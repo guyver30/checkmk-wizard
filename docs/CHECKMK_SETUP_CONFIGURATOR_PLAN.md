@@ -1,5 +1,12 @@
 # CheckMK Setup Configurator — High-Level Plan
 
+**Implementation status:** Phases 1-7 implemented as a Python wizard under
+`src/checkmk_wizard/` — see [README.md](../README.md) for setup/run/test
+instructions. Unit tests cover the REST client, scanner, and remote helpers
+in isolation (mocked); the wizard has not been run end-to-end against a live
+Checkmk site or real network/SSH targets, since none are available in the
+environment it was built in.
+
 **Goal:** A reusable tool/script that automates the base setup of CheckMK Community Edition
 (2.4.0p34) from scratch — installation through activated, monitored hosts. Scope is CheckMK setup
 only. MQTT publisher, notification scripts, and the dashboard are a separate downstream layer and
