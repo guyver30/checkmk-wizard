@@ -31,6 +31,19 @@ class CheckmkConnection:
     username: str
     secret: str
     proto: str = "http"
+    # Credential used for `cmk-agent-ctl register` (Phase 5.2), kept
+    # separate from `username`/`secret` (used for all REST API calls) so a
+    # least-privilege registration-only user can be used when available.
+    # Defaults to the REST credential if no dedicated one was found — see
+    # docs/PLAN-CONFORMANCE-AUDIT.md, Phase 5, credential-scope finding.
+    registration_user: str | None = None
+    registration_secret: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.registration_user is None:
+            self.registration_user = self.username
+        if self.registration_secret is None:
+            self.registration_secret = self.secret
 
     @property
     def base_url(self) -> str:
@@ -106,6 +119,15 @@ class CheckmkClient:
         )
         return resp.json()
 
+    async def list_folders(self) -> list[dict[str, Any]]:
+        """List every folder on the site. Collection GET endpoints return
+        `{"domainType": ..., "value": [...]}` (verified via context7:
+        docs.checkmk.com/latest/en/rest_api.html, pending-changes collection
+        example) — same shape as the object this returns from `value`.
+        """
+        resp = await self._request("GET", "/domain-types/folder_config/collections/all")
+        return resp.json().get("value", [])
+
     # -- Phase 3/5: hosts ----------------------------------------------------
 
     async def create_host(
@@ -123,6 +145,11 @@ class CheckmkClient:
             params={"bake_agent": False},
         )
         return resp.json()
+
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        """List every host on the site, with its folder and attributes."""
+        resp = await self._request("GET", "/domain-types/host_config/collections/all")
+        return resp.json().get("value", [])
 
     async def update_host_attributes(
         self, host_name: str, attributes: dict[str, Any], etag: str
@@ -152,11 +179,17 @@ class CheckmkClient:
     # -- Phase 6: service discovery ------------------------------------------
 
     async def start_service_discovery(self, host_name: str, mode: str = "refresh") -> dict[str, Any]:
+        # 303 means Checkmk ran discovery as a background job instead of
+        # synchronously (documented behavior of this endpoint) — that's a
+        # success, not an error.
         resp = await self._request(
             "POST",
             "/domain-types/service_discovery_run/actions/start/invoke",
             json_body={"host_name": host_name, "mode": mode},
+            expect=(200, 201, 303),
         )
+        if resp.status_code in (204, 303):
+            return {}
         return resp.json()
 
     # -- Phase 7: activation --------------------------------------------------

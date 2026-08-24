@@ -5,6 +5,11 @@ site from scratch — network discovery, host onboarding, agent installation,
 and activation. See [docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md](docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md)
 for the full design and phase breakdown.
 
+For exactly how the implementation behaves today, see
+[docs/WIZARD-OPERATION.md](docs/WIZARD-OPERATION.md). For how that
+implementation compares to the plan above (verified against live Checkmk
+docs), see [docs/PLAN-CONFORMANCE-AUDIT.md](docs/PLAN-CONFORMANCE-AUDIT.md).
+
 ## Setup
 
 ```bash

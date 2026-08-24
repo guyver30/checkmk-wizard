@@ -9,11 +9,19 @@ Verified facts used here (via context7 against live Checkmk docs):
   the REST API.
 - Windows equivalent is `cmk-agent-ctl.exe register` with the same flags
   (or short flags -H -s -i -U).
+- Linux agent packages are published by distro family: RPM for RHEL-based
+  systems, SLES, Fedora, and openSUSE; DEB for Debian, Ubuntu, and other
+  DEB-based distributions (docs.checkmk.com/latest/en/agent_linux.html,
+  "Downloading RPM/DEB packages") — not per exact distro/version match.
+- `cmk-agent-ctl status` reports a `Connection: <server>/<site>` line per
+  registered connection (docs.checkmk.com/latest/en/hosts_autoregister.html,
+  "Check Agent Controller status").
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import shlex
 from dataclasses import dataclass
 from enum import Enum
@@ -53,6 +61,7 @@ class ActionResult:
 class OSRelease:
     id: str
     version_id: str
+    id_like: str = ""
 
     @classmethod
     def parse(cls, text: str) -> OSRelease:
@@ -62,20 +71,49 @@ class OSRelease:
                 continue
             key, _, value = line.partition("=")
             values[key.strip()] = value.strip().strip('"')
-        return cls(id=values.get("ID", "unknown"), version_id=values.get("VERSION_ID", "unknown"))
+        return cls(
+            id=values.get("ID", "unknown"),
+            version_id=values.get("VERSION_ID", "unknown"),
+            id_like=values.get("ID_LIKE", ""),
+        )
+
+
+# Checkmk publishes Linux agent packages by distro family, not per exact
+# distro/version (verified via context7: docs.checkmk.com/latest/en/
+# agent_linux.html, "Downloading RPM/DEB packages" — "RPM packages are
+# intended for RHEL-based systems, SLES, Fedora, and openSUSE, while DEB
+# packages are used for Debian, Ubuntu, and other DEB-based distributions").
+# Classification uses ID + ID_LIKE (the standard freedesktop.org os-release
+# fallback convention) so derivatives (Rocky/Alma/Mint/etc.) are recognized
+# without an exhaustive distro list.
+_DEB_FAMILY = {"debian", "ubuntu"}
+_RPM_FAMILY = {"rhel", "fedora", "centos", "suse", "opensuse"}
+
+
+def package_family(os_release: OSRelease) -> str | None:
+    """Classify a target's agent-package family as "deb" or "rpm" from its
+    /etc/os-release ID/ID_LIKE. Returns None if neither family matches.
+    """
+    tokens = {os_release.id, *os_release.id_like.split()}
+    if tokens & _DEB_FAMILY:
+        return "deb"
+    if tokens & _RPM_FAMILY:
+        return "rpm"
+    return None
 
 
 @dataclass
 class CompatibilityCheck:
     compatible: bool
     target: OSRelease
-    expected: OSRelease
+    package_family: str | None
     message: str
 
 
-def local_os_release(path: str = "/etc/os-release") -> OSRelease:
-    with open(path) as f:
-        return OSRelease.parse(f.read())
+@dataclass
+class AgentStatusCheck:
+    verified: bool
+    detail: str
 
 
 async def probe_port(host: str, port: int, timeout: float = 3.0) -> PortProbeResult:
@@ -165,14 +203,17 @@ async def fix_firewall_linux(host: str, creds: SSHCredentials, port: int) -> Act
 
 
 async def check_os_compatibility(host: str, creds: SSHCredentials) -> CompatibilityCheck | None:
-    """Compare the target's OS to the Checkmk host's own OS as a proxy for
-    agent-package compatibility. Returns None if the check itself couldn't
-    run (e.g. SSH unreachable) — caller should fall back to manual.
+    """Classify the target's agent-package family (deb/rpm) from its own
+    /etc/os-release. This does NOT compare against the Checkmk host's own
+    OS — Checkmk publishes agent packages per distro *family*, so a target
+    running a different distro in the same family (e.g. Debian target vs.
+    Ubuntu Checkmk host, both deb-based) installs fine. Returns None if the
+    check itself couldn't run (e.g. SSH unreachable) — caller should fall
+    back to manual.
     """
     if not await check_ssh_reachable(host, creds):
         return None
     try:
-        expected = local_os_release()
         async with await _connect(host, creds) as conn:
             result = await conn.run("cat /etc/os-release", check=False)
             if result.exit_status != 0:
@@ -181,17 +222,16 @@ async def check_os_compatibility(host: str, creds: SSHCredentials) -> Compatibil
     except (OSError, asyncssh.Error, FileNotFoundError):
         return None
 
-    compatible = target.id == expected.id and target.version_id == expected.version_id
-    if compatible:
-        message = f"Target OS ({target.id} {target.version_id}) matches the Checkmk host."
+    family = package_family(target)
+    if family is not None:
+        message = f"Target OS is {target.id} {target.version_id} — using {family} packages."
     else:
         message = (
-            f"Target OS is {target.id} {target.version_id}, but the Checkmk host "
-            f"(and its agent packages) is {expected.id} {expected.version_id}. "
-            "The generic agent package may still install and run correctly, but this "
-            "hasn't been verified for this combination."
+            f"Target OS is {target.id} {target.version_id}, which isn't a recognized "
+            "Debian/Ubuntu-family (deb) or RHEL/SLES/Fedora/openSUSE-family (rpm) distro. "
+            "Can't determine which agent package to install."
         )
-    return CompatibilityCheck(compatible=compatible, target=target, expected=expected, message=message)
+    return CompatibilityCheck(compatible=family is not None, target=target, package_family=family, message=message)
 
 
 def linux_register_command(
@@ -236,10 +276,32 @@ async def install_agent_linux(
         return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, "SSH unreachable", manual)
 
     remote_path = f"/tmp/{package_filename}"
+    expected_sha256 = hashlib.sha256(package_bytes).hexdigest()
     try:
         async with await _connect(host, creds) as conn, conn.start_sftp_client() as sftp:
             async with sftp.open(remote_path, "wb") as f:
                 await f.write(package_bytes)
+
+            # A successful SFTP write only means no exception was raised —
+            # it doesn't confirm the bytes that landed on disk match what
+            # was sent (silent truncation/corruption on a bad connection
+            # wouldn't raise). Verify with a checksum before installing.
+            checksum_result = await conn.run(f"sha256sum {shlex.quote(remote_path)}", check=False)
+            if checksum_result.exit_status != 0:
+                return ActionResult(
+                    Outcome.FAILED_FALLBACK_MANUAL,
+                    f"Could not verify uploaded package (sha256sum failed: {checksum_result.stderr})",
+                    manual,
+                )
+            checksum_output = checksum_result.stdout if isinstance(checksum_result.stdout, str) else ""
+            remote_sha256 = checksum_output.split()[0] if checksum_output.split() else ""
+            if remote_sha256 != expected_sha256:
+                return ActionResult(
+                    Outcome.FAILED_FALLBACK_MANUAL,
+                    "Uploaded package checksum mismatch — transfer may be corrupted "
+                    f"(expected {expected_sha256[:12]}…, got {remote_sha256[:12] or '(none)'}…)",
+                    manual,
+                )
 
             if package_filename.endswith(".deb"):
                 install_cmd = f"sudo dpkg -i {shlex.quote(remote_path)}"
@@ -270,3 +332,44 @@ async def install_agent_linux(
             return ActionResult(Outcome.AUTOMATED, "Package installed and agent registered")
     except (OSError, asyncssh.Error) as exc:
         return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, str(exc), manual)
+
+
+def agent_status_shows_connection(output: str, site: str) -> bool:
+    """Whether `cmk-agent-ctl status` output includes a `Connection:` line
+    for the given site (format confirmed via context7:
+    docs.checkmk.com/latest/en/hosts_autoregister.html — "Connection:
+    myserver/mysite").
+    """
+    suffix = f"/{site}"
+    return any(
+        line.strip().startswith("Connection:") and line.strip().endswith(suffix)
+        for line in output.splitlines()
+    )
+
+
+async def check_agent_status(host: str, creds: SSHCredentials, site: str) -> AgentStatusCheck:
+    """Run `cmk-agent-ctl status` on the target after install+registration to
+    confirm the agent controller is actually operational and recorded a
+    connection for this site — rather than trusting the register command's
+    exit code alone. This is a local check on the target (reads the agent
+    controller's own state); it doesn't independently confirm the Checkmk
+    server has accepted the host as UP — that's confirmed later, for the
+    whole batch, by Phase 7's Livestatus query.
+    """
+    try:
+        async with await _connect(host, creds) as conn:
+            result = await conn.run("cmk-agent-ctl status", check=False)
+    except (OSError, asyncssh.Error) as exc:
+        return AgentStatusCheck(verified=False, detail=f"Could not run cmk-agent-ctl status: {exc}")
+
+    output = result.stdout if isinstance(result.stdout, str) else ""
+    if result.exit_status != 0:
+        detail = result.stderr if isinstance(result.stderr, str) and result.stderr else output
+        return AgentStatusCheck(verified=False, detail=f"cmk-agent-ctl status exited {result.exit_status}: {detail}")
+
+    if not agent_status_shows_connection(output, site):
+        return AgentStatusCheck(
+            verified=False,
+            detail=f"cmk-agent-ctl status ran but reported no connection for site '{site}'",
+        )
+    return AgentStatusCheck(verified=True, detail="cmk-agent-ctl reports an active connection for this site")

@@ -8,6 +8,28 @@ CONN = CheckmkConnection(host="cmk.example", site="mysite", username="automation
 BASE = "http://cmk.example/mysite/check_mk/api/v1"
 
 
+def test_connection_registration_credential_defaults_to_rest_credential():
+    conn = CheckmkConnection(host="cmk.example", site="mysite", username="automation", secret="s3cret")
+    assert conn.registration_user == "automation"
+    assert conn.registration_secret == "s3cret"
+
+
+def test_connection_registration_credential_can_be_overridden():
+    conn = CheckmkConnection(
+        host="cmk.example",
+        site="mysite",
+        username="automation",
+        secret="s3cret",
+        registration_user="agent_registration",
+        registration_secret="r3g-s3cret",
+    )
+    assert conn.registration_user == "agent_registration"
+    assert conn.registration_secret == "r3g-s3cret"
+    # REST credential is untouched by the override.
+    assert conn.username == "automation"
+    assert conn.secret == "s3cret"
+
+
 @pytest.mark.asyncio
 async def test_get_version():
     with respx.mock:
@@ -42,6 +64,28 @@ async def test_create_host():
 
 
 @pytest.mark.asyncio
+async def test_list_hosts_returns_value_array():
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={"domainType": "host_config", "value": [{"id": "host1"}, {"id": "host2"}]})
+        )
+        async with CheckmkClient(CONN) as client:
+            hosts = await client.list_hosts()
+    assert hosts == [{"id": "host1"}, {"id": "host2"}]
+
+
+@pytest.mark.asyncio
+async def test_list_folders_returns_value_array():
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"domainType": "folder_config", "value": [{"id": "/vlan10"}]})
+        )
+        async with CheckmkClient(CONN) as client:
+            folders = await client.list_folders()
+    assert folders == [{"id": "/vlan10"}]
+
+
+@pytest.mark.asyncio
 async def test_error_response_raises():
     with respx.mock:
         respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
@@ -61,6 +105,17 @@ async def test_start_service_discovery_uses_refresh_mode():
         async with CheckmkClient(CONN) as client:
             await client.start_service_discovery("myhost")
     assert b'"mode": "refresh"' in route.calls.last.request.content or b'"mode":"refresh"' in route.calls.last.request.content
+
+
+@pytest.mark.asyncio
+async def test_start_service_discovery_accepts_303_background_job():
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
+            return_value=Response(303, headers={"location": f"{BASE}/objects/background_job/foo"})
+        )
+        async with CheckmkClient(CONN) as client:
+            result = await client.start_service_discovery("myhost", mode="fix_all")
+    assert result == {}
 
 
 @pytest.mark.asyncio

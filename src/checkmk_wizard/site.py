@@ -11,6 +11,7 @@ Facts used here are verified against live Checkmk docs via context7:
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,24 @@ class SiteCredentials:
     site: str
     automation_user: str
     automation_secret: str
+
+
+CHECKMK_NOT_INSTALLED_INSTRUCTIONS = """\
+Checkmk doesn't appear to be installed on this host (the 'omd' command
+wasn't found on PATH).
+
+1. Download the Community Edition package for your distro from
+   https://checkmk.com/download
+2. Install it, e.g. on Debian/Ubuntu:
+     apt install /path/to/check-mk-community-<version>_<codename>_<arch>.deb
+   (see https://docs.checkmk.com/latest/en/install_packages_debian.html for
+   RPM-based distros and other install methods)
+3. Re-run this wizard."""
+
+
+def omd_installed() -> bool:
+    """Whether the `omd` command is available — i.e. Checkmk is installed."""
+    return shutil.which("omd") is not None
 
 
 def site_home(site: str) -> Path:

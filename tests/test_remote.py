@@ -4,7 +4,9 @@ import pytest
 
 from checkmk_wizard.remote import (
     OSRelease,
+    agent_status_shows_connection,
     linux_register_command,
+    package_family,
     probe_port,
     windows_firewall_instructions,
     windows_register_command,
@@ -22,6 +24,58 @@ def test_os_release_parse_missing_fields_defaults_unknown():
     parsed = OSRelease.parse("SOMETHING=else\n")
     assert parsed.id == "unknown"
     assert parsed.version_id == "unknown"
+    assert parsed.id_like == ""
+
+
+def test_os_release_parse_id_like():
+    text = 'ID=rocky\nID_LIKE="rhel centos fedora"\nVERSION_ID="9.3"\n'
+    parsed = OSRelease.parse(text)
+    assert parsed.id_like == "rhel centos fedora"
+
+
+def test_package_family_deb_direct_id():
+    assert package_family(OSRelease(id="debian", version_id="12")) == "deb"
+    assert package_family(OSRelease(id="ubuntu", version_id="22.04")) == "deb"
+
+
+def test_package_family_deb_via_id_like():
+    # Linux Mint identifies as its own distro but is Ubuntu/Debian-based.
+    assert package_family(OSRelease(id="linuxmint", version_id="21", id_like="ubuntu debian")) == "deb"
+
+
+def test_package_family_rpm_direct_id():
+    assert package_family(OSRelease(id="rhel", version_id="9")) == "rpm"
+    assert package_family(OSRelease(id="opensuse", version_id="15")) == "rpm"
+
+
+def test_package_family_rpm_via_id_like():
+    # Rocky Linux identifies as its own distro but is RHEL-based.
+    assert package_family(OSRelease(id="rocky", version_id="9.3", id_like="rhel centos fedora")) == "rpm"
+
+
+def test_package_family_unknown_for_unrecognized_distro():
+    assert package_family(OSRelease(id="alpine", version_id="3.19")) is None
+
+
+def test_agent_status_shows_connection_true():
+    output = (
+        "Version: 2.3.0b1\n"
+        "Agent socket: operational\n"
+        "IP allowlist: any\n\n\n"
+        "Connection: myserver/mysite\n"
+        "\tUUID: b11af975-40a8-4574-b6cd-12dc11c6f273\n"
+    )
+    assert agent_status_shows_connection(output, "mysite") is True
+
+
+def test_agent_status_shows_connection_false_wrong_site():
+    output = "Connection: myserver/othersite\n"
+    assert agent_status_shows_connection(output, "mysite") is False
+
+
+def test_agent_status_shows_connection_false_when_absent():
+    output = "Version: 2.3.0b1\nAgent socket: operational\n"
+    assert agent_status_shows_connection(output, "mysite") is False
 
 
 @pytest.mark.asyncio

@@ -28,7 +28,9 @@ class OnboardedHost:
     ip: str
     hostname: str
     folder: str
-    os_family: str  # "linux" | "windows"
+    os_family: str  # "linux" | "windows" | "snmp"
+    snmp_version: str | None = None  # "v1" | "v2c" — only set when os_family == "snmp"
+    snmp_community: str | None = None
 
 
 @dataclass
@@ -43,6 +45,10 @@ class WizardState:
 
 async def phase1_site_bringup() -> CheckmkConnection:
     console.rule("[bold]Phase 1 — Site Bring-up")
+
+    if not site.omd_installed():
+        console.print(f"[red]{site.CHECKMK_NOT_INSTALLED_INSTRUCTIONS}[/red]")
+        raise SystemExit(1)
 
     site_name = await questionary.text("Checkmk site name:").ask_async()
     checkmk_host = await questionary.text(
@@ -72,11 +78,33 @@ async def phase1_site_bringup() -> CheckmkConnection:
         secret = await questionary.password("Automation secret:").ask_async()
         creds = site.SiteCredentials(site=site_name, automation_user="automation", automation_secret=secret)
 
+    # Checkmk ships a separate pre-configured 'agent_registration' user
+    # scoped solely to host registration (verified via context7:
+    # docs.checkmk.com/latest/en/agent_deployment.html — "the default
+    # 'agent_registration' user is pre-configured with these rights").
+    # Use it for cmk-agent-ctl register (Phase 5.2) instead of the broader
+    # 'automation' REST credential, when it's available.
+    registration_creds = site.get_site_credentials(site_name, automation_user="agent_registration")
+    if registration_creds is not None:
+        console.print(
+            "[green]Using the dedicated 'agent_registration' user[/green] for agent "
+            "registration (separate from the general automation account)."
+        )
+    else:
+        console.print(
+            "[yellow]No 'agent_registration' user found — agent registration will reuse "
+            "the general 'automation' credential.[/yellow] For tighter scoping, create a "
+            "user named 'agent_registration' with the 'Agent registration user' role "
+            "(Setup > Users) and re-run the wizard."
+        )
+
     connection = CheckmkConnection(
         host=checkmk_host,
         site=site_name,
         username=creds.automation_user,
         secret=creds.automation_secret,
+        registration_user=registration_creds.automation_user if registration_creds else None,
+        registration_secret=registration_creds.automation_secret if registration_creds else None,
     )
 
     async with CheckmkClient(connection) as client:
@@ -165,9 +193,35 @@ async def phase4_classification(scan_results: list[HostScanResult]) -> list[Onbo
         hostname = await questionary.text(f"Hostname for {ip}:", default=ip).ask_async()
         folder = await questionary.text(f"Folder for {hostname} (default /):", default="/").ask_async()
         os_family = await questionary.select(
-            f"OS family for {hostname}:", choices=["linux", "windows"]
+            f"Monitoring method for {hostname}:",
+            choices=[
+                questionary.Choice("linux (Checkmk agent)", value="linux"),
+                questionary.Choice("windows (Checkmk agent)", value="windows"),
+                questionary.Choice("snmp (no agent — switch/router/printer/etc.)", value="snmp"),
+            ],
         ).ask_async()
-        onboarded.append(OnboardedHost(ip=ip, hostname=hostname, folder=folder, os_family=os_family))
+
+        snmp_version = None
+        snmp_community = None
+        if os_family == "snmp":
+            snmp_version = await questionary.select(
+                "SNMP version:",
+                choices=[questionary.Choice("v2c", value="v2c"), questionary.Choice("v1", value="v1")],
+            ).ask_async()
+            snmp_community = await questionary.text(
+                "SNMP community string:", default="public"
+            ).ask_async()
+
+        onboarded.append(
+            OnboardedHost(
+                ip=ip,
+                hostname=hostname,
+                folder=folder,
+                os_family=os_family,
+                snmp_version=snmp_version,
+                snmp_community=snmp_community,
+            )
+        )
     return onboarded
 
 
@@ -197,6 +251,32 @@ async def phase5_onboarding(
 
     for h in hosts:
         console.print(f"\n[bold]{h.hostname}[/bold] ({h.ip}, {h.os_family})")
+
+        if h.os_family == "snmp":
+            # No agent, no firewall/SSH steps — Checkmk polls SNMP devices
+            # directly. tag_agent/tag_snmp_ds values verified via context7
+            # against docs.checkmk.com/latest/en/hosts_setup.html (CSV host
+            # import attribute mapping: agent=no-agent, snmp_ds=snmp-v2).
+            # NOTE: the exact snmp_community attribute schema below was not
+            # confirmed against live Checkmk REST API docs — verify against
+            # the target site's own API spec (e.g. its /ui/ swagger) before
+            # relying on this in production.
+            try:
+                await client.create_host(
+                    host_name=h.hostname,
+                    folder=h.folder,
+                    attributes={
+                        "ipaddress": h.ip,
+                        "tag_agent": "no-agent",
+                        "tag_snmp_ds": "snmp-v2" if h.snmp_version == "v2c" else "snmp-v1",
+                        "snmp_community": {"type": "v1_v2_community", "community": h.snmp_community},
+                    },
+                )
+                console.print("  [green]SNMP host created[/green] — polled directly, no agent/firewall/SSH steps")
+            except CheckmkAPIError as exc:
+                console.print(f"  [yellow]host create/update: {exc}[/yellow]")
+            continue
+
         try:
             await client.create_host(
                 host_name=h.hostname,
@@ -210,7 +290,7 @@ async def phase5_onboarding(
             console.print("  [cyan]Windows target — manual path (by design):[/cyan]")
             console.print(f"    Firewall: {remote.windows_firewall_instructions(remote.AGENT_RECEIVER_PORT)}")
             console.print(
-                f"    Register: {remote.windows_register_command(h.hostname, connection.host, connection.site, connection.username, connection.secret)}"
+                f"    Register: {remote.windows_register_command(h.hostname, connection.host, connection.site, connection.registration_user, connection.registration_secret)}"
             )
             continue
 
@@ -229,37 +309,56 @@ async def phase5_onboarding(
             console.print(f"    {fw_result.manual_instructions}")
 
         compat = await remote.check_os_compatibility(h.ip, ssh_creds)
+        pkg_family = "deb"
         proceed = True
-        if compat is not None and not compat.compatible:
-            console.print(f"  [yellow]{compat.message}[/yellow]")
-            proceed = await questionary.confirm("Proceed anyway with the generic package?", default=False).ask_async()
+        if compat is not None:
+            style = "cyan" if compat.compatible else "yellow"
+            console.print(f"  [{style}]{compat.message}[/{style}]")
+            if compat.compatible:
+                pkg_family = compat.package_family
+            else:
+                proceed = await questionary.confirm(
+                    "Proceed anyway assuming a Debian/Ubuntu-compatible (.deb) package?", default=False
+                ).ask_async()
 
         if not proceed:
             console.print("  Skipping agent install at user's request.")
             continue
 
+        os_type = "linux_deb" if pkg_family == "deb" else "linux_rpm"
+        package_filename = "check-mk-agent.deb" if pkg_family == "deb" else "check-mk-agent.rpm"
+
         register_cmd = remote.linux_register_command(
-            h.hostname, connection.host, connection.site, connection.username, connection.secret
+            h.hostname, connection.host, connection.site, connection.registration_user, connection.registration_secret
         )
         try:
-            package_bytes = await client.download_agent("linux_deb")
+            package_bytes = await client.download_agent(os_type)
         except CheckmkAPIError as exc:
             console.print(f"  [red]Agent download failed: {exc}[/red]")
             _print_linux_manual(h, connection)
             continue
 
         install_result = await remote.install_agent_linux(
-            h.ip, ssh_creds, package_bytes, "check-mk-agent.deb", register_cmd
+            h.ip, ssh_creds, package_bytes, package_filename, register_cmd
         )
         color = "green" if install_result.outcome == remote.Outcome.AUTOMATED else "yellow"
         console.print(f"  Agent install: [{color}]{install_result.outcome.value}[/] — {install_result.detail}")
         if install_result.manual_instructions and install_result.outcome != remote.Outcome.AUTOMATED:
             console.print(f"    {install_result.manual_instructions}")
 
+        # Trusting register_cmd's exit code alone only confirms the command
+        # ran without error — it doesn't confirm the agent controller is
+        # actually operational and connected. Verify directly.
+        if install_result.outcome == remote.Outcome.AUTOMATED:
+            status_check = await remote.check_agent_status(h.ip, ssh_creds, connection.site)
+            status_color = "green" if status_check.verified else "yellow"
+            status_label = "verified" if status_check.verified else "could not verify"
+            console.print(f"  Agent status: [{status_color}]{status_label}[/] — {status_check.detail}")
+
 
 def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection) -> None:
     register_cmd = remote.linux_register_command(
-        host.hostname, connection.host, connection.site, connection.username, connection.secret
+        host.hostname, connection.host, connection.site, connection.registration_user, connection.registration_secret
     )
     console.print(f"    Firewall (ufw example): ufw allow {remote.AGENT_RECEIVER_PORT}/tcp")
     console.print(f"    Download agent from the Checkmk site, install it, then run: {register_cmd}")
@@ -270,10 +369,15 @@ def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection) -> N
 
 async def phase6_discovery(client: CheckmkClient, hosts: list[OnboardedHost]) -> None:
     console.rule("[bold]Phase 6 — Discovery & Baseline")
+    # mode="fix_all" both discovers and accepts services in one call (adds
+    # missing, removes vanished, accepts host labels) — Checkmk's REST
+    # equivalent of the "Accept all" button. mode="refresh" alone only
+    # refreshes the discovery state and leaves services "undecided," so
+    # they'd never actually go live at Phase 7's activation.
     for h in hosts:
         try:
-            await client.start_service_discovery(h.hostname, mode="refresh")
-            console.print(f"  [green]discovery started[/green] {h.hostname}")
+            await client.start_service_discovery(h.hostname, mode="fix_all")
+            console.print(f"  [green]services discovered and accepted[/green] {h.hostname}")
         except CheckmkAPIError as exc:
             console.print(f"  [yellow]discovery failed[/yellow] {h.hostname}: {exc}")
 
@@ -302,10 +406,26 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
             table.add_row(h.hostname, label)
         console.print(table)
 
+    # Pull the site's actual current host/folder configuration for the
+    # snapshot, not just a log of what this run touched — this is what the
+    # plan's "known good baseline... for diffing/disaster recovery" wording
+    # calls for. Scope note: this covers hosts and folders only, not rules,
+    # users, or other site-wide config — a partial config snapshot, not a
+    # full site backup.
+    try:
+        all_hosts = await client.list_hosts()
+        all_folders = await client.list_folders()
+    except CheckmkAPIError as exc:
+        console.print(f"[yellow]Could not export full host/folder snapshot: {exc}[/yellow]")
+        all_hosts = None
+        all_folders = None
+
     snapshot = {
         "generated_at": datetime.now(UTC).isoformat(),
         "site": connection.site,
-        "onboarded_hosts": [h.__dict__ for h in hosts],
+        "onboarded_this_run": [h.__dict__ for h in hosts],
+        "hosts": all_hosts,
+        "folders": all_folders,
     }
     out_path = Path(f"config_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")  # noqa: DTZ005 -- local wall-clock filename, not a stored timestamp
     out_path.write_text(json.dumps(snapshot, indent=2))
