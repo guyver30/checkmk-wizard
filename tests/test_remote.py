@@ -117,8 +117,14 @@ def test_windows_register_command_contains_flags():
     cmd = windows_register_command("winhost", "cmk.example", "mysite", "automation", "secret")
     assert "cmk-agent-ctl.exe" in cmd
     assert "register" in cmd
-    assert "--hostname winhost" in cmd
-    assert "--server cmk.example" in cmd
+    assert "--hostname 'winhost'" in cmd
+    assert "--server 'cmk.example'" in cmd
+
+
+def test_windows_register_command_quotes_embedded_single_quote():
+    cmd = windows_register_command("winhost", "cmk.example", "mysite", "automation", "p'ss")
+    # PowerShell escapes an embedded single quote by doubling it.
+    assert "--password 'p''ss'" in cmd
 
 
 def test_windows_firewall_instructions_uses_given_port():

@@ -15,7 +15,7 @@ original design, see [PLAN-CONFORMANCE-AUDIT.md](PLAN-CONFORMANCE-AUDIT.md).
 ## Entry point and control flow
 
 `uv run checkmk-wizard` → `checkmk_wizard.__main__` → `wizard.main()`
-(`wizard.py:450-451`) → `asyncio.run(run())` → `run()` (`wizard.py:438-447`),
+(`wizard.py:491-492`) → `asyncio.run(run())` → `run()` (`wizard.py:479-489`),
 which executes all 7 phases **sequentially, in a single process, with no
 resume/checkpoint support**:
 
@@ -36,7 +36,7 @@ state file. If the process is killed mid-run, the next run starts at Phase 1
 with no memory of what happened before (site/hosts already created in
 Checkmk are simply re-detected or re-created).
 
-## Phase 1 — Site Bring-up (`wizard.py:46-117`)
+## Phase 1 — Site Bring-up (`wizard.py:47-118`)
 
 1. **Pre-flight check:** `site.omd_installed()` (`site.py:44-46`) checks
    `shutil.which("omd")`. If Checkmk isn't installed at all, prints install
@@ -63,7 +63,7 @@ Checkmk are simply re-detected or re-created).
      manually via the web UI and prompts for the secret interactively.
 5. Separately, looks up a **dedicated `agent_registration` credential**
    the same way (`site.get_site_credentials(site_name,
-   automation_user="agent_registration")`, `wizard.py:87`) — Checkmk ships
+   automation_user="agent_registration")`, `wizard.py:88`) — Checkmk ships
    this as a separate pre-configured, least-privilege user scoped solely to
    host registration (doc-verified: `docs.checkmk.com/latest/en/
    agent_deployment.html`). If found, it's kept separate from the REST
@@ -85,7 +85,7 @@ only *checks* that it's already installed and fails fast with guidance if
 not; the rest of the phase creates/starts the OMD *site* inside an
 already-installed Checkmk.
 
-## Phase 2 — Folder Structure (`wizard.py:123-138`)
+## Phase 2 — Folder Structure (`wizard.py:124-140`)
 
 1. `questionary.confirm` — "Set up folders?" Defaults to **No**.
 2. If yes: comma-separated folder names, each created via
@@ -94,10 +94,14 @@ already-installed Checkmk.
    are printed per-folder and do not stop the loop.
 3. If no: nothing happens — later hosts land in the root folder `/`.
 
-## Phase 3 — Network Discovery (`wizard.py:144-174`)
+## Phase 3 — Network Discovery (`wizard.py:145-195`)
 
 1. Prompts for a CIDR (e.g. `192.168.10.0/24`) and an optional
-   comma-separated port list (default `22,80,443` — `scanner.py:17`).
+   comma-separated port list (default `22,80,443` — `scanner.py:17`). Each
+   is validated on entry (`ipaddress.ip_network(..., strict=False)` for the
+   CIDR, `int()` per port) and re-prompted on a parse failure instead of
+   raising uncaught out of the phase — a bad CIDR/port no longer kills the
+   whole run.
 2. `scan_network()` (`scanner.py:63-85`):
    - Parses the CIDR with `ipaddress.ip_network(cidr, strict=False)`.
    - Splits anything larger than `/24` into `/24` chunks
@@ -115,10 +119,10 @@ already-installed Checkmk.
    `POST /domain-types/host_config/collections/all` with
    `{host_name: ip, folder: "/", attributes: {ipaddress: ip}}` — always at
    root, regardless of any folders created in Phase 2
-   (`wizard.py:168-172`, `api.py:133-147`). Failures are printed and
+   (`wizard.py:184-186`, `api.py:133-147`). Failures are printed and
    skipped, not retried.
 
-## Phase 4 — Host Classification (`wizard.py:180-225`)
+## Phase 4 — Host Classification (`wizard.py:196-241`)
 
 Purely interactive — **no API calls, no fingerprinting**:
 
@@ -127,14 +131,14 @@ Purely interactive — **no API calls, no fingerprinting**:
 2. For each selected IP: prompts for hostname (default = the IP), folder
    (default `/`), and a monitoring-method choice — `linux` (agent),
    `windows` (agent), or `snmp` (no agent — switches/routers/printers/etc.)
-   (`questionary.select`, `wizard.py:195-202`).
+   (`questionary.select`, `wizard.py:211-218`).
 3. **If `snmp`:** additionally prompts for SNMP version (`v2c` or `v1` —
    **v3 is not supported**, community-string auth only) and the community
-   string (default `public`) (`wizard.py:204-213`).
+   string (default `public`) (`wizard.py:220-229`).
 4. Returns a list of `OnboardedHost(ip, hostname, folder, os_family,
    snmp_version, snmp_community)`.
 
-## Phase 5 — Host Onboarding (`wizard.py:231-356`)
+## Phase 5 — Host Onboarding (`wizard.py:270-408`)
 
 Runs once for the whole batch, then loops **sequentially, one host at a
 time** — no concurrency.
@@ -146,26 +150,49 @@ time** — no concurrency.
    key path) → builds one `SSHCredentials` object reused for **every**
    Linux host in the batch (same username/credential for all hosts).
 
+**Host create/update (`_create_or_update_host()`, `wizard.py:247-266`):**
+Both branches below go through this helper instead of calling
+`client.create_host()` directly. Phase 3 already staged every scanned IP
+as a bare host object under `host_name=ip` (see Phase 3 above); a Phase 4
+promotion that keeps the default hostname (== IP) therefore always
+collides with that stub host on `create_host`. The helper catches the
+resulting `CheckmkAPIError`, fetches the existing host's ETag
+(`client.get_host()`), and `PUT`s the attributes via
+`update_host_attributes()` instead — so `tag_agent`/`tag_snmp_ds`/
+`snmp_community`/`ipaddress` still land on the host rather than being
+silently dropped by the failed create. **Known limitation:** this only
+updates attributes, not folder placement — Checkmk's host-config `PUT`
+doesn't support moving folders, so a host promoted into a non-root folder
+that already exists at root (from Phase 3) stays at root. A create/update
+failure for any other reason (e.g. an invalid hostname) still just prints
+a warning and the wizard **continues anyway** to the firewall/SSH steps
+regardless (known bug — see audit) — this fix narrows that bug's trigger
+to genuine failures, since the common IP-collision case no longer fails
+at all.
+
 **Per host:**
-1. **If `os_family == "snmp"`:** `client.create_host(host_name=hostname,
+1. **If `os_family == "snmp"`:** `_create_or_update_host(host_name=hostname,
    folder=..., attributes={ipaddress, tag_agent: "no-agent", tag_snmp_ds:
    "snmp-v2"|"snmp-v1", snmp_community: {type: "v1_v2_community",
-   community}})` (`wizard.py:264-278`) — no firewall/SSH/agent steps at
+   community}})` (`wizard.py:299-312`) — no firewall/SSH/agent steps at
    all, `continue` to next host. `tag_agent`/`tag_snmp_ds` values are
    doc-verified (Checkmk's CSV host-import attribute mapping,
    `docs.checkmk.com/latest/en/hosts_setup.html`); the `snmp_community`
    payload shape is best-effort and **not** independently doc-confirmed —
    verify against the target site's own REST API spec before relying on it.
-2. **Otherwise:** `client.create_host(host_name=hostname, folder=...,
-   attributes={ipaddress, tag_agent: "cmk-agent"})` (`wizard.py:280-285`).
-   If this fails, the wizard **prints a warning and continues anyway** to
-   the firewall/SSH steps regardless (known bug — see audit).
+2. **Otherwise:** `_create_or_update_host(host_name=hostname, folder=...,
+   attributes={ipaddress, tag_agent: "cmk-agent"})` (`wizard.py:319-325`).
 3. **If `os_family == "windows"`:** prints
    `windows_firewall_instructions()` and `windows_register_command()`
-   (`remote.py:160-164, 250-257`) as copy-paste text, using
+   (`remote.py:160-164, 259-267`) as copy-paste text, using
    `connection.registration_user`/`registration_secret` (not
    `username`/`secret` — see credential-scope note below). No automation
    attempted at all for Windows — `continue` to next host.
+   `windows_register_command()` PowerShell-quotes each argument
+   (`_ps_quote()`, `remote.py:250-256` — single-quoted literal, doubled
+   embedded `'`) so a hostname/site/password containing a space, `$`, or
+   `'` still produces a valid command to copy-paste; `linux_register_command`
+   already did the POSIX-shell equivalent via `shlex.quote()`.
 4. **If `os_family == "linux"`:**
    a. `remote.probe_port(ip, 8000)` (`remote.py:119-139`) — TCP connect
       attempt to the Agent Receiver port; classifies as `open`,
@@ -173,7 +200,7 @@ time** — no concurrency.
       (timeout/other OSError). Result is printed, **not acted on** —
       informational only.
    b. If no SSH credentials were supplied: prints manual firewall/install
-      instructions (`_print_linux_manual`, `wizard.py:359-364`) and moves
+      instructions (`_print_linux_manual`, `wizard.py:400-405`) and moves
       to the next host.
    c. Otherwise, `remote.fix_firewall_linux(ip, creds, 8000)`
       (`remote.py:167-202`):
@@ -201,7 +228,7 @@ time** — no concurrency.
       and continues to the next.
    f. `register_cmd = remote.linux_register_command(hostname, host, site,
       connection.registration_user, connection.registration_secret)`
-      (`wizard.py:331-333`) — uses the dedicated `agent_registration`
+      (`wizard.py:372-374`) — uses the dedicated `agent_registration`
       credential from Phase 1 when one was found, **not** the general
       `automation` REST credential (see credential-scope note below).
    g. `client.download_agent(os_type)` (`api.py:170-177`) — requests
@@ -209,12 +236,12 @@ time** — no concurrency.
       step d (defaults to `linux_deb` if the compatibility check itself
       couldn't run, e.g. SSH became unreachable between steps).
    h. `remote.install_agent_linux(ip, creds, package_bytes,
-      package_filename, register_cmd)` (`remote.py:260-334`), where
+      package_filename, register_cmd)` (`remote.py:269-343`), where
       `package_filename` is `check-mk-agent.deb` or `check-mk-agent.rpm`
       to match the package family from step g:
       - SFTP-uploads the package to `/tmp/<package_filename>` on the
         target.
-      - **Verifies the upload with a checksum** (`remote.py:285-304`):
+      - **Verifies the upload with a checksum** (`remote.py:294-313`):
         runs `sha256sum <path>` on the target and compares it to a
         `hashlib.sha256` of the bytes sent — a successful SFTP write only
         means no exception was raised, not that what landed on disk
@@ -232,9 +259,9 @@ time** — no concurrency.
       - Any step failing → `FAILED_FALLBACK_MANUAL` with manual
         instructions; success → `AUTOMATED`.
    i. **If install returned `AUTOMATED`:** `remote.check_agent_status(ip,
-      creds, site)` (`remote.py:350-365`, `wizard.py:349-356`) runs
+      creds, site)` (`remote.py:359-374`, `wizard.py:390-397`) runs
       `cmk-agent-ctl status` on the target and checks (via
-      `agent_status_shows_connection()`, `remote.py:337-347`) that its
+      `agent_status_shows_connection()`, `remote.py:346-356`) that its
       output contains a `Connection: <server>/<site>` line for this site —
       confirming the agent controller is actually operational and recorded
       a connection, rather than trusting the register command's exit code
@@ -246,7 +273,7 @@ time** — no concurrency.
       Livestatus query. Printed as its own `Agent status: verified /
       could not verify` line, separate from the install line.
 
-## Phase 6 — Discovery & Baseline (`wizard.py:370-387`)
+## Phase 6 — Discovery & Baseline (`wizard.py:411-423`)
 
 For every onboarded host: `POST
 /domain-types/service_discovery_run/actions/start/invoke` with
@@ -270,7 +297,7 @@ Phase 5 sets the SNMP community as a **host attribute** directly
 a different mechanism than the plan's wording, but the same outcome
 (SNMP-only hosts get their community string configured).
 
-## Phase 7 — Activation & Validation (`wizard.py:388-431`)
+## Phase 7 — Activation & Validation (`wizard.py:429-473`)
 
 1. `GET /domain-types/activation_run/collections/pending_changes` to read
    the `ETag` header (`api.py:197-202`).
@@ -291,7 +318,7 @@ a different mechanism than the plan's wording, but the same outcome
    `client.list_hosts()` → `GET /domain-types/host_config/collections/all`
    and `client.list_folders()` → `GET
    /domain-types/folder_config/collections/all` (`api.py:122-129,
-   149-152`; `wizard.py:415-421`) — rather than only logging what this run
+   149-152`; `wizard.py:456-462`) — rather than only logging what this run
    touched. Both return the collection's `value` array (doc-confirmed
    response shape: `docs.checkmk.com/latest/en/rest_api.html`,
    pending-changes collection example). If this fetch fails, prints a
@@ -313,9 +340,9 @@ a different mechanism than the plan's wording, but the same outcome
 |---|---|---|
 | `CheckmkConnection` | `api.py:27-50` | host/site/username/secret + computed `base_url`; `registration_user`/`registration_secret` default to `username`/`secret` via `__post_init__` |
 | `CheckmkClient` | `api.py:53-220` | async context-managed `httpx` wrapper; one method per endpoint used |
-| `WizardState` | `wizard.py:37-40` | declared but **unused** — phases pass state via direct return values/params instead |
+| `WizardState` | `wizard.py:38-41` | declared but **unused** — phases pass state via direct return values/params instead |
 | `HostScanResult` | `scanner.py:22-29` | IP + open ports from Phase 3 |
-| `OnboardedHost` | `wizard.py:26-33` | ip/hostname/folder/os_family (+ snmp_version/snmp_community if SNMP) from Phase 4 |
+| `OnboardedHost` | `wizard.py:28-34` | ip/hostname/folder/os_family (+ snmp_version/snmp_community if SNMP) from Phase 4 |
 | `ActionResult` | `remote.py:54-57` | outcome (`automated`/`manual_required`/`failed_fallback_manual`) + detail + manual text |
 | `SSHCredentials` | `remote.py:41-44` | username + password or private key path, held in memory only |
 | `OSRelease` | `remote.py:61-79` | parsed `/etc/os-release` (id, version_id, id_like) |
@@ -350,7 +377,7 @@ a different mechanism than the plan's wording, but the same outcome
   command-line argument to `cmk-agent-ctl register` over the SSH session
   (`remote.py:237-247`), visible to anything reading that process's argv
   on the target host. Using the narrower `agent_registration` credential
-  when available (Phase 1, `wizard.py:87-108`) limits what this exposure
+  when available (Phase 1, `wizard.py:88-109`) limits what this exposure
   can be used for, compared to leaking the full `automation` credential.
 - The SNMP community string (Phase 4, `snmp` hosts) is prompted in plain
   text via `questionary.text` (not password-masked) and later written

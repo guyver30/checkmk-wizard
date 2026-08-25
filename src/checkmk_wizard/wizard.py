@@ -5,6 +5,7 @@ Configurator (see docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md).
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import secrets
 from dataclasses import dataclass, field
@@ -143,12 +144,27 @@ async def phase2_folders(client: CheckmkClient) -> None:
 
 async def phase3_discovery(client: CheckmkClient) -> list[HostScanResult]:
     console.rule("[bold]Phase 3 — Network Discovery (custom async scanner)")
-    cidr = await questionary.text("Subnet/CIDR to scan (e.g. 192.168.10.0/24):").ask_async()
-    port_input = await questionary.text(
-        f"Ports to check, comma-separated (default {','.join(map(str, DEFAULT_PORTS))}):",
-        default="",
-    ).ask_async()
-    ports = tuple(int(p) for p in port_input.split(",") if p.strip()) or DEFAULT_PORTS
+
+    cidr = None
+    while cidr is None:
+        raw_cidr = await questionary.text("Subnet/CIDR to scan (e.g. 192.168.10.0/24):").ask_async()
+        try:
+            ipaddress.ip_network(raw_cidr, strict=False)
+        except ValueError as exc:
+            console.print(f"[red]Invalid CIDR ({exc}) — try again.[/red]")
+        else:
+            cidr = raw_cidr
+
+    ports = None
+    while ports is None:
+        port_input = await questionary.text(
+            f"Ports to check, comma-separated (default {','.join(map(str, DEFAULT_PORTS))}):",
+            default="",
+        ).ask_async()
+        try:
+            ports = tuple(int(p) for p in port_input.split(",") if p.strip()) or DEFAULT_PORTS
+        except ValueError:
+            console.print("[red]Ports must be comma-separated integers — try again.[/red]")
 
     with Progress() as progress:
         task = progress.add_task("Scanning...", total=None)
@@ -228,6 +244,29 @@ async def phase4_classification(scan_results: list[HostScanResult]) -> list[Onbo
 # ── Phase 5: Host onboarding, firewall (5.1), agent install (5.2) ─────────
 
 
+async def _create_or_update_host(
+    client: CheckmkClient, host_name: str, folder: str, attributes: dict
+) -> None:
+    """Create the host, falling back to updating it in place if it already
+    exists — e.g. Phase 3 stages every scanned IP as a bare host object
+    under that same name, so a Phase 4 promotion that keeps the default
+    hostname (== IP) always collides here. Without this fallback, the
+    create fails and this call's attributes (tag_agent/tag_snmp_ds/
+    snmp_community/ipaddress) are silently never applied. Note: this only
+    updates attributes, not folder placement — Checkmk's host-config PUT
+    doesn't support moving folders, so a host promoted into a non-root
+    folder that already exists at root (from Phase 3) stays at root.
+    """
+    try:
+        await client.create_host(host_name=host_name, folder=folder, attributes=attributes)
+    except CheckmkAPIError:
+        resp = await client.get_host(host_name)
+        etag = resp.headers.get("ETag")
+        if not etag:
+            raise
+        await client.update_host_attributes(host_name, attributes, etag)
+
+
 async def phase5_onboarding(
     client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]
 ) -> None:
@@ -262,7 +301,8 @@ async def phase5_onboarding(
             # the target site's own API spec (e.g. its /ui/ swagger) before
             # relying on this in production.
             try:
-                await client.create_host(
+                await _create_or_update_host(
+                    client,
                     host_name=h.hostname,
                     folder=h.folder,
                     attributes={
@@ -278,7 +318,8 @@ async def phase5_onboarding(
             continue
 
         try:
-            await client.create_host(
+            await _create_or_update_host(
+                client,
                 host_name=h.hostname,
                 folder=h.folder,
                 attributes={"ipaddress": h.ip, "tag_agent": "cmk-agent"},

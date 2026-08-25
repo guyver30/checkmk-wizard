@@ -102,6 +102,20 @@
 
 ### Incomplete Error Recovery in Phase 5
 
+**Update (2026-08-25), partial fix:** the most common trigger for this bug
+was Phase 3 staging every scanned IP as a host under `host_name=ip`
+(`wizard.py:184-186`), which collided with Phase 5's `create_host` call
+whenever the user kept the default hostname (== IP) — silently dropping
+`tag_agent`/`tag_snmp_ds`/`snmp_community`/`ipaddress` for the common path,
+not just the naming-violation edge case described below. Phase 5 now goes
+through `_create_or_update_host()` (`wizard.py:247-266`), which falls back
+to `update_host_attributes()` on a collision instead of failing. See
+`docs/PLAN-CONFORMANCE-AUDIT.md` Phase 5 section, 2026-08-25 entry, for
+details and the remaining limitation (folder placement isn't corrected by
+the fallback). The "continues anyway" bug described below is still
+present for genuine create failures (e.g. an actually invalid hostname) —
+only its most frequent trigger is closed.
+
 **Issue:** In `phase5_onboarding()` (wizard.py, lines 177-258), if a host create/update fails, the wizard continues to attempt firewall and agent install anyway. This can lead to installing an agent on a host object that was never successfully created in Checkmk.
 
 **Files:** `src/checkmk_wizard/wizard.py:177-258`
