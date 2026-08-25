@@ -13,10 +13,10 @@ mechanics.
 
 | Phase | Conformance | Notes |
 |---|---|---|
-| 1 — Site Bring-up | ⚠️ Partial (improved 2026-08-24) | Package install itself still out of scope by design; wizard now fails fast with clear instructions instead of a confusing subprocess error; rest matches and is doc-verified correct |
-| 2 — Folders | ✅ Matches | |
-| 3 — Network Discovery | ✅ Matches | Native-scan rationale independently confirmed accurate; CIDR/port input now validated (fixed 2026-08-25) |
-| 4 — Host Classification | ✅ Matches | |
+| 1 — Site Bring-up | ⚠️ Partial (improved 2026-08-24, 2026-08-25) | Package install itself still out of scope by design; wizard now fails fast with clear instructions instead of a confusing subprocess error; added a site-selection menu (continue/delete-then-create-new), site-name/checkmk-host validation, automation-user auto-provisioning with self-activation polling (correcting this audit's own earlier wrong claim that a default automation user exists, and fixing the foreign-pending-change regression that fix caused), full omd create/start/rm output surfacing, a fix for `start_site()` wrongly treating an already-running restart as fatal, and network-error wrapping in the REST client so unreachable/malformed hosts fail cleanly instead of crashing (all 2026-08-25) |
+| 2 — Folders | ✅ Matches (extended 2026-08-25) | Beyond original plan scope: folders now carry an optional per-folder subnet for Phase 3 to scan directly into them, requested by the user; folder names live-verified and validated against Checkmk's own naming pattern |
+| 3 — Network Discovery | ✅ Matches | Native-scan rationale independently confirmed accurate; CIDR/port input now validated (fixed 2026-08-25); scans folder-by-folder and stages into the right folder when Phase 2 defines subnets, falls back to the original flat scan otherwise (2026-08-25) |
+| 4 — Host Classification | ✅ Matches (simplified 2026-08-25) | Per-host folder prompt removed — folder now carried automatically from which Phase 2 folder-subnet scan found the host; hostnames live-verified and validated against Checkmk's own naming pattern |
 | 5 — Host Onboarding | ⚠️ Partial (improved 2026-08-24, 2026-08-25) | SNMP path, RPM path, OS-compat check, credential-scope, package-integrity verification, post-install status verification, Phase 3→5 host-collision, and Windows command quoting all fixed; remaining CONCERNS.md items (known_hosts=None, argv secrets, etc.) unchanged |
 | 6 — Discovery & Baseline | ✅ Matches (as scoped 2026-08-24) | Accept-services gap closed (`mode: "fix_all"`); baseline rulesets (step 2) deliberately deferred, decision documented |
 | 7 — Activation & Validation | ✅ Matches (as scoped 2026-08-24) | Activation/health-check correct and doc-verified; snapshot now pulls real host/folder config, documented as partial (not a full site backup) |
@@ -76,12 +76,307 @@ API), this is a reasonable simplification, not a functional bug — but it's
 a deviation from the written plan worth noting since it changes the
 documented recovery path.
 
+**✅ New — 2026-08-25, "reset existing site" option, beyond the original
+plan/CONCERNS.md scope, added for repeated wizard test iteration.** When
+the site already exists, the wizard now asks `Reset it?` (default No)
+before falling back to reuse. Answering yes runs `site.remove_site()`
+(`site.py:75-85`, `omd -f rm <site>`) — deleting the site's config, data,
+and system user, but not the Checkmk install or other sites — then
+recreates it fresh via the same path as a brand-new site. This isn't
+called for by the plan (which only covers "prompt for existing cmkadmin
+credentials" on collision) but fills the gap of resetting a test/dev site
+to defaults without a full package reinstall. New tests:
+`tests/test_site.py`.
+
+**✅ Fixed — 2026-08-25, unvalidated site name crashed the wizard.** Found
+live during manual testing: entering a site name `omd create` rejects
+(doesn't start with a letter, contains a disallowed character, or exceeds
+16 characters — `docs.checkmk.com/latest/en/omd_basics.html`, "Creating
+sites") raised an unhandled `SiteBootstrapError` out of `_create_fresh_site()`,
+killing the entire run with a raw Python traceback instead of a re-prompt —
+the same class of gap as the Phase 3 CIDR/port issue fixed earlier
+2026-08-25, just not caught until it was hit live. **Fix:** the site-name
+prompt (`wizard.py:77-85`) now validates against `_SITE_NAME_RE`
+(`wizard.py:30`, matching OMD's own rule) and re-prompts on a mismatch
+instead of passing the value straight to `omd create`. New tests:
+`tests/test_wizard.py`.
+
+**⚠️ Correction — 2026-08-25, this audit's own Phase 1 claim was wrong.**
+Earlier in this section ("✅ Verified correct against live docs" above)
+this document states *"Each Checkmk site includes a default automation
+user"* as a doc-confirmed fact. Live testing of a real 2.4.0p35 CE site
+disproved this directly: `omd create` provisions exactly two users,
+`cmkadmin` (admin role, no automation secret) and `agent_registration`
+(automation-capable, but role-scoped solely to agent registration — a
+`GET .../domain-types/user_config/collections/all` call with its
+credential returns 401 *"you lack the permission... 'User management'"*).
+There is no general-purpose default automation user. Checkmk's own docs
+turned out to already say this precisely, just not surfaced by the
+original context7 queries: `docs.checkmk.com/latest/en/wato_user.html` —
+*"Each Checkmk site includes a default automation user **for agent
+registration**"* (glossary entry, `docs.checkmk.com/latest/en/glossar.html`)
+— the "for agent registration" qualifier is exactly the distinction this
+audit missed. Practical effect confirmed by the user hitting the
+"No default 'automation' user secret found on disk" fallback on every
+fresh site during manual testing, not as a rare edge case.
+
+**✅ Fixed — 2026-08-25, auto-provision the 'automation' user instead of
+requiring a manual GUI step every time.** Given the above, Phase 1's
+"no automation secret found — create one manually" fallback
+(`wizard.py:113-119`) was previously the *expected* outcome on every fresh
+site, not a fallback. **Fix:** `_create_fresh_site()` (`wizard.py:53-66`)
+now calls the new `bootstrap_automation_user()` (`api.py:231-377`)
+immediately after `omd create`/`omd start`, using the cmkadmin password it
+just generated to log in via Checkmk's GUI session-cookie flow
+(`login.py`, scraping the CSRF token and POSTing the login form — verified
+live that the GET-based login shown in some Checkmk doc examples returns
+"Method not allowed" on this version) and then calling
+`POST /domain-types/user_config/collections/all` with
+`auth_option.store_automation_secret: true` to create the `automation`
+user with a generated secret, matching the exact on-disk path
+`site.get_site_credentials()` already reads. This exact request body
+isn't covered by Checkmk's generic REST API docs (context7 didn't surface
+it despite three targeted queries) — it was instead extracted from the
+live site's own OpenAPI spec (authenticated `GET
+<site>/check_mk/api/1.0/openapi-doc.yaml`) and confirmed end-to-end
+against a real running site before being wired into the wizard. Any
+failure in this bootstrap (wrong password somehow, unexpected HTML,
+non-2xx response) is caught and falls through to the pre-existing manual
+prompt — never fatal. Not attempted when reusing an existing, non-reset
+site, since that path never has cmkadmin's password available. New tests:
+`tests/test_api.py` (6 cases, respx-mocked — 2 more added by the
+self-activation fix below).
+
+**✅ Fixed — 2026-08-25, auto-provisioning left a foreign pending change
+that broke Phase 7 activation on every run.** Found live by the user:
+Phase 7 failed with 401 *"There are changes from other users and foreign
+changes are not allowed in this API call"* despite hosts/folders/the
+automation user all visibly existing in the GUI. Root cause: the previous
+fix's user-creation call is itself a pending WATO change attributed to
+`cmkadmin` — every subsequent call (folders, hosts, discovery, and
+finally Phase 7's `activate_changes`) runs as `automation` with
+`force_foreign_changes` at its safe default of `False`, so Checkmk
+correctly refuses to activate a change from a different user. First fix
+attempt (self-activate the `cmkadmin` change immediately, cookie-
+authenticated, right after creating the user) was correct in principle —
+confirmed via manual `curl` with a `sleep 2` between steps — but failed
+under the wizard's actual (much faster) timing: `activate-changes` is an
+async background job, and the fire-and-forget POST returned before the
+job finished, so a follow-up `activate_changes()` call moments later
+still saw the change as in-progress and hit the identical 401. Checkmk's
+response includes a `wait-for-completion` link for exactly this, but
+live-verified it's a redirect-based long-poll (302 while running, not a
+single blocking call) — httpx doesn't follow redirects by default, and
+naively enabling `follow_redirects=True` hit `httpx.TooManyRedirects`
+instead of actually waiting. **Fix:** poll the activation run's own
+`self` link for `extensions.is_running` directly (0.3s interval, ~9s
+cap) instead of relying on the redirect link — full control, no redirect
+surprises. Verified live end-to-end under the worst-case timing (zero
+delay between site creation and a manual `activate_changes()` call,
+reproducing the user's report exactly): activation now succeeds cleanly.
+New tests: `tests/test_api.py` (2 more cases — immediate-completion fast
+path and the polling loop with `asyncio.sleep` mocked out).
+
+**✅ Fixed — 2026-08-25, `omd create`/`omd start`/`omd rm` output was
+silently discarded, including the diagnostic detail on failure.** Raised
+by the user: does the wizard monitor `omd start`'s per-daemon output
+("Starting X...OK"), since that's where a real failure would show up?
+It didn't. `site.create_site()`/`start_site()`/`remove_site()`
+(`site.py:57-107`) already captured `subprocess.run(..., capture_output=True)`
+but only ever inspected `result.stderr` when `returncode != 0` — `stdout`
+was discarded unconditionally, on success *and* failure. Live-verified
+this loses real information: `omd`'s per-daemon progress
+(`Starting apache...OK` / `Starting apache.............failed`) is on
+**stdout**, not stderr. Reproduced by occupying the site's Apache TCP
+port before `omd start` — the process's exit code (2) does correctly
+propagate a single-daemon failure (so the existing `returncode != 0`
+check was never silently swallowing failures), but the raised error only
+included Apache's own stderr text, not the `stdout` line identifying
+*which* daemon failed or confirming every other daemon started fine
+first. For a non-web-facing daemon (no verbose stderr the way Apache
+has), stdout could be the only signal.
+
+**Fix:** all three functions now return `result.stdout` and include both
+`stdout` and `stderr` in the raised `SiteBootstrapError`. `wizard.py`
+prints each call's returned output to the console (dimmed) immediately —
+`_create_fresh_site()` (`wizard.py:53-66`) for the create+start path, and
+the reuse/reset branches in `phase1_site_bringup()` — so the operator
+sees the same "Starting X...OK" transcript `omd` itself would print,
+inline in the wizard's own output, whether it succeeds or fails. Verified
+live end-to-end for both outcomes (clean start, and a forced Apache-port
+conflict producing `Starting apache.............failed` plus the
+underlying `Address already in use` reason in the caught error). New
+tests: `tests/test_site.py` (6 cases covering all three functions'
+success/failure stdout+stderr handling).
+
+**✅ New — 2026-08-25, site-selection menu replaces the old
+name-first-then-reset flow, requested by the user.** Previously Phase 1
+always prompted for a site name first, then only offered "reset the site
+under that same name" if it turned out to already exist — no way to see
+what sites already exist before naming one, and no way to delete an old
+site and create a fresh one under a *different* name in one flow.
+
+**Fix:** `site.list_sites()` (`site.py:57-66` — lists directory names
+under `/omd/sites/`, the same convention `site_exists()` already relies
+on) runs before any prompt. No sites → straight to a validated new-site-
+name prompt, unchanged from before. One or more sites → a menu: "Continue
+with existing site '\<name\>'" per site, or "Delete a site, then create a
+new one." Deleting loops back to the same menu (re-listing sites) rather
+than forcing a new-site prompt immediately — so deleting one of several
+sites still offers continuing with a remaining one, and a declined
+delete-confirmation just re-shows the menu unchanged. Only once no sites
+remain does the "no sites exist" branch prompt for a new name, which can
+differ from any deleted site's name (the whole point of the request — the
+old flow only ever recreated under the same name). Verified live with a
+scripted (mocked `questionary`) run through all three paths: no-sites →
+new site; existing → continue; existing → delete → create with a
+different name (confirmed the deleted site no longer appears in
+`list_sites()` afterward). New tests: `tests/test_site.py` (`list_sites()`
+cases); site-selection loop verified via live scripted smoke test, not
+unit tests — `wizard.py` orchestration remains at the project's existing
+0% direct-unit-test coverage (see `CONCERNS.md`), consistent with every
+other phase function.
+
+**✅ Fixed — 2026-08-25, network-level failures bypassed every
+`except CheckmkAPIError` in the codebase — the single highest-leverage
+input-validation gap found this session.** Requested by the user: ensure
+every value entered in the wizard is checked for validity, *and* that
+nothing sent to Checkmk can crash the wizard with a raw exception.
+Investigating that surfaced a gap upstream of any single field:
+`CheckmkClient._request()` (`api.py:79-115`) — the one choke point every
+`CheckmkClient` method goes through — only ever inspected the HTTP
+response status; it never wrapped the `self._client.request(...)` call
+itself. Live-verified: pointing `CheckmkConnection` at an unreachable or
+malformed host raises a raw `httpx.ConnectError`, which none of
+`wizard.py`'s per-phase `except CheckmkAPIError` blocks would catch.
+`bootstrap_automation_user()` (`api.py:245-401`) has the same exposure
+via its own direct `httpx` calls, contradicting its own documented
+contract ("raises `CheckmkAPIError` on any failure").
+
+**Fix:** `_request()` now catches `httpx.HTTPError` and re-raises as
+`CheckmkAPIError` (`status_code=0` for "no HTTP response received") —
+one fix, at the one choke point, closes this for every existing
+`except CheckmkAPIError` site in the codebase without touching any of
+them. `bootstrap_automation_user()`'s login/create-user calls got the
+same wrapping directly, since it bypasses `CheckmkClient`. Verified live
+both ways against `"my host with spaces"` — previously an unhandled
+`ConnectError` traceback, now a clean `CheckmkAPIError`. New tests:
+`tests/test_api.py` (2 cases, respx `side_effect` simulating a
+`ConnectError`).
+
+**✅ New — 2026-08-25, proactive format validation for every field
+Checkmk itself constrains, live-verified rather than guessed.** Matching
+how `_SITE_NAME_RE` was derived from `omd create`'s own error text, the
+same approach was applied to the remaining fields: provoked 400 responses
+from a real running 2.4.0p35 CE site and read the exact pattern Checkmk's
+own validation reports back, rather than assuming.
+- **Folder name** (`_FOLDER_NAME_RE`, `wizard.py:39`): `POST
+  .../folder_config/collections/all` rejected `"my folder"`/`"my.folder"`
+  with pattern `^[-\w]*\Z` — hyphens allowed (unlike site names), spaces
+  and dots are not. Wired into Phase 2's folder-name prompt
+  (`wizard.py:254-260`), re-prompted on a mismatch.
+- **Host name** (`_HOST_NAME_RE`, `wizard.py:44`): `POST
+  .../host_config/collections/all` rejected `"my host"`/`"host@name"`
+  with pattern `^[-0-9a-zA-Z_.]+\Z` — dots allowed (for FQDNs/IPs), spaces
+  and `@` are not. Wired into Phase 4's hostname prompt (`wizard.py:400-
+  411`), re-prompted on a mismatch.
+- **SNMP community string** — checked and found to have **no** format
+  restriction (a value with spaces round-tripped through the REST API
+  unchanged); left as free text, no validation added.
+- **Checkmk host** (Phase 1 step 3, `_valid_checkmk_host()`,
+  `wizard.py:55-62`) — not a Checkmk-enforced field (only used to build
+  the wizard's own `base_url`), but validated as a parseable IP or an
+  RFC-1123-style hostname (`_HOSTNAME_RE`, `wizard.py:50-52`) regardless,
+  since bad input here is exactly what the network-error-wrapping fix
+  above was written to catch — belt and suspenders, matching the user's
+  explicit ask for both.
+- **SSH username** (`wizard.py:486-490`) and **private-key path**
+  (`wizard.py:497-507`, checked to exist as a local file) — not
+  Checkmk-API fields, but a nonexistent key or blank username fails
+  identically for every host in the batch, so caught once up front.
+- **Automation secret manual-entry prompt** (`wizard.py:195-199`) —
+  re-prompted if left blank.
+
+New tests: `tests/test_wizard.py` (regex parametrized cases for all three
+Checkmk-verified patterns). Verified live end-to-end: scripted an invalid
+folder name and an invalid hostname through the actual phase functions
+against a real site, confirmed both re-prompt with the exact live-derived
+rejection reason and never reach the REST API with bad input.
+
+**✅ Fixed — 2026-08-25, `start_site()` treated a harmless "already
+running" restart as a fatal failure.** Found while smoke-testing the
+Checkmk-host validation fix above, against `my_site` reused across
+several test runs — not a bad-input case, a separate pre-existing bug.
+Live-verified: `omd start` on a site that's already fully running (the
+ordinary case when Phase 1 reuses an existing site) returns exit code 2
+even though every daemon reports "already running"/"already started" —
+`start_site()` (`site.py:89-113`) treated any nonzero exit as fatal,
+so the wizard's single most common re-run scenario raised
+`SiteBootstrapError` and crashed. **Fix:** only raise when the literal
+word `"failed"` appears in `omd`'s stdout — live-confirmed present in
+every genuine failure observed (e.g. `Starting apache.............failed`)
+and absent from the already-running case. New tests: `tests/test_site.py`
+(harmless-nonzero-exit case). Verified live end-to-end: reproduced the
+original crash (start an already-running site), confirmed the fix
+resolves it, confirmed a real induced failure (occupied Apache port)
+still correctly raises.
+
 ---
 
 ## Phase 2 — Folder Structure
 
 Matches the plan. `POST /domain-types/folder_config/collections/all` with
 `{name, title, parent, attributes}` is correct current syntax. No findings.
+
+**✅ New — 2026-08-25, folder-scoped subnet scanning, requested by the
+user.** Beyond the original plan's scope (Phase 2 step 3 explicitly says
+*"folder assignment can be decided per-host in Phase 4 regardless of
+whether this phase runs"* — folders and network discovery were designed
+as independent). The user wanted them tied together: each folder gets its
+own subnet, scanned directly into it, with per-folder subnets optional
+("I can decide not to enter any subnet for a folder"), and no more manual
+per-host folder assignment in Phase 4.
+
+**Fix, spanning Phases 2-4:**
+- **Phase 2** (`wizard.py:202-260`) now loops one folder at a time
+  (name, then its subnet — blank to create the folder without scanning it
+  now) instead of a single comma-separated names prompt, returning
+  `dict[str, str | None]` (`{"/vlan10": "10.0.0.0/24", "/vlan20": None}`).
+  Live-verified finding along the way: Checkmk's host-config REST endpoint
+  requires the **full folder path** (`/vlan10`) for the `folder` field —
+  a bare name like `create_folder()`'s own `name` parameter takes is
+  rejected with a 400 pattern-mismatch error. `phase2_folders()` stores
+  the full path as the dict key so this distinction never leaks into
+  Phase 3/4/5.
+- **Phase 3** (`wizard.py:266-328`) scans each folder's subnet separately
+  and stages results directly into that folder (`host_name`, `folder`,
+  `attributes` all in one `create_host` call) — no longer always root
+  regardless of Phase 2, closing a gap `_create_or_update_host()`'s own
+  docstring used to flag as a known limitation (see Phase 5 section).
+  Falls back to exactly the original single-CIDR flat-scan-to-root
+  behavior when Phase 2 produced no folder/subnet pairs (skipped, or
+  every subnet left blank) — no regression for anyone not using this.
+  Returns `list[ScannedHost(ip, open_ports, folder)]` instead of the
+  scanner's bare `HostScanResult`.
+- **Phase 4** (`wizard.py:334-383`) drops the per-host folder prompt
+  entirely — `OnboardedHost.folder` is copied straight from the selected
+  `ScannedHost`, since the folder is already known from which scan found
+  the host. Checkbox `value` is the whole `ScannedHost` object (not a bare
+  IP string) so this carries through without an extra lookup.
+
+Verified live end-to-end (not unit tests — this is orchestration/prompt
+flow, same 0%-direct-coverage precedent as the rest of `wizard.py`):
+scripted a real run creating two folders (one with a subnet scanning
+`127.0.0.0/30` against the site's own Apache port, one without), confirmed
+the host landed in the REST API with `extensions.folder == "/vlan10"`
+(not root), confirmed the no-subnet folder was skipped, and confirmed
+Phase 4 asks no folder question while still producing the correct
+`OnboardedHost.folder`. Also re-verified the flat-fallback (no folders at
+all) path still stages at root exactly as before. Related, incidental
+fix: `_create_or_update_host()`'s "folder placement" limitation note (see
+Phase 5 section) is effectively closed now that Phase 3 stages into the
+correct folder from the start — its fallback `PUT` no longer needs to
+move anything.
 
 ---
 
@@ -101,7 +396,10 @@ native Checkmk scanning is independently confirmed accurate:
   out of scope) matches plan step 3-4 exactly.
 
 No findings beyond what CONCERNS.md already flags as tech debt (no
-network-level timeout, no cancel/resume on large ranges).
+network-level timeout, no cancel/resume on large ranges). See Phase 2
+section above for the 2026-08-25 folder-scoped scanning feature, which
+changes this phase's signature and staging behavior but not its scanning
+mechanics.
 
 ---
 
@@ -480,10 +778,52 @@ before connecting.
 11. ~~**Unhandled CIDR/port input crashes the wizard**~~ — **fixed
     2026-08-25**, see Phase 5 section above (Phase 3 input, fix grouped
     with the other 2026-08-25 findings).
+12. ~~**Unhandled site-name input crashes the wizard**~~ — **fixed
+    2026-08-25**, see Phase 1 section above. Found live during manual
+    testing (`omd create` rejected the entered name), not by review.
+13. ~~**No default 'automation' user exists on a fresh site — this
+    audit's own earlier claim to the contrary was wrong**~~ — **fixed
+    2026-08-25**, see Phase 1 section above. Found live during manual
+    testing; auto-provisioning now closes the gap instead of requiring a
+    manual GUI step on every fresh site.
+14. ~~**`omd create`/`omd start`/`omd rm` output discarded, including
+    on failure**~~ — **fixed 2026-08-25**, see Phase 1 section above.
+    Raised by the user, not found during review.
+15. ~~**Automation-user auto-provisioning left a foreign pending change
+    that broke every Phase 7 activation**~~ — **fixed 2026-08-25**, see
+    Phase 1 section above. Self-inflicted by fix #13; found live by the
+    user hitting it in Phase 7 during the very next test run.
+16. ~~**Site name asked before the operator can see what sites already
+    exist, and deleting a site forced recreating under the same name**~~
+    — **fixed 2026-08-25**, see Phase 1 section above. Requested by the
+    user, beyond the original plan's scope.
+17. ~~**Folder structure (Phase 2) and network discovery (Phase 3) were
+    fully independent — no way to scan a specific subnet into a specific
+    folder**~~ — **fixed 2026-08-25**, see Phase 2 section above.
+    Requested by the user, beyond the original plan's scope (the plan
+    explicitly designed these as independent).
+18. ~~**Network-level failures (unreachable/malformed host) bypassed
+    every `except CheckmkAPIError` in the codebase**~~ — **fixed
+    2026-08-25**, see Phase 1 section above. The single highest-leverage
+    finding from the user's "validate everything, never crash" request —
+    fixed once at `CheckmkClient._request()`'s single choke point rather
+    than at each of the ~10 call sites.
+19. ~~**Folder names and hostnames weren't validated against Checkmk's
+    own naming rules before being sent to the REST API**~~ — **fixed
+    2026-08-25**, see Phase 2 section above. Requested by the user
+    ("if a folder cannot have spaces, or dash, etc."); patterns
+    live-verified against a real site rather than assumed, same method
+    already used for `_SITE_NAME_RE`.
+20. ~~**`start_site()` treated a harmless "already running" restart as a
+    fatal failure**~~ — **fixed 2026-08-25**, see Phase 1 section above.
+    Found live while smoke-testing fix #18/#19, not part of the original
+    request — a separate pre-existing bug hit by the wizard's single most
+    common re-run scenario.
 
-Everything else — Phases 2, 3, 4, and the mechanical parts of Phases 1, 5,
-6, and 7 (REST payloads, CLI syntax, endpoint paths) — matches the plan and
-is independently confirmed accurate against current Checkmk documentation.
+Everything else — the mechanical parts of Phases 1, 2, 3, 5, 6, and 7
+(REST payloads, CLI syntax, endpoint paths) and all of Phase 4 — matches
+the plan and is independently confirmed accurate against current Checkmk
+documentation.
 Pre-existing tech-debt/security findings from `.planning/codebase/CONCERNS.md`
 were spot-checked during this pass; the package-integrity item is now
 fixed (see Phase 5 section), and the rest remain accurate and are not

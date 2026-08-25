@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -18,10 +19,54 @@ from rich.progress import Progress
 from rich.table import Table
 
 from checkmk_wizard import livestatus, remote, site
-from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection
-from checkmk_wizard.scanner import DEFAULT_PORTS, HostScanResult, scan_network
+from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection, bootstrap_automation_user
+from checkmk_wizard.scanner import DEFAULT_PORTS, scan_network
 
 console = Console()
+
+# OMD site name rules (docs.checkmk.com/latest/en/omd_basics.html,
+# "Creating sites"): must start with a letter, contain only letters,
+# digits, and underscores, max 16 characters.
+_SITE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,15}$")
+
+# Checkmk REST API validation patterns — live-verified against a running
+# 2.4.0p35 CE site by provoking 400 responses and reading the exact regex
+# Checkmk's own field validation reports back, rather than guessing:
+#   folder name  (POST .../folder_config/collections/all, "name"):
+#     rejected "my folder" and "my.folder" with pattern '^[-\w]*\Z' —
+#     letters/digits/underscore/hyphen only, no spaces or dots (unlike
+#     hostnames below, which do allow dots).
+_FOLDER_NAME_RE = re.compile(r"^[-\w]+$")
+#   host name    (POST .../host_config/collections/all, "host_name"):
+#     rejected "my host" and "host@name" with pattern '^[-0-9a-zA-Z_.]+\Z'
+#     — letters/digits/underscore/hyphen/dot (dots needed for FQDNs and
+#     dotted IPv4 addresses).
+_HOST_NAME_RE = re.compile(r"^[-0-9a-zA-Z_.]+$")
+
+# Not a Checkmk-enforced pattern (this value is never validated server-side
+# — it's only used to build the wizard's own base_url and printed into
+# commands) but bad input here still needs catching before it reaches
+# httpx: RFC-1123-style hostname, checked alongside a plain IP address.
+_HOSTNAME_RE = re.compile(
+    r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$"
+)
+
+
+def _valid_checkmk_host(value: str) -> bool:
+    if len(value) > 253:
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return bool(_HOSTNAME_RE.match(value))
+
+
+@dataclass
+class ScannedHost:
+    ip: str
+    open_ports: list[int]
+    folder: str  # which Phase 2 folder's subnet this host was discovered in ("/" if none)
 
 
 @dataclass
@@ -37,11 +82,42 @@ class OnboardedHost:
 @dataclass
 class WizardState:
     connection: CheckmkConnection | None = None
-    scan_results: list[HostScanResult] = field(default_factory=list)
+    scan_results: list[ScannedHost] = field(default_factory=list)
     onboarded: list[OnboardedHost] = field(default_factory=list)
 
 
 # ── Phase 1: Site bring-up ──────────────────────────────────────────────
+
+
+async def _create_fresh_site(site_name: str, checkmk_host: str) -> None:
+    admin_password = secrets.token_urlsafe(16)
+    console.print(site.create_site(site_name, admin_password), style="dim", end="")
+    console.print(site.start_site(site_name), style="dim", end="")
+    console.print(
+        f"Site created. cmkadmin password (save this): [bold yellow]{admin_password}[/bold yellow]"
+    )
+    try:
+        await bootstrap_automation_user(checkmk_host, site_name, admin_password)
+        console.print("[green]Automation user 'automation' created automatically.[/green]")
+    except CheckmkAPIError as exc:
+        console.print(
+            f"[yellow]Could not auto-create the 'automation' user ({exc}) — "
+            "you'll be prompted to create one manually below.[/yellow]"
+        )
+
+
+async def _prompt_new_site_name(taken: set[str]) -> str:
+    while True:
+        raw_name = await questionary.text("New Checkmk site name:").ask_async()
+        if not _SITE_NAME_RE.match(raw_name):
+            console.print(
+                "[red]Invalid site name — must start with a letter, contain only "
+                "letters/digits/underscores, and be 1-16 characters long. Try again.[/red]"
+            )
+        elif raw_name in taken:
+            console.print(f"[red]Site '{raw_name}' already exists — choose a different name.[/red]")
+        else:
+            return raw_name
 
 
 async def phase1_site_bringup() -> CheckmkConnection:
@@ -51,23 +127,63 @@ async def phase1_site_bringup() -> CheckmkConnection:
         console.print(f"[red]{site.CHECKMK_NOT_INSTALLED_INSTRUCTIONS}[/red]")
         raise SystemExit(1)
 
-    site_name = await questionary.text("Checkmk site name:").ask_async()
-    checkmk_host = await questionary.text(
-        "Hostname/IP to reach this Checkmk site on (as seen by agents/browser):",
-        default="localhost",
-    ).ask_async()
+    site_name: str | None = None
+    reuse_existing = False
+    existing_sites = site.list_sites()
+    while site_name is None:
+        if not existing_sites:
+            site_name = await _prompt_new_site_name(set(existing_sites))
+            break
 
-    if not site.site_exists(site_name):
-        console.print(f"Site [bold]{site_name}[/bold] doesn't exist yet — creating it.")
-        admin_password = secrets.token_urlsafe(16)
-        site.create_site(site_name, admin_password)
-        site.start_site(site_name)
-        console.print(
-            f"Site created. cmkadmin password (save this): [bold yellow]{admin_password}[/bold yellow]"
+        choices = [
+            questionary.Choice(f"Continue with existing site '{s}'", value=s) for s in existing_sites
+        ]
+        choices.append(questionary.Choice("Delete a site, then create a new one", value=None))
+        selection = await questionary.select(
+            "Existing Checkmk site(s) found on this host:", choices=choices
+        ).ask_async()
+
+        if selection is not None:
+            site_name = selection
+            reuse_existing = True
+            break
+
+        to_delete = (
+            existing_sites[0]
+            if len(existing_sites) == 1
+            else await questionary.select(
+                "Which site do you want to delete?", choices=existing_sites
+            ).ask_async()
         )
+        confirmed = await questionary.confirm(
+            f"Delete site '{to_delete}'? This removes ALL its config/data permanently "
+            "(does not touch the Checkmk install itself).",
+            default=False,
+        ).ask_async()
+        if confirmed:
+            console.print(f"[yellow]Deleting site {to_delete}...[/yellow]")
+            console.print(site.remove_site(to_delete), style="dim", end="")
+            existing_sites = site.list_sites()
+        # else: loop back to the same menu (nothing changed).
+
+    checkmk_host = None
+    while checkmk_host is None:
+        raw_host = await questionary.text(
+            "Hostname/IP to reach this Checkmk site on (as seen by agents/browser):",
+            default="localhost",
+        ).ask_async()
+        if not _valid_checkmk_host(raw_host):
+            console.print(f"[red]'{raw_host}' isn't a valid hostname or IP address — try again.[/red]")
+        else:
+            checkmk_host = raw_host
+
+    if reuse_existing:
+        console.print(f"Reusing existing site [bold]{site_name}[/bold].")
+        # no-op if already running; omd handles that
+        console.print(site.start_site(site_name), style="dim", end="")
     else:
-        console.print(f"Site [bold]{site_name}[/bold] already exists — reusing it.")
-        site.start_site(site_name)  # no-op if already running; omd handles that
+        console.print(f"Creating new site [bold]{site_name}[/bold].")
+        await _create_fresh_site(site_name, checkmk_host)
 
     creds = site.get_site_credentials(site_name)
     if creds is None:
@@ -76,7 +192,11 @@ async def phase1_site_bringup() -> CheckmkConnection:
             "Create one manually: Setup > Users > Add user, authentication mode "
             "'Automation secret for machine accounts', then paste the secret below."
         )
-        secret = await questionary.password("Automation secret:").ask_async()
+        secret = ""
+        while not secret:
+            secret = await questionary.password("Automation secret:").ask_async()
+            if not secret:
+                console.print("[red]Automation secret can't be blank — try again.[/red]")
         creds = site.SiteCredentials(site=site_name, automation_user="automation", automation_secret=secret)
 
     # Checkmk ships a separate pre-configured 'agent_registration' user
@@ -121,39 +241,100 @@ async def phase1_site_bringup() -> CheckmkConnection:
 # ── Phase 2: Folder structure (optional) ────────────────────────────────
 
 
-async def phase2_folders(client: CheckmkClient) -> None:
+async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
+    """Optionally create folders, each with its own subnet to scan in
+    Phase 3. Returns {folder_name: cidr_or_None} — an empty dict (no
+    folders, or every folder's subnet left blank) tells Phase 3 to fall
+    back to a single flat scan into the root folder.
+    """
     console.rule("[bold]Phase 2 — Folder Structure (optional)")
     use_folders = await questionary.confirm("Set up folders (one per VLAN/site)?", default=False).ask_async()
     if not use_folders:
-        console.print("Skipping — all hosts will land in the root folder.")
-        return
+        console.print("Skipping — Phase 3 will scan a single subnet into the root folder.")
+        return {}
 
-    raw = await questionary.text(
-        "Comma-separated folder names (e.g. vlan10,vlan20):"
-    ).ask_async()
-    for name in [n.strip() for n in raw.split(",") if n.strip()]:
+    console.print(
+        "Add folders one at a time. Each folder can have its own subnet for Phase 3 "
+        "to scan directly into it — leave the subnet blank to create the folder "
+        "without scanning it now."
+    )
+    folder_subnets: dict[str, str | None] = {}
+    while True:
+        name = (await questionary.text("Folder name (blank to finish adding folders):").ask_async()).strip()
+        name = name.lstrip("/")
+        if not name:
+            break
+        if not _FOLDER_NAME_RE.match(name):
+            console.print(
+                f"[red]Invalid folder name '{name}' — Checkmk only allows letters, digits, "
+                "underscores, and hyphens (no spaces or dots). Try again.[/red]"
+            )
+            continue
+
+        cidr: str | None = None
+        while True:
+            raw_cidr = (
+                await questionary.text(
+                    f"Subnet/CIDR to scan for folder '{name}' (blank to skip scanning it):",
+                    default="",
+                ).ask_async()
+            ).strip()
+            if not raw_cidr:
+                break
+            try:
+                ipaddress.ip_network(raw_cidr, strict=False)
+            except ValueError as exc:
+                console.print(f"[red]Invalid CIDR ({exc}) — try again.[/red]")
+            else:
+                cidr = raw_cidr
+                break
+
         try:
             await client.create_folder(name=name, title=name)
             console.print(f"  [green]created[/green] /{name}")
         except CheckmkAPIError as exc:
             console.print(f"  [red]failed[/red] /{name}: {exc}")
 
+        # Checkmk's REST API `folder` field for hosts must be a full path
+        # ("/vlan10"), not the bare name `create_folder()` takes — live-
+        # verified a bare name is rejected with a 400 pattern-mismatch
+        # error. Store the full path here so it flows unchanged through
+        # Phase 3's ScannedHost.folder and Phase 4/5's OnboardedHost.folder
+        # without every later call needing to know about the distinction.
+        folder_subnets[f"/{name}"] = cidr
+
+    if not folder_subnets:
+        console.print("No folders added — Phase 3 will scan a single subnet into the root folder.")
+    return folder_subnets
+
 
 # ── Phase 3: Network discovery ──────────────────────────────────────────
 
 
-async def phase3_discovery(client: CheckmkClient) -> list[HostScanResult]:
+async def phase3_discovery(client: CheckmkClient, folder_subnets: dict[str, str | None]) -> list[ScannedHost]:
+    """Scan each Phase 2 folder's subnet directly into that folder. Falls
+    back to a single flat scan into the root folder when Phase 2 defined
+    no folders (skipped, or every folder's subnet was left blank) —
+    matches the wizard's original single-CIDR-prompt behavior.
+    """
     console.rule("[bold]Phase 3 — Network Discovery (custom async scanner)")
 
-    cidr = None
-    while cidr is None:
-        raw_cidr = await questionary.text("Subnet/CIDR to scan (e.g. 192.168.10.0/24):").ask_async()
-        try:
-            ipaddress.ip_network(raw_cidr, strict=False)
-        except ValueError as exc:
-            console.print(f"[red]Invalid CIDR ({exc}) — try again.[/red]")
-        else:
-            cidr = raw_cidr
+    scans: list[tuple[str, str]] = [(folder, cidr) for folder, cidr in folder_subnets.items() if cidr]
+    skipped_folders = [folder for folder, cidr in folder_subnets.items() if not cidr]
+    if skipped_folders:
+        console.print(f"Skipping scan for folder(s) with no subnet given: {', '.join(skipped_folders)}")
+
+    if not scans:
+        cidr = None
+        while cidr is None:
+            raw_cidr = await questionary.text("Subnet/CIDR to scan (e.g. 192.168.10.0/24):").ask_async()
+            try:
+                ipaddress.ip_network(raw_cidr, strict=False)
+            except ValueError as exc:
+                console.print(f"[red]Invalid CIDR ({exc}) — try again.[/red]")
+            else:
+                cidr = raw_cidr
+        scans = [("/", cidr)]
 
     ports = None
     while ports is None:
@@ -166,48 +347,68 @@ async def phase3_discovery(client: CheckmkClient) -> list[HostScanResult]:
         except ValueError:
             console.print("[red]Ports must be comma-separated integers — try again.[/red]")
 
-    with Progress() as progress:
-        task = progress.add_task("Scanning...", total=None)
+    all_results: list[ScannedHost] = []
+    for folder, cidr in scans:
+        console.print(f"[bold]Scanning {cidr} → folder '{folder}'[/bold]")
+        with Progress() as progress:
+            task = progress.add_task("Scanning...", total=None)
 
-        def on_progress(chunk, alive, total):
-            progress.update(task, description=f"Scanned {chunk} — {alive}/{total} responsive")
+            def on_progress(chunk, alive, total):
+                progress.update(task, description=f"Scanned {chunk} — {alive}/{total} responsive")
 
-        results = await scan_network(cidr, ports=ports, on_progress=on_progress)
+            results = await scan_network(cidr, ports=ports, on_progress=on_progress)
+
+        for r in results:
+            all_results.append(ScannedHost(ip=r.ip, open_ports=r.open_ports, folder=folder))
+            try:
+                await client.create_host(host_name=r.ip, folder=folder, attributes={"ipaddress": r.ip})
+            except CheckmkAPIError as exc:
+                console.print(f"[yellow]Could not stage {r.ip}: {exc}[/yellow]")
 
     table = Table(title="Discovered hosts")
     table.add_column("IP")
+    table.add_column("Folder")
     table.add_column("Open ports")
-    for r in results:
-        table.add_row(r.ip, ", ".join(map(str, r.open_ports)))
+    for sh in all_results:
+        table.add_row(sh.ip, sh.folder, ", ".join(map(str, sh.open_ports)))
     console.print(table)
 
-    for r in results:
-        try:
-            await client.create_host(host_name=r.ip, attributes={"ipaddress": r.ip})
-        except CheckmkAPIError as exc:
-            console.print(f"[yellow]Could not stage {r.ip}: {exc}[/yellow]")
-
-    return results
+    return all_results
 
 
 # ── Phase 4: Host classification (manual, by design — no fingerprinting) ──
 
 
-async def phase4_classification(scan_results: list[HostScanResult]) -> list[OnboardedHost]:
+async def phase4_classification(scan_results: list[ScannedHost]) -> list[OnboardedHost]:
+    """Purely interactive — no fingerprinting, no folder prompt: each host's
+    folder is already known from which Phase 2 folder-subnet scan found it.
+    """
     console.rule("[bold]Phase 4 — Host Classification")
     console.print("No automatic fingerprinting — pick which IPs to promote to named hosts.")
 
-    choices = [questionary.Choice(f"{r.ip} (ports: {r.open_ports})", value=r.ip) for r in scan_results]
+    choices = [
+        questionary.Choice(f"{r.ip} [{r.folder}] (ports: {r.open_ports})", value=r) for r in scan_results
+    ]
     if not choices:
         console.print("No scanned hosts to promote.")
         return []
 
-    selected_ips = await questionary.checkbox("Promote which hosts?", choices=choices).ask_async()
+    selected = await questionary.checkbox("Promote which hosts?", choices=choices).ask_async()
 
     onboarded: list[OnboardedHost] = []
-    for ip in selected_ips:
-        hostname = await questionary.text(f"Hostname for {ip}:", default=ip).ask_async()
-        folder = await questionary.text(f"Folder for {hostname} (default /):", default="/").ask_async()
+    for scanned in selected:
+        hostname = None
+        while hostname is None:
+            raw_hostname = await questionary.text(
+                f"Hostname for {scanned.ip}:", default=scanned.ip
+            ).ask_async()
+            if not _HOST_NAME_RE.match(raw_hostname):
+                console.print(
+                    f"[red]Invalid hostname '{raw_hostname}' — Checkmk only allows letters, "
+                    "digits, underscores, hyphens, and dots. Try again.[/red]"
+                )
+            else:
+                hostname = raw_hostname
         os_family = await questionary.select(
             f"Monitoring method for {hostname}:",
             choices=[
@@ -230,9 +431,9 @@ async def phase4_classification(scan_results: list[HostScanResult]) -> list[Onbo
 
         onboarded.append(
             OnboardedHost(
-                ip=ip,
+                ip=scanned.ip,
                 hostname=hostname,
-                folder=folder,
+                folder=scanned.folder,
                 os_family=os_family,
                 snmp_version=snmp_version,
                 snmp_community=snmp_community,
@@ -254,8 +455,11 @@ async def _create_or_update_host(
     create fails and this call's attributes (tag_agent/tag_snmp_ds/
     snmp_community/ipaddress) are silently never applied. Note: this only
     updates attributes, not folder placement — Checkmk's host-config PUT
-    doesn't support moving folders, so a host promoted into a non-root
-    folder that already exists at root (from Phase 3) stays at root.
+    doesn't support moving folders. In practice this no longer bites for
+    the folder itself: Phase 3 now stages each host directly into the
+    folder its scan belongs to (`folder=` on the same `create_host` call
+    used here), so by the time this fallback runs, `folder` already
+    matches where Phase 3 put it.
     """
     try:
         await client.create_host(host_name=host_name, folder=folder, attributes=attributes)
@@ -279,13 +483,29 @@ async def phase5_onboarding(
     ).ask_async()
     ssh_creds: remote.SSHCredentials | None = None
     if use_ssh:
-        username = await questionary.text("SSH username:").ask_async()
+        username = None
+        while not username:
+            username = (await questionary.text("SSH username:").ask_async()).strip()
+            if not username:
+                console.print("[red]SSH username can't be blank — try again.[/red]")
+
         auth_mode = await questionary.select("SSH auth method:", choices=["password", "private key"]).ask_async()
         if auth_mode == "password":
             password = await questionary.password("SSH password:").ask_async()
             ssh_creds = remote.SSHCredentials(username=username, password=password)
         else:
-            key_path = await questionary.text("Private key path:").ask_async()
+            key_path = None
+            while key_path is None:
+                raw_key_path = (await questionary.text("Private key path:").ask_async()).strip()
+                # Local filesystem check, not a Checkmk-API validation —
+                # but a nonexistent key would fail identically for every
+                # host in the batch, so catching it once up front here
+                # (instead of once per host inside asyncssh's connect
+                # error handling) is worth the pre-flight check.
+                if not Path(raw_key_path).expanduser().is_file():
+                    console.print(f"[red]'{raw_key_path}' isn't a file that exists — try again.[/red]")
+                else:
+                    key_path = raw_key_path
             ssh_creds = remote.SSHCredentials(username=username, private_key_path=key_path)
 
     for h in hosts:
@@ -479,8 +699,8 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
 async def run() -> None:
     connection = await phase1_site_bringup()
     async with CheckmkClient(connection) as client:
-        await phase2_folders(client)
-        scan_results = await phase3_discovery(client)
+        folder_subnets = await phase2_folders(client)
+        scan_results = await phase3_discovery(client, folder_subnets)
         onboarded = await phase4_classification(scan_results)
         await phase5_onboarding(client, connection, onboarded)
         await phase6_discovery(client, onboarded)

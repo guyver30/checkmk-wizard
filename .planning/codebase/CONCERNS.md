@@ -139,6 +139,17 @@ only its most frequent trigger is closed.
 
 ### Folder Assignment Race Condition
 
+**Update (2026-08-25), largely mitigated:** Phase 4 no longer lets the
+operator type an arbitrary folder name by hand — `OnboardedHost.folder`
+now always comes from `ScannedHost.folder`, which is either `/` (always
+exists) or a folder Phase 2 itself just created via the REST API in the
+same run. The typo/nonexistent-folder scenario this concern describes is
+closed. Residual gap: if a folder's `create_folder()` call in Phase 2
+itself fails (e.g. a permissions issue), the wizard still records that
+folder's subnet and Phase 3 will still scan/stage into it, hitting this
+same class of error again in Phase 3/5 — not pre-flight-checked. See
+`docs/PLAN-CONFORMANCE-AUDIT.md`, Phase 2/3, 2026-08-25 entry.
+
 **Issue:** In `phase5_onboarding()` (wizard.py, line 201-205), hosts are created with a folder that may not exist if Phase 2 was skipped or if folder creation failed. The API will likely reject this, but the error handling is generic.
 
 **Files:** `src/checkmk_wizard/wizard.py:201-205`

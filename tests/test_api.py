@@ -1,11 +1,17 @@
+import json
+from unittest.mock import AsyncMock, patch
+
+import httpx
 import pytest
 import respx
 from httpx import Response
 
-from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection
+from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection, bootstrap_automation_user
 
 CONN = CheckmkConnection(host="cmk.example", site="mysite", username="automation", secret="s3cret")
 BASE = "http://cmk.example/mysite/check_mk/api/v1"
+LOGIN_URL = "http://cmk.example/mysite/check_mk/login.py"
+LOGIN_PAGE_HTML = '<script>var global_csrf_token = "the-csrf-token";</script>'
 
 
 def test_connection_registration_credential_defaults_to_rest_credential():
@@ -97,6 +103,18 @@ async def test_error_response_raises():
 
 
 @pytest.mark.asyncio
+async def test_network_error_wrapped_as_checkmk_api_error():
+    # A raw httpx.HTTPError (unreachable host, DNS failure, timeout, ...)
+    # must never escape as-is — every CheckmkClient call site in the
+    # wizard only catches CheckmkAPIError.
+    with respx.mock:
+        respx.get(f"{BASE}/version").mock(side_effect=httpx.ConnectError("Name or service not known"))
+        async with CheckmkClient(CONN) as client:
+            with pytest.raises(CheckmkAPIError, match="Name or service not known"):
+                await client.get_version()
+
+
+@pytest.mark.asyncio
 async def test_start_service_discovery_uses_refresh_mode():
     with respx.mock:
         route = respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
@@ -162,3 +180,139 @@ async def test_download_agent_uses_os_type_param():
             data = await client.download_agent("linux_deb")
     assert data == b"binary-agent-data"
     assert route.calls.last.request.url.params["os_type"] == "linux_deb"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_success():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        create_route = respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(200, json={"value": []}, headers={"ETag": '"the-etag"'})
+        )
+        self_url = f"{BASE}/objects/activation_run/run-id"
+        activate_route = respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(
+                200,
+                json={
+                    "links": [{"rel": "self", "href": self_url}],
+                    "extensions": {"is_running": False},
+                },
+            )
+        )
+        status_route = respx.get(self_url)
+        await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["username"] == "automation"
+    assert body["auth_option"]["auth_type"] == "automation"
+    assert body["auth_option"]["store_automation_secret"] is True
+    assert body["roles"] == ["admin"]
+
+    # The user-creation call is itself a pending change attributed to
+    # cmkadmin — must be activated (as cmkadmin, so it's not "foreign")
+    # before it can block a later activate_changes() call as "automation".
+    assert activate_route.called
+    assert activate_route.calls.last.request.headers["If-Match"] == '"the-etag"'
+    activate_body = json.loads(activate_route.calls.last.request.content)
+    assert activate_body["force_foreign_changes"] is False
+    # Activation already reported done (is_running: false) — no need to poll.
+    assert not status_route.called
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_polls_until_activation_completes():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(200, json={"value": []}, headers={"ETag": '"the-etag"'})
+        )
+        self_url = f"{BASE}/objects/activation_run/run-id"
+        respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(
+                200,
+                json={"links": [{"rel": "self", "href": self_url}], "extensions": {"is_running": True}},
+            )
+        )
+        status_route = respx.get(self_url)
+        status_route.side_effect = [
+            Response(200, json={"extensions": {"is_running": True}}),
+            Response(200, json={"extensions": {"is_running": False}}),
+        ]
+        with patch("checkmk_wizard.api.asyncio.sleep", new=AsyncMock()):
+            await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
+
+    assert status_route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_succeeds_even_if_self_activation_fails():
+    # The self-cleanup activation is best-effort: the automation user is
+    # already created and usable at that point, so a failure here must not
+    # be raised as a bootstrap failure.
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(500, json={"title": "internal error"})
+        )
+        # No route registered for activate-changes — must not be called
+        # (no ETag to extract from the failed GET above), and the missing
+        # mock must not raise assert-all-mocked either.
+        await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_raises_without_csrf_token():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text="<html>no token here</html>"))
+        with pytest.raises(CheckmkAPIError):
+            await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_wraps_network_error():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(side_effect=httpx.ConnectError("Name or service not known"))
+        with pytest.raises(CheckmkAPIError, match="Name or service not known"):
+            await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_raises_on_failed_login():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        # No auth_<site> cookie set — wrong password / login rejected.
+        respx.post(LOGIN_URL).mock(return_value=Response(200, text="login page again"))
+        with pytest.raises(CheckmkAPIError):
+            await bootstrap_automation_user("cmk.example", "mysite", "wrongpw")
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_raises_on_create_failure():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(400, json={"title": "already exists"})
+        )
+        with pytest.raises(CheckmkAPIError):
+            await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
