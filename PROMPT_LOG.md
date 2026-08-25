@@ -23,3 +23,6 @@
 - 2026-08-25 11:31 (mid-turn) — "shouldn't you create user automation and accept changes as first thing... then you add hosts, folders, etc. using user automation instead of cmkadmin? what's your suggestion?"
 - 2026-08-25 12:00 — "a couple of things to fix: 1) wizard should check for existing sites at startup and offer continue/delete+create-new; 2) folder creation should let each folder have its own subnet to scan, multiple scans placing hosts in the right folder, no per-host folder prompt needed"
 - 2026-08-25 12:30 — "also ensure that all the text, IP addresses, etc entered in the wizard different steps is checked for validity and also allowed by checkmk system... this has to be caught properly without causing code or API exceptions"
+- 2026-08-25 13:00 — "I delete site, but it doesn't ask the name for a new one, just jumps directly to hostname/ip"
+- 2026-08-25 13:10 — [pasted transcript showing selection jumps straight to hostname/IP prompt]
+- 2026-08-25 13:12 — confirmed: no confirmation/deletion-output/new-name prompt appeared at all, straight to hostname/IP

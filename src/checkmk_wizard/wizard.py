@@ -24,6 +24,10 @@ from checkmk_wizard.scanner import DEFAULT_PORTS, scan_network
 
 console = Console()
 
+# Sentinel for the "delete a site" menu choice in phase1_site_bringup() —
+# see the comment at its use site for why this can't just be `value=None`.
+_DELETE_SITE = object()
+
 # OMD site name rules (docs.checkmk.com/latest/en/omd_basics.html,
 # "Creating sites"): must start with a letter, contain only letters,
 # digits, and underscores, max 16 characters.
@@ -138,12 +142,20 @@ async def phase1_site_bringup() -> CheckmkConnection:
         choices = [
             questionary.Choice(f"Continue with existing site '{s}'", value=s) for s in existing_sites
         ]
-        choices.append(questionary.Choice("Delete a site, then create a new one", value=None))
+        # NOT value=None: questionary.Choice's own __init__ default for
+        # `value` is also None, so passing it explicitly is indistinguishable
+        # from omitting it — Choice then falls back to using the *title
+        # string* as the value. Live-verified this bug: selecting "Delete a
+        # site..." returned that literal title string as `selection`
+        # (not None), which `is not None` treated as a real site name,
+        # skipping the delete flow and the new-name prompt entirely,
+        # straight to the host prompt. A dedicated sentinel avoids the trap.
+        choices.append(questionary.Choice("Delete a site, then create a new one", value=_DELETE_SITE))
         selection = await questionary.select(
             "Existing Checkmk site(s) found on this host:", choices=choices
         ).ask_async()
 
-        if selection is not None:
+        if selection is not _DELETE_SITE:
             site_name = selection
             reuse_existing = True
             break
