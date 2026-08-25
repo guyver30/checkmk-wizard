@@ -15,9 +15,9 @@ mechanics.
 |---|---|---|
 | 1 — Site Bring-up | ⚠️ Partial (improved 2026-08-24) | Package install itself still out of scope by design; wizard now fails fast with clear instructions instead of a confusing subprocess error; rest matches and is doc-verified correct |
 | 2 — Folders | ✅ Matches | |
-| 3 — Network Discovery | ✅ Matches | Native-scan rationale independently confirmed accurate |
+| 3 — Network Discovery | ✅ Matches | Native-scan rationale independently confirmed accurate; CIDR/port input now validated (fixed 2026-08-25) |
 | 4 — Host Classification | ✅ Matches | |
-| 5 — Host Onboarding | ⚠️ Partial (improved 2026-08-24) | SNMP path, RPM path, OS-compat check, credential-scope, package-integrity verification, and post-install status verification all fixed; remaining CONCERNS.md items (known_hosts=None, argv secrets, etc.) unchanged |
+| 5 — Host Onboarding | ⚠️ Partial (improved 2026-08-24, 2026-08-25) | SNMP path, RPM path, OS-compat check, credential-scope, package-integrity verification, post-install status verification, Phase 3→5 host-collision, and Windows command quoting all fixed; remaining CONCERNS.md items (known_hosts=None, argv secrets, etc.) unchanged |
 | 6 — Discovery & Baseline | ✅ Matches (as scoped 2026-08-24) | Accept-services gap closed (`mode: "fix_all"`); baseline rulesets (step 2) deliberately deferred, decision documented |
 | 7 — Activation & Validation | ✅ Matches (as scoped 2026-08-24) | Activation/health-check correct and doc-verified; snapshot now pulls real host/folder config, documented as partial (not a full site backup) |
 
@@ -269,9 +269,52 @@ summary table minutes later.
 
 **Already known (CONCERNS.md), still present:** `known_hosts=None`
 disabling SSH host-key verification; secrets passed as `cmk-agent-ctl
---password` argv (visible in `ps`); Phase 5's "continue anyway after host
-create fails" bug; hardcoded `sudo` with no `NOPASSWD` check; sequential
-(non-concurrent) per-host processing.
+--password` argv (visible in `ps`); hardcoded `sudo` with no `NOPASSWD`
+check; sequential (non-concurrent) per-host processing.
+
+**✅ Fixed — 2026-08-25, three findings from a follow-up code review of
+`src/checkmk_wizard/` against the implementation (not a plan-conformance
+question — these are correctness bugs found by re-reading the code, not
+gaps against the plan document):**
+
+1. **Phase 3→5 host-name collision silently dropped onboarding config.**
+   Phase 3 stages every scanned IP as a host object under `host_name=ip`
+   (`wizard.py:184-186`). Phase 4 defaults the promotion hostname to that
+   same IP, so Phase 5's `create_host` collided with the Phase 3 stub on
+   the common (default-hostname) path — not the rare "invalid hostname"
+   edge case CONCERNS.md's "Incomplete Error Recovery in Phase 5" entry
+   describes. Combined with that entry's already-known "continues anyway
+   after create fails" bug, the host's `tag_agent`/`tag_snmp_ds`/
+   `snmp_community`/`ipaddress` from Phase 5 were silently never applied —
+   worst for SNMP devices, which could be left tagged as agent-based
+   instead of `no-agent` and never correctly polled.
+   **Fix:** both `create_host` call sites in `phase5_onboarding()` now go
+   through a new `_create_or_update_host()` helper (`wizard.py:247-266`)
+   that falls back to `client.get_host()` + `update_host_attributes()`
+   (an `If-Match`/ETag `PUT`, both already existing but previously unused
+   client methods) when the create collides. This narrows the still-open
+   "continues anyway" bug's actual trigger to genuine create failures.
+   **Known limitation, documented in the code and in WIZARD-OPERATION.md:**
+   the fallback updates attributes only, not folder — Checkmk's host-config
+   `PUT` doesn't support moving folders, so a host promoted into a
+   non-root folder that already exists at root (from Phase 3) stays at
+   root. New tests: `tests/test_wizard.py`.
+2. **`windows_register_command()` didn't quote its arguments.** Unlike
+   `linux_register_command()` (`shlex.quote()` for POSIX shell),
+   `windows_register_command()` (`remote.py:259-267`) interpolated
+   hostname/server/site/user/password unquoted into the printed PowerShell
+   command — a value containing a space, `$`, or `'` produced a broken
+   copy-paste instruction. **Fix:** new `_ps_quote()` helper
+   (`remote.py:250-256`) wraps each argument as a single-quoted PowerShell
+   literal (doubling embedded `'`), matching the care already given to the
+   Linux command. New test: `tests/test_remote.py`.
+3. **Unhandled CIDR/port input crashed the whole wizard.** Phase 3
+   (`wizard.py:145-165`) passed the raw CIDR/port text straight to
+   `ipaddress.ip_network()`/`int()` with no validation; a typo raised an
+   uncaught `ValueError` that killed the entire 7-phase run (no
+   resume/checkpoint support — see WIZARD-OPERATION.md), losing all prior
+   progress. **Fix:** both prompts now validate on entry and re-prompt on
+   a parse failure instead of propagating the exception.
 
 ---
 
@@ -429,6 +472,14 @@ before connecting.
    **fixed 2026-08-24**, see Phase 7 section above. Now pulls a real
    hosts+folders snapshot from the live site via REST API; documented as
    partial (not a full site backup — no rules/users/other config).
+9. ~~**Phase 3→5 host-name collision silently drops onboarding config**~~ —
+   **fixed 2026-08-25**, see Phase 5 section above. Found in a follow-up
+   code review, not the original 2026-08-24 audit.
+10. ~~**`windows_register_command()` doesn't quote its arguments**~~ —
+    **fixed 2026-08-25**, see Phase 5 section above.
+11. ~~**Unhandled CIDR/port input crashes the wizard**~~ — **fixed
+    2026-08-25**, see Phase 5 section above (Phase 3 input, fix grouped
+    with the other 2026-08-25 findings).
 
 Everything else — Phases 2, 3, 4, and the mechanical parts of Phases 1, 5,
 6, and 7 (REST payloads, CLI syntax, endpoint paths) — matches the plan and

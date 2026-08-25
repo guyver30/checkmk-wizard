@@ -247,13 +247,22 @@ def linux_register_command(
     )
 
 
+def _ps_quote(value: str) -> str:
+    """Quote a value for PowerShell as a single-quoted (non-interpolating)
+    string literal — doubling embedded single quotes is PowerShell's escape
+    for them, and single-quoting avoids `$`-variable interpolation that a
+    double-quoted string would trigger on a hostname/password containing `$`.
+    """
+    return "'" + value.replace("'", "''") + "'"
+
+
 def windows_register_command(
     hostname: str, server: str, site: str, user: str, password: str
 ) -> str:
     return (
         '& "C:\\Program Files (x86)\\checkmk\\service\\cmk-agent-ctl.exe" register '
-        f"--hostname {hostname} --server {server} --site {site} "
-        f'--user {user} --password "{password}"'
+        f"--hostname {_ps_quote(hostname)} --server {_ps_quote(server)} --site {_ps_quote(site)} "
+        f"--user {_ps_quote(user)} --password {_ps_quote(password)}"
     )
 
 
