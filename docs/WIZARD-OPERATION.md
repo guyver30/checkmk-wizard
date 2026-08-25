@@ -15,7 +15,7 @@ original design, see [PLAN-CONFORMANCE-AUDIT.md](PLAN-CONFORMANCE-AUDIT.md).
 ## Entry point and control flow
 
 `uv run checkmk-wizard` → `checkmk_wizard.__main__` → `wizard.main()`
-(`wizard.py:711-712`) → `asyncio.run(run())` → `run()` (`wizard.py:699-708`),
+(`wizard.py:723-724`) → `asyncio.run(run())` → `run()` (`wizard.py:711-720`),
 which executes all 7 phases **sequentially, in a single process, with no
 resume/checkpoint support**:
 
@@ -36,7 +36,7 @@ state file. If the process is killed mid-run, the next run starts at Phase 1
 with no memory of what happened before (site/hosts already created in
 Checkmk are simply re-detected or re-created).
 
-## Phase 1 — Site Bring-up (`wizard.py:123-238`)
+## Phase 1 — Site Bring-up (`wizard.py:127-250`)
 
 1. **Pre-flight check:** `site.omd_installed()` (`site.py:44-46`) checks
    `shutil.which("omd")`. If Checkmk isn't installed at all, prints install
@@ -44,11 +44,11 @@ Checkmk are simply re-detected or re-created).
    — download link + `apt install` example) and `raise SystemExit(1)`
    immediately, before prompting for anything, rather than letting
    `omd create` fail later with a raw `FileNotFoundError`/subprocess error.
-2. **Site selection** (`wizard.py:130-166`). `site.list_sites()`
+2. **Site selection** (`wizard.py:134-179`). `site.list_sites()`
    (`site.py:57-66` — lists directory names under `/omd/sites/`, the same
    convention `site_exists()` already uses) runs first, before any prompt:
    - **No sites exist:** goes straight to `_prompt_new_site_name()`
-     (`wizard.py:109-119`) — same validation as before (`_SITE_NAME_RE`,
+     (`wizard.py:113-123`) — same validation as before (`_SITE_NAME_RE`,
      `wizard.py:30`; must start with a letter, letters/digits/underscores
      only, max 16 characters, doc-verified:
      `docs.checkmk.com/latest/en/omd_basics.html`, "Creating sites";
@@ -69,18 +69,44 @@ Checkmk are simply re-detected or re-created).
        and prompts for a new name — which can differ from any deleted
        site's name, since site name is no longer asked before this
        decision.
+
+     **Fixed 2026-08-25 — the "Delete a site..." choice used `value=None`,
+     which silently broke the whole delete flow.** Live-verified bug,
+     reported by the user (single site → picked delete → landed straight
+     on the Checkmk-host prompt, no confirmation, no deletion output, no
+     new-name prompt at all): `questionary.Choice.__init__`'s own default
+     for its `value` parameter is *also* `None`, so passing `value=None`
+     explicitly is indistinguishable from omitting it — `Choice` then
+     falls back to using the **title string** as the value. Selecting
+     "Delete a site, then create a new one" therefore returned that
+     literal string as `selection`, which `if selection is not None:`
+     treated as a real site name — skipping the delete/confirm/rename
+     flow entirely and jumping straight to the host prompt with `site_name`
+     set to that garbage string. A first reproduction attempt with a
+     scripted (mocked-out `questionary.select`) test *passed*, because
+     mocking `questionary.select` itself bypasses `Choice.__init__`
+     entirely — the mock never resolves `.value` at all, so it can't catch
+     a bug that lives inside that resolution. Only a test that constructs
+     the real `Choice` and reads its real `.value` reproduces it. **Fix:**
+     a dedicated sentinel object (`_DELETE_SITE`, `wizard.py:29`) instead
+     of `None`, compared by identity (`is not _DELETE_SITE`). Verified
+     live end-to-end against a real site: reproduced the exact reported
+     symptom pre-fix, confirmed the fix resolves it (delete flow runs,
+     new-name prompt appears, new site created). New tests:
+     `tests/test_wizard.py` (constructs the real `questionary.Choice` and
+     asserts `.value is _DELETE_SITE`, not the title string).
 3. Prompts for **Checkmk host** (hostname/IP other systems use to reach
    this site; defaults to `localhost`) — same prompt as before, now asked
    once site selection is settled rather than up front. **Validated**
-   (`_valid_checkmk_host()`, `wizard.py:55-62`) as either a parseable IP
-   address or an RFC-1123-style hostname (`_HOSTNAME_RE`, `wizard.py:50-52`)
+   (`_valid_checkmk_host()`, `wizard.py:59-66`) as either a parseable IP
+   address or an RFC-1123-style hostname (`_HOSTNAME_RE`, `wizard.py:54-56`)
    and re-prompted on a mismatch. This isn't a Checkmk-enforced format —
    the value is only ever used to build the wizard's own `base_url` and
    printed into commands, never validated server-side — but bad input
    here (a stray space, an accidentally-included `http://` prefix, ...)
    used to reach `httpx` unvalidated and crash the wizard; see the
    `CheckmkClient._request()` fix below.
-   - **New site:** `_create_fresh_site()` (`wizard.py:92-108`) generates a
+   - **New site:** `_create_fresh_site()` (`wizard.py:96-112`) generates a
      random admin password via `secrets.token_urlsafe(16)`, runs
      `omd create --admin-password <pwd> <site>` as a subprocess
      (`site.py:69-86`), then `omd start <site>` (`site.py:89-103`), then
@@ -131,10 +157,10 @@ Checkmk are simply re-detected or re-created).
    - **If not found** (auto-provisioning wasn't attempted — reused an
      existing site — or it failed): prints instructions to create an
      `automation` user manually via the web UI and prompts for the secret
-     interactively — re-prompted if left blank (`wizard.py:195-199`).
+     interactively — re-prompted if left blank (`wizard.py:207-211`).
 5. Separately, looks up a **dedicated `agent_registration` credential**
    the same way (`site.get_site_credentials(site_name,
-   automation_user="agent_registration")`, `wizard.py:208`) — Checkmk ships
+   automation_user="agent_registration")`, `wizard.py:220`) — Checkmk ships
    this as a separate pre-configured, least-privilege user scoped solely to
    host registration (doc-verified: `docs.checkmk.com/latest/en/
    agent_deployment.html`). If found, it's kept separate from the REST
@@ -226,7 +252,7 @@ running 2.4.0p35 CE site: login → create user → Bearer-auth with the new
 secret → `automation.secret` file appears on disk at the path
 `site.read_automation_secret()` already reads.
 
-## Phase 2 — Folder Structure (`wizard.py:244-308`)
+## Phase 2 — Folder Structure (`wizard.py:256-320`)
 
 **Changed 2026-08-25: folders now carry their own subnet, one at a time,**
 instead of a single comma-separated names list with no subnet concept.
@@ -239,7 +265,7 @@ root folder, same as the wizard's original behavior.
    returns `{}` immediately.
 2. If yes, loops one folder at a time until an empty name is entered:
    - **Folder name** (blank finishes the loop). A leading `/` is stripped
-     if typed, then **validated** (`_FOLDER_NAME_RE`, `wizard.py:39`) and
+     if typed, then **validated** (`_FOLDER_NAME_RE`, `wizard.py:43`) and
      re-prompted on a mismatch — live-verified against a real Checkmk site
      (see below) that only letters, digits, underscores, and hyphens are
      allowed; a name with a space or dot is rejected before it ever
@@ -262,7 +288,7 @@ root folder, same as the wizard's original behavior.
 3. If no folders end up with a subnet (including "no folders at all"),
    prints a note that Phase 3 will fall back to a single flat scan.
 
-## Phase 3 — Network Discovery (`wizard.py:314-376`)
+## Phase 3 — Network Discovery (`wizard.py:326-388`)
 
 **Changed 2026-08-25: scans each Phase 2 folder's subnet directly into
 that folder**, instead of a single subnet always staged at root
@@ -286,14 +312,14 @@ flow when Phase 2 produced no folder/subnet pairs.
    host counts as "alive" if any checked port responds) and **stages every
    alive IP directly into that folder**: `POST
    /domain-types/host_config/collections/all` with `{host_name: ip,
-   folder: folder, attributes: {ipaddress: ip}}` (`wizard.py:364`,
+   folder: folder, attributes: {ipaddress: ip}}` (`wizard.py:376`,
    `api.py:150-164`) — no longer always root. Failures are printed and
    skipped, not retried.
 5. Renders one combined `rich` table (IP / Folder / Open ports) across all
    folders' results after every scan completes, then returns
    `list[ScannedHost(ip, open_ports, folder)]`.
 
-## Phase 4 — Host Classification (`wizard.py:382-442`)
+## Phase 4 — Host Classification (`wizard.py:394-454`)
 
 Purely interactive — **no API calls, no fingerprinting, and (changed
 2026-08-25) no folder prompt** — each host's folder is already known from
@@ -305,21 +331,21 @@ case):
    `ScannedHost` object (not just the IP string), so the folder travels
    with the selection without a separate lookup.
 2. For each selected host: prompts for hostname (default = the IP,
-   **validated** against `_HOST_NAME_RE` (`wizard.py:44` — live-verified
+   **validated** against `_HOST_NAME_RE` (`wizard.py:48` — live-verified
    against a real Checkmk site: `POST .../host_config/collections/all`
    rejected "my host"/"host@name" with pattern `^[-0-9a-zA-Z_.]+\Z`) and
    re-prompted on a mismatch
-   (`wizard.py:400-411`) and a monitoring-method choice — `linux` (agent),
+   (`wizard.py:412-423`) and a monitoring-method choice — `linux` (agent),
    `windows` (agent), or `snmp` (no agent — switches/routers/printers/etc.)
-   (`questionary.select`, `wizard.py:412-419`).
+   (`questionary.select`, `wizard.py:424-431`).
 3. **If `snmp`:** additionally prompts for SNMP version (`v2c` or `v1` —
    **v3 is not supported**, community-string auth only) and the community
-   string (default `public`) (`wizard.py:421-430`).
+   string (default `public`) (`wizard.py:433-442`).
 4. Returns a list of `OnboardedHost(ip, hostname, folder, os_family,
    snmp_version, snmp_community)` — `folder` copied straight from the
    selected `ScannedHost`, never asked interactively.
 
-## Phase 5 — Host Onboarding (`wizard.py:474-617`)
+## Phase 5 — Host Onboarding (`wizard.py:486-629`)
 
 Runs once for the whole batch, then loops **sequentially, one host at a
 time** — no concurrency.
@@ -328,16 +354,16 @@ time** — no concurrency.
 1. Asks "Attempt automated SSH firewall + agent install for Linux hosts?"
    (default Yes).
 2. If yes: prompts for SSH username (re-prompted if left blank,
-   `wizard.py:486-490`), then auth mode (password or private key path) →
+   `wizard.py:498-502`), then auth mode (password or private key path) →
    builds one `SSHCredentials` object reused for **every** Linux host in
    the batch (same username/credential for all hosts). A private-key path
    is checked to exist as a local file (`Path(...).expanduser().is_file()`,
-   `wizard.py:497-507`) and re-prompted if not — not a Checkmk-API
+   `wizard.py:509-519`) and re-prompted if not — not a Checkmk-API
    validation, but a nonexistent key would fail identically for every
    host in the batch, so this is caught once up front rather than once
    per host inside `asyncssh`'s own connection error handling.
 
-**Host create/update (`_create_or_update_host()`, `wizard.py:448-469`):**
+**Host create/update (`_create_or_update_host()`, `wizard.py:460-481`):**
 Both branches below go through this helper instead of calling
 `client.create_host()` directly. Phase 3 already staged every scanned IP
 as a bare host object under `host_name=ip` **in the folder its scan
@@ -362,14 +388,14 @@ failures, since the common IP-collision case no longer fails at all.
 1. **If `os_family == "snmp"`:** `_create_or_update_host(host_name=hostname,
    folder=..., attributes={ipaddress, tag_agent: "no-agent", tag_snmp_ds:
    "snmp-v2"|"snmp-v1", snmp_community: {type: "v1_v2_community",
-   community}})` (`wizard.py:524-533`) — no firewall/SSH/agent steps at
+   community}})` (`wizard.py:536-545`) — no firewall/SSH/agent steps at
    all, `continue` to next host. `tag_agent`/`tag_snmp_ds` values are
    doc-verified (Checkmk's CSV host-import attribute mapping,
    `docs.checkmk.com/latest/en/hosts_setup.html`); the `snmp_community`
    payload shape is best-effort and **not** independently doc-confirmed —
    verify against the target site's own REST API spec before relying on it.
 2. **Otherwise:** `_create_or_update_host(host_name=hostname, folder=...,
-   attributes={ipaddress, tag_agent: "cmk-agent"})` (`wizard.py:540-546`).
+   attributes={ipaddress, tag_agent: "cmk-agent"})` (`wizard.py:552-558`).
 3. **If `os_family == "windows"`:** prints
    `windows_firewall_instructions()` and `windows_register_command()`
    (`remote.py:160-164, 259-267`) as copy-paste text, using
@@ -388,7 +414,7 @@ failures, since the common IP-collision case no longer fails at all.
       (timeout/other OSError). Result is printed, **not acted on** —
       informational only.
    b. If no SSH credentials were supplied: prints manual firewall/install
-      instructions (`_print_linux_manual`, `wizard.py:620-625`) and moves
+      instructions (`_print_linux_manual`, `wizard.py:632-637`) and moves
       to the next host.
    c. Otherwise, `remote.fix_firewall_linux(ip, creds, 8000)`
       (`remote.py:167-202`):
@@ -416,7 +442,7 @@ failures, since the common IP-collision case no longer fails at all.
       and continues to the next.
    f. `register_cmd = remote.linux_register_command(hostname, host, site,
       connection.registration_user, connection.registration_secret)`
-      (`wizard.py:592-594`) — uses the dedicated `agent_registration`
+      (`wizard.py:604-606`) — uses the dedicated `agent_registration`
       credential from Phase 1 when one was found, **not** the general
       `automation` REST credential (see credential-scope note below).
    g. `client.download_agent(os_type)` (`api.py:187-194`) — requests
@@ -447,7 +473,7 @@ failures, since the common IP-collision case no longer fails at all.
       - Any step failing → `FAILED_FALLBACK_MANUAL` with manual
         instructions; success → `AUTOMATED`.
    i. **If install returned `AUTOMATED`:** `remote.check_agent_status(ip,
-      creds, site)` (`remote.py:359-374`, `wizard.py:614-617`) runs
+      creds, site)` (`remote.py:359-374`, `wizard.py:626-629`) runs
       `cmk-agent-ctl status` on the target and checks (via
       `agent_status_shows_connection()`, `remote.py:346-356`) that its
       output contains a `Connection: <server>/<site>` line for this site —
@@ -461,7 +487,7 @@ failures, since the common IP-collision case no longer fails at all.
       Livestatus query. Printed as its own `Agent status: verified /
       could not verify` line, separate from the install line.
 
-## Phase 6 — Discovery & Baseline (`wizard.py:631-643`)
+## Phase 6 — Discovery & Baseline (`wizard.py:643-655`)
 
 For every onboarded host: `POST
 /domain-types/service_discovery_run/actions/start/invoke` with
@@ -485,7 +511,7 @@ Phase 5 sets the SNMP community as a **host attribute** directly
 a different mechanism than the plan's wording, but the same outcome
 (SNMP-only hosts get their community string configured).
 
-## Phase 7 — Activation & Validation (`wizard.py:649-693`)
+## Phase 7 — Activation & Validation (`wizard.py:661-705`)
 
 1. `GET /domain-types/activation_run/collections/pending_changes` to read
    the `ETag` header (`api.py:214-219`).
@@ -506,7 +532,7 @@ a different mechanism than the plan's wording, but the same outcome
    `client.list_hosts()` → `GET /domain-types/host_config/collections/all`
    and `client.list_folders()` → `GET
    /domain-types/folder_config/collections/all` (`api.py:166-169,
-   139-146`; `wizard.py:676-682`) — rather than only logging what this run
+   139-146`; `wizard.py:688-694`) — rather than only logging what this run
    touched. Both return the collection's `value` array (doc-confirmed
    response shape: `docs.checkmk.com/latest/en/rest_api.html`,
    pending-changes collection example). If this fetch fails, prints a
@@ -528,10 +554,10 @@ a different mechanism than the plan's wording, but the same outcome
 |---|---|---|
 | `CheckmkConnection` | `api.py:27-50` | host/site/username/secret + computed `base_url`; `registration_user`/`registration_secret` default to `username`/`secret` via `__post_init__` |
 | `CheckmkClient` | `api.py:56-237` | async context-managed `httpx` wrapper; one method per endpoint used |
-| `WizardState` | `wizard.py:83-86` | declared but **unused** — phases pass state via direct return values/params instead |
+| `WizardState` | `wizard.py:87-90` | declared but **unused** — phases pass state via direct return values/params instead |
 | `HostScanResult` | `scanner.py:22-29` | IP + open ports — `scan_network()`'s own return type, wrapped into `ScannedHost` per folder by Phase 3 |
-| `ScannedHost` | `wizard.py:66-69` | `HostScanResult` + which Phase 2 folder its subnet scan found it in (`/` for the flat-fallback case) — Phase 3's actual return type since 2026-08-25 |
-| `OnboardedHost` | `wizard.py:73-79` | ip/hostname/folder/os_family (+ snmp_version/snmp_community if SNMP) from Phase 4; `folder` copied from `ScannedHost`, never prompted |
+| `ScannedHost` | `wizard.py:70-73` | `HostScanResult` + which Phase 2 folder its subnet scan found it in (`/` for the flat-fallback case) — Phase 3's actual return type since 2026-08-25 |
+| `OnboardedHost` | `wizard.py:77-83` | ip/hostname/folder/os_family (+ snmp_version/snmp_community if SNMP) from Phase 4; `folder` copied from `ScannedHost`, never prompted |
 | `ActionResult` | `remote.py:54-57` | outcome (`automated`/`manual_required`/`failed_fallback_manual`) + detail + manual text |
 | `SSHCredentials` | `remote.py:41-44` | username + password or private key path, held in memory only |
 | `OSRelease` | `remote.py:61-79` | parsed `/etc/os-release` (id, version_id, id_like) |
@@ -596,7 +622,7 @@ tests: `tests/test_api.py` (2 cases, respx `side_effect` simulating a
   command-line argument to `cmk-agent-ctl register` over the SSH session
   (`remote.py:237-247`), visible to anything reading that process's argv
   on the target host. Using the narrower `agent_registration` credential
-  when available (Phase 1, `wizard.py:208-238`) limits what this exposure
+  when available (Phase 1, `wizard.py:220-250`) limits what this exposure
   can be used for, compared to leaking the full `automation` credential.
 - The SNMP community string (Phase 4, `snmp` hosts) is prompted in plain
   text via `questionary.text` (not password-masked) and later written

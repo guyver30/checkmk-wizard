@@ -13,7 +13,7 @@ mechanics.
 
 | Phase | Conformance | Notes |
 |---|---|---|
-| 1 — Site Bring-up | ⚠️ Partial (improved 2026-08-24, 2026-08-25) | Package install itself still out of scope by design; wizard now fails fast with clear instructions instead of a confusing subprocess error; added a site-selection menu (continue/delete-then-create-new), site-name/checkmk-host validation, automation-user auto-provisioning with self-activation polling (correcting this audit's own earlier wrong claim that a default automation user exists, and fixing the foreign-pending-change regression that fix caused), full omd create/start/rm output surfacing, a fix for `start_site()` wrongly treating an already-running restart as fatal, and network-error wrapping in the REST client so unreachable/malformed hosts fail cleanly instead of crashing (all 2026-08-25) |
+| 1 — Site Bring-up | ⚠️ Partial (improved 2026-08-24, 2026-08-25) | Package install itself still out of scope by design; wizard now fails fast with clear instructions instead of a confusing subprocess error; added a site-selection menu (continue/delete-then-create-new — and fixed a `questionary.Choice(value=None)` footgun that silently broke the delete path), site-name/checkmk-host validation, automation-user auto-provisioning with self-activation polling (correcting this audit's own earlier wrong claim that a default automation user exists, and fixing the foreign-pending-change regression that fix caused), full omd create/start/rm output surfacing, a fix for `start_site()` wrongly treating an already-running restart as fatal, and network-error wrapping in the REST client so unreachable/malformed hosts fail cleanly instead of crashing (all 2026-08-25) |
 | 2 — Folders | ✅ Matches (extended 2026-08-25) | Beyond original plan scope: folders now carry an optional per-folder subnet for Phase 3 to scan directly into them, requested by the user; folder names live-verified and validated against Checkmk's own naming pattern |
 | 3 — Network Discovery | ✅ Matches | Native-scan rationale independently confirmed accurate; CIDR/port input now validated (fixed 2026-08-25); scans folder-by-folder and stages into the right folder when Phase 2 defines subnets, falls back to the original flat scan otherwise (2026-08-25) |
 | 4 — Host Classification | ✅ Matches (simplified 2026-08-25) | Per-host folder prompt removed — folder now carried automatically from which Phase 2 folder-subnet scan found the host; hostnames live-verified and validated against Checkmk's own naming pattern |
@@ -320,6 +320,37 @@ and absent from the already-running case. New tests: `tests/test_site.py`
 original crash (start an already-running site), confirmed the fix
 resolves it, confirmed a real induced failure (occupied Apache port)
 still correctly raises.
+
+**✅ Fixed — 2026-08-25, the "Delete a site..." menu choice used
+`value=None`, silently breaking the entire delete-then-create-new flow.**
+Reported live by the user: with a single site, picking "Delete a site,
+then create a new one" landed straight on the Checkmk-host prompt — no
+confirmation, no deletion, no new-name prompt at all. Root cause:
+`questionary.Choice.__init__`'s own default for `value` is *also* `None`,
+so `phase1_site_bringup()` passing `value=None` for that choice was
+indistinguishable from not passing it — `Choice` falls back to using the
+**title string** as `.value`. Selecting it therefore returned the literal
+string `"Delete a site, then create a new one"` as `selection`, which
+`if selection is not None:` treated as a genuine site name, skipping the
+whole delete flow and setting `site_name` to that garbage string.
+
+A first reproduction attempt — a scripted test with `questionary.select`
+itself mocked out — passed, giving false confidence the code was
+correct. That mock bypasses `Choice.__init__` entirely, so it can't
+exercise (or catch) a bug that lives inside `Choice`'s own value-
+resolution logic; only a test that constructs the real `Choice` object
+and reads its real `.value` reproduces it. This is now the standing
+practice for this kind of prompt-plumbing code: verify against the real
+`questionary` classes, not just against a mock of the top-level function.
+
+**Fix:** a dedicated sentinel object (`_DELETE_SITE`, `wizard.py:29`)
+instead of `None`, compared by identity. Verified live end-to-end against
+a real site: reproduced the exact reported symptom with the pre-fix code,
+then confirmed the fix resolves it (delete flow runs, new-name prompt
+appears, new site gets created under the new name). New tests:
+`tests/test_wizard.py` (constructs the real `questionary.Choice` and
+asserts `.value is _DELETE_SITE`, not the title string — the exact
+assertion that would have caught this the first time).
 
 ---
 
@@ -819,6 +850,13 @@ before connecting.
     Found live while smoke-testing fix #18/#19, not part of the original
     request — a separate pre-existing bug hit by the wizard's single most
     common re-run scenario.
+21. ~~**"Delete a site, then create a new one" silently broke — landed
+    straight on the host prompt, no confirmation, no deletion, no
+    new-name prompt**~~ — **fixed 2026-08-25**, see Phase 1 section above.
+    Reported live by the user; root cause was `questionary.Choice(value=
+    None)` being indistinguishable from not passing `value` at all. A
+    first reproduction with `questionary.select` mocked out gave a false
+    negative — fixed by testing against the real `Choice` class instead.
 
 Everything else — the mechanical parts of Phases 1, 2, 3, 5, 6, and 7
 (REST payloads, CLI syntax, endpoint paths) and all of Phase 4 — matches

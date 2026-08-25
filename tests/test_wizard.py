@@ -1,9 +1,11 @@
 import pytest
+import questionary
 import respx
 from httpx import Response
 
 from checkmk_wizard.api import CheckmkClient, CheckmkConnection
 from checkmk_wizard.wizard import (
+    _DELETE_SITE,
     _FOLDER_NAME_RE,
     _HOST_NAME_RE,
     _SITE_NAME_RE,
@@ -13,6 +15,21 @@ from checkmk_wizard.wizard import (
 
 CONN = CheckmkConnection(host="cmk.example", site="mysite", username="automation", secret="s3cret")
 BASE = "http://cmk.example/mysite/check_mk/api/v1"
+
+
+def test_delete_site_choice_value_survives_as_sentinel():
+    # Regression test for a live-verified real bug: questionary.Choice's
+    # own __init__ default for `value` is also None, so `value=None` is
+    # indistinguishable from omitting it — Choice then falls back to using
+    # the *title string* as the value. phase1_site_bringup()'s "Delete a
+    # site..." menu choice used to pass value=None, so selecting it
+    # returned the literal title string (not None), which the code's
+    # `is not None` check treated as a real site name — skipping the
+    # entire delete flow and the new-site-name prompt, landing straight on
+    # the host prompt. Must use a dedicated sentinel instead.
+    choice = questionary.Choice("Delete a site, then create a new one", value=_DELETE_SITE)
+    assert choice.value is _DELETE_SITE
+    assert choice.value != "Delete a site, then create a new one"
 
 
 @pytest.mark.parametrize(
