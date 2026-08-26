@@ -656,8 +656,10 @@ confirmed exact current syntax (`docs.checkmk.com/latest/en/rest_api.html`).
 The plan specifies three steps for this phase:
 1. Run discovery — **implemented.**
 2. Apply baseline discovery rulesets (systemd services, SNMP community,
-   disabled-services) — **decision 2026-08-24: deliberately deferred, see
-   below.**
+   disabled-services) — **decision 2026-08-24: deliberately deferred for
+   all three; revised 2026-08-26: systemd/Windows single-service discovery
+   built (see below), SNMP community already covered, disabled-services
+   still deferred.**
 3. **Accept discovered services** (bulk accept via API, or flag for manual
    review) — **fixed 2026-08-24.**
 
@@ -691,30 +693,49 @@ accepted `200`/`201`/`204` and would have raised `CheckmkAPIError` on a
 covered by a new test (`test_start_service_discovery_accepts_303_background_job`
 in `tests/test_api.py`).
 
-**⚠️ Step 2 (baseline discovery rulesets) — deliberately deferred, not
-built (decision 2026-08-24).**
+**⚠️ Step 2 (baseline discovery rulesets) — originally deliberately
+deferred (decision 2026-08-24); systemd/Windows part built 2026-08-26.**
 The plan itself hedges all three of its examples as situational: "apply
 baseline rulesets *where useful*", systemd discovery "*if* the host runs
 relevant services", disabled-services "to suppress *known-noisy* checks."
-Two of the three (systemd single-services discovery, disabled-services)
-require operator judgment about a specific environment — which services
-run where, which checks are noisy for this deployment — that a generic
-onboarding wizard has no way to infer from a network scan. Building either
-would mean guessing at a ruleset-rule-creation REST payload shape this
-session could not confirm via context7 (Checkmk's rule API is scoped
-per-ruleset-name, `/domain-types/rule/collections/all?ruleset_name=...`,
-and no worked example for a specific ruleset surfaced), for behavior the
-plan doesn't specify concretely enough to build against confidently.
 
-The third example, "SNMP community ruleset," is effectively already
+**Systemd/Windows single-service discovery — now implemented**
+(`wizard.py`'s `_collect_expected_services()` and
+`_create_service_discovery_rules()`, called from Phase 5; verified from
+Phase 6 by `_verify_expected_services()` — see WIZARD-OPERATION.md for the
+full mechanism). The original 2026-08-24 deferral reasoning — "guessing
+at a ruleset-rule-creation REST payload shape this session could not
+confirm via context7" — no longer applies: the correct payload shape for
+`discovery_systemd_units_services` and `inventory_services_rules` was
+determined by installing the real Checkmk agent on a live systemd host,
+creating rules against a real Checkmk 2.4.0p35 CE site, and reading the
+shipped check-plugin source directly (`cmk/plugins/collection/agent_based/systemd_units.py`,
+`cmk/gui/plugins/wato/check_parameters/{systemd_services,services}.py`)
+rather than relying on context7/doc coverage, which turned out not to
+document this ruleset's internals precisely enough (e.g. the `.service`
+suffix-stripping behavior, and that a bare name entry requires an exact
+string match rather than being treated as a regex — both found only by
+live debugging a rule that otherwise silently matched nothing). This also
+resolves this feature's operator-judgment concern differently than
+originally framed: rather than the wizard guessing which services matter,
+it now asks the user directly — via a live SSH scan of currently-running
+systemd units to choose from (Linux with SSH access) or manual entry
+(Windows, or Linux without SSH access) — so the judgment call stays with
+the operator, not the wizard.
+
+**Disabled-services baseline ruleset — still deliberately deferred.** This
+one remains genuinely different from the systemd/Windows case: it's about
+suppressing *known-noisy* checks, which requires judgment about what's
+noisy in a specific deployment that neither a network scan nor an SSH
+scan of running services can answer — there's no equivalent "ask the user
+to pick from what's there" mitigation available for it the way there was
+for systemd/Windows discovery.
+
+The plan's third example, "SNMP community ruleset," is effectively already
 covered by the Phase 5 SNMP fix: the community string is set as a **host
 attribute** (`snmp_community`) directly on the host object rather than via
 a separate folder-level ruleset — a different mechanism than the plan's
-wording, but the same functional outcome for SNMP-only hosts. This was
-confirmed with the user rather than assumed; the alternative (adding an
-optional "disabled services" prompt with a guessed rule-creation payload)
-was explicitly declined in favor of not building against an unconfirmed
-API shape.
+wording, but the same functional outcome for SNMP-only hosts.
 
 ---
 
@@ -793,10 +814,15 @@ before connecting.
 6. ~~**Phase 5: `cmk-agent-ctl register` uses the broad `automation` credential**~~
    — **fixed 2026-08-24**, see Phase 5 section above.
 7. ~~**Phase 6 step 2 missing (baseline discovery rulesets)**~~ —
-   **decision 2026-08-24: deliberately deferred**, see Phase 6 section
-   above. Not built — the plan hedges this as situational and requires
-   operator-specific knowledge the wizard can't infer; building it would
-   mean guessing at an unconfirmed rule-creation payload shape.
+   **decision 2026-08-24: deliberately deferred; revised 2026-08-26**, see
+   Phase 6 section above. Systemd/Windows single-service discovery **now
+   built** (`_collect_expected_services()`/`_create_service_discovery_rules()`
+   in Phase 5, verified from Phase 6) — the original blocker (unconfirmed
+   rule-creation payload shape) was resolved by live-testing against a real
+   Checkmk site and reading the shipped check-plugin source instead of
+   relying on docs coverage. Disabled-services still deliberately deferred
+   — no equivalent "ask the operator to pick from what's there" mitigation
+   applies to it.
 8. ~~**Phase 7: snapshot step references a nonexistent script**~~ —
    **fixed 2026-08-24**, see Phase 7 section above. Now pulls a real
    hosts+folders snapshot from the live site via REST API; documented as

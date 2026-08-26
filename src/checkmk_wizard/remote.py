@@ -157,6 +157,40 @@ async def check_ssh_reachable(host: str, creds: SSHCredentials, timeout: float =
         return False
 
 
+async def list_running_systemd_services(host: str, creds: SSHCredentials) -> list[str] | None:
+    """SSH in and list currently-running systemd service units, by name
+    with the `.service` suffix stripped — live-verified against a real
+    Checkmk 2.4.0p35 CE site (installed the real agent on a live systemd
+    host, read its own discovery-parsing source): Checkmk's systemd
+    plugin strips that suffix from the unit name before matching a
+    discovery rule against it, so a rule built from the raw
+    "apache2.service" form would silently match nothing. Returns None if
+    SSH is unreachable or the command fails — caller falls back to
+    manual entry, same as the other remote.py automation here.
+    """
+    if not await check_ssh_reachable(host, creds):
+        return None
+    try:
+        async with await _connect(host, creds) as conn:
+            result = await conn.run(
+                "systemctl list-units --type=service --state=running --no-legend --plain", check=False
+            )
+            if result.exit_status != 0:
+                return None
+            output = result.stdout if isinstance(result.stdout, str) else ""
+            names = []
+            for line in output.splitlines():
+                fields = line.split()
+                if not fields:
+                    continue
+                unit = fields[0].removesuffix(".service")
+                if unit:
+                    names.append(unit)
+            return names
+    except (OSError, asyncssh.Error):
+        return None
+
+
 def windows_firewall_instructions(port: int) -> str:
     return (
         f"New-NetFirewallRule -DisplayName \"Checkmk Agent Receiver {port}\" "
