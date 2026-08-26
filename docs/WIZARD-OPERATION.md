@@ -384,6 +384,20 @@ the wizard **continues anyway** to the firewall/SSH steps regardless
 (known bug — see audit) — this fix narrows that bug's trigger to genuine
 failures, since the common IP-collision case no longer fails at all.
 
+**IP-placeholder cleanup on rename (2026-08-26, `wizard.py:526-537`):** If
+Phase 4 gave a host a hostname different from its scanned IP, the Phase 3
+stub (`host_name=ip`, bare `ipaddress` attribute, no `tag_agent`/
+`tag_snmp_ds` — so Checkmk shows it with its default agent config and no
+SNMP) is a leftover, separate object from the new `host_name=hostname`
+object about to be created below — the collision-fallback above only
+kicks in when the hostname *equals* the IP, so a rename previously left
+both visible in Checkmk side by side. Before creating/updating the named
+host, the wizard now calls `client.delete_host(ip)`
+(`api.py`, `DELETE /objects/host_config/{name}`, live-verified against a
+real Checkmk 2.4.0p35 CE site: 204 with no `If-Match`/ETag required) and
+swallows `CheckmkAPIError` (e.g. 404 if Phase 3 never staged it) —
+best-effort, never blocks onboarding.
+
 **Per host:**
 1. **If `os_family == "snmp"`:** `_create_or_update_host(host_name=hostname,
    folder=..., attributes={ipaddress, tag_agent: "no-agent", tag_snmp_ds:

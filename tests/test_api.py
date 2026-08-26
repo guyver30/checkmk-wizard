@@ -70,6 +70,28 @@ async def test_create_host():
 
 
 @pytest.mark.asyncio
+async def test_delete_host():
+    # Live-verified against a real Checkmk 2.4.0p35 CE site: DELETE
+    # .../host_config/{name} returns 204 with no If-Match/ETag needed.
+    with respx.mock:
+        route = respx.delete(f"{BASE}/objects/host_config/myhost").mock(return_value=Response(204))
+        async with CheckmkClient(CONN) as client:
+            await client.delete_host("myhost")
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_delete_host_missing_raises():
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/ghost").mock(
+            return_value=Response(404, json={"title": "Not Found"})
+        )
+        async with CheckmkClient(CONN) as client:
+            with pytest.raises(CheckmkAPIError):
+                await client.delete_host("ghost")
+
+
+@pytest.mark.asyncio
 async def test_list_hosts_returns_value_array():
     with respx.mock:
         respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(

@@ -523,6 +523,20 @@ async def phase5_onboarding(
     for h in hosts:
         console.print(f"\n[bold]{h.hostname}[/bold] ({h.ip}, {h.os_family})")
 
+        if h.hostname != h.ip:
+            # Phase 3 stages every scanned IP as a placeholder host under
+            # its own name (bare `ipaddress` attribute, no tag_agent/
+            # tag_snmp_ds) so it lands in the right folder. When Phase 4
+            # renames it, the block below creates a *new* host object
+            # under h.hostname, leaving the IP-named placeholder behind as
+            # a duplicate with default (unconfigured) monitoring settings.
+            # Delete it; best-effort since its absence isn't fatal (e.g.
+            # Phase 3 failed to stage it in the first place).
+            try:
+                await client.delete_host(h.ip)
+            except CheckmkAPIError:
+                pass
+
         if h.os_family == "snmp":
             # No agent, no firewall/SSH steps — Checkmk polls SNMP devices
             # directly. tag_agent/tag_snmp_ds values verified via context7
