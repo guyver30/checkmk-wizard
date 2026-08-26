@@ -9,8 +9,10 @@ from checkmk_wizard.wizard import (
     _FOLDER_NAME_RE,
     _HOST_NAME_RE,
     _SITE_NAME_RE,
+    OnboardedHost,
     _create_or_update_host,
     _valid_checkmk_host,
+    phase5_onboarding,
 )
 
 CONN = CheckmkConnection(host="cmk.example", site="mysite", username="automation", secret="s3cret")
@@ -139,3 +141,66 @@ async def test_create_or_update_host_falls_back_to_update_on_collision():
             )
     assert update_route.called
     assert update_route.calls.last.request.headers["If-Match"] == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_phase5_deletes_ip_placeholder_when_host_renamed(monkeypatch):
+    # Regression test for a live-reported real bug: Phase 3 stages every
+    # scanned IP as a placeholder host under its own name (bare
+    # `ipaddress` attribute, no tag_agent/tag_snmp_ds — default monitoring
+    # settings). When Phase 4 renames it, Phase 5 used to create the new,
+    # properly-configured host under the new name without ever touching
+    # the IP-named placeholder — leaving both visible in Checkmk. Phase 5
+    # must delete the placeholder whenever hostname != ip.
+    async def no_ssh(self, patch_stdout=False, kbi_msg=""):
+        return False  # "Attempt automated SSH firewall + agent install?" -> No
+
+    monkeypatch.setattr(questionary.Question, "ask_async", no_ssh)
+
+    host = OnboardedHost(
+        ip="10.0.0.5",
+        hostname="myserver",
+        folder="/",
+        os_family="snmp",
+        snmp_version="v2c",
+        snmp_community="public",
+    )
+
+    with respx.mock:
+        delete_route = respx.delete(f"{BASE}/objects/host_config/10.0.0.5").mock(return_value=Response(204))
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host])
+
+    assert delete_route.called
+    assert create_route.called
+    assert b"myserver" in create_route.calls.last.request.content
+
+
+@pytest.mark.asyncio
+async def test_phase5_does_not_delete_when_hostname_equals_ip(monkeypatch):
+    # The common case (Phase 4 keeps the default hostname == IP): the
+    # Phase 3 placeholder IS the final host, so it must NOT be deleted.
+    async def no_ssh(self, patch_stdout=False, kbi_msg=""):
+        return False
+
+    monkeypatch.setattr(questionary.Question, "ask_async", no_ssh)
+
+    host = OnboardedHost(
+        ip="10.0.0.6",
+        hostname="10.0.0.6",
+        folder="/",
+        os_family="snmp",
+        snmp_version="v2c",
+        snmp_community="public",
+    )
+
+    with respx.mock:
+        delete_route = respx.delete(f"{BASE}/objects/host_config/10.0.0.6").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host])
+
+    assert not delete_route.called

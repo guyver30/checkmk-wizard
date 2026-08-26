@@ -26,3 +26,4 @@
 - 2026-08-25 13:00 — "I delete site, but it doesn't ask the name for a new one, just jumps directly to hostname/ip"
 - 2026-08-25 13:10 — [pasted transcript showing selection jumps straight to hostname/IP prompt]
 - 2026-08-25 13:12 — confirmed: no confirmation/deletion-output/new-name prompt appeared at all, straight to hostname/IP
+- 2026-08-26 09:30 — "if there are new hosts being added in the network, how to ensure that checkmk is able to find them?... also I realised that renamed hosts are visualized twice: the original one with IP address... and then the same renamed... If a host is renamed, then don't add also the original one with just IP"

@@ -182,6 +182,12 @@ class CheckmkClient:
     async def get_host(self, host_name: str) -> httpx.Response:
         return await self._request("GET", f"/objects/host_config/{host_name}")
 
+    async def delete_host(self, host_name: str) -> None:
+        # Live-verified against a real Checkmk 2.4.0p35 CE site: DELETE
+        # .../host_config/{name} returns 204 with no If-Match/ETag needed,
+        # and 404 (raised as CheckmkAPIError) if the host doesn't exist.
+        await self._request("DELETE", f"/objects/host_config/{host_name}")
+
     # -- Phase 5.2: agent download ------------------------------------------
 
     async def download_agent(self, os_type: str) -> bytes:
