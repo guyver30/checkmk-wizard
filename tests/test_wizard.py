@@ -13,18 +13,37 @@ from checkmk_wizard.wizard import (
     _SITE_NAME_RE,
     OnboardedHost,
     ScannedHost,
+    _collect_expected_services,
     _create_or_update_host,
+    _create_service_discovery_rules,
     _network_scan_attributes,
     _valid_checkmk_host,
+    _verify_expected_services,
     phase2_folders,
     phase3_discovery,
     phase4_classification,
     phase5_onboarding,
+    phase6_discovery,
 )
+from checkmk_wizard.remote import SSHCredentials
 from checkmk_wizard.scanner import HostScanResult
 
 CONN = CheckmkConnection(host="cmk.example", site="mysite", username="automation", secret="s3cret")
 BASE = "http://cmk.example/mysite/check_mk/api/v1"
+
+
+def _mock_no_ssh_and_skip_services(monkeypatch):
+    """First ask_async() call (Phase 5's "Attempt automated SSH..."
+    confirm) returns False; every call after — including the manual
+    expected-services prompt _collect_expected_services falls back to for
+    a windows/no-SSH host — returns "" (blank = skip)."""
+    call_count = {"n": 0}
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        call_count["n"] += 1
+        return False if call_count["n"] == 1 else ""
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
 
 
 def test_delete_site_choice_value_survives_as_sentinel():
@@ -183,10 +202,7 @@ async def test_phase5_agent_host_sets_no_snmp(monkeypatch):
     # A linux/windows host must explicitly declare tag_snmp_ds="no-snmp"
     # rather than leaving it unset — every wizard-created host declares
     # its monitoring method explicitly, never relying on Checkmk defaults.
-    async def no_ssh(self, patch_stdout=False, kbi_msg=""):
-        return False
-
-    monkeypatch.setattr(questionary.Question, "ask_async", no_ssh)
+    _mock_no_ssh_and_skip_services(monkeypatch)
 
     host = OnboardedHost(ip="10.0.0.7", hostname="10.0.0.7", folder="/", os_family="windows")
 
@@ -423,10 +439,7 @@ async def test_phase4_rejects_out_of_range_port(monkeypatch):
 async def test_phase5_creates_tcp_rule_for_expected_open_ports(monkeypatch):
     # Regression/feature test: each expected-open port from Phase 4 must
     # become its own active_checks:tcp rule scoped to that host.
-    async def no_ssh(self, patch_stdout=False, kbi_msg=""):
-        return False
-
-    monkeypatch.setattr(questionary.Question, "ask_async", no_ssh)
+    _mock_no_ssh_and_skip_services(monkeypatch)
 
     host = OnboardedHost(
         ip="10.0.0.20",
@@ -486,10 +499,7 @@ async def test_phase5_creates_tcp_rule_for_snmp_host(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_phase5_no_rule_when_no_expected_ports(monkeypatch):
-    async def no_ssh(self, patch_stdout=False, kbi_msg=""):
-        return False
-
-    monkeypatch.setattr(questionary.Question, "ask_async", no_ssh)
+    _mock_no_ssh_and_skip_services(monkeypatch)
 
     host = OnboardedHost(ip="10.0.0.22", hostname="10.0.0.22", folder="/", os_family="windows")
 
@@ -500,3 +510,206 @@ async def test_phase5_no_rule_when_no_expected_ports(monkeypatch):
             await phase5_onboarding(client, CONN, [host])
 
     assert not rule_route.called
+
+
+@pytest.mark.asyncio
+async def test_create_service_discovery_rules_linux_strips_service_suffix_and_anchors():
+    # Regression test for a live-debugged real bug: Checkmk's systemd
+    # discovery strips the ".service" suffix from the unit name before
+    # matching a discovery rule against it (confirmed by installing the
+    # real Checkmk agent on a live systemd host and reading its
+    # discovery-parsing source) — a rule built from the raw
+    # "apache2.service" form silently discovers nothing, no error at all.
+    # Also live-verified: a bare (non-"~"-prefixed) name entry requires an
+    # *exact* string match rather than being treated as a regex, so every
+    # entry must be "~"-prefixed to reliably match.
+    host = OnboardedHost(ip="10.0.0.30", hostname="webhost", folder="/vlan10", os_family="linux")
+    with respx.mock:
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _create_service_discovery_rules(client, host, ["apache2.service", "cron"])
+
+    body = json.loads(rule_route.calls.last.request.content)
+    assert body["ruleset"] == "discovery_systemd_units_services"
+    assert body["folder"] == "/vlan10"
+    assert json.loads(body["value_raw"]) == {"names": ["~^apache2$", "~^cron$"]}
+    assert body["conditions"] == {"host_name": {"match_on": ["webhost"], "operator": "one_of"}}
+
+
+@pytest.mark.asyncio
+async def test_create_service_discovery_rules_windows_no_tilde_prefix():
+    # Windows's `inventory_services_rules` ("services" list) treats every
+    # entry as a regex already — confirmed via the check plugin's own
+    # discovery function — so no "~" prefix is used (unlike systemd).
+    host = OnboardedHost(ip="10.0.0.31", hostname="dbhost", folder="/", os_family="windows")
+    with respx.mock:
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _create_service_discovery_rules(client, host, ["MSSQLSERVER"])
+
+    body = json.loads(rule_route.calls.last.request.content)
+    assert body["ruleset"] == "inventory_services_rules"
+    assert json.loads(body["value_raw"]) == {"services": ["^MSSQLSERVER$"]}
+
+
+@pytest.mark.asyncio
+async def test_create_service_discovery_rules_noop_when_empty():
+    host = OnboardedHost(ip="10.0.0.32", hostname="h", folder="/", os_family="linux")
+    with respx.mock:
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await _create_service_discovery_rules(client, host, [])
+    assert not rule_route.called
+
+
+@pytest.mark.asyncio
+async def test_collect_expected_services_ssh_scan_presents_checkbox(monkeypatch):
+    async def fake_scan(ip, creds):
+        return ["apache2", "cron", "dbus"]
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.list_running_systemd_services", fake_scan)
+
+    async def fake_checkbox_ask(self, patch_stdout=False, kbi_msg=""):
+        return ["apache2", "cron"]
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_checkbox_ask)
+
+    result = await _collect_expected_services("webhost", "10.0.0.30", "linux", SSHCredentials(username="u"))
+    assert result == ["apache2", "cron"]
+
+
+@pytest.mark.asyncio
+async def test_collect_expected_services_falls_back_to_manual_when_scan_empty(monkeypatch):
+    async def fake_scan(ip, creds):
+        return []  # SSH worked but found nothing running (or scan failed) -> manual fallback
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.list_running_systemd_services", fake_scan)
+
+    async def fake_text_ask(self, patch_stdout=False, kbi_msg=""):
+        return "nginx, redis"
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_text_ask)
+
+    result = await _collect_expected_services("webhost", "10.0.0.30", "linux", SSHCredentials(username="u"))
+    assert result == ["nginx", "redis"]
+
+
+@pytest.mark.asyncio
+async def test_collect_expected_services_manual_when_no_ssh_creds(monkeypatch):
+    async def fake_text_ask(self, patch_stdout=False, kbi_msg=""):
+        return "MSSQLSERVER"
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_text_ask)
+
+    result = await _collect_expected_services("dbhost", "10.0.0.31", "windows", None)
+    assert result == ["MSSQLSERVER"]
+
+
+@pytest.mark.asyncio
+async def test_collect_expected_services_blank_input_skips(monkeypatch):
+    async def fake_text_ask(self, patch_stdout=False, kbi_msg=""):
+        return ""
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_text_ask)
+
+    result = await _collect_expected_services("dbhost", "10.0.0.31", "windows", None)
+    assert result == []
+
+
+def test_verify_expected_services_reports_monitored_and_missing(capsys):
+    host = OnboardedHost(
+        ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux",
+        expected_services=["apache2", "ghost-service"],
+    )
+    discovery_result = {
+        "extensions": {
+            "check_table": {
+                "systemd_units_services-apache2": {
+                    "value": "monitored",
+                    "extensions": {"service_name": "Systemd Service apache2"},
+                },
+            }
+        }
+    }
+    _verify_expected_services(host, discovery_result)
+    out = capsys.readouterr().out
+    assert "apache2" in out and "is now monitored" in out
+    assert "ghost-service" in out and "NOT picked up" in out
+
+
+def test_verify_expected_services_background_job_no_false_failure(capsys):
+    host = OnboardedHost(
+        ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux",
+        expected_services=["apache2"],
+    )
+    _verify_expected_services(host, {})  # api.py returns {} for the 204/303 background-job case
+    out = capsys.readouterr().out
+    assert "could not verify" in out
+    assert "NOT picked up" not in out
+
+
+def test_verify_expected_services_noop_without_expected_services(capsys):
+    host = OnboardedHost(ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux")
+    _verify_expected_services(host, {"extensions": {"check_table": {}}})
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.asyncio
+async def test_phase5_windows_manual_service_entry_creates_rule(monkeypatch):
+    # End-to-end through phase5_onboarding for the windows (always-manual)
+    # path: manual service-name entry -> inventory_services_rules rule.
+    answers = iter([False, "MSSQLSERVER, W3SVC"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    host = OnboardedHost(ip="10.0.0.33", hostname="winhost", folder="/", os_family="windows")
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.33").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host])
+
+    assert host.expected_services == ["MSSQLSERVER", "W3SVC"]
+    body = json.loads(rule_route.calls.last.request.content)
+    assert body["ruleset"] == "inventory_services_rules"
+    assert json.loads(body["value_raw"]) == {"services": ["^MSSQLSERVER$", "^W3SVC$"]}
+
+
+@pytest.mark.asyncio
+async def test_phase6_discovery_verifies_expected_services(monkeypatch, capsys):
+    host = OnboardedHost(
+        ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux",
+        expected_services=["apache2"],
+    )
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
+            return_value=Response(
+                200,
+                json={
+                    "extensions": {
+                        "check_table": {
+                            "systemd_units_services-apache2": {
+                                "value": "monitored",
+                                "extensions": {"service_name": "Systemd Service apache2"},
+                            }
+                        }
+                    }
+                },
+            )
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase6_discovery(client, [host])
+
+    out = capsys.readouterr().out
+    assert "is now monitored" in out

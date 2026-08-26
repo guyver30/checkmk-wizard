@@ -83,6 +83,11 @@ class OnboardedHost:
     snmp_version: str | None = None  # "v1" | "v2c" — only set when os_family == "snmp"
     snmp_community: str | None = None
     expected_open_ports: list[int] = field(default_factory=list)
+    # Set during Phase 5 (needs SSH access, unlike expected_open_ports which
+    # is a Phase 4 prompt) — systemd unit / Windows service names to
+    # actively monitor. Read back by Phase 6 to verify they actually made
+    # it into the "monitored" list, not just silently discovered nothing.
+    expected_services: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -610,6 +615,86 @@ async def _create_expected_open_port_rules(client: CheckmkClient, host: Onboarde
             console.print(f"  [yellow]could not create TCP-port-{port} check for {host.hostname}: {exc}[/yellow]")
 
 
+async def _collect_expected_services(
+    hostname: str, ip: str, os_family: str, ssh_creds: remote.SSHCredentials | None
+) -> list[str]:
+    """Which systemd units (Linux) / Windows services should be actively
+    monitored on this host. Prefers a live SSH scan of currently-running
+    systemd units when possible — the user picks from what's actually
+    there instead of guessing spelling — falling back to manual entry
+    otherwise. Windows is always manual: this wizard never establishes
+    any remote connection to Windows hosts (same "manual path by design"
+    as agent install above), so there is no scan to attempt there.
+    """
+    if os_family == "linux" and ssh_creds is not None:
+        running = await remote.list_running_systemd_services(ip, ssh_creds)
+        if running:
+            choices = [questionary.Choice(name, value=name) for name in running]
+            selected = await questionary.checkbox(
+                f"Which running services on {hostname} should be actively monitored?",
+                choices=choices,
+            ).ask_async()
+            return selected
+
+    raw = (
+        await questionary.text(
+            f"Service names to actively monitor on {hostname} "
+            "(comma-separated exact systemd unit / Windows service names, blank to skip):"
+        ).ask_async()
+    ).strip()
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+async def _create_service_discovery_rules(
+    client: CheckmkClient, host: OnboardedHost, service_names: list[str]
+) -> None:
+    """One rule covering *all* requested service names at once (unlike
+    the TCP-port rules above, this ruleset's name-list field natively
+    holds multiple entries) that tells Checkmk's discovery to pick up
+    these specific systemd units / Windows services as individually
+    monitored checks, instead of only the always-on summary check.
+
+    Regex construction here is the product of live debugging against a
+    real Checkmk 2.4.0p35 CE site (installed the actual agent on a real
+    systemd host to get ground truth) and reading the shipped check-plugin
+    source, not assumption:
+      - Systemd (`discovery_systemd_units_services`): a bare name entry
+        requires an *exact* string match; only a `~`-prefixed entry is
+        treated as a regex — live-verified a bare "apache2" entry alone
+        does nothing useful for robustness, so every entry is always sent
+        `~`-prefixed here. Separately, and easy to miss: Checkmk's own
+        systemd parser strips the trailing `.service` suffix from the
+        unit name *before* matching against the rule (confirmed by
+        reading its discovery-parsing source) — a rule built from the raw
+        "apache2.service" form silently discovers nothing, no error at
+        all. The suffix is stripped here for exactly that reason.
+      - Windows (`inventory_services_rules`): every entry is *always*
+        treated as a regex already (no `~` needed) — confirmed via the
+        check plugin's own discovery function.
+    Both anchored with `^...$` and `re.escape()`d so a name matches
+    exactly, never as an accidental prefix of a different service.
+    """
+    if not service_names or host.os_family not in ("linux", "windows"):
+        return
+    if host.os_family == "linux":
+        names = [f"~^{re.escape(name.removesuffix('.service'))}$" for name in service_names]
+        ruleset, value_raw = "discovery_systemd_units_services", json.dumps({"names": names})
+    else:
+        services = [f"^{re.escape(name)}$" for name in service_names]
+        ruleset, value_raw = "inventory_services_rules", json.dumps({"services": services})
+
+    try:
+        await client.create_rule(
+            ruleset=ruleset,
+            folder=host.folder,
+            value_raw=value_raw,
+            conditions={"host_name": {"match_on": [host.hostname], "operator": "one_of"}},
+        )
+        console.print(f"  [green]service monitoring configured[/green] for: {', '.join(service_names)}")
+    except CheckmkAPIError as exc:
+        console.print(f"  [yellow]could not configure service monitoring for {host.hostname}: {exc}[/yellow]")
+
+
 async def phase5_onboarding(
     client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]
 ) -> None:
@@ -701,6 +786,15 @@ async def phase5_onboarding(
         except CheckmkAPIError as exc:
             console.print(f"  [yellow]host create/update: {exc}[/yellow]")
 
+        # Ahead of the windows/linux branch below (not inside it) so it
+        # runs the same way regardless of which path that branch takes —
+        # Linux with working SSH gets a live scan; everything else
+        # (Windows, or Linux with no/failed SSH) gets the manual prompt.
+        h.expected_services = await _collect_expected_services(
+            h.hostname, h.ip, h.os_family, ssh_creds if h.os_family == "linux" else None
+        )
+        await _create_service_discovery_rules(client, h, h.expected_services)
+
         if h.os_family == "windows":
             console.print("  [cyan]Windows target — manual path (by design):[/cyan]")
             console.print(f"    Firewall: {remote.windows_firewall_instructions(remote.AGENT_RECEIVER_PORT)}")
@@ -791,10 +885,52 @@ async def phase6_discovery(client: CheckmkClient, hosts: list[OnboardedHost]) ->
     # they'd never actually go live at Phase 7's activation.
     for h in hosts:
         try:
-            await client.start_service_discovery(h.hostname, mode="fix_all")
+            result = await client.start_service_discovery(h.hostname, mode="fix_all")
             console.print(f"  [green]services discovered and accepted[/green] {h.hostname}")
+            _verify_expected_services(h, result)
         except CheckmkAPIError as exc:
             console.print(f"  [yellow]discovery failed[/yellow] {h.hostname}: {exc}")
+
+
+def _verify_expected_services(host: OnboardedHost, discovery_result: dict) -> None:
+    """Confirm each of Phase 5's requested systemd/Windows service names
+    actually became a monitored service after mode="fix_all" — not
+    silently missing. Necessary specifically for this feature (unlike the
+    TCP-port rules, which always produce their service once the rule
+    exists): a discovery-selection rule whose name/regex doesn't match
+    anything on the host raises no error at all anywhere in this
+    pipeline — it just discovers zero matching services. This is exactly
+    the failure mode live-verified while building this feature (an
+    unstripped ".service" suffix silently matched nothing), so it needs
+    surfacing here rather than assuming success.
+    """
+    if not host.expected_services:
+        return
+    if not discovery_result:
+        # 204/303 (background job, per api.py) — no immediate check_table
+        # to verify against; best-effort only, don't report false failures.
+        console.print(f"    [dim]could not verify expected services for {host.hostname} — discovery ran as a background job[/dim]")
+        return
+
+    check_table = discovery_result.get("extensions", {}).get("check_table", {})
+    monitored_names = {
+        entry.get("extensions", {}).get("service_name")
+        for entry in check_table.values()
+        if entry.get("value") == "monitored"
+    }
+    for name in host.expected_services:
+        bare = name.removesuffix(".service")
+        # Checkmk's own service-name templates: "Systemd Service %s"
+        # (Linux) / "Service %s" (Windows) — check both since OnboardedHost
+        # doesn't separately track which one applies.
+        candidates = {f"Systemd Service {bare}", f"Service {name}"}
+        if candidates & monitored_names:
+            console.print(f"    [green]✓[/green] '{name}' is now monitored on {host.hostname}")
+        else:
+            console.print(
+                f"    [yellow]✗ '{name}' was NOT picked up on {host.hostname}[/yellow] — "
+                "double check the exact service/unit name (case-sensitive) and that it's actually present on the host"
+            )
 
 
 # ── Phase 7: Activation & validation ────────────────────────────────────

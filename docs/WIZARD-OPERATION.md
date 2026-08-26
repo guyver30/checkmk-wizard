@@ -15,7 +15,7 @@ original design, see [PLAN-CONFORMANCE-AUDIT.md](PLAN-CONFORMANCE-AUDIT.md).
 ## Entry point and control flow
 
 `uv run checkmk-wizard` → `checkmk_wizard.__main__` → `wizard.main()`
-(`wizard.py:865-866`) → `asyncio.run(run())` → `run()` (`wizard.py:853-863`),
+(`wizard.py:1001-1002`) → `asyncio.run(run())` → `run()` (`wizard.py:989-999`),
 which executes all 7 phases **sequentially, in a single process, with no
 resume/checkpoint support**:
 
@@ -410,7 +410,7 @@ case):
    snmp_version, snmp_community, expected_open_ports)` — `folder` copied
    straight from the selected `ScannedHost`, never asked interactively.
 
-## Phase 5 — Host Onboarding (`wizard.py:613-773`)
+## Phase 5 — Host Onboarding (`wizard.py:698-867`)
 
 Runs once for the whole batch, then loops **sequentially, one host at a
 time** — no concurrency.
@@ -419,11 +419,11 @@ time** — no concurrency.
 1. Asks "Attempt automated SSH firewall + agent install for Linux hosts?"
    (default Yes).
 2. If yes: prompts for SSH username (re-prompted if left blank,
-   `wizard.py:626-629`), then auth mode (password or private key path) →
+   `wizard.py:712-715`), then auth mode (password or private key path) →
    builds one `SSHCredentials` object reused for **every** Linux host in
    the batch (same username/credential for all hosts). A private-key path
    is checked to exist as a local file (`Path(...).expanduser().is_file()`,
-   `wizard.py:636-647`) and re-prompted if not — not a Checkmk-API
+   `wizard.py:722-733`) and re-prompted if not — not a Checkmk-API
    validation, but a nonexistent key would fail identically for every
    host in the batch, so this is caught once up front rather than once
    per host inside `asyncssh`'s own connection error handling.
@@ -449,7 +449,7 @@ the wizard **continues anyway** to the firewall/SSH steps regardless
 (known bug — see audit) — this fix narrows that bug's trigger to genuine
 failures, since the common IP-collision case no longer fails at all.
 
-**IP-placeholder cleanup on rename (2026-08-26, `wizard.py:653-665`):** If
+**IP-placeholder cleanup on rename (2026-08-26, `wizard.py:680-692`):** If
 Phase 4 gave a host a hostname different from its scanned IP, the Phase 3
 stub (`host_name=ip`, inert `tag_agent: "no-agent"`/`tag_snmp_ds:
 "no-snmp"`) is a leftover, separate object from the new `host_name=hostname`
@@ -485,7 +485,7 @@ the inverse ("alert if a normally-closed port opens") isn't implemented.
 1. **If `os_family == "snmp"`:** `_create_or_update_host(host_name=hostname,
    folder=..., attributes={ipaddress, tag_agent: "no-agent", tag_snmp_ds:
    "snmp-v2"|"snmp-v1", snmp_community: {type: "v1_v2_community",
-   community}})` (`wizard.py:676-686`) — no firewall/SSH/agent steps at
+   community}})` (`wizard.py:703-713`) — no firewall/SSH/agent steps at
    all, `continue` to next host. `tag_agent`/`tag_snmp_ds` values are
    doc-verified (Checkmk's CSV host-import attribute mapping,
    `docs.checkmk.com/latest/en/hosts_setup.html`); the `snmp_community`
@@ -493,31 +493,81 @@ the inverse ("alert if a normally-closed port opens") isn't implemented.
    verify against the target site's own REST API spec before relying on it.
 2. **Otherwise:** `_create_or_update_host(host_name=hostname, folder=...,
    attributes={ipaddress, tag_agent: "cmk-agent", tag_snmp_ds: "no-snmp"})`
-   (`wizard.py:694-699`). `tag_snmp_ds` set explicitly here (2026-08-26,
+   (`wizard.py:779-784`). `tag_snmp_ds` set explicitly here (2026-08-26,
    same reasoning as Phase 3's staging) rather than left to Checkmk's own
    default for that tag group.
-3. **If `os_family == "windows"`:** prints
+3. **Systemd/Windows service monitoring (2026-08-26, `wizard.py:788-796`):**
+   for both non-SNMP branches (windows and linux alike — ahead of the
+   windows/linux `continue` split below, not inside either arm of it), asks
+   which specific systemd units / Windows services should be *actively*
+   monitored, then configures Checkmk's discovery to pick them up:
+   - **`_collect_expected_services()` (`wizard.py:618-644`):** for a Linux
+     host with SSH credentials available, tries a **live SSH scan**
+     (`remote.list_running_systemd_services()`, `remote.py:151-179` —
+     `systemctl list-units --type=service --state=running --no-legend
+     --plain` over the same SSH connection used for firewall/install
+     above) and presents the result as a `questionary.checkbox` so the
+     user picks from what's *actually running*, rather than guessing
+     spelling. Falls back to a manual comma-separated
+     `questionary.text` prompt (blank = skip) for: a Windows host (this
+     wizard never establishes any remote connection to Windows hosts —
+     same manual-by-design scope as agent install), a Linux host with no
+     SSH credentials, or a scan that came back empty (unreachable, or
+     the command failed). Stored on `h.expected_services` — Phase 6
+     reads it back to verify (see below).
+   - **`_create_service_discovery_rules()` (`wizard.py:648-694`):** one
+     rule covering *all* requested names at once (unlike the TCP-port
+     rules above — this ruleset's name-list field natively holds
+     multiple entries) — `discovery_systemd_units_services` for Linux,
+     `inventory_services_rules` for Windows, scoped by the same
+     `host_name` condition pattern as the TCP-port rules. The exact
+     regex construction here is the product of live debugging against a
+     real Checkmk 2.4.0p35 CE site (installed the real agent on a real
+     systemd host to get ground truth, then read the shipped
+     check-plugin source), not assumption — two non-obvious findings
+     that would otherwise silently discover **zero** services with no
+     error anywhere in the pipeline:
+     - Systemd: a bare (non-`~`-prefixed) name entry requires an
+       **exact** string match, not a regex — every entry is sent
+       `~`-prefixed here to always get regex matching.
+     - Systemd: Checkmk's own agent-side parser **strips the trailing
+       `.service` suffix** from the unit name before matching a
+       discovery rule against it (confirmed by reading
+       `_parse_name_and_unit_type()` in the shipped
+       `cmk/plugins/collection/agent_based/systemd_units.py`) — a rule
+       built from the raw `"apache2.service"`
+       form matches nothing. `_create_service_discovery_rules()` strips it
+       (`name.removesuffix(".service")`) before building the regex, for
+       exactly this reason.
+     - Windows (`inventory_services_rules`'s `services` list): every
+       entry is *always* treated as a regex already — no `~` prefix
+       needed or supported there.
+     Both platforms' entries are anchored `^...$` and `re.escape()`d so a
+     name matches exactly, never as an accidental prefix of a different
+     service. Best-effort: a failure here is caught and printed, never
+     blocking the rest of onboarding.
+4. **If `os_family == "windows"`:** prints
    `windows_firewall_instructions()` and `windows_register_command()`
-   (`remote.py:160-164, 259-267`) as copy-paste text, using
+   (`remote.py:194-198, 293-301`) as copy-paste text, using
    `connection.registration_user`/`registration_secret` (not
    `username`/`secret` — see credential-scope note below). No automation
    attempted at all for Windows — `continue` to next host.
    `windows_register_command()` PowerShell-quotes each argument
-   (`_ps_quote()`, `remote.py:250-256` — single-quoted literal, doubled
+   (`_ps_quote()`, `remote.py:284-290` — single-quoted literal, doubled
    embedded `'`) so a hostname/site/password containing a space, `$`, or
    `'` still produces a valid command to copy-paste; `linux_register_command`
    already did the POSIX-shell equivalent via `shlex.quote()`.
-4. **If `os_family == "linux"`:**
+5. **If `os_family == "linux"`:**
    a. `remote.probe_port(ip, 8000)` (`remote.py:119-139`) — TCP connect
       attempt to the Agent Receiver port; classifies as `open`,
       `closed_rst` (got `ConnectionRefusedError`), or `filtered_or_down`
       (timeout/other OSError). Result is printed, **not acted on** —
       informational only.
    b. If no SSH credentials were supplied: prints manual firewall/install
-      instructions (`_print_linux_manual`, `wizard.py:774-779`) and moves
+      instructions (`_print_linux_manual`, `wizard.py:868-873`) and moves
       to the next host.
    c. Otherwise, `remote.fix_firewall_linux(ip, creds, 8000)`
-      (`remote.py:167-202`):
+      (`remote.py:201-236`):
       - `check_ssh_reachable()` first; if it fails →
         `FAILED_FALLBACK_MANUAL`.
       - Over one SSH connection, runs `command -v ufw`, then
@@ -527,7 +577,7 @@ the inverse ("alert if a normally-closed port opens") isn't implemented.
         (`sudo ufw allow 8000/tcp`, etc.) — **no confirmation prompt, no
         dry-run, no rollback.**
       - Any failure → `FAILED_FALLBACK_MANUAL` with the manual rule text.
-   d. `remote.check_os_compatibility(ip, creds)` (`remote.py:205-234`):
+   d. `remote.check_os_compatibility(ip, creds)` (`remote.py:239-268`):
       reads `/etc/os-release` over SSH on the target and classifies it as
       `deb`-family or `rpm`-family via `remote.package_family()`
       (`remote.py:93-102`), using the target's own `ID`/`ID_LIKE` — **not**
@@ -542,7 +592,7 @@ the inverse ("alert if a normally-closed port opens") isn't implemented.
       and continues to the next.
    f. `register_cmd = remote.linux_register_command(hostname, host, site,
       connection.registration_user, connection.registration_secret)`
-      (`wizard.py:746-748`) — uses the dedicated `agent_registration`
+      (`wizard.py:840-842`) — uses the dedicated `agent_registration`
       credential from Phase 1 when one was found, **not** the general
       `automation` REST credential (see credential-scope note below).
    g. `client.download_agent(os_type)` (`api.py:211-218`) — requests
@@ -550,12 +600,12 @@ the inverse ("alert if a normally-closed port opens") isn't implemented.
       step d (defaults to `linux_deb` if the compatibility check itself
       couldn't run, e.g. SSH became unreachable between steps).
    h. `remote.install_agent_linux(ip, creds, package_bytes,
-      package_filename, register_cmd)` (`remote.py:269-343`), where
+      package_filename, register_cmd)` (`remote.py:303-377`), where
       `package_filename` is `check-mk-agent.deb` or `check-mk-agent.rpm`
       to match the package family from step g:
       - SFTP-uploads the package to `/tmp/<package_filename>` on the
         target.
-      - **Verifies the upload with a checksum** (`remote.py:294-313`):
+      - **Verifies the upload with a checksum** (`remote.py:328-347`):
         runs `sha256sum <path>` on the target and compares it to a
         `hashlib.sha256` of the bytes sent — a successful SFTP write only
         means no exception was raised, not that what landed on disk
@@ -573,9 +623,9 @@ the inverse ("alert if a normally-closed port opens") isn't implemented.
       - Any step failing → `FAILED_FALLBACK_MANUAL` with manual
         instructions; success → `AUTOMATED`.
    i. **If install returned `AUTOMATED`:** `remote.check_agent_status(ip,
-      creds, site)` (`remote.py:359-374`, `wizard.py:768-771`) runs
+      creds, site)` (`remote.py:393-408`, `wizard.py:862-865`) runs
       `cmk-agent-ctl status` on the target and checks (via
-      `agent_status_shows_connection()`, `remote.py:346-356`) that its
+      `agent_status_shows_connection()`, `remote.py:380-390`) that its
       output contains a `Connection: <server>/<site>` line for this site —
       confirming the agent controller is actually operational and recorded
       a connection, rather than trusting the register command's exit code
@@ -587,7 +637,7 @@ the inverse ("alert if a normally-closed port opens") isn't implemented.
       Livestatus query. Printed as its own `Agent status: verified /
       could not verify` line, separate from the install line.
 
-## Phase 6 — Discovery & Baseline (`wizard.py:785-802`)
+## Phase 6 — Discovery & Baseline (`wizard.py:879-937`)
 
 For every onboarded host: `POST
 /domain-types/service_discovery_run/actions/start/invoke` with
@@ -597,21 +647,39 @@ call, so services are actually in the monitored state by the time Phase 7
 activates changes. A `303` response (Checkmk ran discovery as an async
 background job) is treated as success, not an error.
 
-**Deliberately not implemented (decision 2026-08-24):** applying baseline
-discovery rulesets (systemd services, disabled-services). The plan's own
-language hedges these as situational ("where useful", "if the host runs
-relevant services", "known-noisy checks") and both require operator
-judgment about a specific environment that the wizard has no way to infer
-from a scan — building either would mean guessing at a REST payload shape
-this session couldn't confirm via context7, for behavior the plan doesn't
-actually specify concretely enough to build against. The plan's third
-example, an "SNMP community ruleset," is effectively already covered:
+**Verifies expected-service discovery (2026-08-26, `_verify_expected_services()`,
+`wizard.py:895-936`):** right after each host's `mode="fix_all"` call, if
+that host has `expected_services` (set in Phase 5, see above), checks the
+discovery response's `check_table` for each requested name and prints a
+per-service ✓/✗. This exists because a discovery-selection rule whose
+name/regex doesn't match anything raises no error anywhere in this
+pipeline — it just silently discovers zero matching services (live-verified
+the hard way while building this feature: an unstripped `.service` suffix
+produced no error, just nothing found), so success can't be assumed and
+must be checked. Looks for `f"Systemd Service {name}"` / `f"Service {name}"`
+among entries whose discovery `value` is `"monitored"` (distinct from
+`"active"`, which is what TCP-port active-check services show instead —
+live-verified these are different phase labels for different check
+categories). If `discovery_result` is falsy (the `303`
+background-job case, where `start_service_discovery()` returns `{}`),
+prints a "could not verify" note instead of a false failure, since there's
+no `check_table` to check yet in that case.
+
+**Deliberately not implemented (decision 2026-08-24, revised 2026-08-26):**
+applying a baseline "disabled-services" discovery ruleset (silencing
+known-noisy default checks). Still deferred — the plan's language hedges
+this as situational ("known-noisy checks") requiring operator judgment
+about a specific environment the wizard has no way to infer from a scan.
+(This decision originally also covered "systemd services" baseline
+discovery — that part is now implemented, see Phase 5's "Systemd/Windows
+service monitoring" above and this phase's verification step.) The plan's
+third example, an "SNMP community ruleset," is effectively already covered:
 Phase 5 sets the SNMP community as a **host attribute** directly
 (`snmp_community`) rather than via a separate folder-level ruleset object —
 a different mechanism than the plan's wording, but the same outcome
 (SNMP-only hosts get their community string configured).
 
-## Phase 7 — Activation & Validation (`wizard.py:803-852`)
+## Phase 7 — Activation & Validation (`wizard.py:939-988`)
 
 1. `GET /domain-types/activation_run/collections/pending_changes` to read
    the `ETag` header (`api.py:238-243`).
@@ -632,7 +700,7 @@ a different mechanism than the plan's wording, but the same outcome
    `client.list_hosts()` → `GET /domain-types/host_config/collections/all`
    and `client.list_folders()` → `GET
    /domain-types/folder_config/collections/all` (`api.py:184-187,
-   139-146`; `wizard.py:830-836`) — rather than only logging what this run
+   139-146`; `wizard.py:969-975`) — rather than only logging what this run
    touched. Both return the collection's `value` array (doc-confirmed
    response shape: `docs.checkmk.com/latest/en/rest_api.html`,
    pending-changes collection example). If this fetch fails, prints a
@@ -657,7 +725,7 @@ a different mechanism than the plan's wording, but the same outcome
 | `WizardState` | `wizard.py:87-90` | declared but **unused** — phases pass state via direct return values/params instead |
 | `HostScanResult` | `scanner.py:22-29` | IP + open ports — `scan_network()`'s own return type, wrapped into `ScannedHost` per folder by Phase 3 |
 | `ScannedHost` | `wizard.py:70-73` | `HostScanResult` + which Phase 2 folder its subnet scan found it in (`/` for the flat-fallback case) — Phase 3's actual return type since 2026-08-25 |
-| `OnboardedHost` | `wizard.py:77-85` | ip/hostname/folder/os_family (+ snmp_version/snmp_community if SNMP, expected_open_ports) from Phase 4; `folder` copied from `ScannedHost`, never prompted |
+| `OnboardedHost` | `wizard.py:77-90` | ip/hostname/folder/os_family (+ snmp_version/snmp_community if SNMP, expected_open_ports) from Phase 4; `folder` copied from `ScannedHost`, never prompted; `expected_services` set in Phase 5 instead (needs SSH access) |
 | `ActionResult` | `remote.py:54-57` | outcome (`automated`/`manual_required`/`failed_fallback_manual`) + detail + manual text |
 | `SSHCredentials` | `remote.py:41-44` | username + password or private key path, held in memory only |
 | `OSRelease` | `remote.py:61-79` | parsed `/etc/os-release` (id, version_id, id_like) |
@@ -720,7 +788,7 @@ tests: `tests/test_api.py` (2 cases, respx `side_effect` simulating a
   dedicated `agent_registration` secret when found, otherwise the same
   `automation` secret used for REST calls) is passed as a `--password`
   command-line argument to `cmk-agent-ctl register` over the SSH session
-  (`remote.py:237-247`), visible to anything reading that process's argv
+  (`remote.py:271-281`), visible to anything reading that process's argv
   on the target host. Using the narrower `agent_registration` credential
   when available (Phase 1, `wizard.py:97-111`) limits what this exposure
   can be used for, compared to leaking the full `automation` credential.
