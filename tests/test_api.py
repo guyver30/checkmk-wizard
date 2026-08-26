@@ -127,6 +127,29 @@ async def test_update_folder_attributes_sends_update_attributes_and_etag():
 
 
 @pytest.mark.asyncio
+async def test_create_rule_sends_ruleset_folder_conditions():
+    with respx.mock:
+        route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "rule1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            result = await client.create_rule(
+                ruleset="active_checks:tcp",
+                folder="/",
+                value_raw='{"port": 443}',
+                conditions={"host_name": {"match_on": ["myhost"], "operator": "one_of"}},
+            )
+    assert result["id"] == "rule1"
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body == {
+        "ruleset": "active_checks:tcp",
+        "folder": "/",
+        "value_raw": '{"port": 443}',
+        "conditions": {"host_name": {"match_on": ["myhost"], "operator": "one_of"}},
+    }
+
+
+@pytest.mark.asyncio
 async def test_list_folders_returns_value_array():
     with respx.mock:
         respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(

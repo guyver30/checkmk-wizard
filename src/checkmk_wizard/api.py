@@ -260,6 +260,26 @@ class CheckmkClient:
             return {}
         return resp.json()
 
+    # -- Phase 5.3: active-check rules (e.g. expected-open TCP ports) -------
+
+    async def create_rule(
+        self, ruleset: str, folder: str, value_raw: str, conditions: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        # `value_raw` is a JSON-encoded string of the ruleset's parameter
+        # dict, not a nested JSON object — live-verified against a real
+        # Checkmk 2.4.0p35 CE site: Checkmk accepts a plain JSON string
+        # here (not just the Python-repr-with-single-quotes form its own
+        # "export for API" GUI feature produces) and echoes it back
+        # correctly in the created rule's `extensions.value_raw`.
+        body = {
+            "ruleset": ruleset,
+            "folder": folder,
+            "value_raw": value_raw,
+            "conditions": conditions or {},
+        }
+        resp = await self._request("POST", "/domain-types/rule/collections/all", json_body=body)
+        return resp.json()
+
 
 # -- Phase 1: bootstrap the 'automation' REST user ---------------------------
 

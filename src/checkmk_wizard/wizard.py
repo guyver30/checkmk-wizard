@@ -82,6 +82,7 @@ class OnboardedHost:
     os_family: str  # "linux" | "windows" | "snmp"
     snmp_version: str | None = None  # "v1" | "v2c" — only set when os_family == "snmp"
     snmp_community: str | None = None
+    expected_open_ports: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -332,7 +333,19 @@ async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
 
         folder_created = False
         try:
-            await client.create_folder(name=name, title=name)
+            # Default every host that lands in this folder — including ones
+            # this wizard never touches, like a host the Network Scan below
+            # creates on its own — to fully inert monitoring ("no-agent",
+            # "no-snmp"), rather than Checkmk's implicit default of
+            # "API integrations if configured, else Checkmk agent" (which
+            # falsely implies agent-based monitoring is already active).
+            # Live-verified: a host created bare in a folder with these set
+            # inherits them via effective_attributes. Phase 3/5 override
+            # these explicitly, per host, once a host's actual monitoring
+            # method (SNMP or agent) is known.
+            await client.create_folder(
+                name=name, title=name, attributes={"tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"}
+            )
             console.print(f"  [green]created[/green] /{name}")
             folder_created = True
         except CheckmkAPIError as exc:
@@ -426,7 +439,16 @@ async def phase3_discovery(client: CheckmkClient, folder_subnets: dict[str, str 
         for r in results:
             all_results.append(ScannedHost(ip=r.ip, open_ports=r.open_ports, folder=folder))
             try:
-                await client.create_host(host_name=r.ip, folder=folder, attributes={"ipaddress": r.ip})
+                # Explicit here (not just relying on the folder default set
+                # in Phase 2) because the root-folder fallback path (no
+                # Phase 2 folders defined) has no folder object of ours to
+                # carry that default — every staged host must still come up
+                # inert until Phase 4/5 knows its real monitoring method.
+                await client.create_host(
+                    host_name=r.ip,
+                    folder=folder,
+                    attributes={"ipaddress": r.ip, "tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"},
+                )
             except CheckmkAPIError as exc:
                 console.print(f"[yellow]Could not stage {r.ip}: {exc}[/yellow]")
 
@@ -494,6 +516,32 @@ async def phase4_classification(scan_results: list[ScannedHost]) -> list[Onboard
                 "SNMP community string:", default="public"
             ).ask_async()
 
+        # Defaults to what Phase 3's scan actually found open on this IP —
+        # a reasonable starting guess for "should be open" — but the user
+        # can clear/edit it. Phase 5 turns each port into a monitored
+        # "Check TCP port connection" service; blank means no such
+        # services are created for this host.
+        expected_open_ports: list[int] = []
+        default_ports = ",".join(str(p) for p in scanned.open_ports)
+        while True:
+            raw_ports = (
+                await questionary.text(
+                    f"Expected-open ports for {hostname} to monitor (comma-separated, blank to skip):",
+                    default=default_ports,
+                ).ask_async()
+            ).strip()
+            if not raw_ports:
+                break
+            try:
+                candidate_ports = [int(p) for p in raw_ports.split(",") if p.strip()]
+                if not all(1 <= p <= 65535 for p in candidate_ports):
+                    raise ValueError("ports must be 1-65535")
+            except ValueError as exc:
+                console.print(f"[red]Invalid port list ({exc}) — try again.[/red]")
+            else:
+                expected_open_ports = candidate_ports
+                break
+
         onboarded.append(
             OnboardedHost(
                 ip=scanned.ip,
@@ -502,6 +550,7 @@ async def phase4_classification(scan_results: list[ScannedHost]) -> list[Onboard
                 os_family=os_family,
                 snmp_version=snmp_version,
                 snmp_community=snmp_community,
+                expected_open_ports=expected_open_ports,
             )
         )
     return onboarded
@@ -534,6 +583,31 @@ async def _create_or_update_host(
         if not etag:
             raise
         await client.update_host_attributes(host_name, attributes, etag)
+
+
+async def _create_expected_open_port_rules(client: CheckmkClient, host: OnboardedHost) -> None:
+    """One `active_checks:tcp` ("Check TCP port connection") rule per
+    expected-open port from Phase 4, scoped to this host only via a
+    `host_name` condition — becomes a monitored "TCP Port <N> (expected
+    open)" service once Phase 6/7 discover and activate it, alerting if
+    the port ever stops responding. Live-verified against a real Checkmk
+    2.4.0p35 CE site end-to-end (rule created → activated → discovered as
+    a real service). `value_raw` is a JSON string of the ruleset's
+    parameter dict — Checkmk accepts plain JSON here, not just the
+    Python-repr form its own GUI export produces. Best-effort per port: a
+    failure on one port (e.g. a colliding rule) must not stop onboarding
+    or block the rest of this host's ports.
+    """
+    for port in host.expected_open_ports:
+        try:
+            await client.create_rule(
+                ruleset="active_checks:tcp",
+                folder=host.folder,
+                value_raw=json.dumps({"port": port, "svc_description": f"TCP Port {port} (expected open)"}),
+                conditions={"host_name": {"match_on": [host.hostname], "operator": "one_of"}},
+            )
+        except CheckmkAPIError as exc:
+            console.print(f"  [yellow]could not create TCP-port-{port} check for {host.hostname}: {exc}[/yellow]")
 
 
 async def phase5_onboarding(
@@ -577,14 +651,13 @@ async def phase5_onboarding(
         console.print(f"\n[bold]{h.hostname}[/bold] ({h.ip}, {h.os_family})")
 
         if h.hostname != h.ip:
-            # Phase 3 stages every scanned IP as a placeholder host under
-            # its own name (bare `ipaddress` attribute, no tag_agent/
-            # tag_snmp_ds) so it lands in the right folder. When Phase 4
+            # Phase 3 stages every scanned IP as an inert placeholder host
+            # under its own name (tag_agent="no-agent", tag_snmp_ds=
+            # "no-snmp") so it lands in the right folder. When Phase 4
             # renames it, the block below creates a *new* host object
             # under h.hostname, leaving the IP-named placeholder behind as
-            # a duplicate with default (unconfigured) monitoring settings.
-            # Delete it; best-effort since its absence isn't fatal (e.g.
-            # Phase 3 failed to stage it in the first place).
+            # a duplicate. Delete it; best-effort since its absence isn't
+            # fatal (e.g. Phase 3 failed to stage it in the first place).
             try:
                 await client.delete_host(h.ip)
             except CheckmkAPIError:
@@ -612,6 +685,7 @@ async def phase5_onboarding(
                     },
                 )
                 console.print("  [green]SNMP host created[/green] — polled directly, no agent/firewall/SSH steps")
+                await _create_expected_open_port_rules(client, h)
             except CheckmkAPIError as exc:
                 console.print(f"  [yellow]host create/update: {exc}[/yellow]")
             continue
@@ -621,8 +695,9 @@ async def phase5_onboarding(
                 client,
                 host_name=h.hostname,
                 folder=h.folder,
-                attributes={"ipaddress": h.ip, "tag_agent": "cmk-agent"},
+                attributes={"ipaddress": h.ip, "tag_agent": "cmk-agent", "tag_snmp_ds": "no-snmp"},
             )
+            await _create_expected_open_port_rules(client, h)
         except CheckmkAPIError as exc:
             console.print(f"  [yellow]host create/update: {exc}[/yellow]")
 
