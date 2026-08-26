@@ -286,6 +286,33 @@ class CheckmkClient:
 _CSRF_TOKEN_RE = re.compile(r'global_csrf_token\s*=\s*"([^"]+)"')
 
 
+async def _gui_login(client: httpx.AsyncClient, login_url: str, site: str, username: str, password: str) -> None:
+    """Log in via Checkmk's GUI session-cookie flow (`login.py`), shared by
+    every caller that needs a cmkadmin-authenticated session before any
+    automation credential exists yet (bootstrapping the 'automation' user,
+    changing cmkadmin's own password). Leaves `client`'s cookie jar
+    populated with the `auth_<site>` session cookie on success.
+    """
+    get_resp = await client.get(login_url)
+    match = _CSRF_TOKEN_RE.search(get_resp.text)
+    if not match:
+        raise CheckmkAPIError("GET", login_url, get_resp.status_code, "no CSRF token found on login page")
+
+    post_resp = await client.post(
+        login_url,
+        data={
+            "_username": username,
+            "_password": password,
+            "_login": "1",
+            "filled_in": "login",
+            "_origtarget": "index.py",
+            "_csrf_token": match.group(1),
+        },
+    )
+    if not client.cookies.get(f"auth_{site}"):
+        raise CheckmkAPIError("POST", login_url, post_resp.status_code, f"{username} login failed")
+
+
 async def bootstrap_automation_user(
     host: str,
     site: str,
@@ -336,24 +363,7 @@ async def bootstrap_automation_user(
         # documented contract ("raises CheckmkAPIError on any failure")
         # actually true.
         try:
-            get_resp = await client.get(login_url)
-            match = _CSRF_TOKEN_RE.search(get_resp.text)
-            if not match:
-                raise CheckmkAPIError("GET", login_url, get_resp.status_code, "no CSRF token found on login page")
-
-            post_resp = await client.post(
-                login_url,
-                data={
-                    "_username": cmkadmin_user,
-                    "_password": cmkadmin_password,
-                    "_login": "1",
-                    "filled_in": "login",
-                    "_origtarget": "index.py",
-                    "_csrf_token": match.group(1),
-                },
-            )
-            if not client.cookies.get(f"auth_{site}"):
-                raise CheckmkAPIError("POST", login_url, post_resp.status_code, "cmkadmin login failed")
+            await _gui_login(client, login_url, site, cmkadmin_user, cmkadmin_password)
 
             create_resp = await client.post(
                 f"{base}/api/v1/domain-types/user_config/collections/all",
@@ -443,3 +453,77 @@ async def bootstrap_automation_user(
                     is_running = status_resp.json().get("extensions", {}).get("is_running", False)
         except httpx.HTTPError:
             pass
+
+
+async def change_cmkadmin_password(
+    host: str,
+    site: str,
+    current_password: str,
+    new_password: str,
+    proto: str = "http",
+    cmkadmin_user: str = "cmkadmin",
+    enforce_password_change: bool = False,
+) -> None:
+    """Change `cmkadmin`'s own login password, right after site creation —
+    so the random password `omd create --admin-password` generated doesn't
+    have to be the one the operator remembers long-term.
+
+    No REST automation credential exists yet at this point in Phase 1
+    (this typically runs before `bootstrap_automation_user()`), so this
+    logs in the same GUI session-cookie way `bootstrap_automation_user()`
+    does (`_gui_login()`), then calls the REST API's own user-edit
+    endpoint: `PUT /objects/user_config/<cmkadmin_user>` with
+    `auth_option = {"auth_type": "password", "password": ..., "enforce_password_change": ...}`.
+    Field names verified directly against the installed Checkmk's own
+    endpoint source (`cmk/gui/openapi/endpoints/user_config/request_schemas.py`,
+    class `AuthUpdatePassword`) rather than guessed, since context7's
+    generic REST API docs don't cover this exact request body.
+
+    Checkmk enforces its own site-wide password policy (Setup > Global
+    settings > "Password policy for local accounts" — default: minimum
+    length 12, no character-group requirement, confirmed from
+    `cmk/gui/wato/_check_mk_configuration.py`) on this same call
+    server-side, regardless of what the caller already checked
+    client-side. A policy violation (or any other failure — wrong
+    `current_password`, etag mismatch) raises `CheckmkAPIError` with the
+    server's own message, so the caller can surface it and re-prompt.
+    """
+    base = f"{proto}://{host}/{site}/check_mk"
+    login_url = f"{base}/login.py"
+    async with httpx.AsyncClient() as client:
+        try:
+            await _gui_login(client, login_url, site, cmkadmin_user, current_password)
+
+            get_resp = await client.get(
+                f"{base}/api/v1/objects/user_config/{cmkadmin_user}",
+                headers={"Accept": "application/json"},
+            )
+            if get_resp.status_code != 200:
+                try:
+                    body: Any = get_resp.json()
+                except ValueError:
+                    body = get_resp.text
+                raise CheckmkAPIError("GET", str(get_resp.url), get_resp.status_code, body)
+            etag = get_resp.headers.get("ETag")
+            if not etag:
+                raise CheckmkAPIError("GET", str(get_resp.url), get_resp.status_code, "missing ETag header")
+
+            put_resp = await client.put(
+                f"{base}/api/v1/objects/user_config/{cmkadmin_user}",
+                json={
+                    "auth_option": {
+                        "auth_type": "password",
+                        "password": new_password,
+                        "enforce_password_change": enforce_password_change,
+                    }
+                },
+                headers={"Accept": "application/json", "If-Match": etag},
+            )
+            if put_resp.status_code != 200:
+                try:
+                    body = put_resp.json()
+                except ValueError:
+                    body = put_resp.text
+                raise CheckmkAPIError("PUT", str(put_resp.url), put_resp.status_code, body)
+        except httpx.HTTPError as exc:
+            raise CheckmkAPIError("GET/PUT", login_url, 0, str(exc)) from exc
