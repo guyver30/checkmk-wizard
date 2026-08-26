@@ -5,7 +5,9 @@ import questionary
 import respx
 from httpx import Response
 
-from checkmk_wizard.api import CheckmkClient, CheckmkConnection
+from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection
+from checkmk_wizard.remote import SSHCredentials
+from checkmk_wizard.scanner import HostScanResult
 from checkmk_wizard.wizard import (
     _DELETE_SITE,
     _FOLDER_NAME_RE,
@@ -16,7 +18,11 @@ from checkmk_wizard.wizard import (
     _collect_expected_services,
     _create_or_update_host,
     _create_service_discovery_rules,
+    _expected_open_ports_by_hostname,
     _network_scan_attributes,
+    _password_problems,
+    _ping_only_hostnames,
+    _prompt_change_cmkadmin_password,
     _valid_checkmk_host,
     _verify_expected_services,
     phase2_folders,
@@ -25,23 +31,20 @@ from checkmk_wizard.wizard import (
     phase5_onboarding,
     phase6_discovery,
 )
-from checkmk_wizard.remote import SSHCredentials
-from checkmk_wizard.scanner import HostScanResult
 
 CONN = CheckmkConnection(host="cmk.example", site="mysite", username="automation", secret="s3cret")
 BASE = "http://cmk.example/mysite/check_mk/api/v1"
 
 
 def _mock_no_ssh_and_skip_services(monkeypatch):
-    """First ask_async() call (Phase 5's "Attempt automated SSH..."
-    confirm) returns False; every call after — including the manual
-    expected-services prompt _collect_expected_services falls back to for
-    a windows/no-SSH host — returns "" (blank = skip)."""
-    call_count = {"n": 0}
+    """Every ask_async() call returns "" — falsy, so it also works for
+    Phase 5's "Attempt automated SSH..." confirm on the (now rare, since
+    it's skipped entirely when no onboarded host is Linux) chance it's
+    still asked — and .strip()-safe for the manual expected-services text
+    prompt a windows/no-SSH host falls back to."""
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
-        call_count["n"] += 1
-        return False if call_count["n"] == 1 else ""
+        return ""
 
     monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
 
@@ -96,6 +99,105 @@ def test_folder_name_validation(name, valid):
     # .../folder_config/collections/all rejects "my folder"/"my.folder"
     # with pattern '^[-\w]*\Z'.
     assert bool(_FOLDER_NAME_RE.match(name)) is valid
+
+
+@pytest.mark.parametrize(
+    "password,expect_ok",
+    [
+        ("Str0ng!Passw0rd", True),  # >=12 chars, 4 groups
+        ("abcDEF123456", True),  # >=12 chars, 3 groups (lower/upper/digit)
+        ("short1A!", False),  # too short (<12)
+        ("alllowercase12", False),  # only 2 groups (lower + digit)
+    ],
+)
+def test_password_problems_length_and_complexity(password, expect_ok):
+    problems = _password_problems(password, "cmkadmin")
+    assert (not problems) == expect_ok
+
+
+def test_password_problems_rejects_username_as_password():
+    assert _password_problems("cmkadmin", "cmkadmin")
+    assert _password_problems("CMKADMIN", "cmkadmin")  # case-insensitive match
+
+
+def test_password_problems_rejects_null_byte():
+    problems = _password_problems("Str0ng!Pass\x00word", "cmkadmin")
+    assert any("null byte" in p for p in problems)
+
+
+@pytest.mark.asyncio
+async def test_prompt_change_cmkadmin_password_declines_keeps_original(monkeypatch):
+    answers = iter([False])  # decline to change
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    result = await _prompt_change_cmkadmin_password("cmk.example", "mysite", "original-pw")
+    assert result == "original-pw"
+
+
+@pytest.mark.asyncio
+async def test_prompt_change_cmkadmin_password_rejects_weak_then_succeeds(monkeypatch):
+    # First candidate is too short/simple and must be rejected locally
+    # (no API call for it); the second passes validation, gets confirmed,
+    # and is sent to the API.
+    answers = iter([True, "short", "Str0ng!Passw0rd", "Str0ng!Passw0rd"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    calls = []
+
+    async def fake_change(host, site, current, new, **kwargs):
+        calls.append((host, site, current, new))
+
+    monkeypatch.setattr("checkmk_wizard.wizard.change_cmkadmin_password", fake_change)
+
+    result = await _prompt_change_cmkadmin_password("cmk.example", "mysite", "original-pw")
+
+    assert result == "Str0ng!Passw0rd"
+    assert calls == [("cmk.example", "mysite", "original-pw", "Str0ng!Passw0rd")]
+
+
+@pytest.mark.asyncio
+async def test_prompt_change_cmkadmin_password_mismatch_then_blank_cancels(monkeypatch):
+    answers = iter([True, "Str0ng!Passw0rd", "Different!Pass1", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    result = await _prompt_change_cmkadmin_password("cmk.example", "mysite", "original-pw")
+    assert result == "original-pw"
+
+
+@pytest.mark.asyncio
+async def test_prompt_change_cmkadmin_password_retries_after_api_rejection(monkeypatch):
+    answers = iter([True, "Str0ng!Passw0rd", "Str0ng!Passw0rd", "An0ther!Passw0rd", "An0ther!Passw0rd"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    call_log = []
+
+    async def fake_change(host, site, current, new, **kwargs):
+        call_log.append(new)
+        if new == "Str0ng!Passw0rd":
+            raise CheckmkAPIError("PUT", "url", 400, "password policy violation")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.change_cmkadmin_password", fake_change)
+
+    result = await _prompt_change_cmkadmin_password("cmk.example", "mysite", "original-pw")
+
+    assert call_log == ["Str0ng!Passw0rd", "An0ther!Passw0rd"]
+    assert result == "An0ther!Passw0rd"
 
 
 @pytest.mark.parametrize(
@@ -211,10 +313,68 @@ async def test_phase5_agent_host_sets_no_snmp(monkeypatch):
             return_value=Response(200, json={})
         )
         async with CheckmkClient(CONN) as client:
-            await phase5_onboarding(client, CONN, [host])
+            await phase5_onboarding(client, CONN, [host], [])
 
     body = json.loads(create_route.calls.last.request.content)
     assert body["attributes"] == {"ipaddress": "10.0.0.7", "tag_agent": "cmk-agent", "tag_snmp_ds": "no-snmp"}
+
+
+@pytest.mark.asyncio
+async def test_phase5_ping_host_sets_no_agent_no_snmp(monkeypatch):
+    # "simple ping" hosts get no agent and no SNMP — Checkmk's default
+    # host check (ICMP ping) is the only monitoring, same tag pair Phase 3
+    # already uses for its inert placeholder hosts.
+    _mock_no_ssh_and_skip_services(monkeypatch)
+
+    host = OnboardedHost(ip="10.0.0.8", hostname="pinghost", folder="/", os_family="ping")
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.8").mock(return_value=Response(204))
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        # "ping" hosts always get an explicit PING active-check rule
+        # (see _ping_only_hostnames) — not under test here, just needs a route.
+        respx.post(f"{BASE}/domain-types/rule/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["attributes"] == {"ipaddress": "10.0.0.8", "tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"}
+
+
+@pytest.mark.asyncio
+async def test_phase5_skips_ssh_prompt_when_no_linux_hosts(monkeypatch):
+    # snmp/ping-only batches have no host that would ever use SSH creds —
+    # the "Attempt automated SSH..." confirm must not be asked at all.
+    async def fail_if_asked(self, patch_stdout=False, kbi_msg=""):
+        raise AssertionError("no prompt should be asked for a snmp-only host batch")
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fail_if_asked)
+
+    host = OnboardedHost(
+        ip="10.0.0.9", hostname="switch3", folder="/", os_family="snmp", snmp_version="v2c", snmp_community="public"
+    )
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.9").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_phase4_offers_ping_monitoring_method(monkeypatch):
+    scanned = ScannedHost(ip="10.0.0.12", open_ports=[], folder="/")
+    answers = iter([[scanned], "10.0.0.12", "ping", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    onboarded = await phase4_classification([scanned])
+    assert onboarded[0].os_family == "ping"
 
 
 @pytest.mark.asyncio
@@ -247,7 +407,7 @@ async def test_phase5_deletes_ip_placeholder_when_host_renamed(monkeypatch):
             return_value=Response(200, json={})
         )
         async with CheckmkClient(CONN) as client:
-            await phase5_onboarding(client, CONN, [host])
+            await phase5_onboarding(client, CONN, [host], [])
 
     assert delete_route.called
     assert create_route.called
@@ -276,7 +436,7 @@ async def test_phase5_does_not_delete_when_hostname_equals_ip(monkeypatch):
         delete_route = respx.delete(f"{BASE}/objects/host_config/10.0.0.6").mock(return_value=Response(204))
         respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
         async with CheckmkClient(CONN) as client:
-            await phase5_onboarding(client, CONN, [host])
+            await phase5_onboarding(client, CONN, [host], [])
 
     assert not delete_route.called
 
@@ -448,6 +608,7 @@ async def test_phase5_creates_tcp_rule_for_expected_open_ports(monkeypatch):
         os_family="windows",  # avoids a real network probe (linux path pings the host)
         expected_open_ports=[80, 443],
     )
+    scan_results = [ScannedHost(ip="10.0.0.20", open_ports=[80, 443], folder="/")]
 
     with respx.mock:
         respx.delete(f"{BASE}/objects/host_config/10.0.0.20").mock(return_value=Response(204))
@@ -456,7 +617,7 @@ async def test_phase5_creates_tcp_rule_for_expected_open_ports(monkeypatch):
             return_value=Response(200, json={"id": "r1"})
         )
         async with CheckmkClient(CONN) as client:
-            await phase5_onboarding(client, CONN, [host])
+            await phase5_onboarding(client, CONN, [host], scan_results)
 
     assert rule_route.call_count == 2
     bodies = [json.loads(c.request.content) for c in rule_route.calls]
@@ -464,6 +625,44 @@ async def test_phase5_creates_tcp_rule_for_expected_open_ports(monkeypatch):
     assert ports_created == [80, 443]
     assert bodies[0]["ruleset"] == "active_checks:tcp"
     assert bodies[0]["conditions"] == {"host_name": {"match_on": ["webserver"], "operator": "one_of"}}
+    assert bodies[0]["folder"] == "/"
+
+
+@pytest.mark.asyncio
+async def test_phase5_groups_shared_expected_open_port_into_one_rule(monkeypatch):
+    # Two hosts both expecting port 22 open must share a single
+    # active_checks:tcp rule (host_name condition listing both), not get
+    # one rule each — even when they live in different Phase 2 folders.
+    _mock_no_ssh_and_skip_services(monkeypatch)
+
+    host_a = OnboardedHost(
+        ip="10.0.0.40", hostname="host-a", folder="/vlan10", os_family="windows", expected_open_ports=[22]
+    )
+    host_b = OnboardedHost(
+        ip="10.0.0.41", hostname="host-b", folder="/vlan20", os_family="windows", expected_open_ports=[22, 443]
+    )
+    scan_results = [
+        ScannedHost(ip="10.0.0.40", open_ports=[22], folder="/vlan10"),
+        ScannedHost(ip="10.0.0.41", open_ports=[22, 443], folder="/vlan20"),
+    ]
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.40").mock(return_value=Response(204))
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.41").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host_a, host_b], scan_results)
+
+    # One rule for port 22 (both hosts), one rule for port 443 (host_b only).
+    assert rule_route.call_count == 2
+    bodies = [json.loads(c.request.content) for c in rule_route.calls]
+    by_port = {json.loads(b["value_raw"])["port"]: b for b in bodies}
+    assert sorted(by_port[22]["conditions"]["host_name"]["match_on"]) == ["host-a", "host-b"]
+    assert by_port[443]["conditions"]["host_name"]["match_on"] == ["host-b"]
+    assert by_port[22]["folder"] == "/"
 
 
 @pytest.mark.asyncio
@@ -482,6 +681,7 @@ async def test_phase5_creates_tcp_rule_for_snmp_host(monkeypatch):
         snmp_community="public",
         expected_open_ports=[161],
     )
+    scan_results = [ScannedHost(ip="10.0.0.21", open_ports=[161], folder="/")]
 
     with respx.mock:
         respx.delete(f"{BASE}/objects/host_config/10.0.0.21").mock(return_value=Response(204))
@@ -490,7 +690,7 @@ async def test_phase5_creates_tcp_rule_for_snmp_host(monkeypatch):
             return_value=Response(200, json={"id": "r1"})
         )
         async with CheckmkClient(CONN) as client:
-            await phase5_onboarding(client, CONN, [host])
+            await phase5_onboarding(client, CONN, [host], scan_results)
 
     assert rule_route.call_count == 1
     body = json.loads(rule_route.calls.last.request.content)
@@ -502,14 +702,131 @@ async def test_phase5_no_rule_when_no_expected_ports(monkeypatch):
     _mock_no_ssh_and_skip_services(monkeypatch)
 
     host = OnboardedHost(ip="10.0.0.22", hostname="10.0.0.22", folder="/", os_family="windows")
+    scan_results = [ScannedHost(ip="10.0.0.22", open_ports=[], folder="/")]
 
     with respx.mock:
         respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
         rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(return_value=Response(200, json={}))
         async with CheckmkClient(CONN) as client:
-            await phase5_onboarding(client, CONN, [host])
+            await phase5_onboarding(client, CONN, [host], scan_results)
 
     assert not rule_route.called
+
+
+def test_expected_open_ports_by_hostname_prefers_promoted_over_scan():
+    # A promoted host uses its (possibly Phase-4-edited) expected_open_ports
+    # under its new hostname; an un-promoted scan result falls back to the
+    # scan's own raw open_ports under the scanned IP.
+    scan_results = [
+        ScannedHost(ip="10.0.0.70", open_ports=[22, 80], folder="/"),  # never promoted
+        ScannedHost(ip="10.0.0.71", open_ports=[22, 80], folder="/"),  # promoted, ports edited down
+    ]
+    onboarded = [
+        OnboardedHost(
+            ip="10.0.0.71", hostname="edited-host", folder="/", os_family="ping", expected_open_ports=[443]
+        )
+    ]
+
+    result = _expected_open_ports_by_hostname(scan_results, onboarded)
+
+    assert result == {"10.0.0.70": [22, 80], "edited-host": [443]}
+
+
+def test_expected_open_ports_by_hostname_skips_hosts_with_no_ports():
+    scan_results = [ScannedHost(ip="10.0.0.72", open_ports=[], folder="/")]
+    assert _expected_open_ports_by_hostname(scan_results, []) == {}
+
+
+def test_ping_only_hostnames_includes_ping_and_never_promoted():
+    # A "ping"-classified promoted host and an un-promoted scan result both
+    # end up agent-less/SNMP-less in Checkmk, so both need the explicit
+    # PING rule. A promoted linux/windows/snmp host does not.
+    scan_results = [
+        ScannedHost(ip="10.0.0.80", open_ports=[22], folder="/"),  # never promoted
+        ScannedHost(ip="10.0.0.81", open_ports=[], folder="/"),  # promoted as "ping"
+        ScannedHost(ip="10.0.0.82", open_ports=[], folder="/"),  # promoted as "linux"
+    ]
+    onboarded = [
+        OnboardedHost(ip="10.0.0.81", hostname="ping-host", folder="/", os_family="ping"),
+        OnboardedHost(ip="10.0.0.82", hostname="linux-host", folder="/", os_family="linux"),
+    ]
+
+    result = _ping_only_hostnames(scan_results, onboarded)
+
+    assert sorted(result) == ["10.0.0.80", "ping-host"]
+
+
+def test_ping_only_hostnames_empty_when_nothing_qualifies():
+    scan_results = [ScannedHost(ip="10.0.0.83", open_ports=[], folder="/")]
+    onboarded = [OnboardedHost(ip="10.0.0.83", hostname="linux-host", folder="/", os_family="linux")]
+    assert _ping_only_hostnames(scan_results, onboarded) == []
+
+
+@pytest.mark.asyncio
+async def test_phase5_creates_grouped_tcp_rules_for_never_promoted_scanned_hosts(monkeypatch):
+    # A host the user never promoted in Phase 4 stays a bare IP-named
+    # placeholder object (Phase 3 already created it), but the scan still
+    # found real open ports on it — those must still get
+    # active_checks:tcp rules, grouped by port with promoted hosts too.
+    _mock_no_ssh_and_skip_services(monkeypatch)
+
+    scan_results = [
+        ScannedHost(ip="10.0.0.60", open_ports=[22, 80], folder="/"),  # never promoted
+        ScannedHost(ip="10.0.0.61", open_ports=[22], folder="/"),  # promoted, renamed
+    ]
+    promoted_host = OnboardedHost(
+        ip="10.0.0.61", hostname="promoted-host", folder="/", os_family="ping", expected_open_ports=[22]
+    )
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.61").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [promoted_host], scan_results)
+
+    # port 22 (both hosts), port 80 (10.0.0.60 only), plus one shared
+    # explicit PING rule (both hosts are agent-less/SNMP-less).
+    assert rule_route.call_count == 3
+    bodies = [json.loads(c.request.content) for c in rule_route.calls]
+    tcp_bodies = [b for b in bodies if b["ruleset"] == "active_checks:tcp"]
+    icmp_bodies = [b for b in bodies if b["ruleset"] == "active_checks:icmp"]
+    by_port = {json.loads(b["value_raw"])["port"]: b for b in tcp_bodies}
+    assert sorted(by_port[22]["conditions"]["host_name"]["match_on"]) == ["10.0.0.60", "promoted-host"]
+    assert by_port[80]["conditions"]["host_name"]["match_on"] == ["10.0.0.60"]
+    assert len(icmp_bodies) == 1
+    assert sorted(icmp_bodies[0]["conditions"]["host_name"]["match_on"]) == ["10.0.0.60", "promoted-host"]
+
+
+@pytest.mark.asyncio
+async def test_phase5_creates_rules_for_scanned_hosts_even_when_none_promoted(monkeypatch):
+    # If the user promotes zero hosts in Phase 4, Phase 5 must still create
+    # expected-open-port rules for whatever the scan found — this isn't
+    # limited to "hosts the user explicitly onboarded."
+    scan_results = [ScannedHost(ip="10.0.0.62", open_ports=[443], folder="/")]
+
+    async def fail_if_asked(self, patch_stdout=False, kbi_msg=""):
+        raise AssertionError("no prompt should be asked with zero promoted hosts")
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fail_if_asked)
+
+    with respx.mock:
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [], scan_results)
+
+    # One TCP-port rule plus the never-promoted host's explicit PING rule.
+    assert rule_route.call_count == 2
+    bodies = [json.loads(c.request.content) for c in rule_route.calls]
+    tcp_body = next(b for b in bodies if b["ruleset"] == "active_checks:tcp")
+    icmp_body = next(b for b in bodies if b["ruleset"] == "active_checks:icmp")
+    assert json.loads(tcp_body["value_raw"]) == {"port": 443, "svc_description": "TCP Port 443 (expected open)"}
+    assert tcp_body["conditions"] == {"host_name": {"match_on": ["10.0.0.62"], "operator": "one_of"}}
+    assert icmp_body["conditions"] == {"host_name": {"match_on": ["10.0.0.62"], "operator": "one_of"}}
 
 
 @pytest.mark.asyncio
@@ -662,7 +979,10 @@ def test_verify_expected_services_noop_without_expected_services(capsys):
 async def test_phase5_windows_manual_service_entry_creates_rule(monkeypatch):
     # End-to-end through phase5_onboarding for the windows (always-manual)
     # path: manual service-name entry -> inventory_services_rules rule.
-    answers = iter([False, "MSSQLSERVER, W3SVC"])
+    # No linux host in this batch, so Phase 5's "Attempt automated SSH..."
+    # confirm is skipped entirely — the first (and only) prompt is the
+    # manual expected-services text field for the windows host.
+    answers = iter(["MSSQLSERVER, W3SVC"])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -678,7 +998,7 @@ async def test_phase5_windows_manual_service_entry_creates_rule(monkeypatch):
             return_value=Response(200, json={"id": "r1"})
         )
         async with CheckmkClient(CONN) as client:
-            await phase5_onboarding(client, CONN, [host])
+            await phase5_onboarding(client, CONN, [host], [])
 
     assert host.expected_services == ["MSSQLSERVER", "W3SVC"]
     body = json.loads(rule_route.calls.last.request.content)

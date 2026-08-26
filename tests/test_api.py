@@ -6,7 +6,13 @@ import pytest
 import respx
 from httpx import Response
 
-from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection, bootstrap_automation_user
+from checkmk_wizard.api import (
+    CheckmkAPIError,
+    CheckmkClient,
+    CheckmkConnection,
+    bootstrap_automation_user,
+    change_cmkadmin_password,
+)
 
 CONN = CheckmkConnection(host="cmk.example", site="mysite", username="automation", secret="s3cret")
 BASE = "http://cmk.example/mysite/check_mk/api/v1"
@@ -385,3 +391,54 @@ async def test_bootstrap_automation_user_raises_on_create_failure():
         )
         with pytest.raises(CheckmkAPIError):
             await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
+
+
+@pytest.mark.asyncio
+async def test_change_cmkadmin_password_success():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.get(f"{BASE}/objects/user_config/cmkadmin").mock(
+            return_value=Response(200, json={}, headers={"ETag": '"user-etag"'})
+        )
+        put_route = respx.put(f"{BASE}/objects/user_config/cmkadmin").mock(return_value=Response(200, json={}))
+
+        await change_cmkadmin_password("cmk.example", "mysite", "oldpw", "N3wSecure!Pass")
+
+    assert put_route.calls.last.request.headers["If-Match"] == '"user-etag"'
+    body = json.loads(put_route.calls.last.request.content)
+    assert body["auth_option"] == {
+        "auth_type": "password",
+        "password": "N3wSecure!Pass",
+        "enforce_password_change": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_change_cmkadmin_password_raises_on_policy_rejection():
+    # e.g. the site's configured password policy rejects the new password —
+    # the server's own detail message must propagate to the caller.
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.get(f"{BASE}/objects/user_config/cmkadmin").mock(
+            return_value=Response(200, json={}, headers={"ETag": '"user-etag"'})
+        )
+        respx.put(f"{BASE}/objects/user_config/cmkadmin").mock(
+            return_value=Response(400, json={"title": "password too short"})
+        )
+        with pytest.raises(CheckmkAPIError, match="password too short"):
+            await change_cmkadmin_password("cmk.example", "mysite", "oldpw", "short")
+
+
+@pytest.mark.asyncio
+async def test_change_cmkadmin_password_raises_on_failed_login():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(return_value=Response(200, text="login page again"))
+        with pytest.raises(CheckmkAPIError):
+            await change_cmkadmin_password("cmk.example", "mysite", "wrongpw", "N3wSecure!Pass")

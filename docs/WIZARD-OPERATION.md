@@ -106,15 +106,50 @@ Checkmk are simply re-detected or re-created).
    here (a stray space, an accidentally-included `http://` prefix, ...)
    used to reach `httpx` unvalidated and crash the wizard; see the
    `CheckmkClient._request()` fix below.
-   - **New site:** `_create_fresh_site()` (`wizard.py:96-112`) generates a
+   - **New site:** `_create_fresh_site()` (`wizard.py:192-206`) generates a
      random admin password via `secrets.token_urlsafe(16)`, runs
      `omd create --admin-password <pwd> <site>` as a subprocess
      (`site.py:69-86`), then `omd start <site>` (`site.py:89-103`), then
-     **prints the generated cmkadmin password to the console**. It then
-     immediately calls `bootstrap_automation_user()` (`api.py:269-425`,
-     see below) to auto-create the `automation` REST user using that
-     cmkadmin password — best-effort: any failure there is caught, printed
-     as a yellow warning, and falls through to the manual path in step 4.
+     **prints the generated cmkadmin password to the console**.
+   - **cmkadmin password change (`_prompt_change_cmkadmin_password()`,
+     `wizard.py:150-186`, added 2026-08-26):** immediately after printing
+     the password, asks "Change the cmkadmin password now? (recommended —
+     the one above was randomly generated)" (default yes). If declined, or
+     the operator leaves the new-password prompt blank, the generated
+     password stays in effect. Otherwise loops: validates the candidate
+     client-side (`_password_problems()`, `wizard.py:101-115` — at least 12
+     characters, matching Checkmk's own default "Password policy for local
+     accounts" minimum, verified against the installed site's own
+     `cmk/gui/wato/_check_mk_configuration.py`; plus a wizard-only,
+     stricter-than-default requirement of at least 3 of the 4 character
+     groups lowercase/uppercase/digit/special via `_password_group_count()`,
+     `wizard.py:91-98`; must not equal the username; no null bytes),
+     re-prompts on any violation with a red per-rule message, then asks for
+     confirmation and re-prompts on mismatch. Once a candidate passes
+     locally, calls `change_cmkadmin_password()` (`api.py`, added
+     2026-08-26) — a `CheckmkAPIError` (e.g. the site's actual configured
+     policy is stricter than this wizard's local check, or rejects the
+     password for another reason) is printed and loops back to a fresh
+     prompt rather than aborting. Whichever password ends up in effect is
+     what subsequent steps (`bootstrap_automation_user()` below) use to
+     keep authenticating as `cmkadmin`.
+   - `_create_fresh_site()` then immediately calls
+     `bootstrap_automation_user()` (`api.py:316-395`, see below) to
+     auto-create the `automation` REST user using cmkadmin's now-current
+     password — best-effort: any failure there is caught, printed as a
+     yellow warning, and falls through to the manual path in step 4.
+     `bootstrap_automation_user()` and `change_cmkadmin_password()`
+     (`api.py:458-`, added 2026-08-26) share the GUI session-cookie login
+     step (`_gui_login()`, `api.py:289-313`) — both need a cmkadmin-
+     authenticated session before any REST automation credential exists.
+     `change_cmkadmin_password()` follows it with `GET
+     /objects/user_config/cmkadmin` for the current ETag, then `PUT
+     /objects/user_config/cmkadmin` with `auth_option = {"auth_type":
+     "password", "password": ..., "enforce_password_change": false}` —
+     field names verified directly against the installed Checkmk's own
+     endpoint source (`cmk/gui/openapi/endpoints/user_config/
+     request_schemas.py`, class `AuthUpdatePassword`), since context7's
+     generic REST API docs don't cover this exact request body.
    - **Existing site (reused):** just runs `omd start <site>` again
      (no-op if already running) and reuses the existing site's credentials
      below — no auto-provisioning attempt here, since that needs a
@@ -367,7 +402,7 @@ flow when Phase 2 produced no folder/subnet pairs.
    folders' results after every scan completes, then returns
    `list[ScannedHost(ip, open_ports, folder)]`.
 
-## Phase 4 — Host Classification (`wizard.py:469-556`)
+## Phase 4 — Host Classification (`wizard.py:564-651`)
 
 Purely interactive — **no API calls, no fingerprinting, and (changed
 2026-08-25) no folder prompt** — each host's folder is already known from
@@ -382,22 +417,27 @@ case):
    **validated** against `_HOST_NAME_RE` (`wizard.py:49` — live-verified
    against a real Checkmk site: `POST .../host_config/collections/all`
    rejected "my host"/"host@name" with pattern `^[-0-9a-zA-Z_.]+\Z`) and
-   re-prompted on a mismatch
-   (`wizard.py:487-498`) and a monitoring-method choice — `linux` (agent),
-   `windows` (agent), or `snmp` (no agent — switches/routers/printers/etc.)
-   (`questionary.select`, `wizard.py:499-506`).
+   re-prompted on a mismatch and a monitoring-method choice — `linux`
+   (agent), `windows` (agent), `snmp` (no agent — switches/routers/
+   printers/etc.), or **`ping`** (no agent, no SNMP — reachability only;
+   added 2026-08-26) (`questionary.select`, `wizard.py:568-575`). `ping` is
+   the same "no-agent"/"no-snmp" tag pair Phase 3 already uses for its
+   inert placeholder hosts, made an explicit, user-chosen option instead of
+   only an implicit not-yet-classified state.
 3. **If `snmp`:** additionally prompts for SNMP version (`v2c` or `v1` —
    **v3 is not supported**, community-string auth only) and the community
-   string (default `public`) (`wizard.py:508-517`).
-4. **Expected-open ports (2026-08-26, `wizard.py:519-543`):** for every
+   string (default `public`).
+4. **Expected-open ports (2026-08-26):** for every
    host regardless of `os_family`, prompts for a comma-separated list of
    "expected-open" ports to monitor going forward — defaults to whatever
    Phase 3's scan actually found open on that IP (a reasonable starting
    guess, editable/clearable), re-prompted if any value falls outside
-   1-65535. Blank means none. Phase 5 turns each one into a Checkmk
-   `active_checks:tcp` ("Check TCP port connection") rule scoped to that
-   host — a real monitored service that goes CRITICAL if the port stops
-   responding (e.g. an internal service on that host crashed). This is
+   1-65535. Blank means none. Phase 5 turns every distinct port across
+   **all** onboarded hosts into one Checkmk `active_checks:tcp` ("Check TCP
+   port connection") rule covering every host that expects it open
+   (changed 2026-08-26 — see Phase 5 below) — a real monitored service
+   that goes CRITICAL if the port stops responding (e.g. an internal
+   service on that host crashed). This is
    only the "should stay open" direction; the inverse ("alert if a port
    that should stay closed — e.g. RDP — opens up") has no equivalent
    native Checkmk option (its `active_checks:tcp` only lets you configure
@@ -409,26 +449,41 @@ case):
 5. Returns a list of `OnboardedHost(ip, hostname, folder, os_family,
    snmp_version, snmp_community, expected_open_ports)` — `folder` copied
    straight from the selected `ScannedHost`, never asked interactively.
+   `os_family` is one of `"linux"`, `"windows"`, `"snmp"`, or `"ping"`.
 
-## Phase 5 — Host Onboarding (`wizard.py:698-867`)
+## Phase 5 — Host Onboarding (`wizard.py:1021-1034`, delegating the
+per-host loop to `_onboard_hosts()`, `wizard.py:829-1018`)
+
+**Restructured 2026-08-26** — the per-host firewall/agent/SNMP/ping
+onboarding loop (below) now only covers hosts the user actually promoted
+in Phase 4, exactly as before, but expected-open-port rule creation was
+pulled out into its own always-runs step so it can cover every *scanned*
+host, not just promoted ones (see "Expected-open-port rules" further
+down) — including the case where the user promotes **zero** hosts.
+`phase5_onboarding(client, connection, hosts, scan_results)` now takes
+Phase 3's full `scan_results` as a 4th argument for exactly this reason.
 
 Runs once for the whole batch, then loops **sequentially, one host at a
 time** — no concurrency.
 
 **Setup (once):**
-1. Asks "Attempt automated SSH firewall + agent install for Linux hosts?"
-   (default Yes).
-2. If yes: prompts for SSH username (re-prompted if left blank,
-   `wizard.py:712-715`), then auth mode (password or private key path) →
+1. **Only if at least one onboarded host is `linux`** (added 2026-08-26 —
+   previously asked unconditionally): asks "Attempt automated SSH firewall
+   + agent install for Linux hosts?" (default Yes). `windows` hosts are
+   always a manual path regardless of SSH creds, and `snmp`/`ping` hosts
+   have no agent at all, so a batch with none of those doesn't get asked a
+   prompt that has nothing to apply to.
+2. If yes: prompts for SSH username (re-prompted if left blank), then
+   auth mode (password or private key path) →
    builds one `SSHCredentials` object reused for **every** Linux host in
    the batch (same username/credential for all hosts). A private-key path
-   is checked to exist as a local file (`Path(...).expanduser().is_file()`,
-   `wizard.py:722-733`) and re-prompted if not — not a Checkmk-API
+   is checked to exist as a local file (`Path(...).expanduser().is_file()`)
+   and re-prompted if not — not a Checkmk-API
    validation, but a nonexistent key would fail identically for every
    host in the batch, so this is caught once up front rather than once
    per host inside `asyncssh`'s own connection error handling.
 
-**Host create/update (`_create_or_update_host()`, `wizard.py:562-585`):**
+**Host create/update (`_create_or_update_host()`, `wizard.py:567-590`):**
 Both branches below go through this helper instead of calling
 `client.create_host()` directly. Phase 3 already staged every scanned IP
 as a bare host object under `host_name=ip` **in the folder its scan
@@ -449,7 +504,7 @@ the wizard **continues anyway** to the firewall/SSH steps regardless
 (known bug — see audit) — this fix narrows that bug's trigger to genuine
 failures, since the common IP-collision case no longer fails at all.
 
-**IP-placeholder cleanup on rename (2026-08-26, `wizard.py:680-692`):** If
+**IP-placeholder cleanup on rename (2026-08-26, `wizard.py:848-859`):** If
 Phase 4 gave a host a hostname different from its scanned IP, the Phase 3
 stub (`host_name=ip`, inert `tag_agent: "no-agent"`/`tag_snmp_ds:
 "no-snmp"`) is a leftover, separate object from the new `host_name=hostname`
@@ -463,45 +518,115 @@ swallows `CheckmkAPIError` (e.g. 404 if Phase 3 never staged it) —
 best-effort, never blocks onboarding.
 
 **Expected-open-port rules (`_create_expected_open_port_rules()`,
-`wizard.py:588-610`):** called right after a successful host create/update,
-for **both** branches below — once per port in `h.expected_open_ports`
-(Phase 4). Each call is `client.create_rule(ruleset="active_checks:tcp",
-folder=h.folder, value_raw=<JSON dict {port, svc_description}>,
-conditions={host_name: {match_on: [h.hostname], operator: "one_of"}})`
+`wizard.py:708-738`, fed by `_expected_open_ports_by_hostname()`,
+`wizard.py:684-704`; broadened 2026-08-26 — previously covered only
+promoted/onboarded hosts):** called **once, from `phase5_onboarding()`
+itself, after `_onboard_hosts()` finishes (or is skipped entirely if
+nothing was promoted)** — not per host, and not scoped to `hosts`
+(the Phase 4 promoted list) at all. `_expected_open_ports_by_hostname()`
+walks **every host Phase 3 scanned**, not just the ones promoted: for a
+host the user promoted in Phase 4, it uses that host's (possibly
+user-edited) `expected_open_ports` under its **new** hostname; for every
+other scanned host — left as a bare Phase 3 placeholder object under
+`host_name=ip` because the user never promoted it — it falls back to the
+scan's own raw `open_ports` under the scanned **IP** directly, since
+Phase 4 never asked about these. This closes a real gap: previously, a
+scanned host the operator chose not to rename/classify got no
+expected-open-port monitoring at all, even though the scan had already
+found real ports open on it.
+
+The resulting `{hostname: [ports]}` map is then regrouped by **port**
+into `{port: [hostnames expecting it open]}`, and one
+`client.create_rule(ruleset="active_checks:tcp", folder="/",
+value_raw=<JSON dict {port, svc_description}>, conditions={host_name:
+{match_on: [...every hostname with that port...], operator: "one_of"}})`
+is issued per distinct port — so two hosts both expecting port 22 open
+share a single rule instead of each getting their own copy (the
+ruleset's `host_name` condition already accepts a multi-hostname
+`match_on` list), and this now holds across promoted and never-promoted
+hosts alike. Placed at the root folder `"/"` rather than each host's own
+Phase 2 folder, since a rule's folder must be an ancestor of every host
+it's meant to cover and hosts sharing a port can span different Phase 2
+folders — the
+`host_name` condition still restricts it to exactly the listed hosts.
 (`api.py`, `POST /domain-types/rule/collections/all`). Live-verified
 end-to-end against a real Checkmk 2.4.0p35 CE site: the rule survives
 activation and Phase 6's discovery picks it up as a real monitored
-service named `TCP Port <N> (expected open)`, going CRITICAL if that port
-stops responding. `value_raw` is sent as plain JSON (confirmed Checkmk
-accepts this, not only the Python-repr-with-single-quotes form its own
-"export for API" GUI feature produces). Only inside the `try` block, so a
-failed host create/update skips rule creation entirely; each port's own
-`CheckmkAPIError` is caught individually so one bad port never blocks the
-rest of that host's ports or the wider onboarding loop. Deliberately only
-the "should stay open" direction — see the note in Phase 4 above for why
-the inverse ("alert if a normally-closed port opens") isn't implemented.
+service named `TCP Port <N> (expected open)` on every matched host, going
+CRITICAL if that port stops responding on any of them. `value_raw` is sent
+as plain JSON (confirmed Checkmk accepts this, not only the
+Python-repr-with-single-quotes form its own "export for API" GUI feature
+produces). Each port's own `CheckmkAPIError` is caught individually so one
+bad port never blocks the rest. Deliberately only the "should stay open"
+direction — see the note in Phase 4 above for why the inverse ("alert if a
+normally-closed port opens") isn't implemented.
+
+**Explicit PING rule (`_create_ping_check_rule()`, `wizard.py:772-796`,
+fed by `_ping_only_hostnames()`, `wizard.py:749-769`; added 2026-08-26 —
+fixes a real reported symptom: "why can I only see TCP ports, not the
+ping status, when I monitor the hosts in the GUI?"):** Checkmk's own
+core-config-generation source (installed site,
+`cmk/base/core_nagios/_create_config.py`, confirmed by reading it
+directly) only auto-adds its implicit "PING" service to a host when that
+host has **no other check configured at all** — `if not have_at_least_
+one_service and not active_checks_rules_exist and not custchecks:`. Every
+agent-less/SNMP-less host this wizard creates (`os_family == "ping"`, and
+every scanned-but-never-promoted host — same `tag_agent: no-agent`/
+`tag_snmp_ds: no-snmp` pair) also gets an expected-open-port
+`active_checks:tcp` rule from the step above whenever it has any expected
+ports at all, which makes `active_checks_rules_exist` true — so Checkmk
+silently skips the implicit PING, leaving **no reachability service at
+all** in the GUI, just the TCP-port checks. (The host's own up/down state
+icon is unaffected — that's computed independently of services — but no
+explicit "PING" row appears in its service list.)
+
+`_ping_only_hostnames()` collects every such hostname (Phase 4's `ping`
+choice, by its current/renamed hostname; every never-promoted scan result,
+by its scanned IP — same population `_expected_open_ports_by_hostname()`
+covers, reused for consistency) regardless of whether it actually has a
+TCP-port rule, since making PING explicit is harmless either way (Checkmk
+skips its own implicit one the moment any active check exists, so there's
+never a duplicate). `_create_ping_check_rule()` then issues **one** shared
+`client.create_rule(ruleset="active_checks:icmp", folder="/",
+value_raw="{}", conditions={host_name: {match_on: [...], operator:
+"one_of"}})` covering all of them — `active_checks:icmp` is Checkmk's
+"Check hosts with PING (ICMP Echo Request)" ruleset (confirmed from the
+installed site's own `cmk/gui/plugins/wato/active_checks/icmp.py`); an
+empty `value_raw` accepts every field's default (service description
+`"PING"`, pings the host's own configured `ipaddress` attribute, default
+RTA/packet-loss/packet-count/timeout thresholds — none of the ruleset's
+fields are required). Same grouped-into-one-rule shape and root-folder
+placement as the TCP-port rules, for the same reasons.
 
 **Per host:**
 1. **If `os_family == "snmp"`:** `_create_or_update_host(host_name=hostname,
    folder=..., attributes={ipaddress, tag_agent: "no-agent", tag_snmp_ds:
    "snmp-v2"|"snmp-v1", snmp_community: {type: "v1_v2_community",
-   community}})` (`wizard.py:703-713`) — no firewall/SSH/agent steps at
+   community}})` (`wizard.py:863-879`) — no firewall/SSH/agent steps at
    all, `continue` to next host. `tag_agent`/`tag_snmp_ds` values are
    doc-verified (Checkmk's CSV host-import attribute mapping,
    `docs.checkmk.com/latest/en/hosts_setup.html`); the `snmp_community`
    payload shape is best-effort and **not** independently doc-confirmed —
    verify against the target site's own REST API spec before relying on it.
-2. **Otherwise:** `_create_or_update_host(host_name=hostname, folder=...,
-   attributes={ipaddress, tag_agent: "cmk-agent", tag_snmp_ds: "no-snmp"})`
-   (`wizard.py:779-784`). `tag_snmp_ds` set explicitly here (2026-08-26,
-   same reasoning as Phase 3's staging) rather than left to Checkmk's own
-   default for that tag group.
-3. **Systemd/Windows service monitoring (2026-08-26, `wizard.py:788-796`):**
+2. **If `os_family == "ping"` (added 2026-08-26, `wizard.py:889-905`):**
+   `_create_or_update_host(host_name=hostname, folder=..., attributes=
+   {ipaddress, tag_agent: "no-agent", tag_snmp_ds: "no-snmp"})` — same
+   inert tag pair Phase 3 uses for its placeholder hosts, so Checkmk's
+   default host check (ICMP ping) is the only monitoring. No firewall/SSH/
+   discovery steps, `continue` to next host — expected-open-port rules
+   (above) still apply, since that grouping runs over every host
+   regardless of `os_family`.
+3. **Otherwise (linux/windows):** `_create_or_update_host(host_name=hostname,
+   folder=..., attributes={ipaddress, tag_agent: "cmk-agent", tag_snmp_ds:
+   "no-snmp"})` (`wizard.py:908-913`). `tag_snmp_ds` set explicitly here
+   (2026-08-26, same reasoning as Phase 3's staging) rather than left to
+   Checkmk's own default for that tag group.
+4. **Systemd/Windows service monitoring (2026-08-26, `wizard.py:917-925`):**
    for both non-SNMP branches (windows and linux alike — ahead of the
    windows/linux `continue` split below, not inside either arm of it), asks
    which specific systemd units / Windows services should be *actively*
    monitored, then configures Checkmk's discovery to pick them up:
-   - **`_collect_expected_services()` (`wizard.py:618-644`):** for a Linux
+   - **`_collect_expected_services()` (`wizard.py:725-751`):** for a Linux
      host with SSH credentials available, tries a **live SSH scan**
      (`remote.list_running_systemd_services()`, `remote.py:151-179` —
      `systemctl list-units --type=service --state=running --no-legend
@@ -515,7 +640,7 @@ the inverse ("alert if a normally-closed port opens") isn't implemented.
      SSH credentials, or a scan that came back empty (unreachable, or
      the command failed). Stored on `h.expected_services` — Phase 6
      reads it back to verify (see below).
-   - **`_create_service_discovery_rules()` (`wizard.py:648-694`):** one
+   - **`_create_service_discovery_rules()` (`wizard.py:755-797`):** one
      rule covering *all* requested names at once (unlike the TCP-port
      rules above — this ruleset's name-list field natively holds
      multiple entries) — `discovery_systemd_units_services` for Linux,
@@ -722,10 +847,10 @@ a different mechanism than the plan's wording, but the same outcome
 |---|---|---|
 | `CheckmkConnection` | `api.py:27-50` | host/site/username/secret + computed `base_url`; `registration_user`/`registration_secret` default to `username`/`secret` via `__post_init__` |
 | `CheckmkClient` | `api.py:56-261` | async context-managed `httpx` wrapper; one method per endpoint used |
-| `WizardState` | `wizard.py:87-90` | declared but **unused** — phases pass state via direct return values/params instead |
+| `WizardState` | `wizard.py:141-144` | declared but **unused** — phases pass state via direct return values/params instead |
 | `HostScanResult` | `scanner.py:22-29` | IP + open ports — `scan_network()`'s own return type, wrapped into `ScannedHost` per folder by Phase 3 |
-| `ScannedHost` | `wizard.py:70-73` | `HostScanResult` + which Phase 2 folder its subnet scan found it in (`/` for the flat-fallback case) — Phase 3's actual return type since 2026-08-25 |
-| `OnboardedHost` | `wizard.py:77-90` | ip/hostname/folder/os_family (+ snmp_version/snmp_community if SNMP, expected_open_ports) from Phase 4; `folder` copied from `ScannedHost`, never prompted; `expected_services` set in Phase 5 instead (needs SSH access) |
+| `ScannedHost` | `wizard.py:118-121` | `HostScanResult` + which Phase 2 folder its subnet scan found it in (`/` for the flat-fallback case) — Phase 3's actual return type since 2026-08-25 |
+| `OnboardedHost` | `wizard.py:125-138` | ip/hostname/folder/`os_family` (`"linux"`\|`"windows"`\|`"snmp"`\|`"ping"`, the last added 2026-08-26) (+ snmp_version/snmp_community if SNMP, expected_open_ports) from Phase 4; `folder` copied from `ScannedHost`, never prompted; `expected_services` set in Phase 5 instead (needs SSH access) |
 | `ActionResult` | `remote.py:54-57` | outcome (`automated`/`manual_required`/`failed_fallback_manual`) + detail + manual text |
 | `SSHCredentials` | `remote.py:41-44` | username + password or private key path, held in memory only |
 | `OSRelease` | `remote.py:61-79` | parsed `/etc/os-release` (id, version_id, id_like) |
@@ -765,7 +890,7 @@ REST call, or a target simply being unreachable, hit this same hole.
 `CheckmkAPIError` (`status_code=0` signals "no HTTP response was ever
 received") — one fix, at the one choke point, closes the gap for every
 existing `except CheckmkAPIError` site without touching any of them.
-`bootstrap_automation_user()` (`api.py:269-425`) talks to `httpx`
+`bootstrap_automation_user()` (`api.py:316-455`) talks to `httpx`
 directly rather than through `CheckmkClient`, so it needed the same fix
 applied separately around its login/create-user calls, to keep its own
 documented contract ("raises `CheckmkAPIError` on any failure") actually
@@ -782,6 +907,13 @@ tests: `tests/test_api.py` (2 cases, respx `side_effect` simulating a
   disk.
 - The Checkmk automation secret and generated cmkadmin password are printed
   to the console (`rich` output) — visible in scrollback/terminal capture.
+  On a fresh site, the operator can immediately replace the generated
+  cmkadmin password (`_prompt_change_cmkadmin_password()`, added
+  2026-08-26 — see Phase 1 above) — the new password is typed via
+  `questionary.password` (masked input, not echoed or logged), but is
+  still sent over plain HTTP by default (same `proto="http"` exposure as
+  every other credential this wizard sends — see the `_password=...`
+  cleartext note below).
 - SSH host key verification is disabled (`known_hosts=None`,
   `remote.py:143`) for every connection.
 - The registration credential (`connection.registration_secret` — the
@@ -790,7 +922,7 @@ tests: `tests/test_api.py` (2 cases, respx `side_effect` simulating a
   command-line argument to `cmk-agent-ctl register` over the SSH session
   (`remote.py:271-281`), visible to anything reading that process's argv
   on the target host. Using the narrower `agent_registration` credential
-  when available (Phase 1, `wizard.py:97-111`) limits what this exposure
+  when available (Phase 1, `wizard.py:317`) limits what this exposure
   can be used for, compared to leaking the full `automation` credential.
 - The SNMP community string (Phase 4, `snmp` hosts) is prompted in plain
   text via `questionary.text` (not password-masked) and later written

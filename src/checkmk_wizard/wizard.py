@@ -20,7 +20,13 @@ from rich.progress import Progress
 from rich.table import Table
 
 from checkmk_wizard import livestatus, remote, site
-from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection, bootstrap_automation_user
+from checkmk_wizard.api import (
+    CheckmkAPIError,
+    CheckmkClient,
+    CheckmkConnection,
+    bootstrap_automation_user,
+    change_cmkadmin_password,
+)
 from checkmk_wizard.scanner import DEFAULT_PORTS, scan_network
 
 console = Console()
@@ -67,6 +73,47 @@ def _valid_checkmk_host(value: str) -> bool:
         return bool(_HOSTNAME_RE.match(value))
 
 
+# cmkadmin password requirements. Checkmk's own default policy (Setup >
+# Global settings > "Password policy for local accounts", verified from
+# the installed site's cmk/gui/wato/_check_mk_configuration.py) requires a
+# minimum length of 12 characters and no character-group complexity by
+# default. `_PASSWORD_MIN_GROUPS` is a wizard-only, stricter-than-default
+# complexity bar (Checkmk itself allows configuring 1-4 of the same 4
+# groups) for a superuser account — being stricter here never causes a
+# false rejection server-side. The REST API call itself re-validates
+# against the site's actual configured policy regardless (which this
+# wizard has no way to read back), so a server-side rejection is still
+# caught and surfaced rather than assumed away.
+_PASSWORD_MIN_LENGTH = 12
+_PASSWORD_MIN_GROUPS = 3
+
+
+def _password_group_count(pw: str) -> int:
+    groups = (
+        any(c.islower() for c in pw),
+        any(c.isupper() for c in pw),
+        any(c.isdigit() for c in pw),
+        any(not c.isalnum() for c in pw),
+    )
+    return sum(groups)
+
+
+def _password_problems(pw: str, username: str) -> list[str]:
+    problems = []
+    if len(pw) < _PASSWORD_MIN_LENGTH:
+        problems.append(f"must be at least {_PASSWORD_MIN_LENGTH} characters long")
+    if "\x00" in pw:
+        problems.append("must not contain null bytes")
+    if pw.lower() == username.lower():
+        problems.append("must not be the same as the username")
+    if _password_group_count(pw) < _PASSWORD_MIN_GROUPS:
+        problems.append(
+            f"must use at least {_PASSWORD_MIN_GROUPS} of these 4 character groups: "
+            "lowercase letters, uppercase letters, digits, special characters"
+        )
+    return problems
+
+
 @dataclass
 class ScannedHost:
     ip: str
@@ -79,7 +126,7 @@ class OnboardedHost:
     ip: str
     hostname: str
     folder: str
-    os_family: str  # "linux" | "windows" | "snmp"
+    os_family: str  # "linux" | "windows" | "snmp" | "ping"
     snmp_version: str | None = None  # "v1" | "v2c" — only set when os_family == "snmp"
     snmp_community: str | None = None
     expected_open_ports: list[int] = field(default_factory=list)
@@ -100,6 +147,48 @@ class WizardState:
 # ── Phase 1: Site bring-up ──────────────────────────────────────────────
 
 
+async def _prompt_change_cmkadmin_password(checkmk_host: str, site_name: str, current_password: str) -> str:
+    """Offer to replace the randomly-generated cmkadmin password with one
+    the operator chooses. Returns whichever password is in effect
+    afterwards (the new one on success, the original if declined or
+    cancelled) — the caller needs this to keep bootstrapping with cmkadmin's
+    *current* password.
+    """
+    change = await questionary.confirm(
+        "Change the cmkadmin password now? (recommended — the one above was randomly generated)",
+        default=True,
+    ).ask_async()
+    if not change:
+        return current_password
+
+    while True:
+        new_password = await questionary.password(
+            "New cmkadmin password (leave blank to cancel):"
+        ).ask_async()
+        if not new_password:
+            console.print("[yellow]Keeping the generated password.[/yellow]")
+            return current_password
+
+        problems = _password_problems(new_password, "cmkadmin")
+        if problems:
+            console.print(f"[red]Password {'; '.join(problems)}.[/red]")
+            continue
+
+        confirm_password = await questionary.password("Confirm new password:").ask_async()
+        if new_password != confirm_password:
+            console.print("[red]Passwords don't match — try again.[/red]")
+            continue
+
+        try:
+            await change_cmkadmin_password(checkmk_host, site_name, current_password, new_password)
+        except CheckmkAPIError as exc:
+            console.print(f"[red]Checkmk rejected the password: {exc}[/red]")
+            continue
+
+        console.print("[green]cmkadmin password changed.[/green]")
+        return new_password
+
+
 async def _create_fresh_site(site_name: str, checkmk_host: str) -> None:
     admin_password = secrets.token_urlsafe(16)
     console.print(site.create_site(site_name, admin_password), style="dim", end="")
@@ -107,6 +196,7 @@ async def _create_fresh_site(site_name: str, checkmk_host: str) -> None:
     console.print(
         f"Site created. cmkadmin password (save this): [bold yellow]{admin_password}[/bold yellow]"
     )
+    admin_password = await _prompt_change_cmkadmin_password(checkmk_host, site_name, admin_password)
     try:
         await bootstrap_automation_user(checkmk_host, site_name, admin_password)
         console.print("[green]Automation user 'automation' created automatically.[/green]")
@@ -507,6 +597,7 @@ async def phase4_classification(scan_results: list[ScannedHost]) -> list[Onboard
                 questionary.Choice("linux (Checkmk agent)", value="linux"),
                 questionary.Choice("windows (Checkmk agent)", value="windows"),
                 questionary.Choice("snmp (no agent — switch/router/printer/etc.)", value="snmp"),
+                questionary.Choice("simple ping (no agent, no SNMP — reachability only)", value="ping"),
             ],
         ).ask_async()
 
@@ -590,29 +681,119 @@ async def _create_or_update_host(
         await client.update_host_attributes(host_name, attributes, etag)
 
 
-async def _create_expected_open_port_rules(client: CheckmkClient, host: OnboardedHost) -> None:
-    """One `active_checks:tcp` ("Check TCP port connection") rule per
-    expected-open port from Phase 4, scoped to this host only via a
-    `host_name` condition — becomes a monitored "TCP Port <N> (expected
-    open)" service once Phase 6/7 discover and activate it, alerting if
-    the port ever stops responding. Live-verified against a real Checkmk
-    2.4.0p35 CE site end-to-end (rule created → activated → discovered as
-    a real service). `value_raw` is a JSON string of the ruleset's
-    parameter dict — Checkmk accepts plain JSON here, not just the
-    Python-repr form its own GUI export produces. Best-effort per port: a
-    failure on one port (e.g. a colliding rule) must not stop onboarding
-    or block the rest of this host's ports.
+def _expected_open_ports_by_hostname(
+    scan_results: list[ScannedHost], onboarded: list[OnboardedHost]
+) -> dict[str, list[int]]:
+    """Every *scanned* host's expected-open ports, keyed by whichever
+    hostname currently represents it in Checkmk — not just the hosts the
+    user promoted/renamed in Phase 4. A host the user never promoted stays
+    a bare Phase 3 placeholder object under `host_name=ip`, but the scan
+    still found real open ports on it, so it still gets checks for them.
+
+    For a promoted host, uses the (possibly user-edited-in-Phase-4)
+    `expected_open_ports` under its new `hostname`. For everything else,
+    falls back to the scan's own raw `open_ports` under the scanned `ip`
+    directly, since Phase 4 never asked about these.
     """
-    for port in host.expected_open_ports:
+    onboarded_by_ip = {h.ip: h for h in onboarded}
+    result: dict[str, list[int]] = {}
+    for scanned in scan_results:
+        promoted = onboarded_by_ip.get(scanned.ip)
+        host_name, ports = (promoted.hostname, promoted.expected_open_ports) if promoted else (scanned.ip, scanned.open_ports)
+        if ports:
+            result[host_name] = ports
+    return result
+
+
+async def _create_expected_open_port_rules(client: CheckmkClient, expected_ports_by_host: dict[str, list[int]]) -> None:
+    """One `active_checks:tcp` ("Check TCP port connection") rule per
+    distinct expected-open port across every scanned host — not one rule
+    per (host, port) pair — the ruleset's `host_name` condition already
+    accepts multiple hostnames in a single rule (`match_on` is a list), so
+    e.g. two hosts both expecting port 22 open share one rule instead of
+    each getting their own copy. Becomes a monitored "TCP Port <N>
+    (expected open)" service on every matched host once Phase 6/7 discover
+    and activate it, alerting if the port ever stops responding.
+
+    Placed at the root folder ("/") rather than each host's own Phase 2
+    folder: a rule's folder must be an ancestor of every host it's meant
+    to cover, and hosts sharing a port can easily span different Phase 2
+    folders — the `host_name` condition still restricts the rule to
+    exactly the listed hosts, nothing broader. Live-verified against a
+    real Checkmk 2.4.0p35 CE site end-to-end (rule created → activated →
+    discovered as a real service). `value_raw` is a JSON string of the
+    ruleset's parameter dict — Checkmk accepts plain JSON here, not just
+    the Python-repr form its own GUI export produces. Best-effort per
+    port: a failure on one port (e.g. a colliding rule) must not stop the
+    rest.
+    """
+    port_hostnames: dict[int, list[str]] = {}
+    for host_name, ports in expected_ports_by_host.items():
+        for port in ports:
+            port_hostnames.setdefault(port, []).append(host_name)
+
+    for port, hostnames in port_hostnames.items():
         try:
             await client.create_rule(
                 ruleset="active_checks:tcp",
-                folder=host.folder,
+                folder="/",
                 value_raw=json.dumps({"port": port, "svc_description": f"TCP Port {port} (expected open)"}),
-                conditions={"host_name": {"match_on": [host.hostname], "operator": "one_of"}},
+                conditions={"host_name": {"match_on": hostnames, "operator": "one_of"}},
             )
         except CheckmkAPIError as exc:
-            console.print(f"  [yellow]could not create TCP-port-{port} check for {host.hostname}: {exc}[/yellow]")
+            console.print(
+                f"  [yellow]could not create TCP-port-{port} check for {', '.join(hostnames)}: {exc}[/yellow]"
+            )
+
+
+def _ping_only_hostnames(scan_results: list[ScannedHost], onboarded: list[OnboardedHost]) -> list[str]:
+    """Every hostname tagged `tag_agent: no-agent` / `tag_snmp_ds: no-snmp`
+    — Phase 4's explicit "ping" choice, plus every scanned host the user
+    never promoted at all (still a bare Phase 3 placeholder under
+    `host_name=ip` with that same tag pair). These need an *explicit*
+    PING active check, or they end up with no reachability service in the
+    GUI at all: Checkmk only auto-adds its own implicit "PING" service
+    when a host has NO other check configured (verified straight from the
+    installed Checkmk's own core-config-generation source,
+    `cmk/base/core_nagios/_create_config.py`: `if not have_at_least_one_
+    service and not active_checks_rules_exist and not custchecks:`) — and
+    every one of these hosts also gets an expected-open-port
+    `active_checks:tcp` rule from `_create_expected_open_port_rules()`
+    above, which makes `active_checks_rules_exist` true and silently
+    suppresses the implicit PING. `_create_ping_check_rule()` below
+    restores it explicitly.
+    """
+    onboarded_ips = {h.ip for h in onboarded}
+    hostnames = [h.hostname for h in onboarded if h.os_family == "ping"]
+    hostnames += [scanned.ip for scanned in scan_results if scanned.ip not in onboarded_ips]
+    return hostnames
+
+
+async def _create_ping_check_rule(client: CheckmkClient, hostnames: list[str]) -> None:
+    """One shared `active_checks:icmp` ("Check hosts with PING (ICMP Echo
+    Request)") rule covering every agent-less, SNMP-less host
+    (`_ping_only_hostnames()` above) — restores an explicit "PING" service
+    for hosts whose implicit one Checkmk skips because they also carry an
+    expected-open-port `active_checks:tcp` rule. `value_raw={}` accepts
+    every ruleset default (service description "PING", pings the host's
+    own configured `ipaddress` attribute, default RTA/packet-loss/packet-
+    count/timeout thresholds) — verified against the installed Checkmk's
+    own ruleset source (`cmk/gui/plugins/wato/active_checks/icmp.py`):
+    every field there is optional. Same grouped-into-one-rule shape as
+    `_create_expected_open_port_rules()`, for the same reason (the
+    ruleset's `host_name` condition already accepts a `match_on` list).
+    """
+    if not hostnames:
+        return
+    try:
+        await client.create_rule(
+            ruleset="active_checks:icmp",
+            folder="/",
+            value_raw=json.dumps({}),
+            conditions={"host_name": {"match_on": hostnames, "operator": "one_of"}},
+        )
+    except CheckmkAPIError as exc:
+        console.print(f"  [yellow]could not create PING check for {', '.join(hostnames)}: {exc}[/yellow]")
 
 
 async def _collect_expected_services(
@@ -695,42 +876,49 @@ async def _create_service_discovery_rules(
         console.print(f"  [yellow]could not configure service monitoring for {host.hostname}: {exc}[/yellow]")
 
 
-async def phase5_onboarding(
+async def _onboard_hosts(
     client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]
 ) -> None:
-    console.rule("[bold]Phase 5 — Host Onboarding")
-    if not hosts:
-        return
-
-    use_ssh = await questionary.confirm(
-        "Attempt automated SSH firewall + agent install for Linux hosts?", default=True
-    ).ask_async()
+    """Per-host firewall/agent/SNMP/ping onboarding loop — everything
+    Phase 5 does for hosts the user actually promoted in Phase 4. Split
+    out from `phase5_onboarding()` (2026-08-26) so expected-open-port rule
+    creation — which now also covers scanned-but-never-promoted hosts —
+    still runs even when `hosts` (the promoted list) is empty.
+    """
     ssh_creds: remote.SSHCredentials | None = None
-    if use_ssh:
-        username = None
-        while not username:
-            username = (await questionary.text("SSH username:").ask_async()).strip()
-            if not username:
-                console.print("[red]SSH username can't be blank — try again.[/red]")
+    # Only Linux hosts ever consume `ssh_creds` below (Windows is always a
+    # manual path by design; snmp/ping hosts have no agent at all) — asking
+    # for SSH credentials when no onboarded host is Linux is a dead-end
+    # prompt with nothing to apply it to.
+    if any(h.os_family == "linux" for h in hosts):
+        use_ssh = await questionary.confirm(
+            "Attempt automated SSH firewall + agent install for Linux hosts?", default=True
+        ).ask_async()
+        if use_ssh:
+            username = None
+            while not username:
+                username = (await questionary.text("SSH username:").ask_async()).strip()
+                if not username:
+                    console.print("[red]SSH username can't be blank — try again.[/red]")
 
-        auth_mode = await questionary.select("SSH auth method:", choices=["password", "private key"]).ask_async()
-        if auth_mode == "password":
-            password = await questionary.password("SSH password:").ask_async()
-            ssh_creds = remote.SSHCredentials(username=username, password=password)
-        else:
-            key_path = None
-            while key_path is None:
-                raw_key_path = (await questionary.text("Private key path:").ask_async()).strip()
-                # Local filesystem check, not a Checkmk-API validation —
-                # but a nonexistent key would fail identically for every
-                # host in the batch, so catching it once up front here
-                # (instead of once per host inside asyncssh's connect
-                # error handling) is worth the pre-flight check.
-                if not Path(raw_key_path).expanduser().is_file():
-                    console.print(f"[red]'{raw_key_path}' isn't a file that exists — try again.[/red]")
-                else:
-                    key_path = raw_key_path
-            ssh_creds = remote.SSHCredentials(username=username, private_key_path=key_path)
+            auth_mode = await questionary.select("SSH auth method:", choices=["password", "private key"]).ask_async()
+            if auth_mode == "password":
+                password = await questionary.password("SSH password:").ask_async()
+                ssh_creds = remote.SSHCredentials(username=username, password=password)
+            else:
+                key_path = None
+                while key_path is None:
+                    raw_key_path = (await questionary.text("Private key path:").ask_async()).strip()
+                    # Local filesystem check, not a Checkmk-API validation —
+                    # but a nonexistent key would fail identically for every
+                    # host in the batch, so catching it once up front here
+                    # (instead of once per host inside asyncssh's connect
+                    # error handling) is worth the pre-flight check.
+                    if not Path(raw_key_path).expanduser().is_file():
+                        console.print(f"[red]'{raw_key_path}' isn't a file that exists — try again.[/red]")
+                    else:
+                        key_path = raw_key_path
+                ssh_creds = remote.SSHCredentials(username=username, private_key_path=key_path)
 
     for h in hosts:
         console.print(f"\n[bold]{h.hostname}[/bold] ({h.ip}, {h.os_family})")
@@ -770,7 +958,23 @@ async def phase5_onboarding(
                     },
                 )
                 console.print("  [green]SNMP host created[/green] — polled directly, no agent/firewall/SSH steps")
-                await _create_expected_open_port_rules(client, h)
+            except CheckmkAPIError as exc:
+                console.print(f"  [yellow]host create/update: {exc}[/yellow]")
+            continue
+
+        if h.os_family == "ping":
+            # No agent, no SNMP — same "no-agent"/"no-snmp" tag pair Phase 3
+            # already uses for its inert placeholder hosts, which leaves
+            # Checkmk's default host check (ICMP ping) as the only
+            # monitoring. No firewall/SSH/discovery steps apply.
+            try:
+                await _create_or_update_host(
+                    client,
+                    host_name=h.hostname,
+                    folder=h.folder,
+                    attributes={"ipaddress": h.ip, "tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"},
+                )
+                console.print("  [green]Ping-only host created[/green] — reachability monitoring only, no agent/SNMP")
             except CheckmkAPIError as exc:
                 console.print(f"  [yellow]host create/update: {exc}[/yellow]")
             continue
@@ -782,7 +986,6 @@ async def phase5_onboarding(
                 folder=h.folder,
                 attributes={"ipaddress": h.ip, "tag_agent": "cmk-agent", "tag_snmp_ds": "no-snmp"},
             )
-            await _create_expected_open_port_rules(client, h)
         except CheckmkAPIError as exc:
             console.print(f"  [yellow]host create/update: {exc}[/yellow]")
 
@@ -863,6 +1066,26 @@ async def phase5_onboarding(
             status_color = "green" if status_check.verified else "yellow"
             status_label = "verified" if status_check.verified else "could not verify"
             console.print(f"  Agent status: [{status_color}]{status_label}[/] — {status_check.detail}")
+
+
+async def phase5_onboarding(
+    client: CheckmkClient,
+    connection: CheckmkConnection,
+    hosts: list[OnboardedHost],
+    scan_results: list[ScannedHost],
+) -> None:
+    console.rule("[bold]Phase 5 — Host Onboarding")
+    if hosts:
+        await _onboard_hosts(client, connection, hosts)
+
+    # Covers every scanned host, not just the ones promoted above — a scan
+    # result the user never promoted stays a bare Phase 3 placeholder
+    # object, but the ports the scan found open on it still get checks.
+    await _create_expected_open_port_rules(client, _expected_open_ports_by_hostname(scan_results, hosts))
+    # The TCP-port rule above suppresses Checkmk's own implicit PING
+    # service for agent-less/SNMP-less hosts — restore it explicitly so
+    # reachability stays visible in the GUI alongside the TCP port checks.
+    await _create_ping_check_rule(client, _ping_only_hostnames(scan_results, hosts))
 
 
 def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection) -> None:
@@ -992,7 +1215,7 @@ async def run() -> None:
         folder_subnets = await phase2_folders(client)
         scan_results = await phase3_discovery(client, folder_subnets)
         onboarded = await phase4_classification(scan_results)
-        await phase5_onboarding(client, connection, onboarded)
+        await phase5_onboarding(client, connection, onboarded, scan_results)
         await phase6_discovery(client, onboarded)
         await phase7_activation(client, connection, onboarded)
     console.rule("[bold green]Done")
