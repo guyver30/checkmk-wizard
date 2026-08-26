@@ -103,6 +103,30 @@ async def test_list_hosts_returns_value_array():
 
 
 @pytest.mark.asyncio
+async def test_get_folder_uses_tilde_encoded_id():
+    with respx.mock:
+        route = respx.get(f"{BASE}/objects/folder_config/~vlan10").mock(
+            return_value=Response(200, json={"id": "~vlan10"}, headers={"ETag": "xyz"})
+        )
+        async with CheckmkClient(CONN) as client:
+            resp = await client.get_folder("vlan10")
+    assert route.called
+    assert resp.headers["ETag"] == "xyz"
+
+
+@pytest.mark.asyncio
+async def test_update_folder_attributes_sends_update_attributes_and_etag():
+    with respx.mock:
+        route = respx.put(f"{BASE}/objects/folder_config/~vlan10").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await client.update_folder_attributes("vlan10", {"network_scan": {"scan_interval": 86400}}, "etag123")
+    assert route.called
+    assert route.calls.last.request.headers["If-Match"] == "etag123"
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body == {"update_attributes": {"network_scan": {"scan_interval": 86400}}}
+
+
+@pytest.mark.asyncio
 async def test_list_folders_returns_value_array():
     with respx.mock:
         respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(

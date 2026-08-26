@@ -12,6 +12,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import questionary
 from rich.console import Console
@@ -253,6 +254,34 @@ async def phase1_site_bringup() -> CheckmkConnection:
 # ── Phase 2: Folder structure (optional) ────────────────────────────────
 
 
+def _network_scan_attributes(cidr: str) -> dict[str, Any] | None:
+    """Folder attribute payload that turns on Checkmk's own built-in
+    per-folder Network Scan — a background cronjob Checkmk itself runs
+    (not this wizard), covering the same subnet Phase 3 scans once, so new
+    hosts added to the network later keep getting picked up without
+    re-running the wizard. Live-verified against a real Checkmk 2.4.0p35
+    CE site: only creates hosts for IPs not already configured anywhere on
+    the site, so it doesn't duplicate or touch hosts already onboarded.
+    `tag_criticality="offline"` ("Do not monitor this host") so newly
+    found hosts land in host administration unmonitored, for manual
+    review/classification — mirrors Phase 3/4's own stage-then-promote
+    flow instead of auto-monitoring unclassified hosts.
+    Returns None for a non-IPv4 network — Checkmk's network_scan
+    `addresses` field is IPv4-only.
+    """
+    network = ipaddress.ip_network(cidr, strict=False)
+    if network.version != 4:
+        return None
+    return {
+        "network_scan": {
+            "addresses": [{"type": "network_range", "network": str(network)}],
+            "time_allowed": [{"start": "00:00", "end": "23:59"}],
+            "scan_interval": 86400,
+            "tag_criticality": "offline",
+        }
+    }
+
+
 async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
     """Optionally create folders, each with its own subnet to scan in
     Phase 3. Returns {folder_name: cidr_or_None} — an empty dict (no
@@ -301,11 +330,35 @@ async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
                 cidr = raw_cidr
                 break
 
+        folder_created = False
         try:
             await client.create_folder(name=name, title=name)
             console.print(f"  [green]created[/green] /{name}")
+            folder_created = True
         except CheckmkAPIError as exc:
             console.print(f"  [red]failed[/red] /{name}: {exc}")
+
+        # Configured as a separate PUT (not baked into the create_folder
+        # call above) so a network_scan validation failure (e.g. a site
+        # customized to drop the standard "criticality" tag group) can
+        # never take the folder itself down with it — folder creation
+        # must never depend on this succeeding.
+        if folder_created and cidr:
+            scan_attrs = _network_scan_attributes(cidr)
+            if scan_attrs is None:
+                console.print(f"  [yellow]skipping network scan setup for /{name} — {cidr} isn't IPv4[/yellow]")
+            else:
+                try:
+                    resp = await client.get_folder(name)
+                    etag = resp.headers.get("ETag")
+                    if etag:
+                        await client.update_folder_attributes(name, scan_attrs, etag)
+                        console.print(
+                            f"  [green]network scan configured[/green] on /{name} — Checkmk will keep "
+                            f"re-scanning {cidr} (~daily) for new hosts, added unmonitored for review"
+                        )
+                except CheckmkAPIError as exc:
+                    console.print(f"  [yellow]could not configure network scan on /{name}: {exc}[/yellow]")
 
         # Checkmk's REST API `folder` field for hosts must be a full path
         # ("/vlan10"), not the bare name `create_folder()` takes — live-

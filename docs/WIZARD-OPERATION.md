@@ -111,7 +111,7 @@ Checkmk are simply re-detected or re-created).
      `omd create --admin-password <pwd> <site>` as a subprocess
      (`site.py:69-86`), then `omd start <site>` (`site.py:89-103`), then
      **prints the generated cmkadmin password to the console**. It then
-     immediately calls `bootstrap_automation_user()` (`api.py:245-401`,
+     immediately calls `bootstrap_automation_user()` (`api.py:269-425`,
      see below) to auto-create the `automation` REST user using that
      cmkadmin password — best-effort: any failure there is caught, printed
      as a yellow warning, and falls through to the manual path in step 4.
@@ -160,7 +160,7 @@ Checkmk are simply re-detected or re-created).
      interactively — re-prompted if left blank (`wizard.py:207-211`).
 5. Separately, looks up a **dedicated `agent_registration` credential**
    the same way (`site.get_site_credentials(site_name,
-   automation_user="agent_registration")`, `wizard.py:220`) — Checkmk ships
+   automation_user="agent_registration")`, `wizard.py:105`) — Checkmk ships
    this as a separate pre-configured, least-privilege user scoped solely to
    host registration (doc-verified: `docs.checkmk.com/latest/en/
    agent_deployment.html`). If found, it's kept separate from the REST
@@ -193,7 +193,7 @@ the REST credential this wizard needs for everything after Phase 1 had no
 default account to read from disk; `_create_fresh_site()` now closes that
 gap itself instead of leaving it to a manual GUI step every single time.
 
-**How `bootstrap_automation_user()` works** (`api.py:245-401`) — the only
+**How `bootstrap_automation_user()` works** (`api.py:269-425`) — the only
 place in this codebase that authenticates any other way than Bearer +
 automation secret, because none exists yet at this point:
 1. `GET .../check_mk/login.py`, scrape the `global_csrf_token` JS variable
@@ -252,7 +252,7 @@ running 2.4.0p35 CE site: login → create user → Bearer-auth with the new
 secret → `automation.secret` file appears on disk at the path
 `site.read_automation_secret()` already reads.
 
-## Phase 2 — Folder Structure (`wizard.py:256-320`)
+## Phase 2 — Folder Structure (`wizard.py:257-377`; `_network_scan_attributes` at `wizard.py:257-280`, `phase2_folders` at `wizard.py:285-377`)
 
 **Changed 2026-08-25: folders now carry their own subnet, one at a time,**
 instead of a single comma-separated names list with no subnet concept.
@@ -277,6 +277,31 @@ root folder, same as the wizard's original behavior.
    - Creates the folder via `POST /domain-types/folder_config/collections/all`
      with `{name, title, parent: "/", attributes: {}}` (`api.py:125-137`).
      Failures are printed and don't stop the loop.
+   - **Network Scan setup (2026-08-26, `wizard.py:_network_scan_attributes`,
+     `phase2_folders` lines ~304-323):** if a subnet was given *and* the
+     folder was created, a **second, independent** call configures
+     Checkmk's own built-in per-folder Network Scan — a background cronjob
+     Checkmk runs on its own schedule, distinct from this wizard's
+     one-time Phase 3 scan — so hosts added to the network *after* the
+     wizard finishes keep getting found without re-running it. Deliberately
+     a separate `GET` (for the ETag) + `PUT update_attributes` call rather
+     than folding it into the `create_folder` POST above: a network-scan
+     validation failure (e.g. a site missing the standard "criticality" tag
+     group) must never take the folder itself down with it. Payload
+     (live-verified against a real Checkmk 2.4.0p35 CE site via its
+     OpenAPI schema, `NetworkScan`/`IPNetwork` components):
+     `{addresses: [{type: "network_range", network: <normalized CIDR>}],
+     time_allowed: [{start: "00:00", end: "23:59"}], scan_interval: 86400,
+     tag_criticality: "offline"}`. `tag_criticality: "offline"` ("Do not
+     monitor this host") means newly-found hosts land in host
+     administration unmonitored, for manual review — mirrors this wizard's
+     own Phase 3 (stage) → Phase 4 (promote) split rather than
+     auto-monitoring unclassified hosts. Live-verified: the scan only
+     creates hosts for IPs not already configured anywhere on the site, so
+     it never touches or duplicates hosts already onboarded by this
+     wizard. Skipped (with a yellow note) for a non-IPv4 CIDR — Checkmk's
+     `network_scan.addresses` field is IPv4-only — and any other failure
+     here is caught and printed, never blocking the folder itself.
    - Records `folder_subnets[f"/{name}"] = cidr_or_None` — the **full
      path** (`/vlan10`), not the bare name `create_folder()` takes.
      Live-verified this distinction matters: Checkmk's host-config REST
@@ -288,7 +313,7 @@ root folder, same as the wizard's original behavior.
 3. If no folders end up with a subnet (including "no folders at all"),
    prints a note that Phase 3 will fall back to a single flat scan.
 
-## Phase 3 — Network Discovery (`wizard.py:326-388`)
+## Phase 3 — Network Discovery (`wizard.py:379-441`)
 
 **Changed 2026-08-25: scans each Phase 2 folder's subnet directly into
 that folder**, instead of a single subnet always staged at root
@@ -313,13 +338,13 @@ flow when Phase 2 produced no folder/subnet pairs.
    alive IP directly into that folder**: `POST
    /domain-types/host_config/collections/all` with `{host_name: ip,
    folder: folder, attributes: {ipaddress: ip}}` (`wizard.py:376`,
-   `api.py:150-164`) — no longer always root. Failures are printed and
+   `api.py:168-182`) — no longer always root. Failures are printed and
    skipped, not retried.
 5. Renders one combined `rich` table (IP / Folder / Open ports) across all
    folders' results after every scan completes, then returns
    `list[ScannedHost(ip, open_ports, folder)]`.
 
-## Phase 4 — Host Classification (`wizard.py:394-454`)
+## Phase 4 — Host Classification (`wizard.py:447-537`)
 
 Purely interactive — **no API calls, no fingerprinting, and (changed
 2026-08-25) no folder prompt** — each host's folder is already known from
@@ -345,7 +370,7 @@ case):
    snmp_version, snmp_community)` — `folder` copied straight from the
    selected `ScannedHost`, never asked interactively.
 
-## Phase 5 — Host Onboarding (`wizard.py:486-629`)
+## Phase 5 — Host Onboarding (`wizard.py:539-709`)
 
 Runs once for the whole batch, then loops **sequentially, one host at a
 time** — no concurrency.
@@ -354,16 +379,16 @@ time** — no concurrency.
 1. Asks "Attempt automated SSH firewall + agent install for Linux hosts?"
    (default Yes).
 2. If yes: prompts for SSH username (re-prompted if left blank,
-   `wizard.py:498-502`), then auth mode (password or private key path) →
+   `wizard.py:552-555`), then auth mode (password or private key path) →
    builds one `SSHCredentials` object reused for **every** Linux host in
    the batch (same username/credential for all hosts). A private-key path
    is checked to exist as a local file (`Path(...).expanduser().is_file()`,
-   `wizard.py:509-519`) and re-prompted if not — not a Checkmk-API
+   `wizard.py:563-573`) and re-prompted if not — not a Checkmk-API
    validation, but a nonexistent key would fail identically for every
    host in the batch, so this is caught once up front rather than once
    per host inside `asyncssh`'s own connection error handling.
 
-**Host create/update (`_create_or_update_host()`, `wizard.py:460-481`):**
+**Host create/update (`_create_or_update_host()`, `wizard.py:513-536`):**
 Both branches below go through this helper instead of calling
 `client.create_host()` directly. Phase 3 already staged every scanned IP
 as a bare host object under `host_name=ip` **in the folder its scan
@@ -384,7 +409,7 @@ the wizard **continues anyway** to the firewall/SSH steps regardless
 (known bug — see audit) — this fix narrows that bug's trigger to genuine
 failures, since the common IP-collision case no longer fails at all.
 
-**IP-placeholder cleanup on rename (2026-08-26, `wizard.py:526-537`):** If
+**IP-placeholder cleanup on rename (2026-08-26, `wizard.py:579-591`):** If
 Phase 4 gave a host a hostname different from its scanned IP, the Phase 3
 stub (`host_name=ip`, bare `ipaddress` attribute, no `tag_agent`/
 `tag_snmp_ds` — so Checkmk shows it with its default agent config and no
@@ -402,14 +427,14 @@ best-effort, never blocks onboarding.
 1. **If `os_family == "snmp"`:** `_create_or_update_host(host_name=hostname,
    folder=..., attributes={ipaddress, tag_agent: "no-agent", tag_snmp_ds:
    "snmp-v2"|"snmp-v1", snmp_community: {type: "v1_v2_community",
-   community}})` (`wizard.py:536-545`) — no firewall/SSH/agent steps at
+   community}})` (`wizard.py:603-613`) — no firewall/SSH/agent steps at
    all, `continue` to next host. `tag_agent`/`tag_snmp_ds` values are
    doc-verified (Checkmk's CSV host-import attribute mapping,
    `docs.checkmk.com/latest/en/hosts_setup.html`); the `snmp_community`
    payload shape is best-effort and **not** independently doc-confirmed —
    verify against the target site's own REST API spec before relying on it.
 2. **Otherwise:** `_create_or_update_host(host_name=hostname, folder=...,
-   attributes={ipaddress, tag_agent: "cmk-agent"})` (`wizard.py:552-558`).
+   attributes={ipaddress, tag_agent: "cmk-agent"})` (`wizard.py:620-625`).
 3. **If `os_family == "windows"`:** prints
    `windows_firewall_instructions()` and `windows_register_command()`
    (`remote.py:160-164, 259-267`) as copy-paste text, using
@@ -428,7 +453,7 @@ best-effort, never blocks onboarding.
       (timeout/other OSError). Result is printed, **not acted on** —
       informational only.
    b. If no SSH credentials were supplied: prints manual firewall/install
-      instructions (`_print_linux_manual`, `wizard.py:632-637`) and moves
+      instructions (`_print_linux_manual`, `wizard.py:699-704`) and moves
       to the next host.
    c. Otherwise, `remote.fix_firewall_linux(ip, creds, 8000)`
       (`remote.py:167-202`):
@@ -456,10 +481,10 @@ best-effort, never blocks onboarding.
       and continues to the next.
    f. `register_cmd = remote.linux_register_command(hostname, host, site,
       connection.registration_user, connection.registration_secret)`
-      (`wizard.py:604-606`) — uses the dedicated `agent_registration`
+      (`wizard.py:671-673`) — uses the dedicated `agent_registration`
       credential from Phase 1 when one was found, **not** the general
       `automation` REST credential (see credential-scope note below).
-   g. `client.download_agent(os_type)` (`api.py:187-194`) — requests
+   g. `client.download_agent(os_type)` (`api.py:211-218`) — requests
       `linux_deb` or `linux_rpm` based on the package family determined in
       step d (defaults to `linux_deb` if the compatibility check itself
       couldn't run, e.g. SSH became unreachable between steps).
@@ -487,7 +512,7 @@ best-effort, never blocks onboarding.
       - Any step failing → `FAILED_FALLBACK_MANUAL` with manual
         instructions; success → `AUTOMATED`.
    i. **If install returned `AUTOMATED`:** `remote.check_agent_status(ip,
-      creds, site)` (`remote.py:359-374`, `wizard.py:626-629`) runs
+      creds, site)` (`remote.py:359-374`, `wizard.py:693-696`) runs
       `cmk-agent-ctl status` on the target and checks (via
       `agent_status_shows_connection()`, `remote.py:346-356`) that its
       output contains a `Connection: <server>/<site>` line for this site —
@@ -501,11 +526,11 @@ best-effort, never blocks onboarding.
       Livestatus query. Printed as its own `Agent status: verified /
       could not verify` line, separate from the install line.
 
-## Phase 6 — Discovery & Baseline (`wizard.py:643-655`)
+## Phase 6 — Discovery & Baseline (`wizard.py:710-727`)
 
 For every onboarded host: `POST
 /domain-types/service_discovery_run/actions/start/invoke` with
-`{host_name, mode: "fix_all"}` (`api.py:198-210`) — discovers services and
+`{host_name, mode: "fix_all"}` (`api.py:222-234`) — discovers services and
 accepts them (adds missing, removes vanished, accepts host labels) in one
 call, so services are actually in the monitored state by the time Phase 7
 activates changes. A `303` response (Checkmk ran discovery as an async
@@ -525,13 +550,13 @@ Phase 5 sets the SNMP community as a **host attribute** directly
 a different mechanism than the plan's wording, but the same outcome
 (SNMP-only hosts get their community string configured).
 
-## Phase 7 — Activation & Validation (`wizard.py:661-705`)
+## Phase 7 — Activation & Validation (`wizard.py:728-777`)
 
 1. `GET /domain-types/activation_run/collections/pending_changes` to read
-   the `ETag` header (`api.py:214-219`).
+   the `ETag` header (`api.py:238-243`).
 2. `POST /domain-types/activation_run/actions/activate-changes/invoke` with
    `{redirect: false, sites: [site], force_foreign_changes: false}` and
-   `If-Match: <etag>` (`api.py:221-237`). On failure, prints the error and
+   `If-Match: <etag>` (`api.py:245-261`). On failure, prints the error and
    **returns early — the snapshot step below does not run.**
 3. If there are onboarded hosts, queries Livestatus directly:
    - Connects to the UNIX socket `/omd/sites/<site>/tmp/run/live`
@@ -545,7 +570,7 @@ a different mechanism than the plan's wording, but the same outcome
 4. Pulls the site's **actual current** host/folder configuration —
    `client.list_hosts()` → `GET /domain-types/host_config/collections/all`
    and `client.list_folders()` → `GET
-   /domain-types/folder_config/collections/all` (`api.py:166-169,
+   /domain-types/folder_config/collections/all` (`api.py:184-187,
    139-146`; `wizard.py:688-694`) — rather than only logging what this run
    touched. Both return the collection's `value` array (doc-confirmed
    response shape: `docs.checkmk.com/latest/en/rest_api.html`,
@@ -567,7 +592,7 @@ a different mechanism than the plan's wording, but the same outcome
 | Type | File | Purpose |
 |---|---|---|
 | `CheckmkConnection` | `api.py:27-50` | host/site/username/secret + computed `base_url`; `registration_user`/`registration_secret` default to `username`/`secret` via `__post_init__` |
-| `CheckmkClient` | `api.py:56-237` | async context-managed `httpx` wrapper; one method per endpoint used |
+| `CheckmkClient` | `api.py:56-261` | async context-managed `httpx` wrapper; one method per endpoint used |
 | `WizardState` | `wizard.py:87-90` | declared but **unused** — phases pass state via direct return values/params instead |
 | `HostScanResult` | `scanner.py:22-29` | IP + open ports — `scan_network()`'s own return type, wrapped into `ScannedHost` per folder by Phase 3 |
 | `ScannedHost` | `wizard.py:70-73` | `HostScanResult` + which Phase 2 folder its subnet scan found it in (`/` for the flat-fallback case) — Phase 3's actual return type since 2026-08-25 |
@@ -611,7 +636,7 @@ REST call, or a target simply being unreachable, hit this same hole.
 `CheckmkAPIError` (`status_code=0` signals "no HTTP response was ever
 received") — one fix, at the one choke point, closes the gap for every
 existing `except CheckmkAPIError` site without touching any of them.
-`bootstrap_automation_user()` (`api.py:245-401`) talks to `httpx`
+`bootstrap_automation_user()` (`api.py:269-425`) talks to `httpx`
 directly rather than through `CheckmkClient`, so it needed the same fix
 applied separately around its login/create-user calls, to keep its own
 documented contract ("raises `CheckmkAPIError` on any failure") actually
@@ -636,7 +661,7 @@ tests: `tests/test_api.py` (2 cases, respx `side_effect` simulating a
   command-line argument to `cmk-agent-ctl register` over the SSH session
   (`remote.py:237-247`), visible to anything reading that process's argv
   on the target host. Using the narrower `agent_registration` credential
-  when available (Phase 1, `wizard.py:220-250`) limits what this exposure
+  when available (Phase 1, `wizard.py:97-111`) limits what this exposure
   can be used for, compared to leaking the full `automation` credential.
 - The SNMP community string (Phase 4, `snmp` hosts) is prompted in plain
   text via `questionary.text` (not password-masked) and later written
@@ -644,7 +669,7 @@ tests: `tests/test_api.py` (2 cases, respx `side_effect` simulating a
   worse than the existing automation-secret/cmkadmin-password console
   exposure noted above, but adds a second plaintext-on-disk credential
   path not present before this bundle of fixes.
-- `bootstrap_automation_user()` (`api.py:245-401`) sends the freshly
+- `bootstrap_automation_user()` (`api.py:269-425`) sends the freshly
   generated cmkadmin password over the login form (`_password=...`) and
   receives a session cookie back — both over plain HTTP by default
   (`CheckmkConnection.proto` defaults to `"http"`), same exposure profile

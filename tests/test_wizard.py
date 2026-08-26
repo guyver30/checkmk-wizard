@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import questionary
 import respx
@@ -11,7 +13,9 @@ from checkmk_wizard.wizard import (
     _SITE_NAME_RE,
     OnboardedHost,
     _create_or_update_host,
+    _network_scan_attributes,
     _valid_checkmk_host,
+    phase2_folders,
     phase5_onboarding,
 )
 
@@ -204,3 +208,106 @@ async def test_phase5_does_not_delete_when_hostname_equals_ip(monkeypatch):
             await phase5_onboarding(client, CONN, [host])
 
     assert not delete_route.called
+
+
+@pytest.mark.parametrize(
+    "cidr,expected_network",
+    [
+        ("192.168.10.0/24", "192.168.10.0/24"),
+        ("192.168.10.5/24", "192.168.10.0/24"),  # host bits stripped by ip_network(strict=False)
+    ],
+)
+def test_network_scan_attributes_ipv4(cidr, expected_network):
+    attrs = _network_scan_attributes(cidr)
+    scan = attrs["network_scan"]
+    assert scan["addresses"] == [{"type": "network_range", "network": expected_network}]
+    assert scan["time_allowed"] == [{"start": "00:00", "end": "23:59"}]
+    assert scan["tag_criticality"] == "offline"
+
+
+def test_network_scan_attributes_ipv6_unsupported():
+    # Checkmk's network_scan `addresses` field is IPv4-only (live-verified
+    # against the schema) — must not send an unsupported payload.
+    assert _network_scan_attributes("2001:db8::/32") is None
+
+
+@pytest.mark.asyncio
+async def test_phase2_folders_configures_network_scan(monkeypatch):
+    # Regression/feature test: a folder given a subnet should come out of
+    # Phase 2 with Checkmk's own Network Scan configured on it, so new
+    # hosts keep getting found without re-running the wizard.
+    answers = iter([True, "vlan10", "192.168.10.0/24", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"id": "~vlan10"})
+        )
+        respx.get(f"{BASE}/objects/folder_config/~vlan10").mock(
+            return_value=Response(200, json={}, headers={"ETag": "etag1"})
+        )
+        update_route = respx.put(f"{BASE}/objects/folder_config/~vlan10").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            result = await phase2_folders(client)
+
+    assert result == {"/vlan10": "192.168.10.0/24"}
+    assert update_route.called
+    assert update_route.calls.last.request.headers["If-Match"] == "etag1"
+    sent = json.loads(update_route.calls.last.request.content)
+    assert sent["update_attributes"]["network_scan"]["tag_criticality"] == "offline"
+
+
+@pytest.mark.asyncio
+async def test_phase2_folders_skips_network_scan_without_subnet(monkeypatch):
+    # A folder with no subnet given must not get a network scan configured
+    # at all — no CIDR means there's nothing to scan.
+    answers = iter([True, "vlan10", "", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"id": "~vlan10"})
+        )
+        get_route = respx.get(f"{BASE}/objects/folder_config/~vlan10").mock(
+            return_value=Response(200, json={}, headers={"ETag": "etag1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase2_folders(client)
+
+    assert not get_route.called
+
+
+@pytest.mark.asyncio
+async def test_phase2_folders_network_scan_failure_does_not_lose_folder(monkeypatch):
+    # If configuring the network scan fails (e.g. a site without the
+    # standard "criticality" tag group), the folder itself must still be
+    # reported created — network scan setup must never take it down.
+    answers = iter([True, "vlan10", "192.168.10.0/24", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"id": "~vlan10"})
+        )
+        respx.get(f"{BASE}/objects/folder_config/~vlan10").mock(
+            return_value=Response(200, json={}, headers={"ETag": "etag1"})
+        )
+        respx.put(f"{BASE}/objects/folder_config/~vlan10").mock(
+            return_value=Response(400, json={"title": "tag_criticality must be specified"})
+        )
+        async with CheckmkClient(CONN) as client:
+            result = await phase2_folders(client)
+
+    assert result == {"/vlan10": "192.168.10.0/24"}

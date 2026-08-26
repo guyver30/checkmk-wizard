@@ -27,3 +27,7 @@
 - 2026-08-25 13:10 — [pasted transcript showing selection jumps straight to hostname/IP prompt]
 - 2026-08-25 13:12 — confirmed: no confirmation/deletion-output/new-name prompt appeared at all, straight to hostname/IP
 - 2026-08-26 09:30 — "if there are new hosts being added in the network, how to ensure that checkmk is able to find them?... also I realised that renamed hosts are visualized twice: the original one with IP address... and then the same renamed... If a host is renamed, then don't add also the original one with just IP"
+- 2026-08-26 09:45 — "Yes, delete the two duplicates, then commit and push"
+- 2026-08-26 10:00 — "so if I set up a network scan for each folder, does it then interfere with the manual host creation afterwards? or it just adds new hosts if find them, without touching existing ones?"
+- 2026-08-26 10:05 — "yes" (wire Network Scan attributes into the wizard's Phase 2 `create_folder()` call)
+- 2026-08-26 10:20 — "update claude statusline using @/home/kone/install-statusline.sh" (unrelated to this project — Claude Code global config, not logged as project work)

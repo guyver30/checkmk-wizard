@@ -145,6 +145,24 @@ class CheckmkClient:
         resp = await self._request("GET", "/domain-types/folder_config/collections/all")
         return resp.json().get("value", [])
 
+    async def get_folder(self, name: str) -> httpx.Response:
+        # Root-level folder REST ids are "~" + name (live-verified: creating
+        # folder "vlan10" under parent "/" returns id "~vlan10") — the tilde
+        # is Checkmk's own path-separator encoding, distinct from the "/name"
+        # form used in the host_config `folder` field.
+        return await self._request("GET", f"/objects/folder_config/~{name}")
+
+    async def update_folder_attributes(
+        self, name: str, attributes: dict[str, Any], etag: str
+    ) -> dict[str, Any]:
+        resp = await self._request(
+            "PUT",
+            f"/objects/folder_config/~{name}",
+            json_body={"update_attributes": attributes},
+            extra_headers={"If-Match": etag},
+        )
+        return resp.json()
+
     # -- Phase 3/5: hosts ----------------------------------------------------
 
     async def create_host(
