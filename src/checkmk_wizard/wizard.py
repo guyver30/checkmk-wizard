@@ -284,6 +284,24 @@ async def phase1_site_bringup() -> CheckmkConnection:
                 "Which site do you want to delete?", choices=existing_sites
             ).ask_async()
         )
+
+        # Deleting the site destroys its certs, so any host already
+        # registered with cmk-agent-ctl (tag_agent: cmk-agent, set for
+        # both Linux and Windows onboarding) goes stale — this wizard has
+        # no SSH credentials for hosts from a previous run at this point
+        # in Phase 1, so it can't clean them up itself. Surface which
+        # hosts are affected before the operator decides.
+        agent_hosts = site.list_agent_registered_hosts(to_delete)
+        if agent_hosts:
+            console.print(
+                f"[yellow]{len(agent_hosts)} host(s) in '{to_delete}' appear to have a Checkmk agent "
+                "registered. Deleting this site destroys its certificates, so each agent's "
+                "connection will go stale. Run 'cmk-agent-ctl delete-all' manually on each "
+                "host below (before or after deleting):[/yellow]"
+            )
+            for hostname, ip in agent_hosts:
+                console.print(f"    {hostname} ({ip})")
+
         confirmed = await questionary.confirm(
             f"Delete site '{to_delete}'? This removes ALL its config/data permanently "
             "(does not touch the Checkmk install itself).",

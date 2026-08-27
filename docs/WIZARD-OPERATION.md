@@ -59,9 +59,13 @@ Checkmk are simply re-detected or re-created).
      new one" — via `questionary.select`.
      - Picking an existing site sets `reuse_existing = True` and moves on
        immediately.
-     - Picking delete: asks which site if more than one exists, confirms
-       (`questionary.confirm`, default **No** — destructive), then
-       `site.remove_site()` and **loops back to the same menu** (so
+     - Picking delete: asks which site if more than one exists, then
+       (added 2026-08-27) checks `site.list_agent_registered_hosts(
+       to_delete)` and — if any are found — warns the operator **before**
+       the confirm prompt, listing each affected host's name and IP, and
+       telling them to run `cmk-agent-ctl delete-all` on each manually.
+       Confirms (`questionary.confirm`, default **No** — destructive),
+       then `site.remove_site()` and **loops back to the same menu** (so
        deleting one of several sites still offers "continue with a
        remaining one" before falling through to a new-site prompt; a
        cancelled/declined confirm also just re-shows the menu unchanged).
@@ -95,6 +99,31 @@ Checkmk are simply re-detected or re-created).
      new-name prompt appears, new site created). New tests:
      `tests/test_wizard.py` (constructs the real `questionary.Choice` and
      asserts `.value is _DELETE_SITE`, not the title string).
+
+     **Stale agent registrations on delete (`site.list_agent_registered_
+     hosts()`/`site._parse_host_attributes()`, added 2026-08-27):**
+     deleting a site destroys its certificates, so any host already
+     registered via `cmk-agent-ctl` (i.e. `tag_agent: cmk-agent`, set for
+     both Linux and Windows hosts by `_onboard_hosts()`) is left holding a
+     connection pinned to a cert that no longer exists — the next agent
+     push from that host fails with a TLS trust error until someone runs
+     `cmk-agent-ctl delete-all` on it (or it gets re-registered against a
+     same-named recreated site). This wizard has no SSH credentials for
+     hosts from a *previous* run at delete-site time, so it can't clean
+     this up itself — it only detects and warns. Detection reads WATO's
+     own on-disk config directly rather than the REST API (no automation
+     credential is guaranteed to exist yet for an arbitrary site being
+     deleted, and this needs to work even for a site other than the one
+     about to be reused): every `etc/check_mk/conf.d/wato/**/hosts.mk`
+     under the site (WATO shards host config **per folder**, so the
+     search isn't limited to the root file) is a `host_attributes.update(
+     {...})` call over a plain Python dict literal — `ast.literal_eval()`
+     extracts it directly rather than executing the file (these `.mk`
+     files are otherwise executable Python, run by Checkmk itself at
+     startup). Hosts with `tag_agent: cmk-agent` are returned as
+     `(hostname, ip)` pairs; a file that doesn't parse as expected
+     contributes nothing rather than raising, since this is a best-effort
+     warning aid, not a config source of truth.
 3. Prompts for **Checkmk host** (hostname/IP other systems use to reach
    this site; defaults to `localhost`) — same prompt as before, now asked
    once site selection is settled rather than up front. **Validated**

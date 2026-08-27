@@ -98,6 +98,44 @@ def test_start_site_raises_on_failure_with_stdout_and_stderr():
     assert "Address already in use" in str(exc_info.value)
 
 
+def test_list_agent_registered_hosts_returns_only_cmk_agent_hosts_across_wato_folders(tmp_path):
+    root_wato = tmp_path / "etc" / "check_mk" / "conf.d" / "wato"
+    root_wato.mkdir(parents=True)
+    (root_wato / "hosts.mk").write_text(
+        "all_hosts += ['checkmk']\n"
+        "host_attributes.update({'checkmk': {'ipaddress': '192.168.1.1', 'tag_agent': 'no-agent'}})\n"
+    )
+
+    subfolder_wato = root_wato / "vlan10"
+    subfolder_wato.mkdir()
+    (subfolder_wato / "hosts.mk").write_text(
+        "all_hosts += ['test-linux', 'test-windows']\n"
+        "host_attributes.update({"
+        "'test-linux': {'ipaddress': '192.168.1.2', 'tag_agent': 'cmk-agent'}, "
+        "'test-windows': {'ipaddress': '192.168.1.3', 'tag_agent': 'cmk-agent'}"
+        "})\n"
+    )
+
+    with patch("checkmk_wizard.site.Path", return_value=tmp_path):
+        result = site.list_agent_registered_hosts("mysite")
+
+    assert result == [("test-linux", "192.168.1.2"), ("test-windows", "192.168.1.3")]
+
+
+def test_list_agent_registered_hosts_empty_when_no_wato_dir(tmp_path):
+    with patch("checkmk_wizard.site.Path", return_value=tmp_path / "does_not_exist"):
+        assert site.list_agent_registered_hosts("mysite") == []
+
+
+def test_list_agent_registered_hosts_empty_when_hosts_mk_malformed(tmp_path):
+    wato_root = tmp_path / "etc" / "check_mk" / "conf.d" / "wato"
+    wato_root.mkdir(parents=True)
+    (wato_root / "hosts.mk").write_text("not a recognizable hosts.mk format at all\n")
+
+    with patch("checkmk_wizard.site.Path", return_value=tmp_path):
+        assert site.list_agent_registered_hosts("mysite") == []
+
+
 def test_start_site_does_not_raise_when_already_running():
     # Live-verified: `omd start` on an already-fully-running site returns
     # a nonzero exit code even though nothing actually failed — every

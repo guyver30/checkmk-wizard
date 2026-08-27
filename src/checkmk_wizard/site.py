@@ -11,6 +11,8 @@ Facts used here are verified against live Checkmk docs via context7:
 
 from __future__ import annotations
 
+import ast
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -127,6 +129,56 @@ def remove_site(site: str) -> str:
     if result.returncode != 0:
         raise SiteBootstrapError(f"omd rm failed:\n{result.stdout}{result.stderr}".strip())
     return result.stdout
+
+
+def _parse_host_attributes(hosts_mk: Path) -> dict[str, dict]:
+    """Extract the `host_attributes` dict from one WATO `hosts.mk` config
+    file. These files are executable Python (Checkmk itself `exec`s them
+    at startup — "Created by HostStorage"), but every value inside
+    `host_attributes` is a plain literal (strings/dicts/numbers/lists) —
+    `ast.literal_eval` parses just that one literal safely, without
+    executing anything else in the file. Returns {} if the expected
+    assignment isn't found or doesn't parse as a literal (e.g. an
+    unexpected file format) rather than raising — this is a best-effort
+    warning aid, not a config source of truth.
+    """
+    text = hosts_mk.read_text()
+    match = re.search(r"host_attributes\.update\((\{.*\})\)", text, re.DOTALL)
+    if not match:
+        return {}
+    try:
+        return ast.literal_eval(match.group(1))
+    except (ValueError, SyntaxError):
+        return {}
+
+
+def list_agent_registered_hosts(site: str) -> list[tuple[str, str]]:
+    """Every host in `site`'s config expected to have a real Checkmk agent
+    installed (`tag_agent: cmk-agent` — set for both Linux and Windows
+    hosts by `wizard._onboard_hosts()`), as `(hostname, ip)` pairs, sorted
+    by hostname.
+
+    WATO stores host configuration per-folder, each folder under its own
+    `etc/check_mk/conf.d/wato/<folder-path>/hosts.mk` (live-verified
+    against a real Checkmk 2.4.0p35 CE site), so every such file under the
+    site is scanned — not just the root one.
+
+    Used before deleting a site: each of these hosts likely has a live
+    `cmk-agent-ctl` registration on the actual target machine that this
+    wizard has no way to reach and clean up itself at delete-site time
+    (Phase 1 doesn't have SSH credentials for hosts from a *previous* run)
+    — the registration goes stale (pinned to a cert this site's deletion
+    just destroyed) the moment the site is gone, so the caller should warn
+    the operator to run `cmk-agent-ctl delete-all` on each one manually.
+    """
+    wato_root = site_home(site) / "etc" / "check_mk" / "conf.d" / "wato"
+    hosts: dict[str, dict] = {}
+    for hosts_mk in wato_root.rglob("hosts.mk"):
+        hosts.update(_parse_host_attributes(hosts_mk))
+
+    return sorted(
+        (name, attrs.get("ipaddress", "?")) for name, attrs in hosts.items() if attrs.get("tag_agent") == "cmk-agent"
+    )
 
 
 def read_automation_secret(site: str, automation_user: str = "automation") -> str | None:
