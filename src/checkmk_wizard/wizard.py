@@ -895,6 +895,57 @@ async def _create_service_discovery_rules(
         console.print(f"  [yellow]could not configure service monitoring for {host.hostname}: {exc}[/yellow]")
 
 
+def _looks_loopback(host: str) -> bool:
+    """Whether `host` can only ever mean "this machine itself" — the
+    literal string `localhost`, or an IP address in the loopback range.
+    `cmk-agent-ctl register --server` is resolved from the *target* host
+    being registered, not from wherever the wizard process happens to
+    run — so a loopback value here can never reach the real Checkmk
+    server from any genuinely remote target (it would just try to contact
+    itself).
+    """
+    if host.strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+async def _resolve_agent_registration_server(hosts: list[OnboardedHost], checkmk_host: str) -> str:
+    """The address Linux/Windows targets should use for `cmk-agent-ctl
+    register --server`. Phase 1's "Hostname/IP to reach this Checkmk site
+    on" answer defaults to `localhost` for the common case of testing
+    against a site on the same machine the wizard runs on — but on a
+    genuinely remote target, `localhost` always resolves to the target
+    itself, so registration silently tries to contact itself and fails
+    every time with a confusing "Failed to discover agent receiver port"
+    error (live-reported symptom, 2026-08-27) rather than anything
+    mentioning `localhost`. Warn and offer a corrected address once, for
+    the whole batch, instead of that same failure repeating per host with
+    no clear explanation.
+    """
+    if not _looks_loopback(checkmk_host):
+        return checkmk_host
+    if not any(not _looks_loopback(h.ip) for h in hosts):
+        # Every target is loopback too (e.g. testing entirely on this same
+        # machine) — `localhost` is actually correct here, nothing to fix.
+        return checkmk_host
+
+    console.print(
+        f"[yellow]This Checkmk site is configured to be reached at '{checkmk_host}', but at least one "
+        "host being onboarded is remote — a remote target can't use 'localhost' to reach this server "
+        "back (cmk-agent-ctl register would try to contact itself and fail).[/yellow]"
+    )
+    corrected = (
+        await questionary.text(
+            "Address Linux/Windows hosts should use to reach this Checkmk server for registration "
+            f"(blank to keep using '{checkmk_host}' anyway):"
+        ).ask_async()
+    ).strip()
+    return corrected or checkmk_host
+
+
 async def _prompt_ssh_credentials() -> remote.SSHCredentials:
     """Collect a username + password/private-key path for the whole Linux
     batch — pure prompting, no connectivity check (that's
@@ -1008,6 +1059,8 @@ async def _onboard_hosts(
     creation — which now also covers scanned-but-never-promoted hosts —
     still runs even when `hosts` (the promoted list) is empty.
     """
+    register_server = await _resolve_agent_registration_server(hosts, connection.host)
+
     ssh_creds: remote.SSHCredentials | None = None
     install_smart = False
     # Only Linux hosts ever consume `ssh_creds` below (Windows is always a
@@ -1113,7 +1166,7 @@ async def _onboard_hosts(
             console.print("  [cyan]Windows target — manual path (by design):[/cyan]")
             console.print(f"    Firewall: {remote.windows_firewall_instructions(remote.AGENT_RECEIVER_PORT)}")
             console.print(
-                f"    Register: {remote.windows_register_command(h.hostname, connection.host, connection.site, connection.registration_user, connection.registration_secret)}"
+                f"    Register: {remote.windows_register_command(h.hostname, register_server, connection.site, connection.registration_user, connection.registration_secret)}"
             )
             continue
 
@@ -1123,7 +1176,7 @@ async def _onboard_hosts(
 
         if ssh_creds is None:
             console.print("  [yellow]No SSH credentials supplied — manual path.[/yellow]")
-            _print_linux_manual(h, connection)
+            _print_linux_manual(h, connection, register_server)
             continue
 
         fw_result = await remote.fix_firewall_linux(h.ip, ssh_creds, remote.AGENT_RECEIVER_PORT)
@@ -1152,13 +1205,13 @@ async def _onboard_hosts(
         package_filename = "check-mk-agent.deb" if pkg_family == "deb" else "check-mk-agent.rpm"
 
         register_cmd = remote.linux_register_command(
-            h.hostname, connection.host, connection.site, connection.registration_user, connection.registration_secret
+            h.hostname, register_server, connection.site, connection.registration_user, connection.registration_secret
         )
         try:
             package_bytes = await client.download_agent(os_type)
         except CheckmkAPIError as exc:
             console.print(f"  [red]Agent download failed: {exc}[/red]")
-            _print_linux_manual(h, connection)
+            _print_linux_manual(h, connection, register_server)
             continue
 
         install_result = await remote.install_agent_linux(
@@ -1248,9 +1301,9 @@ async def phase5_onboarding(
     await _create_ping_check_rule(client, _ping_only_hostnames(scan_results, hosts))
 
 
-def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection) -> None:
+def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection, register_server: str) -> None:
     register_cmd = remote.linux_register_command(
-        host.hostname, connection.host, connection.site, connection.registration_user, connection.registration_secret
+        host.hostname, register_server, connection.site, connection.registration_user, connection.registration_secret
     )
     console.print(f"    Firewall (ufw example): ufw allow {remote.AGENT_RECEIVER_PORT}/tcp")
     console.print(f"    Download agent from the Checkmk site, install it, then run: {register_cmd}")

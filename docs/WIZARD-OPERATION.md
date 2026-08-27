@@ -526,6 +526,30 @@ unprivileged) — sudo's cached-credential scoping across separate
 non-interactive SSH exec channels isn't reliable enough to depend on
 across chained commands.
 
+**Agent registration server address (`_resolve_agent_registration_server()`/
+`_looks_loopback()`, added 2026-08-27 — live-reported bug):** `phase1_site_
+bringup()`'s "Hostname/IP to reach this Checkmk site on (as seen by
+agents/browser)" prompt defaults to `localhost`, which is correct for
+testing entirely on the machine the wizard runs on but is silently wrong
+the moment a genuinely remote host gets onboarded: `cmk-agent-ctl register
+--server localhost`, run on that remote target over SSH, resolves
+`localhost` to the target itself, not back to the Checkmk server —
+registration then fails every time with a confusing "Failed to discover
+agent receiver port from Checkmk REST API" error that never mentions
+`localhost` at all. Called once at the top of `_onboard_hosts()`, before
+the SSH-credentials setup: if `connection.host` is loopback (`localhost`,
+or an IP `ipaddress.ip_address(...).is_loopback`) **and** at least one
+host being onboarded has a non-loopback IP, warns and prompts for the
+correct address once for the whole batch (blank keeps `connection.host`
+anyway); if every target is loopback too, returns `connection.host`
+unchanged with no prompt — `localhost` is actually correct there. The
+resulting `register_server` value (not `connection.host`) is what flows
+into every `linux_register_command()`/`windows_register_command()` call
+and into `_print_linux_manual()`'s manual instructions — `connection.host`
+itself is untouched, since it's still correct for the wizard's own local
+REST API calls to Checkmk (those run from wherever the wizard process is,
+not from the remote target).
+
 **Host create/update (`_create_or_update_host()`, `wizard.py:567-590`):**
 Both branches below go through this helper instead of calling
 `client.create_host()` directly. Phase 3 already staged every scanned IP
