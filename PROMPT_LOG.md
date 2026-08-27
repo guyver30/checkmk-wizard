@@ -55,3 +55,4 @@
 - 2026-08-27 16:10 — pasted real wizard run output showing "Agent status: could not verify — cmk-agent-ctl status exited 1: ERROR Failed to run as user 'cmk-agent' ... Please execute with sufficient permissions (maybe try 'sudo')" plus 'cron'/'dbus' not picked up by discovery
 - 2026-08-27 16:12 (mid-turn) — "also smartctl needs to run with sudo"
 - 2026-08-27 16:30 — "I can see cron and dbus in the undecided service list when I monitor the host, so why got that error? those services (and all the other discovered ones) must move to the monitored service list"
+- 2026-08-27 16:50 — "when I delete a site, it doesn't flag properly that there's a host with a registered agent, like we discussed. Check this"
