@@ -397,6 +397,47 @@ async def _upload_verified(
     return None
 
 
+async def check_agent_installed(host: str, creds: SSHCredentials, pkg_family: str) -> bool:
+    """Whether the `check-mk-agent` package is already present on the
+    target, checked before attempting a fresh install so a host that
+    already has it doesn't get a redundant upload + package-manager
+    invocation — `dpkg -i`/`rpm -i` on top of an existing install isn't
+    dangerous (dpkg reinstalls in place; rpm just errors "already
+    installed"), but it wastes an SFTP upload and a full package op for
+    no benefit. Returns False (not an exception) on any SSH failure, same
+    convention as `check_ssh_reachable`/`check_sudo` — callers then take
+    the normal fresh-install path, which itself already handles
+    unreachable SSH.
+    """
+    query_cmd = "dpkg -s check-mk-agent" if pkg_family == "deb" else "rpm -q check-mk-agent"
+    try:
+        async with await _connect(host, creds) as conn:
+            result = await conn.run(f"{query_cmd} >/dev/null 2>&1", check=False)
+            return result.exit_status == 0
+    except (OSError, asyncssh.Error):
+        return False
+
+
+async def register_agent_linux(host: str, creds: SSHCredentials, register_cmd: str) -> ActionResult:
+    """Run `cmk-agent-ctl register` on a target where the agent package is
+    already installed (see `check_agent_installed()`) — split out from
+    `install_agent_linux()` so that case can skip straight to registration
+    instead of re-uploading and reinstalling a package that's already
+    there.
+    """
+    manual = f"Run on the target host: {register_cmd}"
+    if not await check_ssh_reachable(host, creds):
+        return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, "SSH unreachable", manual)
+    try:
+        async with await _connect(host, creds) as conn:
+            reg_result = await _run_sudo(conn, creds, register_cmd)
+            if reg_result.exit_status != 0:
+                return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, f"Registration failed: {reg_result.stderr}", manual)
+            return ActionResult(Outcome.AUTOMATED, "Agent already installed; registered")
+    except (OSError, asyncssh.Error) as exc:
+        return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, str(exc), manual)
+
+
 async def install_agent_linux(
     host: str,
     creds: SSHCredentials,

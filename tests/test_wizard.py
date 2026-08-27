@@ -20,6 +20,7 @@ from checkmk_wizard.wizard import (
     _DELETE_SITE,
     _FOLDER_NAME_RE,
     _HOST_NAME_RE,
+    _MANUAL_REGISTRATION_ADDRESS,
     _RETRY_SSH_CREDENTIALS,
     _RETRY_SUDO_PASSWORD,
     _SITE_NAME_RE,
@@ -825,11 +826,48 @@ async def test_resolve_agent_registration_server_unchanged_when_every_target_is_
 
 
 @pytest.mark.asyncio
-async def test_resolve_agent_registration_server_prompts_and_uses_corrected_address(monkeypatch):
+async def test_resolve_agent_registration_server_offers_discovered_candidates(monkeypatch):
     # A real remote host + a loopback Checkmk address is the exact live-
     # reported bug: cmk-agent-ctl register --server localhost, run on the
     # remote target, tries to contact itself and fails registration every
-    # time. Must warn and offer a corrected address.
+    # time. Rather than asking the operator to go find and type an
+    # address, this machine's own non-loopback addresses are discovered
+    # and offered as ready-to-pick options.
+    monkeypatch.setattr("checkmk_wizard.wizard._local_ipv4_addresses", lambda: ["192.168.1.10", "10.0.0.1"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return "192.168.1.10"
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    hosts = [OnboardedHost(ip="10.0.0.5", hostname="test-linux", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "localhost") == "192.168.1.10"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_falls_back_to_manual_entry_when_chosen(monkeypatch):
+    # Selecting "Enter a different address" from the discovered candidates
+    # falls through to the free-text prompt, e.g. for a NAT/firewalled
+    # address none of this machine's own interfaces would show.
+    monkeypatch.setattr("checkmk_wizard.wizard._local_ipv4_addresses", lambda: ["192.168.1.10"])
+
+    answers = iter([_MANUAL_REGISTRATION_ADDRESS, "cmk.example.com"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    hosts = [OnboardedHost(ip="10.0.0.5", hostname="test-linux", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "localhost") == "cmk.example.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_prompts_manually_when_no_candidates_found(monkeypatch):
+    # No local interface candidates discovered at all — falls straight to
+    # the free-text prompt (no selection menu with nothing useful to pick).
+    monkeypatch.setattr("checkmk_wizard.wizard._local_ipv4_addresses", list)
+
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return "cmk.example.com"
 
@@ -841,6 +879,8 @@ async def test_resolve_agent_registration_server_prompts_and_uses_corrected_addr
 
 @pytest.mark.asyncio
 async def test_resolve_agent_registration_server_keeps_loopback_when_prompt_left_blank(monkeypatch):
+    monkeypatch.setattr("checkmk_wizard.wizard._local_ipv4_addresses", list)
+
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return ""
 
@@ -979,6 +1019,7 @@ def _mock_linux_ssh_agent_install(monkeypatch, *, os_release: OSRelease):
             CompatibilityCheck(compatible=True, target=os_release, package_family="deb", message="ok")
         ),
     )
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_agent_installed", lambda *a, **k: _ready(False))
     monkeypatch.setattr(
         "checkmk_wizard.wizard.remote.install_agent_linux",
         lambda *a, **k: _ready(ActionResult(Outcome.AUTOMATED, "agent installed")),
@@ -1046,6 +1087,44 @@ async def test_phase5_uses_corrected_registration_server_for_loopback_checkmk_ho
 
     assert "--server cmk.example.com" in captured["register_cmd"]
     assert "localhost" not in captured["register_cmd"]
+
+
+@pytest.mark.asyncio
+async def test_phase5_skips_package_install_when_agent_already_present(monkeypatch):
+    # A host that already has check-mk-agent (e.g. a re-run, or baked into
+    # its base image) must not get a redundant download/upload/dpkg-i —
+    # only registration should run.
+    answers = iter([True, False, "root", "password", "secret", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_linux_ssh_agent_install(monkeypatch, os_release=OSRelease(id="ubuntu", version_id="22.04"))
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_agent_installed", lambda *a, **k: _ready(True))
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("install_agent_linux must not run when the agent is already installed")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.install_agent_linux", fail_if_called)
+
+    register_calls = []
+
+    async def fake_register_agent_linux(host, creds, register_cmd):
+        register_calls.append((host, register_cmd))
+        return ActionResult(Outcome.AUTOMATED, "Agent already installed; registered")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.register_agent_linux", fake_register_agent_linux)
+
+    host = OnboardedHost(ip="10.0.0.71", hostname="10.0.0.71", folder="/", os_family="linux")
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    assert len(register_calls) == 1
+    assert register_calls[0][0] == "10.0.0.71"
 
 
 @pytest.mark.asyncio

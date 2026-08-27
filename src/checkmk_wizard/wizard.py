@@ -9,6 +9,7 @@ import ipaddress
 import json
 import re
 import secrets
+import socket
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -912,6 +913,42 @@ def _looks_loopback(host: str) -> bool:
         return False
 
 
+def _local_ipv4_addresses() -> list[str]:
+    """Every non-loopback IPv4 address configured on this machine's own
+    network interfaces — candidates for how a remote host could reach this
+    Checkmk site back. Combines two standard-library-only techniques
+    since neither alone is fully reliable across every environment
+    (multiple NICs, containers, VPNs):
+      - the "connect a UDP socket, then read its own bound address" trick,
+        which reports whichever interface the OS would actually route
+        through to reach the wider network (no packets are actually sent —
+        UDP `connect()` just picks a route and binds locally);
+      - `socket.gethostbyname_ex(hostname)`, which reports every address
+        the local hostname itself resolves to (depends on `/etc/hosts`/
+        DNS, so it can catch additional interfaces the first technique
+        misses).
+    Not guaranteed exhaustive (e.g. an interface with no default route and
+    no `/etc/hosts` entry can still be missed) — callers still offer a
+    manual-entry fallback for that case.
+    """
+    addresses: set[str] = set()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            addresses.add(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        _, _, ip_list = socket.gethostbyname_ex(socket.gethostname())
+        addresses.update(ip_list)
+    except OSError:
+        pass
+    return sorted(addr for addr in addresses if not ipaddress.ip_address(addr).is_loopback)
+
+
+_MANUAL_REGISTRATION_ADDRESS = "manual_registration_address"
+
+
 async def _resolve_agent_registration_server(hosts: list[OnboardedHost], checkmk_host: str) -> str:
     """The address Linux/Windows targets should use for `cmk-agent-ctl
     register --server`. Phase 1's "Hostname/IP to reach this Checkmk site
@@ -921,9 +958,10 @@ async def _resolve_agent_registration_server(hosts: list[OnboardedHost], checkmk
     itself, so registration silently tries to contact itself and fails
     every time with a confusing "Failed to discover agent receiver port"
     error (live-reported symptom, 2026-08-27) rather than anything
-    mentioning `localhost`. Warn and offer a corrected address once, for
-    the whole batch, instead of that same failure repeating per host with
-    no clear explanation.
+    mentioning `localhost`. Detects this once, for the whole batch, and
+    offers this machine's own non-loopback addresses (`_local_ipv4_
+    addresses()`) as ready-to-pick options instead of asking the operator
+    to go find and type one themselves.
     """
     if not _looks_loopback(checkmk_host):
         return checkmk_host
@@ -937,6 +975,18 @@ async def _resolve_agent_registration_server(hosts: list[OnboardedHost], checkmk
         "host being onboarded is remote — a remote target can't use 'localhost' to reach this server "
         "back (cmk-agent-ctl register would try to contact itself and fail).[/yellow]"
     )
+
+    candidates = _local_ipv4_addresses()
+    if candidates:
+        choices = [questionary.Choice(ip, value=ip) for ip in candidates]
+        choices.append(questionary.Choice("Enter a different address", value=_MANUAL_REGISTRATION_ADDRESS))
+        selected = await questionary.select(
+            "Which address should Linux/Windows hosts use to reach this Checkmk server?",
+            choices=choices,
+        ).ask_async()
+        if selected != _MANUAL_REGISTRATION_ADDRESS:
+            return selected
+
     corrected = (
         await questionary.text(
             "Address Linux/Windows hosts should use to reach this Checkmk server for registration "
@@ -1207,18 +1257,29 @@ async def _onboard_hosts(
         register_cmd = remote.linux_register_command(
             h.hostname, register_server, connection.site, connection.registration_user, connection.registration_secret
         )
-        try:
-            package_bytes = await client.download_agent(os_type)
-        except CheckmkAPIError as exc:
-            console.print(f"  [red]Agent download failed: {exc}[/red]")
-            _print_linux_manual(h, connection, register_server)
-            continue
 
-        install_result = await remote.install_agent_linux(
-            h.ip, ssh_creds, package_bytes, package_filename, register_cmd
-        )
+        # Skip a redundant upload + package install for a host that
+        # already has the agent — e.g. a re-run of the wizard, or a host
+        # provisioned with the agent baked into its base image.
+        if await remote.check_agent_installed(h.ip, ssh_creds, pkg_family):
+            console.print("  [cyan]check-mk-agent already installed — registering only.[/cyan]")
+            install_result = await remote.register_agent_linux(h.ip, ssh_creds, register_cmd)
+            step_label = "Agent registration"
+        else:
+            try:
+                package_bytes = await client.download_agent(os_type)
+            except CheckmkAPIError as exc:
+                console.print(f"  [red]Agent download failed: {exc}[/red]")
+                _print_linux_manual(h, connection, register_server)
+                continue
+
+            install_result = await remote.install_agent_linux(
+                h.ip, ssh_creds, package_bytes, package_filename, register_cmd
+            )
+            step_label = "Agent install"
+
         color = "green" if install_result.outcome == remote.Outcome.AUTOMATED else "yellow"
-        console.print(f"  Agent install: [{color}]{install_result.outcome.value}[/] — {install_result.detail}")
+        console.print(f"  {step_label}: [{color}]{install_result.outcome.value}[/] — {install_result.detail}")
         if install_result.manual_instructions and install_result.outcome != remote.Outcome.AUTOMATED:
             console.print(f"    {install_result.manual_instructions}")
 

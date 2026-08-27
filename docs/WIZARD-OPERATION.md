@@ -539,11 +539,22 @@ agent receiver port from Checkmk REST API" error that never mentions
 `localhost` at all. Called once at the top of `_onboard_hosts()`, before
 the SSH-credentials setup: if `connection.host` is loopback (`localhost`,
 or an IP `ipaddress.ip_address(...).is_loopback`) **and** at least one
-host being onboarded has a non-loopback IP, warns and prompts for the
-correct address once for the whole batch (blank keeps `connection.host`
-anyway); if every target is loopback too, returns `connection.host`
-unchanged with no prompt — `localhost` is actually correct there. The
-resulting `register_server` value (not `connection.host`) is what flows
+host being onboarded has a non-loopback IP, warns, then offers a fix
+**without** requiring the operator to go look one up:
+`_local_ipv4_addresses()` (`wizard.py`, added 2026-08-27) discovers this
+machine's own non-loopback IPv4 addresses via two standard-library-only
+techniques (a UDP-socket-connect-then-read-local-address trick that finds
+whichever interface the OS would actually route through, plus
+`socket.gethostbyname_ex(hostname)` for anything `/etc/hosts`/DNS adds on
+top) — each candidate found is offered as a `questionary.select` choice,
+alongside an "Enter a different address" option for the case neither
+technique finds the actually-reachable one (e.g. behind NAT). No
+candidates found at all → falls straight to the free-text prompt with no
+selection menu. Either way, leaving the free-text prompt blank keeps
+`connection.host` (the loopback value) anyway; if every target is
+loopback too, returns `connection.host` unchanged with no prompt at all —
+`localhost` is actually correct there. The resulting `register_server`
+value (not `connection.host`) is what flows
 into every `linux_register_command()`/`windows_register_command()` call
 and into `_print_linux_manual()`'s manual instructions — `connection.host`
 itself is untouched, since it's still correct for the wizard's own local
@@ -787,14 +798,29 @@ placement as the TCP-port rules, for the same reasons.
       (`wizard.py:840-842`) — uses the dedicated `agent_registration`
       credential from Phase 1 when one was found, **not** the general
       `automation` REST credential (see credential-scope note below).
-   g. `client.download_agent(os_type)` (`api.py:211-218`) — requests
-      `linux_deb` or `linux_rpm` based on the package family determined in
-      step d (defaults to `linux_deb` if the compatibility check itself
-      couldn't run, e.g. SSH became unreachable between steps).
-   h. `remote.install_agent_linux(ip, creds, package_bytes,
+   g. **`remote.check_agent_installed(ip, creds, pkg_family)`** (added
+      2026-08-27) — runs `dpkg -s check-mk-agent` or `rpm -q
+      check-mk-agent` (by package family) over SSH first, **before**
+      downloading or uploading anything. If the package is already
+      present (a wizard re-run, or a host provisioned with the agent
+      baked into its base image), skips straight to
+      `remote.register_agent_linux(ip, creds, register_cmd)` — a
+      registration-only call factored out of `install_agent_linux()`
+      (`remote.py`) — instead of a redundant download/upload/`dpkg -i`.
+      Printed as "Agent registration:" rather than "Agent install:" in
+      this case. Returns `False` (not an exception) on any SSH failure,
+      so a host this can't check just falls through to the normal
+      fresh-install path below, which already handles SSH failures on
+      its own.
+   h. Otherwise: `client.download_agent(os_type)` (`api.py:211-218`) —
+      requests `linux_deb` or `linux_rpm` based on the package family
+      determined in step d (defaults to `linux_deb` if the compatibility
+      check itself couldn't run, e.g. SSH became unreachable between
+      steps).
+   i. `remote.install_agent_linux(ip, creds, package_bytes,
       package_filename, register_cmd)` (`remote.py:303-377`), where
       `package_filename` is `check-mk-agent.deb` or `check-mk-agent.rpm`
-      to match the package family from step g:
+      to match the package family from step d:
       - SFTP-uploads the package to `/tmp/<package_filename>` on the
         target.
       - **Verifies the upload with a checksum** (`remote.py:328-347`):
@@ -814,9 +840,10 @@ placement as the TCP-port rules, for the same reasons.
         machine, not via REST API).
       - Any step failing → `FAILED_FALLBACK_MANUAL` with manual
         instructions; success → `AUTOMATED`.
-   i. **If install returned `AUTOMATED`:** `remote.check_agent_status(ip,
-      creds, site)` (`remote.py:393-408`, `wizard.py:862-865`) runs
-      `cmk-agent-ctl status` on the target and checks (via
+   j. **If install (or, per step g, registration-only) returned
+      `AUTOMATED`:** `remote.check_agent_status(ip, creds, site)`
+      (`remote.py:393-408`, `wizard.py:862-865`) runs `cmk-agent-ctl
+      status` on the target and checks (via
       `agent_status_shows_connection()`, `remote.py:380-390`) that its
       output contains a `Connection: <server>/<site>` line for this site —
       confirming the agent controller is actually operational and recorded
@@ -828,7 +855,7 @@ placement as the TCP-port rules, for the same reasons.
       host as UP; that's confirmed later, for the whole batch, by Phase 7's
       Livestatus query. Printed as its own `Agent status: verified /
       could not verify` line, separate from the install line.
-   j. **If install returned `AUTOMATED`** and the operator opted in (see
+   k. **If install returned `AUTOMATED`** and the operator opted in (see
       "SMART disk monitoring" below): installs `smartmontools` and the
       `smart_posix` agent plugin, so Phase 6's discovery below also picks
       up disk health (temperature, wear, error counters) alongside the
