@@ -1,3 +1,4 @@
+import ast
 import json
 
 import pytest
@@ -17,6 +18,10 @@ from checkmk_wizard.remote import (
 )
 from checkmk_wizard.scanner import HostScanResult
 from checkmk_wizard.wizard import (
+    _DEFAULT_CPU_LOAD_LEVELS,
+    _DEFAULT_CPU_UTILIZATION_LEVELS,
+    _DEFAULT_FILESYSTEM_LEVELS,
+    _DEFAULT_MEMORY_LEVELS,
     _DELETE_SITE,
     _FOLDER_NAME_RE,
     _HOST_NAME_RE,
@@ -40,6 +45,7 @@ from checkmk_wizard.wizard import (
     _password_problems,
     _ping_only_hostnames,
     _prompt_change_cmkadmin_password,
+    _prompt_threshold_levels,
     _resolve_agent_registration_server,
     _smart_posix_plugin_path,
     _valid_checkmk_host,
@@ -732,6 +738,181 @@ async def test_phase5_no_rule_when_no_expected_ports(monkeypatch):
     assert not rule_route.called
 
 
+@pytest.mark.asyncio
+async def test_phase5_configures_default_thresholds_when_confirmed(monkeypatch):
+    # Service-names prompt (blank/skip), confirm thresholds (yes), then
+    # blank answers for all four threshold prompts -> defaults used.
+    answers = iter(["", True, "", "", "", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    host = OnboardedHost(ip="10.0.0.50", hostname="winbox", folder="/", os_family="windows")
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.50").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    assert rule_route.call_count == 4
+    bodies = [json.loads(c.request.content) for c in rule_route.calls]
+    by_ruleset = {b["ruleset"]: b for b in bodies}
+    assert set(by_ruleset) == {
+        "checkgroup_parameters:cpu_load",
+        "checkgroup_parameters:cpu_utilization_os",
+        "checkgroup_parameters:memory_linux",
+        "checkgroup_parameters:filesystem",
+    }
+    for b in bodies:
+        assert b["folder"] == "/"
+        assert b["conditions"] == {}
+
+    # value_raw is Python-literal syntax (real tuples), not JSON — a
+    # Checkmk `Levels()`/`CascadingDropdown` valuespec distinguishes its
+    # alternatives by the value's Python type, and a JSON array
+    # deserializes to a `list`, which none of them match.
+    assert ast.literal_eval(by_ruleset["checkgroup_parameters:cpu_load"]["value_raw"]) == {
+        "levels1": _DEFAULT_CPU_LOAD_LEVELS,
+        "levels5": _DEFAULT_CPU_LOAD_LEVELS,
+        "levels15": _DEFAULT_CPU_LOAD_LEVELS,
+    }
+    assert ast.literal_eval(by_ruleset["checkgroup_parameters:cpu_utilization_os"]["value_raw"]) == {
+        "util": _DEFAULT_CPU_UTILIZATION_LEVELS
+    }
+    assert ast.literal_eval(by_ruleset["checkgroup_parameters:memory_linux"]["value_raw"]) == {
+        "levels_ram": ("perc_used", _DEFAULT_MEMORY_LEVELS)
+    }
+    assert ast.literal_eval(by_ruleset["checkgroup_parameters:filesystem"]["value_raw"]) == {
+        "levels": _DEFAULT_FILESYSTEM_LEVELS
+    }
+
+
+@pytest.mark.asyncio
+async def test_phase5_configures_custom_thresholds(monkeypatch):
+    answers = iter(["", True, "1.5,3", "60,80", "70,85", "75,88"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    host = OnboardedHost(ip="10.0.0.51", hostname="winbox2", folder="/", os_family="windows")
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.51").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    bodies = {json.loads(c.request.content)["ruleset"]: json.loads(c.request.content) for c in rule_route.calls}
+    assert ast.literal_eval(bodies["checkgroup_parameters:cpu_load"]["value_raw"]) == {
+        "levels1": (1.5, 3.0),
+        "levels5": (1.5, 3.0),
+        "levels15": (1.5, 3.0),
+    }
+    assert ast.literal_eval(bodies["checkgroup_parameters:cpu_utilization_os"]["value_raw"]) == {"util": (60.0, 80.0)}
+    assert ast.literal_eval(bodies["checkgroup_parameters:memory_linux"]["value_raw"]) == {
+        "levels_ram": ("perc_used", (70.0, 85.0))
+    }
+    assert ast.literal_eval(bodies["checkgroup_parameters:filesystem"]["value_raw"]) == {"levels": (75.0, 88.0)}
+
+
+@pytest.mark.asyncio
+async def test_phase5_skips_thresholds_when_declined(monkeypatch):
+    answers = iter(["", False])  # service names blank, decline thresholds
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    host = OnboardedHost(ip="10.0.0.52", hostname="winbox3", folder="/", os_family="windows")
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.52").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    assert not rule_route.called
+
+
+@pytest.mark.asyncio
+async def test_phase5_skips_threshold_prompt_when_no_agent_hosts(monkeypatch):
+    # A ping-only host never reaches the service-names or firewall/SSH
+    # prompts, so the threshold confirm — gated on at least one linux/
+    # windows host — must not be asked either; an empty answer iterator
+    # means any unexpected ask_async() call fails the test with
+    # StopIteration. (It still gets its own implicit PING active-check
+    # rule from `_create_ping_check_rule` — unrelated to thresholds.)
+    answers = iter([])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    host = OnboardedHost(ip="10.0.0.53", hostname="pinger", folder="/", os_family="ping")
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.53").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        rule_route = respx.post(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"id": "r1"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    rulesets_created = [json.loads(c.request.content)["ruleset"] for c in rule_route.calls]
+    assert not any(r.startswith("checkgroup_parameters:") for r in rulesets_created)
+
+
+@pytest.mark.asyncio
+async def test_prompt_threshold_levels_uses_default_when_blank(monkeypatch):
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return ""
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    result = await _prompt_threshold_levels("CPU load", "", (5.0, 10.0))
+    assert result == (5.0, 10.0)
+
+
+@pytest.mark.asyncio
+async def test_prompt_threshold_levels_falls_back_on_unparseable_answer(monkeypatch, capsys):
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return "not-a-number"
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    result = await _prompt_threshold_levels("CPU load", "", (5.0, 10.0))
+    assert result == (5.0, 10.0)
+    assert "could not parse" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_prompt_threshold_levels_parses_custom_values(monkeypatch):
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return "1.5, 3"
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    result = await _prompt_threshold_levels("CPU load", "", (5.0, 10.0))
+    assert result == (1.5, 3.0)
+
+
 def test_expected_open_ports_by_hostname_prefers_promoted_over_scan():
     # A promoted host uses its (possibly Phase-4-edited) expected_open_ports
     # under its new hostname; an un-promoted scan result falls back to the
@@ -1058,7 +1239,7 @@ async def test_phase5_uses_corrected_registration_server_for_loopback_checkmk_ho
     # "cmk.example.com": corrected registration-server prompt (fires first
     # in _onboard_hosts); True: attempt SSH; False: decline smartmontools;
     # "root"/"password"/"secret": SSH creds; "": expected-services prompt.
-    answers = iter(["cmk.example.com", True, False, "root", "password", "secret", ""])
+    answers = iter(["cmk.example.com", True, False, "root", "password", "secret", "", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1096,7 +1277,7 @@ async def test_phase5_skips_package_install_when_agent_already_present(monkeypat
     # A host that already has check-mk-agent (e.g. a re-run, or baked into
     # its base image) must not get a redundant download/upload/dpkg-i —
     # only registration should run.
-    answers = iter([True, False, "root", "password", "secret", ""])
+    answers = iter([True, False, "root", "password", "secret", "", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1134,7 +1315,7 @@ async def test_phase5_installs_smartmontools_and_smart_plugin_for_linux_host(mon
     # True: attempt SSH; True: also install smartmontools; "root": SSH
     # username; "password": SSH auth method; "secret": SSH password;
     # "": manual expected-services prompt (no systemd scan result -> blank/skip).
-    answers = iter([True, True, "root", "password", "secret", ""])
+    answers = iter([True, True, "root", "password", "secret", "", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1190,7 +1371,7 @@ async def test_phase5_skips_plugin_deploy_when_smartctl_verify_fails(monkeypatch
     # post-install verification can't confirm that, copying the plugin
     # that reads smartctl's output is pointless; must skip it, not deploy
     # blindly.
-    answers = iter([True, True, "root", "password", "secret", ""])
+    answers = iter([True, True, "root", "password", "secret", "", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1229,7 +1410,7 @@ async def test_phase5_skips_plugin_deploy_when_smartctl_verify_fails(monkeypatch
 async def test_phase5_skips_smartmontools_when_declined(monkeypatch):
     # Same Linux/SSH host, but the operator declines the second confirm —
     # smartmontools/plugin install must never be attempted.
-    answers = iter([True, False, "root", "password", "secret", ""])
+    answers = iter([True, False, "root", "password", "secret", "", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1259,7 +1440,7 @@ async def test_phase5_skips_smartmontools_for_unbundled_os(monkeypatch):
     # Agent install still succeeds on e.g. Debian (same "deb" package
     # family as Ubuntu), but there's no bundled smartmontools .deb for it —
     # must skip cleanly rather than erroring.
-    answers = iter([True, True, "root", "password", "secret", ""])
+    answers = iter([True, True, "root", "password", "secret", "", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1504,7 +1685,7 @@ async def test_phase5_windows_manual_service_entry_creates_rule(monkeypatch):
     # No linux host in this batch, so Phase 5's "Attempt automated SSH..."
     # confirm is skipped entirely — the first (and only) prompt is the
     # manual expected-services text field for the windows host.
-    answers = iter(["MSSQLSERVER, W3SVC"])
+    answers = iter(["MSSQLSERVER, W3SVC", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)

@@ -834,6 +834,76 @@ async def _create_ping_check_rule(client: CheckmkClient, hostnames: list[str]) -
         console.print(f"  [yellow]could not create PING check for {', '.join(hostnames)}: {exc}[/yellow]")
 
 
+_DEFAULT_CPU_LOAD_LEVELS = (5.0, 10.0)  # per core
+_DEFAULT_CPU_UTILIZATION_LEVELS = (80.0, 90.0)  # percent, averaged over one check interval (~1 minute)
+_DEFAULT_MEMORY_LEVELS = (80.0, 90.0)  # percent RAM used
+_DEFAULT_FILESYSTEM_LEVELS = (80.0, 90.0)  # percent used
+
+
+async def _prompt_threshold_levels(label: str, unit: str, default: tuple[float, float]) -> tuple[float, float]:
+    raw = (
+        await questionary.text(
+            f"{label} — warning,critical{f' ({unit})' if unit else ''} "
+            f"(default {default[0]:g},{default[1]:g}):"
+        ).ask_async()
+    ).strip()
+    if not raw:
+        return default
+    try:
+        warn_s, crit_s = raw.split(",", 1)
+        return float(warn_s), float(crit_s)
+    except ValueError:
+        console.print(f"  [yellow]could not parse '{raw}', using default {default[0]:g},{default[1]:g}[/yellow]")
+        return default
+
+
+async def _create_threshold_rules(client: CheckmkClient) -> None:
+    """One global rule (root folder, no host_name condition) per check, so
+    it applies wherever the matching service exists across every current
+    and future host — a host without that service (e.g. a ping-only or
+    SNMP-only host) is simply unaffected, so scoping isn't needed.
+
+    `value_raw` here can't be plain JSON like the other rule-creation
+    helpers in this file: live-verified against a real Checkmk 2.4.0p35 CE
+    site that these four rulesets' warning/critical fields are Checkmk's
+    `Levels()`/`CascadingDropdown` valuespecs, which distinguish their
+    alternatives (fixed levels vs. no levels vs. predictive; percent-used
+    vs. absolute) by the *Python type* of the value — a JSON array
+    deserializes to a Python `list`, which matches none of them and is
+    rejected ("data type of the value does not match any of the allowed
+    alternatives"). Sending the dict via `repr()` instead produces genuine
+    Python tuple syntax (`(5.0, 10.0)`), which Checkmk's own API parses
+    (it accepts Python literal syntax, not just JSON) and which the
+    `Levels()` alternative correctly matches as "Fixed Levels" — confirmed
+    by round-tripping a real rule through the API and reading back the
+    identical `value_raw` in the response.
+
+    `memory_linux` only covers Linux hosts (Windows memory reporting uses
+    a different ruleset this wizard doesn't set) — harmless no-op on
+    Windows/SNMP hosts, same as the other three here.
+    """
+    cpu_load = await _prompt_threshold_levels("CPU load (per core)", "", _DEFAULT_CPU_LOAD_LEVELS)
+    cpu_utilization = await _prompt_threshold_levels("CPU utilization", "%", _DEFAULT_CPU_UTILIZATION_LEVELS)
+    memory = await _prompt_threshold_levels("Memory (RAM) used", "%", _DEFAULT_MEMORY_LEVELS)
+    filesystem = await _prompt_threshold_levels("Filesystem used", "%", _DEFAULT_FILESYSTEM_LEVELS)
+
+    rules = [
+        (
+            "checkgroup_parameters:cpu_load",
+            repr({"levels1": cpu_load, "levels5": cpu_load, "levels15": cpu_load}),
+        ),
+        ("checkgroup_parameters:cpu_utilization_os", repr({"util": cpu_utilization})),
+        ("checkgroup_parameters:memory_linux", repr({"levels_ram": ("perc_used", memory)})),
+        ("checkgroup_parameters:filesystem", repr({"levels": filesystem})),
+    ]
+    for ruleset, value_raw in rules:
+        try:
+            await client.create_rule(ruleset=ruleset, folder="/", value_raw=value_raw)
+        except CheckmkAPIError as exc:
+            console.print(f"  [yellow]could not create {ruleset} rule: {exc}[/yellow]")
+    console.print("[green]Default thresholds configured.[/green]")
+
+
 async def _collect_expected_services(
     hostname: str, ip: str, os_family: str, ssh_creds: remote.SSHCredentials | None
 ) -> list[str]:
@@ -1378,6 +1448,14 @@ async def phase5_onboarding(
     # service for agent-less/SNMP-less hosts — restore it explicitly so
     # reachability stays visible in the GUI alongside the TCP port checks.
     await _create_ping_check_rule(client, _ping_only_hostnames(scan_results, hosts))
+
+    if any(h.os_family in ("linux", "windows") for h in hosts):
+        configure_thresholds = await questionary.confirm(
+            "Configure default alert thresholds (CPU load, CPU utilization, memory, filesystem)?",
+            default=False,
+        ).ask_async()
+        if configure_thresholds:
+            await _create_threshold_rules(client)
 
 
 def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection, register_server: str) -> None:
