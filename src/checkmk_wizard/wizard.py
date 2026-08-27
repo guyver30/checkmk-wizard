@@ -895,6 +895,110 @@ async def _create_service_discovery_rules(
         console.print(f"  [yellow]could not configure service monitoring for {host.hostname}: {exc}[/yellow]")
 
 
+async def _prompt_ssh_credentials() -> remote.SSHCredentials:
+    """Collect a username + password/private-key path for the whole Linux
+    batch — pure prompting, no connectivity check (that's
+    `_establish_ssh_access()`, which calls this in a retry loop).
+    """
+    username = None
+    while not username:
+        username = (await questionary.text("SSH username:").ask_async()).strip()
+        if not username:
+            console.print("[red]SSH username can't be blank — try again.[/red]")
+
+    auth_mode = await questionary.select("SSH auth method:", choices=["password", "private key"]).ask_async()
+    if auth_mode == "password":
+        password = await questionary.password("SSH password:").ask_async()
+        return remote.SSHCredentials(username=username, password=password)
+
+    key_path = None
+    while key_path is None:
+        raw_key_path = (await questionary.text("Private key path:").ask_async()).strip()
+        # Local filesystem check, not a Checkmk-API validation — but a
+        # nonexistent key would fail identically for every host in the
+        # batch, so catching it once up front here (instead of once per
+        # host inside asyncssh's connect error handling) is worth the
+        # pre-flight check.
+        if not Path(raw_key_path).expanduser().is_file():
+            console.print(f"[red]'{raw_key_path}' isn't a file that exists — try again.[/red]")
+        else:
+            key_path = raw_key_path
+    return remote.SSHCredentials(username=username, private_key_path=key_path)
+
+
+_RETRY_SSH_CREDENTIALS = "retry_ssh_credentials"
+_RETRY_SUDO_PASSWORD = "retry_sudo_password"
+_SKIP_AUTOMATED_SSH = "skip_automated_ssh"
+
+
+async def _establish_ssh_access(test_host_ip: str) -> remote.SSHCredentials | None:
+    """Collect SSH credentials once for the whole Linux batch and verify
+    them right away against `test_host_ip` (the first Linux host) —
+    instead of a typo'd password only surfacing many steps later, deep
+    inside the per-host loop, as a string of unexplained
+    `FAILED_FALLBACK_MANUAL` results. Also confirms sudo elevation works,
+    prompting for a sudo password if the account needs one. Returns None
+    if the operator chooses to give up rather than keep retrying — callers
+    then fall back to manual instructions for every Linux host.
+
+    Since credentials (and, if needed, the sudo password) are shared
+    across the whole batch by design (see `_onboard_hosts()`), testing
+    once against one host is a deliberate simplification, not a full
+    per-host credential check — a host with genuinely different
+    credentials still falls back to manual instructions on its own via
+    each remote.py function's own `check_ssh_reachable()` guard.
+    """
+    while True:
+        creds = await _prompt_ssh_credentials()
+
+        console.print(f"Testing SSH login on {test_host_ip}...")
+        if not await remote.check_ssh_reachable(test_host_ip, creds):
+            choice = await questionary.select(
+                f"Could not log into {test_host_ip} with those credentials "
+                "(wrong username/password/key, or the host is unreachable). What now?",
+                choices=[
+                    questionary.Choice("Re-enter SSH credentials", value=_RETRY_SSH_CREDENTIALS),
+                    questionary.Choice(
+                        "Skip automated SSH (manual instructions for all Linux hosts)",
+                        value=_SKIP_AUTOMATED_SSH,
+                    ),
+                ],
+            ).ask_async()
+            if choice == _RETRY_SSH_CREDENTIALS:
+                continue
+            return None
+
+        console.print("[green]SSH login confirmed.[/green]")
+
+        if await remote.check_sudo(test_host_ip, creds):
+            console.print("[green]Sudo elevation confirmed.[/green]")
+            return creds
+
+        console.print(f"[yellow]Logged in, but this account needs a password to use sudo on {test_host_ip}.[/yellow]")
+        while True:
+            creds.sudo_password = await questionary.password("Sudo password:").ask_async()
+            if await remote.check_sudo(test_host_ip, creds):
+                console.print("[green]Sudo elevation confirmed.[/green]")
+                return creds
+
+            choice = await questionary.select(
+                "Sudo still failed with that password. What now?",
+                choices=[
+                    questionary.Choice("Try a different sudo password", value=_RETRY_SUDO_PASSWORD),
+                    questionary.Choice("Re-enter SSH credentials", value=_RETRY_SSH_CREDENTIALS),
+                    questionary.Choice(
+                        "Skip automated SSH (manual instructions for all Linux hosts)",
+                        value=_SKIP_AUTOMATED_SSH,
+                    ),
+                ],
+            ).ask_async()
+            if choice == _RETRY_SUDO_PASSWORD:
+                continue
+            if choice == _RETRY_SSH_CREDENTIALS:
+                break
+            return None
+
+
 async def _onboard_hosts(
     client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]
 ) -> None:
@@ -910,7 +1014,8 @@ async def _onboard_hosts(
     # manual path by design; snmp/ping hosts have no agent at all) — asking
     # for SSH credentials when no onboarded host is Linux is a dead-end
     # prompt with nothing to apply it to.
-    if any(h.os_family == "linux" for h in hosts):
+    linux_hosts = [h for h in hosts if h.os_family == "linux"]
+    if linux_hosts:
         use_ssh = await questionary.confirm(
             "Attempt automated SSH firewall + agent install for Linux hosts?", default=True
         ).ask_async()
@@ -919,30 +1024,12 @@ async def _onboard_hosts(
                 "Also install smartmontools + SMART disk monitoring (smart_posix plugin) on Linux hosts?",
                 default=True,
             ).ask_async()
-            username = None
-            while not username:
-                username = (await questionary.text("SSH username:").ask_async()).strip()
-                if not username:
-                    console.print("[red]SSH username can't be blank — try again.[/red]")
-
-            auth_mode = await questionary.select("SSH auth method:", choices=["password", "private key"]).ask_async()
-            if auth_mode == "password":
-                password = await questionary.password("SSH password:").ask_async()
-                ssh_creds = remote.SSHCredentials(username=username, password=password)
-            else:
-                key_path = None
-                while key_path is None:
-                    raw_key_path = (await questionary.text("Private key path:").ask_async()).strip()
-                    # Local filesystem check, not a Checkmk-API validation —
-                    # but a nonexistent key would fail identically for every
-                    # host in the batch, so catching it once up front here
-                    # (instead of once per host inside asyncssh's connect
-                    # error handling) is worth the pre-flight check.
-                    if not Path(raw_key_path).expanduser().is_file():
-                        console.print(f"[red]'{raw_key_path}' isn't a file that exists — try again.[/red]")
-                    else:
-                        key_path = raw_key_path
-                ssh_creds = remote.SSHCredentials(username=username, private_key_path=key_path)
+            ssh_creds = await _establish_ssh_access(linux_hosts[0].ip)
+            if ssh_creds is None:
+                # Nothing left to install smartmontools/plugin over — the
+                # per-host loop below already handles ssh_creds=None by
+                # falling back to manual instructions for firewall/agent.
+                install_smart = False
 
     for h in hosts:
         console.print(f"\n[bold]{h.hostname}[/bold] ({h.ip}, {h.os_family})")
