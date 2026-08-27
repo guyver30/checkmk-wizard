@@ -31,6 +31,25 @@ from checkmk_wizard.scanner import DEFAULT_PORTS, scan_network
 
 console = Console()
 
+# Bundled smartmontools .deb packages (see remote.smartmontools_deb_filename)
+# ship inside the repo, not the installed package, since this wizard is run
+# via `uv run` from a checkout rather than installed as a distributed wheel.
+_SMARTMONTOOLS_DIR = Path(__file__).resolve().parents[2] / "docs" / "smart"
+
+
+def _smart_posix_plugin_path(site_name: str) -> Path:
+    """The `smart_posix` agent plugin shipped with the *connected* site's own
+    Checkmk install — read locally, not fetched over the API (Checkmk's REST
+    API only exposes whole-agent-package downloads, not individual plugin
+    files; see remote.py's AGENT_PLUGINS_DIR). Using the site's own copy
+    (rather than a version bundled with the wizard) keeps it in sync with
+    whatever Checkmk version that site actually runs — this wizard already
+    assumes local shell access to the Checkmk host (site.py runs `omd`
+    directly), so local filesystem access to the site's own files is no new
+    assumption.
+    """
+    return Path(f"/omd/sites/{site_name}/share/check_mk/agents/plugins/smart_posix")
+
 # Sentinel for the "delete a site" menu choice in phase1_site_bringup() —
 # see the comment at its use site for why this can't just be `value=None`.
 _DELETE_SITE = object()
@@ -886,6 +905,7 @@ async def _onboard_hosts(
     still runs even when `hosts` (the promoted list) is empty.
     """
     ssh_creds: remote.SSHCredentials | None = None
+    install_smart = False
     # Only Linux hosts ever consume `ssh_creds` below (Windows is always a
     # manual path by design; snmp/ping hosts have no agent at all) — asking
     # for SSH credentials when no onboarded host is Linux is a dead-end
@@ -895,6 +915,10 @@ async def _onboard_hosts(
             "Attempt automated SSH firewall + agent install for Linux hosts?", default=True
         ).ask_async()
         if use_ssh:
+            install_smart = await questionary.confirm(
+                "Also install smartmontools + SMART disk monitoring (smart_posix plugin) on Linux hosts?",
+                default=True,
+            ).ask_async()
             username = None
             while not username:
                 username = (await questionary.text("SSH username:").ask_async()).strip()
@@ -1066,6 +1090,55 @@ async def _onboard_hosts(
             status_color = "green" if status_check.verified else "yellow"
             status_label = "verified" if status_check.verified else "could not verify"
             console.print(f"  Agent status: [{status_color}]{status_label}[/] — {status_check.detail}")
+
+        # SMART disk monitoring needs the plugin dir the agent package just
+        # created, so this only runs once the agent install above actually
+        # succeeded. No separate discovery rule is needed to "enable"
+        # smart_posix's checks — unlike systemd unit monitoring, Checkmk's
+        # smart_ata/smart_nvme/smart_scsi check plugins discover
+        # unconditionally once the section data is present (verified
+        # against the installed Checkmk's own check plugin source: no
+        # discovery ruleset gates them), so Phase 6's normal `fix_all`
+        # discovery picks them up on its own.
+        if install_smart and install_result.outcome == remote.Outcome.AUTOMATED:
+            deb_filename = remote.smartmontools_deb_filename(compat.target) if compat else None
+            if deb_filename is None:
+                console.print("  [yellow]SMART monitoring: no bundled smartmontools package for this OS — skipped.[/yellow]")
+            else:
+                try:
+                    smart_bytes = (_SMARTMONTOOLS_DIR / deb_filename).read_bytes()
+                except OSError as exc:
+                    console.print(f"  [yellow]SMART monitoring: couldn't read bundled package {deb_filename}: {exc}[/yellow]")
+                else:
+                    smart_install = await remote.install_smartmontools(h.ip, ssh_creds, smart_bytes, "smartmontools.deb")
+                    color = "green" if smart_install.outcome == remote.Outcome.AUTOMATED else "yellow"
+                    console.print(f"  smartmontools install: [{color}]{smart_install.outcome.value}[/] — {smart_install.detail}")
+                    if smart_install.manual_instructions and smart_install.outcome != remote.Outcome.AUTOMATED:
+                        console.print(f"    {smart_install.manual_instructions}")
+
+                    if smart_install.outcome == remote.Outcome.AUTOMATED:
+                        # dpkg exiting 0 only means the package unpacked
+                        # cleanly — confirm smartctl actually runs and SMART
+                        # is turned on before bothering to copy the plugin
+                        # that reads its output.
+                        verify_result = await remote.verify_smartmontools(h.ip, ssh_creds)
+                        color = "green" if verify_result.outcome == remote.Outcome.AUTOMATED else "yellow"
+                        console.print(f"  smartmontools verify: [{color}]{verify_result.outcome.value}[/] — {verify_result.detail}")
+                        if verify_result.manual_instructions and verify_result.outcome != remote.Outcome.AUTOMATED:
+                            console.print(f"    {verify_result.manual_instructions}")
+
+                        if verify_result.outcome == remote.Outcome.AUTOMATED:
+                            plugin_path = _smart_posix_plugin_path(connection.site)
+                            try:
+                                plugin_bytes = plugin_path.read_bytes()
+                            except OSError as exc:
+                                console.print(f"  [yellow]SMART plugin: couldn't read {plugin_path}: {exc}[/yellow]")
+                            else:
+                                plugin_result = await remote.deploy_agent_plugin(h.ip, ssh_creds, plugin_bytes, "smart_posix")
+                                color = "green" if plugin_result.outcome == remote.Outcome.AUTOMATED else "yellow"
+                                console.print(f"  SMART plugin deploy: [{color}]{plugin_result.outcome.value}[/] — {plugin_result.detail}")
+                                if plugin_result.manual_instructions and plugin_result.outcome != remote.Outcome.AUTOMATED:
+                                    console.print(f"    {plugin_result.manual_instructions}")
 
 
 async def phase5_onboarding(

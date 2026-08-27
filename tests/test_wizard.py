@@ -6,13 +6,22 @@ import respx
 from httpx import Response
 
 from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection
-from checkmk_wizard.remote import SSHCredentials
+from checkmk_wizard.remote import (
+    ActionResult,
+    AgentStatusCheck,
+    CompatibilityCheck,
+    OSRelease,
+    Outcome,
+    PortProbeResult,
+    SSHCredentials,
+)
 from checkmk_wizard.scanner import HostScanResult
 from checkmk_wizard.wizard import (
     _DELETE_SITE,
     _FOLDER_NAME_RE,
     _HOST_NAME_RE,
     _SITE_NAME_RE,
+    _SMARTMONTOOLS_DIR,
     OnboardedHost,
     ScannedHost,
     _collect_expected_services,
@@ -23,6 +32,7 @@ from checkmk_wizard.wizard import (
     _password_problems,
     _ping_only_hostnames,
     _prompt_change_cmkadmin_password,
+    _smart_posix_plugin_path,
     _valid_checkmk_host,
     _verify_expected_services,
     phase2_folders,
@@ -760,6 +770,221 @@ def test_ping_only_hostnames_empty_when_nothing_qualifies():
     scan_results = [ScannedHost(ip="10.0.0.83", open_ports=[], folder="/")]
     onboarded = [OnboardedHost(ip="10.0.0.83", hostname="linux-host", folder="/", os_family="linux")]
     assert _ping_only_hostnames(scan_results, onboarded) == []
+
+
+def test_smartmontools_packages_bundled_for_every_mapped_ubuntu_release():
+    # Regression guard: remote.smartmontools_deb_filename()'s hardcoded
+    # filenames must always resolve to a real file under docs/smart/, or
+    # the wizard would crash mid-onboarding trying to read a nonexistent
+    # bundled package.
+    from checkmk_wizard.remote import _SMARTMONTOOLS_DEB_BY_UBUNTU_VERSION
+
+    for filename in _SMARTMONTOOLS_DEB_BY_UBUNTU_VERSION.values():
+        assert (_SMARTMONTOOLS_DIR / filename).is_file()
+
+
+def test_smart_posix_plugin_path_uses_connected_site_name():
+    path = _smart_posix_plugin_path("mysite")
+    assert str(path) == "/omd/sites/mysite/share/check_mk/agents/plugins/smart_posix"
+
+
+def _mock_linux_ssh_agent_install(monkeypatch, *, os_release: OSRelease):
+    """Stub every remote.py SSH mechanic the Linux/SSH onboarding path calls
+    so it never touches a real network or the real /omd filesystem: probing,
+    firewall, OS-compat detection (fixed to `os_release`), agent install,
+    and agent-status verification all report success. Returns the raw
+    monkeypatch handle so callers can further stub/spy on top (e.g. the new
+    smartmontools/plugin calls)."""
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.list_running_systemd_services", lambda *a, **k: _none())
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.remote.probe_port",
+        lambda *a, **k: _ready(PortProbeResult(reachable=True, classification="open")),
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.remote.fix_firewall_linux",
+        lambda *a, **k: _ready(ActionResult(Outcome.AUTOMATED, "firewall ok")),
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.remote.check_os_compatibility",
+        lambda *a, **k: _ready(
+            CompatibilityCheck(compatible=True, target=os_release, package_family="deb", message="ok")
+        ),
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.remote.install_agent_linux",
+        lambda *a, **k: _ready(ActionResult(Outcome.AUTOMATED, "agent installed")),
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.remote.check_agent_status",
+        lambda *a, **k: _ready(AgentStatusCheck(verified=True, detail="connected")),
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.remote.verify_smartmontools",
+        lambda *a, **k: _ready(ActionResult(Outcome.AUTOMATED, "smartctl 7+ confirmed; SMART enabled on 1/1 device(s)")),
+    )
+
+
+async def _none():
+    return None
+
+
+async def _ready(value):
+    return value
+
+
+@pytest.mark.asyncio
+async def test_phase5_installs_smartmontools_and_smart_plugin_for_linux_host(monkeypatch, tmp_path):
+    # True: attempt SSH; True: also install smartmontools; "root": SSH
+    # username; "password": SSH auth method; "secret": SSH password;
+    # "": manual expected-services prompt (no systemd scan result -> blank/skip).
+    answers = iter([True, True, "root", "password", "secret", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_linux_ssh_agent_install(monkeypatch, os_release=OSRelease(id="ubuntu", version_id="22.04"))
+
+    plugin_file = tmp_path / "smart_posix"
+    plugin_file.write_bytes(b"fake plugin script")
+    monkeypatch.setattr("checkmk_wizard.wizard._smart_posix_plugin_path", lambda site: plugin_file)
+
+    smartmontools_calls = []
+    plugin_calls = []
+
+    async def fake_install_smartmontools(host, creds, package_bytes, package_filename):
+        smartmontools_calls.append((host, creds, package_bytes, package_filename))
+        return ActionResult(Outcome.AUTOMATED, "smartmontools installed")
+
+    async def fake_deploy_agent_plugin(host, creds, plugin_bytes, plugin_name):
+        plugin_calls.append((host, creds, plugin_bytes, plugin_name))
+        return ActionResult(Outcome.AUTOMATED, "plugin deployed")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.install_smartmontools", fake_install_smartmontools)
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.deploy_agent_plugin", fake_deploy_agent_plugin)
+
+    host = OnboardedHost(ip="10.0.0.50", hostname="10.0.0.50", folder="/", os_family="linux")
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        respx.get(f"{BASE}/domain-types/agent/actions/download/invoke").mock(
+            return_value=Response(200, content=b"agent-package-bytes")
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    assert len(smartmontools_calls) == 1
+    host_arg, creds_arg, package_bytes, package_filename = smartmontools_calls[0]
+    assert host_arg == "10.0.0.50"
+    assert creds_arg == SSHCredentials(username="root", password="secret")
+    assert package_filename == "smartmontools.deb"
+    assert package_bytes == (_SMARTMONTOOLS_DIR / "smartmontools_7.2-1build2_amd64(Jammy).deb").read_bytes()
+
+    assert len(plugin_calls) == 1
+    host_arg, creds_arg, plugin_bytes, plugin_name = plugin_calls[0]
+    assert host_arg == "10.0.0.50"
+    assert plugin_bytes == b"fake plugin script"
+    assert plugin_name == "smart_posix"
+
+
+@pytest.mark.asyncio
+async def test_phase5_skips_plugin_deploy_when_smartctl_verify_fails(monkeypatch):
+    # `dpkg -i` exiting 0 doesn't confirm smartctl actually runs — if the
+    # post-install verification can't confirm that, copying the plugin
+    # that reads smartctl's output is pointless; must skip it, not deploy
+    # blindly.
+    answers = iter([True, True, "root", "password", "secret", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_linux_ssh_agent_install(monkeypatch, os_release=OSRelease(id="ubuntu", version_id="22.04"))
+
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.remote.install_smartmontools",
+        lambda *a, **k: _ready(ActionResult(Outcome.AUTOMATED, "smartmontools installed")),
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.remote.verify_smartmontools",
+        lambda *a, **k: _ready(
+            ActionResult(Outcome.FAILED_FALLBACK_MANUAL, "smartctl did not report version 7+ after install")
+        ),
+    )
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("plugin deploy must not run when smartctl verification fails")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.deploy_agent_plugin", fail_if_called)
+
+    host = OnboardedHost(ip="10.0.0.53", hostname="10.0.0.53", folder="/", os_family="linux")
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        respx.get(f"{BASE}/domain-types/agent/actions/download/invoke").mock(
+            return_value=Response(200, content=b"agent-package-bytes")
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+
+@pytest.mark.asyncio
+async def test_phase5_skips_smartmontools_when_declined(monkeypatch):
+    # Same Linux/SSH host, but the operator declines the second confirm —
+    # smartmontools/plugin install must never be attempted.
+    answers = iter([True, False, "root", "password", "secret", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_linux_ssh_agent_install(monkeypatch, os_release=OSRelease(id="ubuntu", version_id="22.04"))
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("smartmontools/plugin install must not run when declined")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.install_smartmontools", fail_if_called)
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.deploy_agent_plugin", fail_if_called)
+
+    host = OnboardedHost(ip="10.0.0.51", hostname="10.0.0.51", folder="/", os_family="linux")
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        respx.get(f"{BASE}/domain-types/agent/actions/download/invoke").mock(
+            return_value=Response(200, content=b"agent-package-bytes")
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+
+@pytest.mark.asyncio
+async def test_phase5_skips_smartmontools_for_unbundled_os(monkeypatch):
+    # Agent install still succeeds on e.g. Debian (same "deb" package
+    # family as Ubuntu), but there's no bundled smartmontools .deb for it —
+    # must skip cleanly rather than erroring.
+    answers = iter([True, True, "root", "password", "secret", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_linux_ssh_agent_install(monkeypatch, os_release=OSRelease(id="debian", version_id="12"))
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("smartmontools/plugin install must not run for an unbundled OS")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.install_smartmontools", fail_if_called)
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.deploy_agent_plugin", fail_if_called)
+
+    host = OnboardedHost(ip="10.0.0.52", hostname="10.0.0.52", folder="/", os_family="linux")
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        respx.get(f"{BASE}/domain-types/agent/actions/download/invoke").mock(
+            return_value=Response(200, content=b"agent-package-bytes")
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
 
 
 @pytest.mark.asyncio

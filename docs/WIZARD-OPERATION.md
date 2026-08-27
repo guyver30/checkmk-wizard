@@ -761,6 +761,88 @@ placement as the TCP-port rules, for the same reasons.
       host as UP; that's confirmed later, for the whole batch, by Phase 7's
       Livestatus query. Printed as its own `Agent status: verified /
       could not verify` line, separate from the install line.
+   j. **If install returned `AUTOMATED`** and the operator opted in (see
+      "SMART disk monitoring" below): installs `smartmontools` and the
+      `smart_posix` agent plugin, so Phase 6's discovery below also picks
+      up disk health (temperature, wear, error counters) alongside the
+      base agent checks.
+
+**SMART disk monitoring (added 2026-08-27; `_SMARTMONTOOLS_DIR`/
+`_smart_posix_plugin_path()`, `wizard.py:34-51`; `remote.
+smartmontools_deb_filename()`, `install_smartmontools()`,
+`verify_smartmontools()`, `deploy_agent_plugin()`, `remote.py:93-119,
+409-528`):** The target hosts have no internet access, so `apt install
+smartmontools` isn't an option, and Checkmk's REST API only exposes
+whole-agent-package downloads (`/domain-types/agent/actions/download/
+invoke`), not individual plugin files — so both pieces here are handled
+differently from the base agent install above.
+
+**Setup (once, only asked if the Linux/SSH prompt above was answered
+yes):** "Also install smartmontools + SMART disk monitoring (smart_posix
+plugin) on Linux hosts?" (default Yes). Declining sets a single
+`install_smart` flag that skips all of the following for every Linux host
+in the batch.
+
+**Per Linux host, only once the base agent install (step h above) reports
+`AUTOMATED`** — the plugin's target directory doesn't exist until the
+agent package creates it:
+
+1. **Match the target's Ubuntu release to a bundled package**
+   (`smartmontools_deb_filename()`, using the `OSRelease` step d's
+   `check_os_compatibility()` already read): the wizard ships
+   `docs/smart/smartmontools_*.deb` for exactly three Ubuntu releases
+   (20.04 Focal, 22.04 Jammy, 24.04 Noble) — a smartmontools `.deb` is
+   built against a specific release's libc/libssl, unlike the base agent
+   package which only cares about the broader deb/rpm family. Any other
+   distro (including Debian, despite being deb-family) or Ubuntu release
+   has no bundled match and is skipped with a message — no manual
+   fallback is printed here since there's no single manual instruction
+   that covers "no compatible package exists."
+2. **`install_smartmontools(ip, creds, package_bytes, "smartmontools.deb")`**
+   (`remote.py:409-436`): SFTP-uploads the matched `.deb` to
+   `/tmp/smartmontools.deb`, verifies it with a sha256 checksum (shared
+   `_upload_verified()` helper, `remote.py:326-348`, factored out of the
+   base agent install's identical upload+checksum logic), then
+   `sudo dpkg -i`s it. Any failure → `FAILED_FALLBACK_MANUAL`.
+3. **`verify_smartmontools(ip, creds)`** (`remote.py:438-481`) — `dpkg -i`
+   exiting 0 only means the package unpacked cleanly, not that `smartctl`
+   actually runs or that any drive has SMART turned on (a drive with SMART
+   disabled reports no attributes at all, so the plugin installed next
+   would silently have nothing to report). Runs `smartctl -V` and checks
+   the first line starts with `smartctl 7` (the same version floor
+   `smart_posix` itself enforces), then `smartctl --scan` to list devices
+   and `sudo smartctl -s on <device>` on each one found — enabling SMART
+   is idempotent, so this is safe to run even where it's already on.
+   Devices smartctl can't find at all → still `AUTOMATED` ("found no
+   drives to enable SMART on"); a device that refuses `-s on` (e.g.
+   unsupported hardware) is reported in the detail message but doesn't
+   fail the whole step. Only a broken/missing `smartctl` binary itself
+   (wrong version, non-zero exit) → `FAILED_FALLBACK_MANUAL`, which skips
+   the plugin copy below — no point copying a plugin that reads output
+   from a binary that isn't working.
+4. **`deploy_agent_plugin(ip, creds, plugin_bytes, "smart_posix")`**
+   (`remote.py:487-528`), only if step 3 reported `AUTOMATED`. The plugin
+   bytes come from the **connected site's own** copy on the Checkmk host's
+   local filesystem (`_smart_posix_plugin_path()`,
+   `/omd/sites/<site>/share/check_mk/agents/plugins/smart_posix`) — not a
+   version bundled with the wizard — so it always matches whatever
+   Checkmk version that site actually runs; this wizard already assumes
+   local shell access to the Checkmk host (`site.py` runs `omd` directly),
+   so this is no new assumption. `AGENT_PLUGINS_DIR`
+   (`/usr/lib/check_mk_agent/plugins`) is root-owned 0755 (live-verified
+   against the check-mk-agent `.deb`'s own file list), so a non-root SSH
+   user can't SFTP into it directly — the plugin is staged under `/tmp`
+   (same pattern as the package installs above) and moved into place with
+   `sudo mv` + `sudo chmod +x`.
+
+**No separate discovery rule is needed** to "enable" `smart_posix`'s
+checks, unlike the systemd-unit monitoring further below — verified
+directly against the installed Checkmk's own check-plugin source
+(`cmk/plugins/smart/agent_based/smart_ata.py` etc.): the `smart_ata_temp`/
+`smart_ata_stats`/`smart_nvme_temp`/`smart_nvme_stats`/`smart_scsi_temp`
+check plugins all discover unconditionally once the `smart_posix_all`
+agent section is present, with no gating ruleset. Phase 6's normal
+`fix_all` discovery (below) picks them up on its own.
 
 ## Phase 6 — Discovery & Baseline (`wizard.py:879-937`)
 
