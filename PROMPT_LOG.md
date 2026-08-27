@@ -45,3 +45,5 @@
 - 2026-08-26 12:20 — "the tcp port connection rules are only set for the hosts that I renamed...it should be set for all the scanned hosts on the ports that were found open, and the grouping of the rules done there. You didn't do it!"
 - 2026-08-26 12:35 — "when I monitor the hosts in the gui, why I cannot see the ping status but only the open/closed tcp ports?"
 - 2026-08-26 12:45 — "commit and push"
+- 2026-08-27 13:23 — "when we install an agent in a linux host, I want to add an option to install the following smartmontools (using the proper .deb package for the linux host os version)...copy the smart_posix plugin from checkmk plugins folder into the linux host...enable the host to discover related smart services and be visualised in checkmk monitor"
+- 2026-08-27 13:35 (mid-turn) — "after installing smartmontools in the remote host, do you verify it's working and smart is enabled on the drives, before proceeding further with plugin copy and checkmk setup?"

@@ -102,6 +102,30 @@ def package_family(os_release: OSRelease) -> str | None:
     return None
 
 
+# smartmontools .deb packages bundled with the wizard (docs/smart/) — the
+# target host has no internet access, so `apt install smartmontools` isn't
+# an option. Only the exact Ubuntu releases the wizard ships a package for
+# are supported; unlike `package_family` above (a same-family package works
+# across any Debian/Ubuntu derivative), a smartmontools .deb is built
+# against a specific release's libc/libssl, so this matches on the precise
+# VERSION_ID rather than the broader ID_LIKE family.
+_SMARTMONTOOLS_DEB_BY_UBUNTU_VERSION = {
+    "20.04": "smartmontools_7.1-1build1_amd64(Focal).deb",
+    "22.04": "smartmontools_7.2-1build2_amd64(Jammy).deb",
+    "24.04": "smartmontools_7.4-2build1_amd64(Noble).deb",
+}
+
+
+def smartmontools_deb_filename(target: OSRelease) -> str | None:
+    """The bundled smartmontools .deb filename (under docs/smart/) matching
+    this target's exact Ubuntu release, or None if the target isn't Ubuntu
+    or isn't one of the releases bundled with the wizard.
+    """
+    if target.id != "ubuntu":
+        return None
+    return _SMARTMONTOOLS_DEB_BY_UBUNTU_VERSION.get(target.version_id)
+
+
 @dataclass
 class CompatibilityCheck:
     compatible: bool
@@ -300,6 +324,32 @@ def windows_register_command(
     )
 
 
+async def _upload_verified(
+    conn: asyncssh.SSHClientConnection, sftp: asyncssh.SFTPClient, package_bytes: bytes, remote_path: str
+) -> str | None:
+    """Write bytes to `remote_path` over SFTP and confirm they landed intact
+    with a checksum. A successful SFTP write only means no exception was
+    raised — it doesn't confirm the bytes that landed on disk match what
+    was sent (silent truncation/corruption on a bad connection wouldn't
+    raise). Returns an error message on mismatch/failure, None on success.
+    """
+    async with sftp.open(remote_path, "wb") as f:
+        await f.write(package_bytes)
+
+    expected_sha256 = hashlib.sha256(package_bytes).hexdigest()
+    checksum_result = await conn.run(f"sha256sum {shlex.quote(remote_path)}", check=False)
+    if checksum_result.exit_status != 0:
+        return f"Could not verify uploaded file (sha256sum failed: {checksum_result.stderr})"
+    checksum_output = checksum_result.stdout if isinstance(checksum_result.stdout, str) else ""
+    remote_sha256 = checksum_output.split()[0] if checksum_output.split() else ""
+    if remote_sha256 != expected_sha256:
+        return (
+            "Uploaded file checksum mismatch — transfer may be corrupted "
+            f"(expected {expected_sha256[:12]}…, got {remote_sha256[:12] or '(none)'}…)"
+        )
+    return None
+
+
 async def install_agent_linux(
     host: str,
     creds: SSHCredentials,
@@ -319,32 +369,11 @@ async def install_agent_linux(
         return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, "SSH unreachable", manual)
 
     remote_path = f"/tmp/{package_filename}"
-    expected_sha256 = hashlib.sha256(package_bytes).hexdigest()
     try:
         async with await _connect(host, creds) as conn, conn.start_sftp_client() as sftp:
-            async with sftp.open(remote_path, "wb") as f:
-                await f.write(package_bytes)
-
-            # A successful SFTP write only means no exception was raised —
-            # it doesn't confirm the bytes that landed on disk match what
-            # was sent (silent truncation/corruption on a bad connection
-            # wouldn't raise). Verify with a checksum before installing.
-            checksum_result = await conn.run(f"sha256sum {shlex.quote(remote_path)}", check=False)
-            if checksum_result.exit_status != 0:
-                return ActionResult(
-                    Outcome.FAILED_FALLBACK_MANUAL,
-                    f"Could not verify uploaded package (sha256sum failed: {checksum_result.stderr})",
-                    manual,
-                )
-            checksum_output = checksum_result.stdout if isinstance(checksum_result.stdout, str) else ""
-            remote_sha256 = checksum_output.split()[0] if checksum_output.split() else ""
-            if remote_sha256 != expected_sha256:
-                return ActionResult(
-                    Outcome.FAILED_FALLBACK_MANUAL,
-                    "Uploaded package checksum mismatch — transfer may be corrupted "
-                    f"(expected {expected_sha256[:12]}…, got {remote_sha256[:12] or '(none)'}…)",
-                    manual,
-                )
+            error = await _upload_verified(conn, sftp, package_bytes, remote_path)
+            if error:
+                return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, error, manual)
 
             if package_filename.endswith(".deb"):
                 install_cmd = f"sudo dpkg -i {shlex.quote(remote_path)}"
@@ -373,6 +402,125 @@ async def install_agent_linux(
                     manual,
                 )
             return ActionResult(Outcome.AUTOMATED, "Package installed and agent registered")
+    except (OSError, asyncssh.Error) as exc:
+        return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, str(exc), manual)
+
+
+async def install_smartmontools(
+    host: str, creds: SSHCredentials, package_bytes: bytes, package_filename: str
+) -> ActionResult:
+    """Install smartmontools from a bundled .deb (docs/smart/) — the target
+    has no internet access, so `apt install smartmontools` isn't an option.
+    Caller picks the right bundled package via `smartmontools_deb_filename()`.
+    """
+    manual = (
+        f"1. Copy the matching smartmontools .deb (see docs/smart/) to the target host.\n"
+        f"2. Install it: sudo dpkg -i {package_filename}"
+    )
+    if not await check_ssh_reachable(host, creds):
+        return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, "SSH unreachable", manual)
+
+    remote_path = f"/tmp/{package_filename}"
+    try:
+        async with await _connect(host, creds) as conn, conn.start_sftp_client() as sftp:
+            error = await _upload_verified(conn, sftp, package_bytes, remote_path)
+            if error:
+                return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, error, manual)
+
+            result = await conn.run(f"sudo dpkg -i {shlex.quote(remote_path)}", check=False)
+            if result.exit_status != 0:
+                return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, f"Install failed: {result.stderr}", manual)
+            return ActionResult(Outcome.AUTOMATED, "smartmontools installed")
+    except (OSError, asyncssh.Error) as exc:
+        return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, str(exc), manual)
+
+
+async def verify_smartmontools(host: str, creds: SSHCredentials) -> ActionResult:
+    """Confirm smartctl actually works and turn SMART monitoring on for
+    every drive it can see, right after installing the package —
+    `dpkg -i` exiting 0 only means the package unpacked cleanly, it doesn't
+    confirm the binary runs or that any drive has SMART enabled (a drive
+    with SMART support disabled reports no attributes at all, so the
+    `smart_posix` plugin installed next would silently have nothing to
+    report). The version-7 check mirrors the same floor `smart_posix`
+    itself enforces (see docs/smart/smart_posix — "smartctl version 7 or
+    newer is required").
+    """
+    manual = "On the target host, run: smartctl -V (expect version 7+); smartctl --scan; smartctl -s on <device> for each drive listed."
+    if not await check_ssh_reachable(host, creds):
+        return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, "SSH unreachable", manual)
+
+    try:
+        async with await _connect(host, creds) as conn:
+            version_result = await conn.run("smartctl -V", check=False)
+            version_output = version_result.stdout if isinstance(version_result.stdout, str) else ""
+            first_line = version_output.splitlines()[0] if version_output.splitlines() else ""
+            if version_result.exit_status != 0 or not first_line.startswith("smartctl 7"):
+                return ActionResult(
+                    Outcome.FAILED_FALLBACK_MANUAL,
+                    f"smartctl did not report version 7+ after install (got: {first_line or version_result.stderr})",
+                    manual,
+                )
+
+            scan_result = await conn.run("smartctl --scan | awk '{print $1}'", check=False)
+            scan_output = scan_result.stdout if isinstance(scan_result.stdout, str) else ""
+            devices = [line.strip() for line in scan_output.splitlines() if line.strip()]
+            if not devices:
+                return ActionResult(Outcome.AUTOMATED, "smartctl works (version 7+) but found no drives to enable SMART on")
+
+            enabled, failed = [], []
+            for device in devices:
+                enable_result = await conn.run(f"sudo smartctl -s on {shlex.quote(device)}", check=False)
+                (enabled if enable_result.exit_status == 0 else failed).append(device)
+
+            detail = f"smartctl 7+ confirmed; SMART enabled on {len(enabled)}/{len(devices)} device(s)"
+            if failed:
+                detail += f" (could not enable on: {', '.join(failed)})"
+            return ActionResult(Outcome.AUTOMATED, detail)
+    except (OSError, asyncssh.Error) as exc:
+        return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, str(exc), manual)
+
+
+AGENT_PLUGINS_DIR = "/usr/lib/check_mk_agent/plugins"
+
+
+async def deploy_agent_plugin(
+    host: str, creds: SSHCredentials, plugin_bytes: bytes, plugin_name: str
+) -> ActionResult:
+    """Copy an agent plugin script (e.g. `smart_posix`) into the Checkmk
+    agent's plugin directory and make it executable, so the next service
+    discovery on this host picks up whatever sections/checks it reports.
+
+    `AGENT_PLUGINS_DIR` is root-owned (0755, live-verified against the
+    check-mk-agent .deb's own file list), so a non-root SSH user can't SFTP
+    directly into it — stage the file under /tmp (same pattern as
+    `install_agent_linux`/`install_smartmontools`) and move it into place
+    with sudo.
+    """
+    final_path = f"{AGENT_PLUGINS_DIR}/{plugin_name}"
+    manual = (
+        f"Copy the plugin to the target host and run:\n"
+        f"  sudo mv <plugin> {final_path}\n"
+        f"  sudo chmod +x {final_path}"
+    )
+    if not await check_ssh_reachable(host, creds):
+        return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, "SSH unreachable", manual)
+
+    staged_path = f"/tmp/{plugin_name}"
+    try:
+        async with await _connect(host, creds) as conn, conn.start_sftp_client() as sftp:
+            error = await _upload_verified(conn, sftp, plugin_bytes, staged_path)
+            if error:
+                return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, error, manual)
+
+            result = await conn.run(
+                f"sudo mv {shlex.quote(staged_path)} {shlex.quote(final_path)} && "
+                f"sudo chmod +x {shlex.quote(final_path)}",
+                check=False,
+            )
+            if result.exit_status != 0:
+                return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, f"Deploy failed: {result.stderr}", manual)
+            return ActionResult(Outcome.AUTOMATED, f"Plugin deployed to {final_path}")
     except (OSError, asyncssh.Error) as exc:
         return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, str(exc), manual)
 

@@ -1,0 +1,21 @@
+copy the deb package into Linux machine
+install it with
+dpkg -i smartmontools...deb
+
+Scan for drives:
+sudo smartctl --scan lists all available storage devices connected to your system.
+
+Check drive info: 
+sudo smartctl -i /dev/sda shows basic information like model, serial number, and capacity for a specific drive.
+
+Enable S.M.A.R.T.: 
+sudo smartctl -s on /dev/sda turns on S.M.A.R.T. monitoring on the selected device.
+
+View all S.M.A.R.T. data: 
+sudo smartctl -a /dev/sda prints out full health attributes, error logs, and statistics.
+
+Run a short self-test: 
+sudo smartctl -t short /dev/sda runs a quick routine check that takes a few minutes.
+
+Run a long self-test: 
+sudo smartctl -t long /dev/sda performs an extensive surface scan of the entire disk.
