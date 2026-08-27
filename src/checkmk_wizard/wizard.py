@@ -1404,8 +1404,40 @@ def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection, regi
 _DISCOVERY_RETRY_DELAYS_SECONDS = (10, 20, 30)
 
 
-async def phase6_discovery(client: CheckmkClient, hosts: list[OnboardedHost]) -> None:
+async def _activate_pending_changes(client: CheckmkClient, connection: CheckmkConnection) -> bool:
+    """Push every pending WATO change (host/folder/rule creation, and
+    later, service-discovery acceptances) into the live monitoring core.
+    Returns whether it succeeded, so a caller that depends on those
+    changes actually being live — e.g. service discovery, which reads
+    host/rule config from the *activated* core, not from WATO's on-disk
+    but not-yet-activated pending state — knows whether to trust what it
+    finds next.
+    """
+    try:
+        etag = await client.get_pending_changes_etag()
+        await client.activate_changes([connection.site], etag)
+        console.print("[green]Changes activated.[/green]")
+        return True
+    except CheckmkAPIError as exc:
+        console.print(f"[red]Activation failed: {exc}[/red]")
+        return False
+
+
+async def phase6_discovery(client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]) -> None:
     console.rule("[bold]Phase 6 — Discovery & Baseline")
+    # Service discovery reads host/rule config from the activated core,
+    # not from WATO's pending-but-unactivated state — Phase 5's freshly
+    # created hosts and discovery-selection rules (e.g. the systemd-unit
+    # rule behind _create_service_discovery_rules) need to be live before
+    # discovery can be trusted to reflect them. Live-reported 2026-08-27:
+    # requested services missing from discovery even with the retries
+    # below, since those retries alone can't fix discovery running
+    # against config the core has never actually seen. Best-effort: still
+    # attempt discovery even if activation itself fails, rather than
+    # skipping the whole phase — some of it may still work.
+    if not await _activate_pending_changes(client, connection):
+        console.print("[yellow]Continuing to discovery despite the activation failure above — results may be incomplete.[/yellow]")
+
     # mode="fix_all" both discovers and accepts services in one call (adds
     # missing, removes vanished, accepts host labels) — Checkmk's REST
     # equivalent of the "Accept all" button. mode="refresh" alone only
@@ -1497,12 +1529,12 @@ def _verify_expected_services(host: OnboardedHost, discovery_result: dict) -> No
 
 async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]) -> None:
     console.rule("[bold]Phase 7 — Activation & Validation")
-    try:
-        etag = await client.get_pending_changes_etag()
-        await client.activate_changes([connection.site], etag)
-        console.print("[green]Changes activated.[/green]")
-    except CheckmkAPIError as exc:
-        console.print(f"[red]Activation failed: {exc}[/red]")
+    # Phase 6 already activated once before running discovery (so
+    # discovery reflects Phase 5's host/rule changes) — this activation
+    # is for what Phase 6's own fix_all discovery produced: accepting a
+    # newly discovered service (moving it from undecided to monitored) is
+    # itself a pending WATO change, same as any host/rule edit.
+    if not await _activate_pending_changes(client, connection):
         return
 
     if hosts:
@@ -1552,7 +1584,7 @@ async def run() -> None:
         scan_results = await phase3_discovery(client, folder_subnets)
         onboarded = await phase4_classification(scan_results)
         await phase5_onboarding(client, connection, onboarded, scan_results)
-        await phase6_discovery(client, onboarded)
+        await phase6_discovery(client, connection, onboarded)
         await phase7_activation(client, connection, onboarded)
     console.rule("[bold green]Done")
 

@@ -1019,6 +1019,31 @@ agent section is present, with no gating ruleset. Phase 6's normal
 
 ## Phase 6 — Discovery & Baseline (`wizard.py:879-937`)
 
+**Activates pending changes before running discovery
+(`_activate_pending_changes()`, added 2026-08-27 — live-reported bug):**
+the very first thing Phase 6 does, before touching any host, is `POST
+/domain-types/activation_run/actions/activate-changes/invoke` (the same
+call Phase 7 makes — factored into this one shared helper, used twice).
+Service discovery reads host and rule configuration from the **activated**
+core, not from WATO's on-disk-but-not-yet-activated pending state — so
+Phase 5's freshly created hosts and discovery-selection rules (e.g. the
+systemd-unit rule behind `_create_service_discovery_rules()`) need to be
+pushed live first, or discovery isn't guaranteed to reflect them
+correctly. Live-reported: requested services still went missing even
+with the retry logic below, because retrying alone can't fix discovery
+running against config the core has never actually seen — the two
+problems (agent data lag vs. config not yet activated) look identical
+from the wizard's output ("NOT picked up") but need different fixes, so
+both are applied. Best-effort: if this activation itself fails, Phase 6
+prints the failure and a "Continuing to discovery despite the activation
+failure above" warning, then attempts discovery anyway rather than
+skipping the whole phase — some of it may still work (e.g. a host with
+no discovery-selection rule at all isn't affected either way). Phase 7
+below still activates again afterward — accepting a newly discovered
+service (moving it from undecided to monitored) is itself a **new**
+pending change created by Phase 6's own `fix_all` calls, so it needs its
+own, later activation.
+
 For every onboarded host: `POST
 /domain-types/service_discovery_run/actions/start/invoke` with
 `{host_name, mode: "fix_all"}` (`api.py:222-234`) — discovers services and
@@ -1083,13 +1108,23 @@ a different mechanism than the plan's wording, but the same outcome
 
 ## Phase 7 — Activation & Validation (`wizard.py:939-988`)
 
-1. `GET /domain-types/activation_run/collections/pending_changes` to read
-   the `ETag` header (`api.py:238-243`).
-2. `POST /domain-types/activation_run/actions/activate-changes/invoke` with
-   `{redirect: false, sites: [site], force_foreign_changes: false}` and
-   `If-Match: <etag>` (`api.py:245-261`). On failure, prints the error and
-   **returns early — the snapshot step below does not run.**
-3. If there are onboarded hosts, queries Livestatus directly:
+1. `_activate_pending_changes(client, connection)` (added 2026-08-27,
+   shared with Phase 6's pre-discovery activation above — the exact same
+   helper, not a duplicate): `GET /domain-types/activation_run/
+   collections/pending_changes` to read the `ETag` header
+   (`api.py:238-243`), then `POST /domain-types/activation_run/actions/
+   activate-changes/invoke` with `{redirect: false, sites: [site],
+   force_foreign_changes: false}` and `If-Match: <etag>`
+   (`api.py:245-261`). This activation covers what Phase 6's `fix_all`
+   discovery just produced — accepting a discovered service is itself a
+   pending change, separate from whatever Phase 5's host/rule creation
+   already needed (that part was activated once already, before Phase 6
+   ran). On failure, prints the error and **returns early — the snapshot
+   step below does not run** (unlike Phase 6, which continues to
+   discovery best-effort even if its own pre-activation fails — this one
+   is the last chance to get changes live, so there's nothing left worth
+   attempting after it fails here).
+2. If there are onboarded hosts, queries Livestatus directly:
    - Connects to the UNIX socket `/omd/sites/<site>/tmp/run/live`
      (`livestatus.py:14-15`).
    - Sends the raw LQL query `GET hosts\nColumns: name state\nOutputFormat:
@@ -1098,7 +1133,7 @@ a different mechanism than the plan's wording, but the same outcome
      (`line.partition(";")`, `livestatus.py:51`).
    - Maps state `0→UP`, `1→DOWN`, `2→UNREACHABLE`, anything else →
      `"unknown"`, and prints a table.
-4. Pulls the site's **actual current** host/folder configuration —
+3. Pulls the site's **actual current** host/folder configuration —
    `client.list_hosts()` → `GET /domain-types/host_config/collections/all`
    and `client.list_folders()` → `GET
    /domain-types/folder_config/collections/all` (`api.py:184-187,
@@ -1108,13 +1143,13 @@ a different mechanism than the plan's wording, but the same outcome
    pending-changes collection example). If this fetch fails, prints a
    warning and writes the snapshot anyway with `hosts`/`folders` set to
    `null`, rather than aborting.
-5. Writes a JSON file `config_snapshot_<YYYYMMDD_HHMMSS>.json` to the
+4. Writes a JSON file `config_snapshot_<YYYYMMDD_HHMMSS>.json` to the
    **current working directory** (wherever the wizard was launched from)
    containing `generated_at`, `site`, `onboarded_this_run` (this run's
    onboarding list — hostname/ip/folder/os_family, plus
    snmp_version/snmp_community **in plaintext** for SNMP hosts), and now
    also `hosts`/`folders` (the site's full current configuration from step
-   4). **Scope note:** this covers hosts and folders only — rules, users,
+   3). **Scope note:** this covers hosts and folders only — rules, users,
    and other site-wide config are not included, so it's a partial
    configuration snapshot, not a full site backup.
 

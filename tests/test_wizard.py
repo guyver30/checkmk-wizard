@@ -28,6 +28,7 @@ from checkmk_wizard.wizard import (
     _SMARTMONTOOLS_DIR,
     OnboardedHost,
     ScannedHost,
+    _activate_pending_changes,
     _collect_expected_services,
     _create_or_update_host,
     _create_service_discovery_rules,
@@ -1527,6 +1528,63 @@ async def test_phase5_windows_manual_service_entry_creates_rule(monkeypatch):
     assert json.loads(body["value_raw"]) == {"services": ["^MSSQLSERVER$", "^W3SVC$"]}
 
 
+def _mock_activation_routes():
+    """phase6_discovery() now activates pending changes before running
+    discovery (see _activate_pending_changes()) — register the two routes
+    that requires, same shape test_api.py's own activation tests use."""
+    respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+        return_value=Response(200, json={}, headers={"ETag": '"etag1"'})
+    )
+    respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+        return_value=Response(200, json={"id": "run1"})
+    )
+
+
+@pytest.mark.asyncio
+async def test_activate_pending_changes_success(capsys):
+    with respx.mock:
+        _mock_activation_routes()
+        async with CheckmkClient(CONN) as client:
+            result = await _activate_pending_changes(client, CONN)
+    assert result is True
+    assert "Changes activated" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_activate_pending_changes_failure(capsys):
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(404, json={"detail": "not found"})
+        )
+        async with CheckmkClient(CONN) as client:
+            result = await _activate_pending_changes(client, CONN)
+    assert result is False
+    assert "Activation failed" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_phase6_discovery_still_attempts_discovery_when_activation_fails(capsys):
+    # Best-effort: activation failing shouldn't skip the whole phase —
+    # some of it may still work, and staying silent would hide that
+    # discovery ran against a possibly-stale config.
+    host = OnboardedHost(ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux")
+
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(404, json={"detail": "not found"})
+        )
+        discovery_route = respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
+            return_value=Response(200, json={"extensions": {"check_table": {}}})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase6_discovery(client, CONN, [host])
+
+    assert discovery_route.called
+    out = capsys.readouterr().out
+    assert "Activation failed" in out
+    assert "Continuing to discovery" in out
+
+
 @pytest.mark.asyncio
 async def test_phase6_discovery_verifies_expected_services(monkeypatch, capsys):
     host = OnboardedHost(
@@ -1534,6 +1592,7 @@ async def test_phase6_discovery_verifies_expected_services(monkeypatch, capsys):
         expected_services=["apache2"],
     )
     with respx.mock:
+        _mock_activation_routes()
         respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
             return_value=Response(
                 200,
@@ -1550,7 +1609,7 @@ async def test_phase6_discovery_verifies_expected_services(monkeypatch, capsys):
             )
         )
         async with CheckmkClient(CONN) as client:
-            await phase6_discovery(client, [host])
+            await phase6_discovery(client, CONN, [host])
 
     out = capsys.readouterr().out
     assert "is now monitored" in out
@@ -1632,11 +1691,12 @@ async def test_phase6_discovery_retries_when_expected_service_missing_then_found
     monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
 
     with respx.mock:
+        _mock_activation_routes()
         respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
             side_effect=[Response(200, json=empty_result), Response(200, json=found_result)]
         )
         async with CheckmkClient(CONN) as client:
-            await phase6_discovery(client, [host])
+            await phase6_discovery(client, CONN, [host])
 
     assert sleep_calls == [10]
     out = capsys.readouterr().out
@@ -1659,11 +1719,12 @@ async def test_phase6_discovery_gives_up_after_all_retries_exhausted(monkeypatch
     monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
 
     with respx.mock:
+        _mock_activation_routes()
         respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
             return_value=Response(200, json=empty_result)
         )
         async with CheckmkClient(CONN) as client:
-            await phase6_discovery(client, [host])
+            await phase6_discovery(client, CONN, [host])
 
     assert sleep_calls == [10, 20, 30]
     out = capsys.readouterr().out

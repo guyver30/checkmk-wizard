@@ -56,3 +56,4 @@
 - 2026-08-27 16:12 (mid-turn) — "also smartctl needs to run with sudo"
 - 2026-08-27 16:30 — "I can see cron and dbus in the undecided service list when I monitor the host, so why got that error? those services (and all the other discovered ones) must move to the monitored service list"
 - 2026-08-27 16:50 — "when I delete a site, it doesn't flag properly that there's a host with a registered agent, like we discussed. Check this"
+- 2026-08-27 17:15 — "you need to activate the changes before checking if services are detected and then move them to monitored"
