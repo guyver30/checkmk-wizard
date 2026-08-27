@@ -52,3 +52,5 @@
 - 2026-08-27 14:41 (mid-turn) — "ssh was fine, why the correct agent was not uploaded to the remote host machine? is the agent package available in checkmk server or needs to be downloaded separately?"
 - 2026-08-27 15:10 — "instead of asking the checkmk real address, find it and propose it (if multiple ip addresses, show options) when need to register the agent; before installing the agent, check that remote host has it already installed or not...as you don't want to try to install it again; if you delete a site, do you need to de-register the agent (if it was registered) ?"
 - 2026-08-27 15:30 — "before deleting a site, can you check in checkmk config if there are hosts with agents registered on it, and then tell the user to do a manual cmk-agent-ctl delete-all on each host (and also tell the IP)"
+- 2026-08-27 16:10 — pasted real wizard run output showing "Agent status: could not verify — cmk-agent-ctl status exited 1: ERROR Failed to run as user 'cmk-agent' ... Please execute with sufficient permissions (maybe try 'sudo')" plus 'cron'/'dbus' not picked up by discovery
+- 2026-08-27 16:12 (mid-turn) — "also smartctl needs to run with sudo"
