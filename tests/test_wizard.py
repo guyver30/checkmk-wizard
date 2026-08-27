@@ -34,6 +34,7 @@ from checkmk_wizard.wizard import (
     _establish_ssh_access,
     _expected_open_ports_by_hostname,
     _looks_loopback,
+    _missing_expected_services,
     _network_scan_attributes,
     _password_problems,
     _ping_only_hostnames,
@@ -1553,3 +1554,117 @@ async def test_phase6_discovery_verifies_expected_services(monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "is now monitored" in out
+
+
+def test_missing_expected_services_returns_names_not_monitored():
+    host = OnboardedHost(
+        ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux",
+        expected_services=["apache2", "ghost-service"],
+    )
+    discovery_result = {
+        "extensions": {
+            "check_table": {
+                "systemd_units_services-apache2": {
+                    "value": "monitored",
+                    "extensions": {"service_name": "Systemd Service apache2"},
+                },
+            }
+        }
+    }
+    assert _missing_expected_services(host, discovery_result) == ["ghost-service"]
+
+
+def test_missing_expected_services_empty_when_all_monitored():
+    host = OnboardedHost(
+        ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux", expected_services=["apache2"]
+    )
+    discovery_result = {
+        "extensions": {
+            "check_table": {
+                "systemd_units_services-apache2": {
+                    "value": "monitored",
+                    "extensions": {"service_name": "Systemd Service apache2"},
+                },
+            }
+        }
+    }
+    assert _missing_expected_services(host, discovery_result) == []
+
+
+def test_missing_expected_services_empty_for_background_job_result():
+    # No check_table to verify against yet — treated as "nothing confirmed
+    # missing," not "everything missing," since there's nothing new to
+    # find by retrying against an empty {} result either.
+    host = OnboardedHost(
+        ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux", expected_services=["apache2"]
+    )
+    assert _missing_expected_services(host, {}) == []
+
+
+@pytest.mark.asyncio
+async def test_phase6_discovery_retries_when_expected_service_missing_then_found(monkeypatch, capsys):
+    # A freshly registered agent's first data push can lag behind Phase
+    # 6's discovery call — live-reported: a service the wizard reported as
+    # missing on the first attempt showed up fine moments later. The first
+    # fix_all call finds nothing; the retry (after a monkeypatched no-op
+    # sleep) finds it.
+    host = OnboardedHost(
+        ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux", expected_services=["apache2"]
+    )
+
+    empty_result = {"extensions": {"check_table": {}}}
+    found_result = {
+        "extensions": {
+            "check_table": {
+                "systemd_units_services-apache2": {
+                    "value": "monitored",
+                    "extensions": {"service_name": "Systemd Service apache2"},
+                },
+            }
+        }
+    }
+
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
+            side_effect=[Response(200, json=empty_result), Response(200, json=found_result)]
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase6_discovery(client, [host])
+
+    assert sleep_calls == [10]
+    out = capsys.readouterr().out
+    assert "retrying" in out
+    assert "is now monitored" in out
+
+
+@pytest.mark.asyncio
+async def test_phase6_discovery_gives_up_after_all_retries_exhausted(monkeypatch, capsys):
+    host = OnboardedHost(
+        ip="10.0.0.30", hostname="webhost", folder="/", os_family="linux", expected_services=["apache2"]
+    )
+    empty_result = {"extensions": {"check_table": {}}}
+
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
+
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
+            return_value=Response(200, json=empty_result)
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase6_discovery(client, [host])
+
+    assert sleep_calls == [10, 20, 30]
+    out = capsys.readouterr().out
+    assert "NOT picked up" in out

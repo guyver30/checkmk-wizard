@@ -1391,6 +1391,19 @@ def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection, regi
 # ── Phase 6: Discovery & baseline ───────────────────────────────────────
 
 
+# A freshly registered agent's first successful data push to Checkmk can
+# take a while to land — the push-agent daemon (cmk-agent-ctl) wakes up on
+# its own periodic timer (commonly ~1 minute), independent of anything
+# this wizard does. Running fix_all discovery immediately after
+# registration can race ahead of that first push and simply find nothing
+# new yet — live-reported: services the wizard reported as "NOT picked up"
+# later showed up fine in Checkmk's own "undecided" list once its own
+# background discovery check eventually ran. These delays retry fix_all a
+# few times, growing, before giving up — total worst case ~60s, and only
+# for a host that's actually still missing something.
+_DISCOVERY_RETRY_DELAYS_SECONDS = (10, 20, 30)
+
+
 async def phase6_discovery(client: CheckmkClient, hosts: list[OnboardedHost]) -> None:
     console.rule("[bold]Phase 6 — Discovery & Baseline")
     # mode="fix_all" both discovers and accepts services in one call (adds
@@ -1401,10 +1414,51 @@ async def phase6_discovery(client: CheckmkClient, hosts: list[OnboardedHost]) ->
     for h in hosts:
         try:
             result = await client.start_service_discovery(h.hostname, mode="fix_all")
+            for delay in _DISCOVERY_RETRY_DELAYS_SECONDS:
+                missing = _missing_expected_services(h, result)
+                if not missing:
+                    break
+                console.print(
+                    f"    [dim]{len(missing)} expected service(s) not yet reported on {h.hostname} "
+                    f"({', '.join(missing)}) — retrying discovery in {delay}s...[/dim]"
+                )
+                await asyncio.sleep(delay)
+                result = await client.start_service_discovery(h.hostname, mode="fix_all")
             console.print(f"  [green]services discovered and accepted[/green] {h.hostname}")
             _verify_expected_services(h, result)
         except CheckmkAPIError as exc:
             console.print(f"  [yellow]discovery failed[/yellow] {h.hostname}: {exc}")
+
+
+def _monitored_service_names(discovery_result: dict) -> set[str]:
+    check_table = discovery_result.get("extensions", {}).get("check_table", {})
+    return {
+        entry.get("extensions", {}).get("service_name")
+        for entry in check_table.values()
+        if entry.get("value") == "monitored"
+    }
+
+
+def _expected_service_candidates(name: str) -> set[str]:
+    bare = name.removesuffix(".service")
+    # Checkmk's own service-name templates: "Systemd Service %s" (Linux) /
+    # "Service %s" (Windows) — check both since OnboardedHost doesn't
+    # separately track which one applies.
+    return {f"Systemd Service {bare}", f"Service {name}"}
+
+
+def _missing_expected_services(host: OnboardedHost, discovery_result: dict) -> list[str]:
+    """Which of Phase 5's requested systemd/Windows service names are NOT
+    yet a monitored service per this discovery result. Empty `discovery_
+    result` (204/303 background job, per api.py) is treated as "nothing
+    confirmed missing" rather than "everything missing" — there's no
+    check_table to verify against yet, so retrying wouldn't have anything
+    new to check either.
+    """
+    if not host.expected_services or not discovery_result:
+        return []
+    monitored_names = _monitored_service_names(discovery_result)
+    return [name for name in host.expected_services if not (_expected_service_candidates(name) & monitored_names)]
 
 
 def _verify_expected_services(host: OnboardedHost, discovery_result: dict) -> None:
@@ -1427,19 +1481,9 @@ def _verify_expected_services(host: OnboardedHost, discovery_result: dict) -> No
         console.print(f"    [dim]could not verify expected services for {host.hostname} — discovery ran as a background job[/dim]")
         return
 
-    check_table = discovery_result.get("extensions", {}).get("check_table", {})
-    monitored_names = {
-        entry.get("extensions", {}).get("service_name")
-        for entry in check_table.values()
-        if entry.get("value") == "monitored"
-    }
+    monitored_names = _monitored_service_names(discovery_result)
     for name in host.expected_services:
-        bare = name.removesuffix(".service")
-        # Checkmk's own service-name templates: "Systemd Service %s"
-        # (Linux) / "Service %s" (Windows) — check both since OnboardedHost
-        # doesn't separately track which one applies.
-        candidates = {f"Systemd Service {bare}", f"Service {name}"}
-        if candidates & monitored_names:
+        if _expected_service_candidates(name) & monitored_names:
             console.print(f"    [green]✓[/green] '{name}' is now monitored on {host.hostname}")
         else:
             console.print(
