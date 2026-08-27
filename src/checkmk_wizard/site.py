@@ -12,7 +12,6 @@ Facts used here are verified against live Checkmk docs via context7:
 from __future__ import annotations
 
 import ast
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -135,21 +134,47 @@ def _parse_host_attributes(hosts_mk: Path) -> dict[str, dict]:
     """Extract the `host_attributes` dict from one WATO `hosts.mk` config
     file. These files are executable Python (Checkmk itself `exec`s them
     at startup — "Created by HostStorage"), but every value inside
-    `host_attributes` is a plain literal (strings/dicts/numbers/lists) —
-    `ast.literal_eval` parses just that one literal safely, without
-    executing anything else in the file. Returns {} if the expected
-    assignment isn't found or doesn't parse as a literal (e.g. an
-    unexpected file format) rather than raising — this is a best-effort
-    warning aid, not a config source of truth.
+    `host_attributes` is a plain literal (strings/dicts/numbers/lists).
+
+    Parses the whole file as a real AST (`ast.parse` — this does not
+    execute anything, just builds a syntax tree) and walks it for the
+    exact `host_attributes.update({...})` call, then runs
+    `ast.literal_eval()` directly on that argument's own AST node.
+    Bug fixed 2026-08-27 (live-reported: delete-a-site never flagged any
+    host at all) — an earlier regex-based version
+    (`re.search(r"host_attributes\\.update\\((\\{.*\\})\\)", text,
+    re.DOTALL)`) used a greedy `.*` that doesn't stop at the end of the
+    `host_attributes.update(...)` call: every real `hosts.mk` has a later
+    `folder_attributes.update({})` call too, so the greedy match ran all
+    the way to *that* call's closing `})` instead, capturing extra
+    trailing text and producing an unparseable string — `ast.literal_eval`
+    then raised on every real file, silently returning `{}` every time.
+    Parsing the real AST and taking one specific call's own argument node
+    sidesteps this whole class of "where does the literal actually end"
+    problem entirely, rather than trying to patch the regex.
+
+    Returns {} if the expected call isn't found or the file doesn't parse
+    (e.g. an unexpected format) rather than raising — this is a
+    best-effort warning aid, not a config source of truth.
     """
-    text = hosts_mk.read_text()
-    match = re.search(r"host_attributes\.update\((\{.*\})\)", text, re.DOTALL)
-    if not match:
-        return {}
     try:
-        return ast.literal_eval(match.group(1))
-    except (ValueError, SyntaxError):
+        tree = ast.parse(hosts_mk.read_text())
+    except (OSError, SyntaxError):
         return {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "update"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "host_attributes"
+            and node.args
+        ):
+            try:
+                return ast.literal_eval(node.args[0])
+            except ValueError:
+                return {}
+    return {}
 
 
 def list_agent_registered_hosts(site: str) -> list[tuple[str, str]]:

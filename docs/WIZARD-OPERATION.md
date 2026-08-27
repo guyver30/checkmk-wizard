@@ -116,14 +116,46 @@ Checkmk are simply re-detected or re-created).
      deleted, and this needs to work even for a site other than the one
      about to be reused): every `etc/check_mk/conf.d/wato/**/hosts.mk`
      under the site (WATO shards host config **per folder**, so the
-     search isn't limited to the root file) is a `host_attributes.update(
-     {...})` call over a plain Python dict literal — `ast.literal_eval()`
-     extracts it directly rather than executing the file (these `.mk`
-     files are otherwise executable Python, run by Checkmk itself at
-     startup). Hosts with `tag_agent: cmk-agent` are returned as
-     `(hostname, ip)` pairs; a file that doesn't parse as expected
-     contributes nothing rather than raising, since this is a best-effort
-     warning aid, not a config source of truth.
+     search isn't limited to the root file) holds a `host_attributes.
+     update({...})` call over a plain Python dict literal. Hosts with
+     `tag_agent: cmk-agent` are returned as `(hostname, ip)` pairs; a file
+     that doesn't parse as expected contributes nothing rather than
+     raising, since this is a best-effort warning aid, not a config source
+     of truth.
+
+     **Fixed 2026-08-27 — the delete flow never flagged any host at all,
+     live-reported.** `_parse_host_attributes()`'s first version located
+     the `host_attributes.update({...})` call with a regex
+     (`re.search(r"host_attributes\.update\((\{.*\})\)", text,
+     re.DOTALL)`) and ran `ast.literal_eval()` on the captured text. The
+     bug: a greedy `.*` under `re.DOTALL` doesn't stop at the end of that
+     call — every real `hosts.mk` has a *later*
+     `folder_attributes.update({})` call too, and the greedy match ran
+     all the way to **that** call's closing `})` instead (the rightmost
+     `})` in the file), capturing extra trailing text in between. The
+     resulting string was never valid Python (unbalanced braces plus
+     leftover `folder_attributes.update({` tacked on the end), so
+     `ast.literal_eval()` raised on every single real file — caught by
+     the existing `except (ValueError, SyntaxError): return {}`, so the
+     function silently returned no hosts, every time, with no visible
+     error anywhere. **Fix:** parse the whole file as a real AST
+     (`ast.parse()` — this does not execute anything, it only builds a
+     syntax tree) and walk it for the exact `host_attributes.update(...)`
+     `Call` node, then run `ast.literal_eval()` directly on that call's
+     own argument AST node (`ast.literal_eval` accepts a node, not just a
+     string) — this sidesteps the "where does the literal actually end"
+     problem entirely instead of trying to patch the regex further.
+     Live-verified: reproduced the exact bug against realistic
+     `hosts.mk` content (regex parse fails on it; AST-walk parse
+     succeeds). New regression test (`tests/test_site.py`,
+     `_real_hosts_mk_content()`): fixture content now matches a real
+     site's file shape byte-for-byte in structure — `all_hosts`/
+     `host_tags.update`/`host_labels.update`/`ipaddresses.update`/
+     `host_attributes.update`/`folder_attributes.update({})`, in that
+     order — specifically so the trailing `folder_attributes.update({})`
+     call is present and would catch this exact regression if it
+     reappeared (confirmed by running this test against the pre-fix
+     regex implementation: it fails there and passes against the fix).
 3. Prompts for **Checkmk host** (hostname/IP other systems use to reach
    this site; defaults to `localhost`) — same prompt as before, now asked
    once site selection is settled rather than up front. **Validated**

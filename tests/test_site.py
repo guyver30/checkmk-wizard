@@ -98,22 +98,39 @@ def test_start_site_raises_on_failure_with_stdout_and_stderr():
     assert "Address already in use" in str(exc_info.value)
 
 
+def _real_hosts_mk_content(host_attributes_body: str) -> str:
+    """A realistic WATO hosts.mk file — same shape as a real Checkmk 2.4
+    CE site produces (live-captured), critically including the
+    `folder_attributes.update({})` call *after* `host_attributes.update`
+    that a naive greedy-regex parse would run past (see
+    `_parse_host_attributes()`'s docstring for the bug this reproduces)."""
+    return (
+        "# Created by HostStorage\n\n"
+        "all_hosts += ['placeholder']\n\n"
+        "host_tags.update({'placeholder': {}})\n\n"
+        "host_labels.update({'placeholder': {}})\n\n"
+        "# ipaddresses\n"
+        "ipaddresses.update({'placeholder': '0.0.0.0'})\n\n"
+        "# Host attributes (needed for WATO)\n"
+        f"host_attributes.update({host_attributes_body})\n\n"
+        "folder_attributes.update({})\n"
+    )
+
+
 def test_list_agent_registered_hosts_returns_only_cmk_agent_hosts_across_wato_folders(tmp_path):
     root_wato = tmp_path / "etc" / "check_mk" / "conf.d" / "wato"
     root_wato.mkdir(parents=True)
     (root_wato / "hosts.mk").write_text(
-        "all_hosts += ['checkmk']\n"
-        "host_attributes.update({'checkmk': {'ipaddress': '192.168.1.1', 'tag_agent': 'no-agent'}})\n"
+        _real_hosts_mk_content("{'checkmk': {'ipaddress': '192.168.1.1', 'tag_agent': 'no-agent'}}")
     )
 
     subfolder_wato = root_wato / "vlan10"
     subfolder_wato.mkdir()
     (subfolder_wato / "hosts.mk").write_text(
-        "all_hosts += ['test-linux', 'test-windows']\n"
-        "host_attributes.update({"
-        "'test-linux': {'ipaddress': '192.168.1.2', 'tag_agent': 'cmk-agent'}, "
-        "'test-windows': {'ipaddress': '192.168.1.3', 'tag_agent': 'cmk-agent'}"
-        "})\n"
+        _real_hosts_mk_content(
+            "{'test-linux': {'ipaddress': '192.168.1.2', 'tag_agent': 'cmk-agent'}, "
+            "'test-windows': {'ipaddress': '192.168.1.3', 'tag_agent': 'cmk-agent'}}"
+        )
     )
 
     with patch("checkmk_wizard.site.Path", return_value=tmp_path):
