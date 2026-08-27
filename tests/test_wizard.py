@@ -32,10 +32,12 @@ from checkmk_wizard.wizard import (
     _create_service_discovery_rules,
     _establish_ssh_access,
     _expected_open_ports_by_hostname,
+    _looks_loopback,
     _network_scan_attributes,
     _password_problems,
     _ping_only_hostnames,
     _prompt_change_cmkadmin_password,
+    _resolve_agent_registration_server,
     _smart_posix_plugin_path,
     _valid_checkmk_host,
     _verify_expected_services,
@@ -792,6 +794,62 @@ def test_smart_posix_plugin_path_uses_connected_site_name():
     assert str(path) == "/omd/sites/mysite/share/check_mk/agents/plugins/smart_posix"
 
 
+@pytest.mark.parametrize(
+    "host,expected",
+    [
+        ("localhost", True),
+        ("LOCALHOST", True),  # case-insensitive
+        ("127.0.0.1", True),
+        ("::1", True),
+        ("192.168.1.10", False),
+        ("cmk.example.com", False),
+    ],
+)
+def test_looks_loopback(host, expected):
+    assert _looks_loopback(host) is expected
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_unchanged_when_not_loopback():
+    hosts = [OnboardedHost(ip="10.0.0.5", hostname="10.0.0.5", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "cmk.example.com") == "cmk.example.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_unchanged_when_every_target_is_loopback_too():
+    # No genuinely remote target — "localhost" is actually correct, no
+    # prompt should even fire (would raise if ask_async() were called
+    # without a monkeypatched Question.ask_async).
+    hosts = [OnboardedHost(ip="127.0.0.1", hostname="127.0.0.1", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "localhost") == "localhost"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_prompts_and_uses_corrected_address(monkeypatch):
+    # A real remote host + a loopback Checkmk address is the exact live-
+    # reported bug: cmk-agent-ctl register --server localhost, run on the
+    # remote target, tries to contact itself and fails registration every
+    # time. Must warn and offer a corrected address.
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return "cmk.example.com"
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    hosts = [OnboardedHost(ip="10.0.0.5", hostname="test-linux", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "localhost") == "cmk.example.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_keeps_loopback_when_prompt_left_blank(monkeypatch):
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return ""
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    hosts = [OnboardedHost(ip="10.0.0.5", hostname="test-linux", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "localhost") == "localhost"
+
+
 @pytest.mark.asyncio
 async def test_establish_ssh_access_succeeds_on_first_try(monkeypatch):
     answers = iter(["root", "password", "secret"])
@@ -941,6 +999,53 @@ async def _none():
 
 async def _ready(value):
     return value
+
+
+@pytest.mark.asyncio
+async def test_phase5_uses_corrected_registration_server_for_loopback_checkmk_host(monkeypatch):
+    # Live-reported bug: a Checkmk site configured as "localhost" (Phase
+    # 1's default, correct only when testing entirely on one machine)
+    # produces a `cmk-agent-ctl register --server localhost` command that,
+    # run on a genuinely remote target, tries to contact itself and always
+    # fails registration. _onboard_hosts() must use the corrected address
+    # from _resolve_agent_registration_server(), not connection.host
+    # directly, for the actual register command.
+    loopback_conn = CheckmkConnection(host="localhost", site="mysite", username="automation", secret="s3cret")
+
+    # "cmk.example.com": corrected registration-server prompt (fires first
+    # in _onboard_hosts); True: attempt SSH; False: decline smartmontools;
+    # "root"/"password"/"secret": SSH creds; "": expected-services prompt.
+    answers = iter(["cmk.example.com", True, False, "root", "password", "secret", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_linux_ssh_agent_install(monkeypatch, os_release=OSRelease(id="ubuntu", version_id="22.04"))
+
+    captured = {}
+
+    async def fake_install_agent_linux(host, creds, package_bytes, package_filename, register_cmd):
+        captured["register_cmd"] = register_cmd
+        return ActionResult(Outcome.AUTOMATED, "agent installed")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.install_agent_linux", fake_install_agent_linux)
+
+    host = OnboardedHost(ip="10.0.0.70", hostname="10.0.0.70", folder="/", os_family="linux")
+    loopback_base = "http://localhost/mysite/check_mk/api/v1"
+
+    with respx.mock:
+        respx.post(f"{loopback_base}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        respx.get(f"{loopback_base}/domain-types/agent/actions/download/invoke").mock(
+            return_value=Response(200, content=b"agent-package-bytes")
+        )
+        async with CheckmkClient(loopback_conn) as client:
+            await phase5_onboarding(client, loopback_conn, [host], [])
+
+    assert "--server cmk.example.com" in captured["register_cmd"]
+    assert "localhost" not in captured["register_cmd"]
 
 
 @pytest.mark.asyncio
