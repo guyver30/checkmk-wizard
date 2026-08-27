@@ -540,7 +540,16 @@ async def verify_smartmontools(host: str, creds: SSHCredentials) -> ActionResult
 
     try:
         async with await _connect(host, creds) as conn:
-            version_result = await conn.run("smartctl -V", check=False)
+            # `smartctl` needs root for anything beyond printing its own
+            # version — even `--scan` can miss or misidentify devices when
+            # run unprivileged (it can't send the ATA/SCSI passthrough
+            # probes needed to fully identify a device without raw access
+            # to /dev/sdX), which was live-reported as a downstream
+            # "could not enable" failure on a device --scan itself found.
+            # `-V` alone doesn't strictly need it, but running it via sudo
+            # too keeps this whole function consistent and avoids relying
+            # on that distinction holding on every distro/smartctl build.
+            version_result = await _run_sudo(conn, creds, "smartctl -V")
             version_output = version_result.stdout if isinstance(version_result.stdout, str) else ""
             first_line = version_output.splitlines()[0] if version_output.splitlines() else ""
             if version_result.exit_status != 0 or not first_line.startswith("smartctl 7"):
@@ -550,7 +559,7 @@ async def verify_smartmontools(host: str, creds: SSHCredentials) -> ActionResult
                     manual,
                 )
 
-            scan_result = await conn.run("smartctl --scan | awk '{print $1}'", check=False)
+            scan_result = await _run_sudo(conn, creds, "smartctl --scan | awk '{print $1}'")
             scan_output = scan_result.stdout if isinstance(scan_result.stdout, str) else ""
             devices = [line.strip() for line in scan_output.splitlines() if line.strip()]
             if not devices:
@@ -639,7 +648,16 @@ async def check_agent_status(host: str, creds: SSHCredentials, site: str) -> Age
     """
     try:
         async with await _connect(host, creds) as conn:
-            result = await conn.run("cmk-agent-ctl status", check=False)
+            # cmk-agent-ctl drops from root to its own `cmk-agent` service
+            # user internally, which needs real root privileges to set up
+            # (setgroups) — running this unprivileged fails with exactly
+            # the permission error `cmk-agent-ctl` itself reports ("Please
+            # execute with sufficient permissions (maybe try 'sudo')"),
+            # live-reported 2026-08-27. Every other cmk-agent-ctl
+            # invocation here (register, in install_agent_linux/
+            # register_agent_linux) already runs via `_run_sudo` — this
+            # verification step was the one left behind.
+            result = await _run_sudo(conn, creds, "cmk-agent-ctl status")
     except (OSError, asyncssh.Error) as exc:
         return AgentStatusCheck(verified=False, detail=f"Could not run cmk-agent-ctl status: {exc}")
 

@@ -871,19 +871,32 @@ placement as the TCP-port rules, for the same reasons.
         instructions; success → `AUTOMATED`.
    j. **If install (or, per step g, registration-only) returned
       `AUTOMATED`:** `remote.check_agent_status(ip, creds, site)`
-      (`remote.py:393-408`, `wizard.py:862-865`) runs `cmk-agent-ctl
-      status` on the target and checks (via
-      `agent_status_shows_connection()`, `remote.py:380-390`) that its
-      output contains a `Connection: <server>/<site>` line for this site —
-      confirming the agent controller is actually operational and recorded
-      a connection, rather than trusting the register command's exit code
-      alone. Doc-verified output format:
+      (`remote.py`) runs `cmk-agent-ctl status` **via `_run_sudo()`**
+      (fixed 2026-08-27 — live-reported bug: this was the one
+      `cmk-agent-ctl` invocation in the whole file still run unprivileged,
+      failing with `cmk-agent-ctl`'s own "Failed to run as user
+      'cmk-agent' ... Please execute with sufficient permissions (maybe
+      try 'sudo')" — `cmk-agent-ctl` drops from root to its own
+      `cmk-agent` service user internally, which needs real root to set
+      up via `setgroups`) and checks (via `agent_status_shows_connection()`)
+      that its output contains a `Connection: <server>/<site>` line for
+      this site — confirming the agent controller is actually operational
+      and recorded a connection, rather than trusting the register
+      command's exit code alone. Doc-verified output format:
       `docs.checkmk.com/latest/en/hosts_autoregister.html`, "Check Agent
       Controller status". This is a **local** check on the target only —
       it doesn't independently confirm the Checkmk server accepted the
       host as UP; that's confirmed later, for the whole batch, by Phase 7's
       Livestatus query. Printed as its own `Agent status: verified /
-      could not verify` line, separate from the install line.
+      could not verify` line, separate from the install line. **Note:** if
+      this still reports "could not verify" after the sudo fix, with the
+      same `setgroups`/EPERM detail, that points to a host-level
+      restriction (e.g. a container/LXC profile missing `CAP_SETGID`)
+      rather than anything sudo-related — worth checking directly on the
+      target with `sudo cmk-agent-ctl status` and `getent group
+      cmk-agent`, since the same restriction could also be preventing the
+      agent's own background data collection from working, which would
+      explain services never showing up in Phase 6 discovery below.
    k. **If install returned `AUTOMATED`** and the operator opted in (see
       "SMART disk monitoring" below): installs `smartmontools` and the
       `smart_posix` agent plugin, so Phase 6's discovery below also picks
@@ -927,21 +940,26 @@ agent package creates it:
    `_upload_verified()` helper, `remote.py:326-348`, factored out of the
    base agent install's identical upload+checksum logic), then
    `sudo dpkg -i`s it. Any failure → `FAILED_FALLBACK_MANUAL`.
-3. **`verify_smartmontools(ip, creds)`** (`remote.py:438-481`) — `dpkg -i`
+3. **`verify_smartmontools(ip, creds)`** (`remote.py`) — `dpkg -i`
    exiting 0 only means the package unpacked cleanly, not that `smartctl`
    actually runs or that any drive has SMART turned on (a drive with SMART
    disabled reports no attributes at all, so the plugin installed next
-   would silently have nothing to report). Runs `smartctl -V` and checks
+   would silently have nothing to report). Every `smartctl` call here runs
+   via `_run_sudo()` (fixed 2026-08-27 — live-reported bug: `--scan` run
+   unprivileged can miss or misidentify devices, since fully identifying
+   one needs the ATA/SCSI passthrough probes only raw device access
+   allows — this surfaced as a "could not enable SMART" failure on a
+   device `--scan` itself had just found). Runs `smartctl -V` and checks
    the first line starts with `smartctl 7` (the same version floor
    `smart_posix` itself enforces), then `smartctl --scan` to list devices
-   and `sudo smartctl -s on <device>` on each one found — enabling SMART
-   is idempotent, so this is safe to run even where it's already on.
-   Devices smartctl can't find at all → still `AUTOMATED` ("found no
-   drives to enable SMART on"); a device that refuses `-s on` (e.g.
-   unsupported hardware) is reported in the detail message but doesn't
-   fail the whole step. Only a broken/missing `smartctl` binary itself
-   (wrong version, non-zero exit) → `FAILED_FALLBACK_MANUAL`, which skips
-   the plugin copy below — no point copying a plugin that reads output
+   and `smartctl -s on <device>` on each one found — enabling SMART is
+   idempotent, so this is safe to run even where it's already on. Devices
+   smartctl can't find at all → still `AUTOMATED` ("found no drives to
+   enable SMART on"); a device that refuses `-s on` (e.g. unsupported
+   hardware) is reported in the detail message but doesn't fail the whole
+   step. Only a broken/missing `smartctl` binary itself (wrong version,
+   non-zero exit) → `FAILED_FALLBACK_MANUAL`, which skips the plugin copy
+   below — no point copying a plugin that reads output
    from a binary that isn't working.
 4. **`deploy_agent_plugin(ip, creds, plugin_bytes, "smart_posix")`**
    (`remote.py:487-528`), only if step 3 reported `AUTOMATED`. The plugin
