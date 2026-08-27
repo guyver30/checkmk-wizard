@@ -20,13 +20,17 @@ from checkmk_wizard.wizard import (
     _DELETE_SITE,
     _FOLDER_NAME_RE,
     _HOST_NAME_RE,
+    _RETRY_SSH_CREDENTIALS,
+    _RETRY_SUDO_PASSWORD,
     _SITE_NAME_RE,
+    _SKIP_AUTOMATED_SSH,
     _SMARTMONTOOLS_DIR,
     OnboardedHost,
     ScannedHost,
     _collect_expected_services,
     _create_or_update_host,
     _create_service_discovery_rules,
+    _establish_ssh_access,
     _expected_open_ports_by_hostname,
     _network_scan_attributes,
     _password_problems,
@@ -788,13 +792,120 @@ def test_smart_posix_plugin_path_uses_connected_site_name():
     assert str(path) == "/omd/sites/mysite/share/check_mk/agents/plugins/smart_posix"
 
 
+@pytest.mark.asyncio
+async def test_establish_ssh_access_succeeds_on_first_try(monkeypatch):
+    answers = iter(["root", "password", "secret"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_ssh_reachable", lambda *a, **k: _ready(True))
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_sudo", lambda *a, **k: _ready(True))
+
+    creds = await _establish_ssh_access("10.0.0.60")
+
+    assert creds == SSHCredentials(username="root", password="secret")
+
+
+@pytest.mark.asyncio
+async def test_establish_ssh_access_retries_credentials_after_ssh_failure(monkeypatch):
+    # First SSH attempt fails (e.g. a typo'd password); operator re-enters
+    # credentials and the second attempt succeeds.
+    answers = iter(
+        ["root", "password", "wrong", _RETRY_SSH_CREDENTIALS, "root", "password", "right"]
+    )
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    ssh_attempts = []
+
+    async def fake_check_ssh_reachable(host, creds):
+        ssh_attempts.append(creds.password)
+        return creds.password == "right"
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_ssh_reachable", fake_check_ssh_reachable)
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_sudo", lambda *a, **k: _ready(True))
+
+    creds = await _establish_ssh_access("10.0.0.61")
+
+    assert ssh_attempts == ["wrong", "right"]
+    assert creds == SSHCredentials(username="root", password="right")
+
+
+@pytest.mark.asyncio
+async def test_establish_ssh_access_returns_none_when_skipped_after_ssh_failure(monkeypatch):
+    answers = iter(["root", "password", "wrong", _SKIP_AUTOMATED_SSH])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_ssh_reachable", lambda *a, **k: _ready(False))
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("sudo must not be checked once SSH itself never succeeded")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_sudo", fail_if_called)
+
+    assert await _establish_ssh_access("10.0.0.62") is None
+
+
+@pytest.mark.asyncio
+async def test_establish_ssh_access_prompts_for_sudo_password_when_needed(monkeypatch):
+    # SSH login works immediately, but this account needs a sudo password —
+    # first candidate is wrong, second is accepted.
+    answers = iter(["root", "password", "secret", "wrong-sudo-pw", _RETRY_SUDO_PASSWORD, "right-sudo-pw"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_ssh_reachable", lambda *a, **k: _ready(True))
+
+    sudo_attempts = []
+
+    async def fake_check_sudo(host, creds):
+        sudo_attempts.append(creds.sudo_password)
+        return creds.sudo_password == "right-sudo-pw"
+
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_sudo", fake_check_sudo)
+
+    creds = await _establish_ssh_access("10.0.0.63")
+
+    # First attempt (sudo_password=None) is the initial "does this account
+    # even need a password" probe, before any password prompt fires.
+    assert sudo_attempts == [None, "wrong-sudo-pw", "right-sudo-pw"]
+    assert creds == SSHCredentials(username="root", password="secret", sudo_password="right-sudo-pw")
+
+
+@pytest.mark.asyncio
+async def test_establish_ssh_access_returns_none_when_skipped_after_sudo_failure(monkeypatch):
+    answers = iter(["root", "password", "secret", "wrong-sudo-pw", _SKIP_AUTOMATED_SSH])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_ssh_reachable", lambda *a, **k: _ready(True))
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_sudo", lambda *a, **k: _ready(False))
+
+    assert await _establish_ssh_access("10.0.0.64") is None
+
+
 def _mock_linux_ssh_agent_install(monkeypatch, *, os_release: OSRelease):
     """Stub every remote.py SSH mechanic the Linux/SSH onboarding path calls
-    so it never touches a real network or the real /omd filesystem: probing,
+    so it never touches a real network or the real /omd filesystem:
+    connectivity/sudo checks (from `_establish_ssh_access()`), probing,
     firewall, OS-compat detection (fixed to `os_release`), agent install,
     and agent-status verification all report success. Returns the raw
     monkeypatch handle so callers can further stub/spy on top (e.g. the new
     smartmontools/plugin calls)."""
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_ssh_reachable", lambda *a, **k: _ready(True))
+    monkeypatch.setattr("checkmk_wizard.wizard.remote.check_sudo", lambda *a, **k: _ready(True))
     monkeypatch.setattr("checkmk_wizard.wizard.remote.list_running_systemd_services", lambda *a, **k: _none())
     monkeypatch.setattr(
         "checkmk_wizard.wizard.remote.probe_port",

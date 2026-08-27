@@ -473,15 +473,58 @@ time** — no concurrency.
    always a manual path regardless of SSH creds, and `snmp`/`ping` hosts
    have no agent at all, so a batch with none of those doesn't get asked a
    prompt that has nothing to apply to.
-2. If yes: prompts for SSH username (re-prompted if left blank), then
-   auth mode (password or private key path) →
-   builds one `SSHCredentials` object reused for **every** Linux host in
-   the batch (same username/credential for all hosts). A private-key path
-   is checked to exist as a local file (`Path(...).expanduser().is_file()`)
-   and re-prompted if not — not a Checkmk-API
-   validation, but a nonexistent key would fail identically for every
-   host in the batch, so this is caught once up front rather than once
-   per host inside `asyncssh`'s own connection error handling.
+2. If yes: also asks whether to install smartmontools + SMART disk
+   monitoring (see that section further down), then calls
+   `_establish_ssh_access(linux_hosts[0].ip)` (`wizard.py`, added
+   2026-08-27) to collect **and immediately verify** SSH credentials
+   before doing anything else with them — previously a typo'd password
+   only surfaced many steps later, as an unexplained
+   `FAILED_FALLBACK_MANUAL` on the first host.
+
+**`_establish_ssh_access()` (credential collection + verification,
+`_prompt_ssh_credentials()`):**
+1. Prompts for SSH username (re-prompted if left blank), then auth mode
+   (password or private key path). A private-key path is checked to exist
+   as a local file (`Path(...).expanduser().is_file()`) and re-prompted if
+   not — not a Checkmk-API validation, but a nonexistent key would fail
+   identically for every host in the batch, so this is caught once up
+   front rather than once per host inside `asyncssh`'s own connection
+   error handling.
+2. **Tests the login immediately** against the *first* Linux host in the
+   batch (`remote.check_ssh_reachable()`) — not deferred to the per-host
+   loop. On failure, offers "Re-enter SSH credentials" (loops back to
+   step 1) or "Skip automated SSH" (returns `None` — every Linux host then
+   falls back to manual instructions, same as if the operator had declined
+   the "Attempt automated SSH..." confirm in the first place).
+3. **Tests sudo elevation** (`remote.check_sudo()`, runs `sudo -S -p ''
+   true`) against the same host. If it fails, prompts for a **separate**
+   sudo password (not assumed to be the same as the SSH login password),
+   re-tests, and loops — "Try a different sudo password", "Re-enter SSH
+   credentials" (back to step 1), or "Skip automated SSH" (`None`).
+4. Returns one `SSHCredentials` (with `sudo_password` set only if step 3
+   needed it) reused for **every** Linux host in the batch — same
+   username/password/sudo-password for all hosts, a deliberate
+   simplification. A host with genuinely different credentials still
+   isn't left silently broken: each remote.py function below independently
+   guards on `check_ssh_reachable()` for its own target and falls back to
+   `FAILED_FALLBACK_MANUAL` with manual instructions for that one host.
+
+**Sudo elevation (`remote._run_sudo()`, added 2026-08-27):** every
+privileged command below (`ufw`/`firewall-cmd`/`nft`, `dpkg -i`/`rpm -i`,
+`cmk-agent-ctl register`, `smartctl -s on`, the plugin `mv`/`chmod`) now
+runs via this one helper instead of a bare `sudo <cmd>` string — it always
+invokes `sudo -S -p '' <cmd>` with `creds.sudo_password` (or an empty
+string) piped to stdin. This is safe to use unconditionally: if the
+account has passwordless sudo (`NOPASSWD`) or a live cached credential,
+`-S` changes nothing about the outcome — it only changes *where* sudo
+would read a password from if it turned out to need one. Each privileged
+step gets its **own** `_run_sudo()` call rather than `&&`-chaining
+multiple `sudo` commands in one shell line (fixed a real bug in
+`fix_firewall_linux`'s firewalld path along the way: `sudo cmd1 && cmd2`
+only elevates `cmd1`, silently running `firewall-cmd --reload`
+unprivileged) — sudo's cached-credential scoping across separate
+non-interactive SSH exec channels isn't reliable enough to depend on
+across chained commands.
 
 **Host create/update (`_create_or_update_host()`, `wizard.py:567-590`):**
 Both branches below go through this helper instead of calling

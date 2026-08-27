@@ -42,6 +42,12 @@ class SSHCredentials:
     username: str
     password: str | None = None
     private_key_path: str | None = None
+    # Only set when `check_sudo()` (during initial SSH setup) finds the
+    # account needs a password to elevate — None means either passwordless
+    # sudo (NOPASSWD) or that it hasn't been checked yet. Kept separate
+    # from `password` since a login password and a sudo password aren't
+    # guaranteed to be the same.
+    sudo_password: str | None = None
 
 
 @dataclass
@@ -181,6 +187,43 @@ async def check_ssh_reachable(host: str, creds: SSHCredentials, timeout: float =
         return False
 
 
+async def _run_sudo(
+    conn: asyncssh.SSHClientConnection, creds: SSHCredentials, cmd: str, check: bool = False
+) -> asyncssh.SSHCompletedProcess:
+    """Run `cmd` with sudo, feeding `creds.sudo_password` over stdin via
+    `-S` unconditionally. Harmless when sudo doesn't actually need a
+    password (NOPASSWD, or a live cached credential) — `-S` only changes
+    *where* sudo reads a password from if it needs one, so this is safe to
+    use as the one code path for every sudo invocation rather than
+    branching on whether the account was found to need a password.
+    `-p ''` suppresses the "[sudo] password for user:" prompt text so it
+    doesn't get mixed into stdout/stderr. Every sudo call gets its own
+    fresh `-S` authentication rather than `&&`-chaining multiple sudo
+    commands in one shell line — sudo's cached-credential lifetime/scoping
+    across non-interactive, non-tty SSH exec channels isn't reliable
+    enough to depend on.
+    """
+    return await conn.run(f"sudo -S -p '' {cmd}", input=(creds.sudo_password or "") + "\n", check=check)
+
+
+async def check_sudo(host: str, creds: SSHCredentials) -> bool:
+    """Whether `creds` (including `creds.sudo_password`, if set) can
+    actually elevate on `host`. Checked once up front during SSH setup —
+    see `wizard._establish_ssh_access()` — so a missing/wrong sudo
+    password surfaces immediately as one clear prompt, instead of as a
+    string of unexplained `FAILED_FALLBACK_MANUAL` results deep in the
+    per-host onboarding loop (every firewall/install/plugin step below
+    needs sudo). Returns False (not an exception) if SSH itself fails,
+    same convention as `check_ssh_reachable`.
+    """
+    try:
+        async with await _connect(host, creds) as conn:
+            result = await _run_sudo(conn, creds, "true")
+            return result.exit_status == 0
+    except (OSError, asyncssh.Error):
+        return False
+
+
 async def list_running_systemd_services(host: str, creds: SSHCredentials) -> list[str] | None:
     """SSH in and list currently-running systemd service units, by name
     with the `.service` suffix stripped — live-verified against a real
@@ -236,26 +279,30 @@ async def fix_firewall_linux(host: str, creds: SSHCredentials, port: int) -> Act
     try:
         async with await _connect(host, creds) as conn:
             if (await conn.run("command -v ufw", check=False)).exit_status == 0:
-                cmd = f"ufw allow {port}/tcp"
+                commands = [f"ufw allow {port}/tcp"]
             elif (await conn.run("command -v firewall-cmd", check=False)).exit_status == 0:
-                cmd = (
-                    f"firewall-cmd --permanent --add-port={port}/tcp && firewall-cmd --reload"
-                )
+                # Two separate sudo invocations, not one `&&`-chained
+                # command — `sudo cmd1 && cmd2` only elevates cmd1, so
+                # `firewall-cmd --reload` would silently run unprivileged
+                # and fail (this was a live bug before `_run_sudo()` made
+                # each sudo call explicit).
+                commands = [f"firewall-cmd --permanent --add-port={port}/tcp", "firewall-cmd --reload"]
             elif (await conn.run("command -v nft", check=False)).exit_status == 0:
-                cmd = f"nft add rule inet filter input tcp dport {port} accept"
+                commands = [f"nft add rule inet filter input tcp dport {port} accept"]
             else:
                 return ActionResult(
                     Outcome.FAILED_FALLBACK_MANUAL, "No recognized firewall backend found", manual
                 )
 
-            result = await conn.run(f"sudo {cmd}", check=False)
-            if result.exit_status != 0:
-                return ActionResult(
-                    Outcome.FAILED_FALLBACK_MANUAL,
-                    f"Command failed: {cmd} ({result.stderr})",
-                    manual,
-                )
-            return ActionResult(Outcome.AUTOMATED, f"Applied: {cmd}")
+            for cmd in commands:
+                result = await _run_sudo(conn, creds, cmd)
+                if result.exit_status != 0:
+                    return ActionResult(
+                        Outcome.FAILED_FALLBACK_MANUAL,
+                        f"Command failed: {cmd} ({result.stderr})",
+                        manual,
+                    )
+            return ActionResult(Outcome.AUTOMATED, f"Applied: {' && '.join(commands)}")
     except (OSError, asyncssh.Error) as exc:
         return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, str(exc), manual)
 
@@ -376,9 +423,9 @@ async def install_agent_linux(
                 return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, error, manual)
 
             if package_filename.endswith(".deb"):
-                install_cmd = f"sudo dpkg -i {shlex.quote(remote_path)}"
+                install_cmd = f"dpkg -i {shlex.quote(remote_path)}"
             elif package_filename.endswith(".rpm"):
-                install_cmd = f"sudo rpm -i {shlex.quote(remote_path)}"
+                install_cmd = f"rpm -i {shlex.quote(remote_path)}"
             else:
                 return ActionResult(
                     Outcome.FAILED_FALLBACK_MANUAL,
@@ -386,7 +433,7 @@ async def install_agent_linux(
                     manual,
                 )
 
-            result = await conn.run(install_cmd, check=False)
+            result = await _run_sudo(conn, creds, install_cmd)
             if result.exit_status != 0:
                 return ActionResult(
                     Outcome.FAILED_FALLBACK_MANUAL,
@@ -394,7 +441,7 @@ async def install_agent_linux(
                     manual,
                 )
 
-            reg_result = await conn.run(f"sudo {register_cmd}", check=False)
+            reg_result = await _run_sudo(conn, creds, register_cmd)
             if reg_result.exit_status != 0:
                 return ActionResult(
                     Outcome.FAILED_FALLBACK_MANUAL,
@@ -427,7 +474,7 @@ async def install_smartmontools(
             if error:
                 return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, error, manual)
 
-            result = await conn.run(f"sudo dpkg -i {shlex.quote(remote_path)}", check=False)
+            result = await _run_sudo(conn, creds, f"dpkg -i {shlex.quote(remote_path)}")
             if result.exit_status != 0:
                 return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, f"Install failed: {result.stderr}", manual)
             return ActionResult(Outcome.AUTOMATED, "smartmontools installed")
@@ -470,7 +517,7 @@ async def verify_smartmontools(host: str, creds: SSHCredentials) -> ActionResult
 
             enabled, failed = [], []
             for device in devices:
-                enable_result = await conn.run(f"sudo smartctl -s on {shlex.quote(device)}", check=False)
+                enable_result = await _run_sudo(conn, creds, f"smartctl -s on {shlex.quote(device)}")
                 (enabled if enable_result.exit_status == 0 else failed).append(device)
 
             detail = f"smartctl 7+ confirmed; SMART enabled on {len(enabled)}/{len(devices)} device(s)"
@@ -513,13 +560,15 @@ async def deploy_agent_plugin(
             if error:
                 return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, error, manual)
 
-            result = await conn.run(
-                f"sudo mv {shlex.quote(staged_path)} {shlex.quote(final_path)} && "
-                f"sudo chmod +x {shlex.quote(final_path)}",
-                check=False,
-            )
-            if result.exit_status != 0:
-                return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, f"Deploy failed: {result.stderr}", manual)
+            mv_result = await _run_sudo(conn, creds, f"mv {shlex.quote(staged_path)} {shlex.quote(final_path)}")
+            if mv_result.exit_status != 0:
+                return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, f"Deploy failed (mv): {mv_result.stderr}", manual)
+
+            chmod_result = await _run_sudo(conn, creds, f"chmod +x {shlex.quote(final_path)}")
+            if chmod_result.exit_status != 0:
+                return ActionResult(
+                    Outcome.FAILED_FALLBACK_MANUAL, f"Deploy failed (chmod): {chmod_result.stderr}", manual
+                )
             return ActionResult(Outcome.AUTOMATED, f"Plugin deployed to {final_path}")
     except (OSError, asyncssh.Error) as exc:
         return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, str(exc), manual)
