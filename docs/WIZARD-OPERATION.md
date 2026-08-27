@@ -995,8 +995,30 @@ call, so services are actually in the monitored state by the time Phase 7
 activates changes. A `303` response (Checkmk ran discovery as an async
 background job) is treated as success, not an error.
 
+**Retries when an expected service hasn't shown up yet
+(`_DISCOVERY_RETRY_DELAYS_SECONDS`/`_missing_expected_services()`, added
+2026-08-27 — live-reported bug):** a freshly registered agent's first
+successful data push to Checkmk can lag behind this wizard — the
+push-agent daemon (`cmk-agent-ctl`) wakes on its own periodic timer
+(commonly ~1 minute), unrelated to anything the wizard controls. Running
+`fix_all` immediately after registration can race ahead of that first
+push, finding nothing new yet: the wizard would report a requested
+service "NOT picked up" even though it later appears fine in Checkmk's
+own "undecided" list once the site's own background discovery eventually
+runs (and stays merely "undecided," not monitored, until something
+accepts it — that something was never this wizard, since by then it had
+already finished and moved on). After the first `fix_all` call, if
+`_missing_expected_services()` (shared with `_verify_expected_services()`
+below via `_monitored_service_names()`/`_expected_service_candidates()`)
+finds any of `host.expected_services` still unmonitored, retries
+`fix_all` again after a growing delay — `(10, 20, 30)` seconds, ~60s
+worst case — stopping as soon as nothing is missing, or after the last
+retry either way. A host with no `expected_services`, or whose first
+`fix_all` call already found everything, incurs no delay at all.
+
 **Verifies expected-service discovery (2026-08-26, `_verify_expected_services()`,
-`wizard.py:895-936`):** right after each host's `mode="fix_all"` call, if
+`wizard.py:895-936`):** right after each host's `mode="fix_all"` call (and
+any retries above), if
 that host has `expected_services` (set in Phase 5, see above), checks the
 discovery response's `check_table` for each requested name and prints a
 per-service ✓/✗. This exists because a discovery-selection rule whose
