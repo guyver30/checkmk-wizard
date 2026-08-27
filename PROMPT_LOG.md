@@ -57,3 +57,12 @@
 - 2026-08-27 16:30 — "I can see cron and dbus in the undecided service list when I monitor the host, so why got that error? those services (and all the other discovered ones) must move to the monitored service list"
 - 2026-08-27 16:50 — "when I delete a site, it doesn't flag properly that there's a host with a registered agent, like we discussed. Check this"
 - 2026-08-27 17:15 — "you need to activate the changes before checking if services are detected and then move them to monitored"
+- 2026-08-27 20:27 — "let's put this service dependency in wizard, but optional to activate" (investigated: no WATO ruleset/REST API for service_dependencies in this Checkmk 2.4 CE (core=nagios) install — legacy Nagios-only .mk config, notification-suppression only, does not change displayed state; user chose to skip)
+- 2026-08-27 20:40 — [pasted screenshot of host services list, host down but CPU/memory/filesystem/systemd services still green] "if linux host is down, or checkmk agent off, why do I still see all the services collected by the agent as ok green, while (correctly) check_mk service is critical red?"
+- 2026-08-27 20:50 — "staleness is 1.5 in settings...what does it mean"
+- 2026-08-27 20:55 — "look how to change them to unknown, if easy"
+- 2026-08-27 20:56 (mid-turn) — "don't use websearch, use context7 as in claude.md!"
+- 2026-08-27 21:00 — "what's the difference between cpu load and cpu utilization"
+- 2026-08-27 21:05 — "so for a warning, it's better to use utilization (over a period of 1 minute for example)"
+- 2026-08-27 21:10 — "how to set rules for certain services captured by checkmk agent: like cpu warning and critical level, disk space, etc"
+- 2026-08-27 21:20 — "ok let's add rules for cpu load, cpu utilization (averaged over 1 minute), memory used, disk space used. Suggest typical values for warning and critical" — implemented `_create_threshold_rules()` in Phase 5 (optional, gated on linux/windows hosts), tests, docs

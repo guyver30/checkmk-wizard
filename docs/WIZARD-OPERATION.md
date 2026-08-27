@@ -1017,6 +1017,51 @@ check plugins all discover unconditionally once the `smart_posix_all`
 agent section is present, with no gating ruleset. Phase 6's normal
 `fix_all` discovery (below) picks them up on its own.
 
+**Optional default alert thresholds (`_create_threshold_rules()`, added
+2026-08-27):** asked once at the end of Phase 5, only if at least one
+onboarded host is `linux` or `windows` (a fleet of only ping/SNMP hosts
+would never get these services, so the prompt is skipped entirely — no
+dead-end question). If confirmed, prompts for warning/critical levels
+(blank = suggested default) for four checks and creates one rule per
+check at the root folder (`/`) with **no `host_name` condition** — it
+applies wherever the matching service exists on any current or future
+host; a host without that service (ping-only, SNMP-only) is simply
+unaffected:
+
+| Check | Ruleset | Suggested default |
+|---|---|---|
+| CPU load (1/5/15 min, per core) | `checkgroup_parameters:cpu_load` | 5.0 / 10.0 |
+| CPU utilization (per check interval, ~1 min) | `checkgroup_parameters:cpu_utilization_os` | 80% / 90% |
+| Memory (RAM) used, Linux | `checkgroup_parameters:memory_linux` | 80% / 90% |
+| Filesystem used | `checkgroup_parameters:filesystem` | 80% / 90% |
+
+`memory_linux` only covers Linux hosts — Windows memory reporting uses a
+different ruleset this wizard doesn't set.
+
+**`value_raw` here is Python-literal syntax, not JSON** — the one place
+in this codebase that isn't, and the reason is a real, live-verified
+Checkmk REST API quirk: these four rulesets' warning/critical fields are
+built from Checkmk's `Levels()` (an `Alternative` valuespec: no levels /
+fixed levels / predictive) and, for `memory_linux`, a `CascadingDropdown`
+(percent-used / absolute / ignore). Both distinguish their alternatives
+by the **Python type** of the value at request-parse time — a JSON array
+in the request body deserializes to a Python `list`, which matches none
+of the alternatives and is rejected ("data type of the value does not
+match any of the allowed alternatives"). Building the value as a real
+Python `dict` with tuple values and sending `repr()` of it instead
+produces genuine tuple syntax (`(5.0, 10.0)`), which Checkmk's rule-value
+parser accepts (it takes Python literal syntax, not just JSON) and which
+`Levels()` correctly matches as "Fixed Levels". Confirmed by creating a
+real rule against a live Checkmk 2.4.0p35 CE site with a plain JSON list
+first (rejected with the exact error above), then with the `repr()` form
+(accepted, and the value read back byte-for-byte identical from the API)
+— then deleting both test rules. Every other ruleset this wizard writes
+to (`active_checks:tcp`, `active_checks:icmp`,
+`discovery_systemd_units_services`, `inventory_services_rules`) uses
+plain `Dictionary`/`ListOfStrings`/`Tuple`-of-primitives valuespecs,
+which accept ordinary JSON lists/dicts fine — this quirk is specific to
+`Alternative`/`CascadingDropdown`-based ones.
+
 ## Phase 6 — Discovery & Baseline (`wizard.py:879-937`)
 
 **Activates pending changes before running discovery
