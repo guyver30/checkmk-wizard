@@ -1,216 +1,135 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-08-24
+**Analysis Date:** 2026-09-05
 
 ## Directory Layout
 
 ```
-checkmk-config/
+checkmk-wizard/
 ├── src/
-│   └── checkmk_wizard/
-│       ├── __init__.py              # Empty; no public exports
-│       ├── __main__.py              # CLI entry point (python -m checkmk_wizard)
-│       ├── wizard.py                # Phases 1-7 orchestration + interactive UI
-│       ├── api.py                   # Checkmk REST API client (CheckmkClient, CheckmkConnection)
-│       ├── site.py                  # OMD site bootstrap and credential management
-│       ├── scanner.py               # Async TCP port scanner (network discovery)
-│       ├── remote.py                # SSH operations: firewall, OS check, agent install
-│       └── livestatus.py            # Livestatus socket query (post-activation health check)
-├── tests/
-│   ├── __init__.py                  # (auto-generated)
-│   ├── test_api.py                  # CheckmkClient REST calls (mocked via respx)
-│   ├── test_scanner.py              # Async TCP scanner
-│   └── test_remote.py               # SSH operations and result classes
+│   └── checkmk_wizard/          # Installable package (src-layout)
+│       ├── __init__.py          # Empty — package marker only
+│       ├── __main__.py          # `python -m checkmk_wizard` entry point
+│       ├── wizard.py            # Phase 1-7 orchestration, prompts, main()
+│       ├── api.py               # Checkmk REST API client + credential bootstrap
+│       ├── site.py              # Local OMD site management (subprocess `omd`)
+│       ├── remote.py            # SSH-based host automation (asyncssh)
+│       ├── scanner.py           # Async TCP port network scanner
+│       └── livestatus.py        # Minimal Livestatus (LQL) TCP client
+├── tests/                       # pytest test suite, one file per src module
+│   ├── test_wizard.py
+│   ├── test_api.py
+│   ├── test_site.py
+│   ├── test_remote.py
+│   ├── test_scanner.py
+│   └── test_livestatus.py
 ├── docs/
-│   └── CHECKMK_SETUP_CONFIGURATOR_PLAN.md  # High-level design doc (phases 1-7)
+│   ├── CHECKMK_SETUP_CONFIGURATOR_PLAN.md   # Original design/requirements doc
+│   ├── PLAN-CONFORMANCE-AUDIT.md            # Audit of implementation vs. plan
+│   ├── WIZARD-OPERATION.md                  # Operational/user-facing runbook
+│   ├── Podman setup for checkmk, minio, mosquitto, worker.md  # Container deployment guide
+│   ├── smart/                   # Bundled smartmontools .deb packages + docs (read by wizard.py at runtime)
+│   └── src/                     # Standalone Checkmk notification scripts (mqtt_notify.py, mqtt_publisher_changes.py) — NOT part of the checkmk_wizard package, deployed separately to a Checkmk site's notification scripts dir
 ├── .planning/
-│   └── codebase/                    # Generated analysis docs (this set)
-├── pyproject.toml                   # Project metadata, dependencies, entry point
-├── README.md                        # Setup, run, test, project layout overview
-├── .python-version                  # Python version constraint (3.11+)
-├── .gitignore                       # Standard Python ignores
-├── uv.lock                          # Locked dependency versions
-└── [build artifacts, cache]         # .venv/, .pytest_cache/, .ruff_cache/
-
+│   └── codebase/                # Codebase map documents (this directory)
+├── pyproject.toml               # Package metadata, deps, `[project.scripts]` entry point
+├── uv.lock                      # uv-managed lockfile
+├── .python-version              # Pinned Python version for uv
+├── README.md
+├── PROMPT_LOG.md                 # Session prompt log (per user's global CLAUDE.md instructions)
+└── config_snapshot_*.json        # Output artifacts written by Phase 7 at the repo root (gitignored/transient, not source)
 ```
 
 ## Directory Purposes
 
 **`src/checkmk_wizard/`:**
-- Purpose: Main package; all application code
-- Contains: Python modules for REST API, site bootstrap, network scanning, SSH ops, Livestatus queries, and orchestration
-- Key files: `wizard.py` (entry point logic), `api.py` (REST client)
+- Purpose: the entire installable Python package — a src-layout single-package project (no sub-packages).
+- Contains: 7 flat `.py` modules, no nested directories.
+- Key files: `wizard.py` (orchestrator, by far the largest at ~1780 lines), `api.py` (~620 lines, REST client), `remote.py` (~674 lines, SSH automation).
 
 **`tests/`:**
-- Purpose: Unit tests for all modules
-- Contains: Test files for API client (mocked), scanner, and remote operations
-- Key files: `test_api.py` (REST calls via respx mocks), `test_scanner.py` (async probes), `test_remote.py` (SSH/firewall logic)
-- Coverage: Isolated unit tests; no end-to-end wizard runs or live Checkmk/SSH targets
+- Purpose: pytest test suite; one test file per source module, named `test_<module>.py`.
+- Contains: `pytest`/`pytest-asyncio` async test functions, `respx` mocks for HTTP, monkeypatched `asyncssh`/`subprocess` for SSH/OMD calls.
+- Key files: `test_wizard.py` (largest, ~91KB — covers every phase function), `test_api.py` (~22KB — covers every REST client method plus bootstrap flows).
 
 **`docs/`:**
-- Purpose: Design documentation
-- Contains: High-level plan with phase breakdowns, REST API endpoint citations, decision rationale
-- Key files: `CHECKMK_SETUP_CONFIGURATOR_PLAN.md` (referenced in README and source docstrings)
+- Purpose: project design docs, an operational runbook, and bundled runtime assets (not auto-generated; hand-maintained per the user's CLAUDE.md instruction to update docs after feature changes).
+- Contains: Markdown design/audit/runbook docs at the top level; `smart/` (binary `.deb` packages + supporting docs, read directly by `wizard.py` at runtime — see `_SMARTMONTOOLS_DIR` in `wizard.py:40`); `src/` (two standalone MQTT notification scripts unrelated to the wizard package, intended for manual deployment onto a Checkmk site's own notification-scripts directory, not imported by `checkmk_wizard`).
 
-**`.planning/codebase/`:**
-- Purpose: Generated codebase analysis (this directory)
-- Contains: ARCHITECTURE.md, STRUCTURE.md, and future analysis docs
-- Generated by: `/bm:map-codebase` agent; consumed by `/bm:plan-phase` and `/bm:execute-phase`
+**`.planning/`:**
+- Purpose: GSD-style planning/codebase-map artifacts (this document's own location), plus `.pending-auth-captures.jsonl` (untracked working file, unrelated to source code).
 
 ## Key File Locations
 
 **Entry Points:**
-- `src/checkmk_wizard/__main__.py`: CLI entry point (invoked by `python -m checkmk_wizard` or `uv run checkmk-wizard`)
-- `src/checkmk_wizard/wizard.py:330-331`: `main()` function (async event loop entry)
-- `src/checkmk_wizard/wizard.py:318-327`: `run()` function (phase orchestration)
+- `src/checkmk_wizard/wizard.py:1778-1780`: `main()` — the `checkmk-wizard` console script target (declared in `pyproject.toml`).
+- `src/checkmk_wizard/__main__.py`: `python -m checkmk_wizard` entry point, delegates to `wizard.main()`.
 
 **Configuration:**
-- `pyproject.toml`: Package metadata, dependencies (httpx, asyncssh, questionary, rich), version, entry-point script
-- `.python-version`: Python 3.11+ requirement
+- `pyproject.toml`: package metadata, runtime dependencies (`asyncssh`, `httpx`, `questionary`, `rich`), dev dependencies (`pytest`, `pytest-asyncio`, `respx`), `[project.scripts]` entry point, `uv_build` build backend.
+- `.python-version`: pins the Python version uv provisions (`>=3.11` per `pyproject.toml`'s `requires-python`).
+- `uv.lock`: uv-managed dependency lockfile (do not hand-edit).
 
 **Core Logic:**
-- `src/checkmk_wizard/wizard.py`: Phase 1-7 functions + WizardState dataclass
-- `src/checkmk_wizard/api.py`: CheckmkClient (async HTTP wrapper) + CheckmkConnection (auth dataclass)
-- `src/checkmk_wizard/site.py`: OMD site operations (create, start, read credentials)
-- `src/checkmk_wizard/scanner.py`: Async TCP port probing with semaphore concurrency
-- `src/checkmk_wizard/remote.py`: SSH firewall/compatibility/agent-install operations
-- `src/checkmk_wizard/livestatus.py`: Livestatus socket query helper
+- `src/checkmk_wizard/wizard.py`: all phase orchestration and interactive prompting logic.
+- `src/checkmk_wizard/api.py`: all Checkmk REST API interaction.
+- `src/checkmk_wizard/site.py`: all local OMD (`omd` CLI) interaction.
+- `src/checkmk_wizard/remote.py`: all SSH-based remote host automation.
+- `src/checkmk_wizard/scanner.py`: network discovery scanning logic.
+- `src/checkmk_wizard/livestatus.py`: post-activation host-state health check.
 
 **Testing:**
-- `tests/test_api.py`: REST client tests (requests mocked via respx)
-- `tests/test_scanner.py`: Async scanner tests (no live network)
-- `tests/test_remote.py`: SSH helper tests (no live SSH)
+- `tests/test_*.py`: mirrors `src/checkmk_wizard/*.py` one-to-one by name (no `test_wizard/` subpackage, no fixtures directory).
 
 ## Naming Conventions
 
 **Files:**
-- Snake case with `.py` extension: `wizard.py`, `test_api.py`, `__main__.py`
-- Tests follow `test_<module>.py` pattern (pytest auto-discovery)
+- One module per external-system concern, named after that system/responsibility (`site.py`, `api.py`, `remote.py`, `scanner.py`, `livestatus.py`) — lowercase, no underscores-as-separators beyond the package name itself.
+- Test files: `test_<module>.py`, one-to-one with `src/checkmk_wizard/<module>.py`.
 
 **Directories:**
-- Snake case: `src/checkmk_wizard/`, `tests/`
-- Hierarchical: source under `src/<package>/`, tests under `tests/`
+- `src/<package_name>/` src-layout (not a flat top-level package) — standard for a `uv`/`hatchling`-style Python package.
+- No `lib/`, `utils/`, or `common/` catch-all directories — every module maps to a specific external-system responsibility; shared helpers live inline in whichever module they logically belong to (e.g. regex validation constants live in `wizard.py` next to the prompts that use them, not in a separate `validators.py`).
 
 **Functions:**
-- Snake case, descriptive: `phase1_site_bringup()`, `scan_network()`, `fix_firewall_linux()`
-- Phase functions prefixed with `phase{N}_`: `phase1_site_bringup`, `phase2_folders`, ..., `phase7_activation`
-- Async functions use `async def` throughout
-
-**Variables:**
-- Snake case: `connection`, `ssh_creds`, `scan_results`, `onboarded`
-- Dataclass instances use type names: `CheckmkConnection`, `OnboardedHost`, `ActionResult`
-
-**Types:**
-- Dataclasses (not named tuples or TypedDict) for domain objects: `OnboardedHost`, `HostScanResult`, `ActionResult`, `CheckmkConnection`
-- Enums for closed sets: `Outcome` (AUTOMATED, MANUAL_REQUIRED, FAILED_FALLBACK_MANUAL)
-- Use `str | None` (Python 3.10+ union syntax) for optional fields
-
-**Constants:**
-- UPPERCASE: `DEFAULT_PORTS`, `DEFAULT_TIMEOUT`, `DEFAULT_CONCURRENCY`, `AGENT_RECEIVER_PORT`
-- Module-level in their defining module: `scanner.py` for scanning constants, `remote.py` for SSH/agent constants
+- Phase-level orchestration functions: `phaseN_<name>` (e.g. `phase1_site_bringup`, `phase3_discovery`) — always top-level, `async def`, called directly by `run()`.
+- Private, phase-scoped helpers: leading underscore, e.g. `_onboard_hosts`, `_create_expected_open_port_rules`, `_prompt_ssh_credentials` — not exported, tested directly via `from checkmk_wizard.wizard import _helper_name` in `tests/test_wizard.py`.
+- Module-level constants: `UPPER_SNAKE_CASE`, private ones prefixed `_` (e.g. `_SITE_NAME_RE`, `_DEFAULT_CPU_LOAD_LEVELS`, `DEFAULT_PORTS` in `scanner.py` is public since it's referenced from `wizard.py`).
 
 ## Where to Add New Code
 
-**New Phase (Phase 8+):**
-- Create function `async def phase8_<name>(...)` in `src/checkmk_wizard/wizard.py`
-- Add docstring with phase objectives
-- Call it sequentially from `run()` function after Phase 7
-- If it requires a new service, create a new module (e.g., `src/checkmk_wizard/phase8_helper.py`) following the pattern of `remote.py`
-- Add tests in `tests/test_phase8_helper.py` (mocked/isolated)
+**New wizard phase or sub-step:**
+- Primary code: add a new `async def phaseN_<name>(...)` (or extend an existing phase) directly in `src/checkmk_wizard/wizard.py`, under a new `# ── Phase N: <Title> ──` banner comment matching the existing style; wire it into `run()` (`wizard.py:1766-1775`).
+- Tests: add corresponding test functions to `tests/test_wizard.py` (no new test file — this file already covers every phase).
 
-**New REST API Call:**
-- Add method to `CheckmkClient` class in `src/checkmk_wizard/api.py`
-- Group by phase in comments (see existing Phase groupings: 1, 2, 3/5, 5.2, 6, 7)
-- Use `self._request()` helper with appropriate method, path, and headers
-- Raise `CheckmkAPIError` on non-2xx responses (handled by `_request()`)
+**New external-system integration (e.g. a new Checkmk REST endpoint, a new SSH-driven remote action):**
+- Checkmk REST calls: add a method to `CheckmkClient` in `src/checkmk_wizard/api.py`, grouped under the existing `# -- Phase N: <area> --` section comments by which phase uses it.
+- SSH/remote host actions: add a function to `src/checkmk_wizard/remote.py`, returning an `ActionResult(outcome, detail, manual_instructions)` to match the existing tri-state (automated/manual/failed) convention.
+- Tests: `tests/test_api.py` (respx-mocked HTTP) or `tests/test_remote.py` (monkeypatched `asyncssh`), respectively.
 
-**New SSH Operation:**
-- Add function to `src/checkmk_wizard/remote.py`
-- Use `_connect()` helper for SSH connection (supports password or private key)
-- Use `asyncssh` for command execution or SFTP
-- Return `ActionResult` (outcome, detail, optional manual_instructions)
-- Call via `check_ssh_reachable()` first to validate connectivity
+**New validation rule or prompt-side constant:**
+- Add regex/constant near the top of `wizard.py`, alongside `_SITE_NAME_RE`/`_FOLDER_NAME_RE`/`_HOST_NAME_RE`/`_HOSTNAME_RE` — document the source (live Checkmk-verified pattern vs. wizard-only stricter rule) in a comment, matching existing style.
 
-**New Network Utility:**
-- Add function to `src/checkmk_wizard/scanner.py` or create `src/checkmk_wizard/network.py`
-- Use async TCP/UDP probes as needed (scanner uses `asyncio.open_connection()` for TCP)
-- Document limitations (e.g., UDP reliability; see Phase 3 rationale in docs)
-
-**New Interactive Decision:**
-- Add `questionary` prompt in the appropriate phase function (e.g., `phase4_classification()` for new host-level decisions)
-- Use `await questionary.<type>(...).ask_async()` (e.g., `text()`, `confirm()`, `select()`, `checkbox()`)
-- Pass result as parameter to downstream functions or store in `OnboardedHost`/`WizardState`
-
-**Utilities (non-domain):**
-- Add to `src/checkmk_wizard/util.py` (not yet created; create if needed)
-- Examples: path helpers, formatters, constants
+**Utilities:**
+- There is no shared `utils.py`. A genuinely cross-cutting helper (used by more than one of `wizard.py`/`api.py`/`remote.py`/`site.py`) should still be placed in whichever single module most directly owns that concern (e.g. `livestatus.py` for anything Livestatus-related) — do not introduce a new catch-all module without strong justification, per this project's existing one-module-per-concern layout.
 
 ## Special Directories
 
-**`.venv/`:**
-- Purpose: Virtual environment (created by `uv sync`)
-- Generated: Yes
-- Committed: No (in .gitignore)
+**`docs/smart/`:**
+- Purpose: bundled smartmontools `.deb` packages (per supported Ubuntu release) and their accompanying install/plugin docs, read directly from disk at runtime by `wizard.py` (`_SMARTMONTOOLS_DIR`).
+- Generated: No — hand-curated, versioned binary packages.
+- Committed: Yes — required for the SMART-monitoring feature to work when the wizard is run via `uv run` from a checkout.
 
-**`.pytest_cache/`, `.ruff_cache/`:**
-- Purpose: Tool caches (pytest, ruff linter)
-- Generated: Yes
-- Committed: No (in .gitignore)
+**`docs/src/`:**
+- Purpose: standalone Checkmk notification scripts (MQTT publisher/notifier) meant for manual deployment to a Checkmk site's own `local/share/check_mk/notifications/` (or similar), independent of the `checkmk_wizard` package and never imported by it.
+- Generated: No.
+- Committed: Yes (untracked in git status as of this analysis — verify before assuming committed).
 
-**`__pycache__/`:**
-- Purpose: Python bytecode cache (automatically created)
-- Generated: Yes
-- Committed: No (in .gitignore)
-
-## Module Dependencies
-
-```
-wizard.py (orchestration)
-├── api.py (CheckmkClient)
-├── site.py (OMD operations)
-├── scanner.py (network discovery)
-├── remote.py (SSH/firewall)
-├── livestatus.py (host state)
-├── questionary (user prompts)
-└── rich (console UI)
-
-api.py (REST client)
-└── httpx (async HTTP)
-
-remote.py (SSH operations)
-└── asyncssh (async SSH)
-
-scanner.py (network scanner)
-└── asyncio, ipaddress (stdlib)
-
-site.py (OMD bootstrap)
-└── subprocess (stdlib)
-
-livestatus.py (socket query)
-└── socket (stdlib)
-```
-
-**No circular imports.** Dependency graph is acyclic; all modules are leafs or depend on leafs only (except `wizard.py` which is the orchestrator).
-
-## Testing Structure
-
-- **Location:** `tests/` directory
-- **Framework:** pytest + pytest-asyncio (for async tests)
-- **Mocking:** respx (for httpx mocks in API tests)
-- **Patterns:**
-  - Each module has a test file: `test_<module>.py`
-  - Tests use `@pytest.mark.asyncio` decorator for async functions
-  - Fixtures provide mock data (e.g., `CheckmkConnection` instances)
-  - No live network, SSH, or Checkmk site access in tests
-
-**Run tests:**
-```bash
-uv run pytest              # Run all tests
-uv run pytest -v           # Verbose output
-uv run pytest --cov        # With coverage
-uv run pytest tests/test_api.py  # Single test file
-```
+**Repo-root `config_snapshot_*.json` files:**
+- Purpose: Phase 7 output artifacts (`wizard.py:1751-1760`) — a point-in-time export of the site's hosts/folders after each wizard run, written to the current working directory the wizard was invoked from.
+- Generated: Yes, at the end of every completed run.
+- Committed: No — these are run artifacts, not source; should not be added to version control (verify `.gitignore` coverage if these begin appearing in `git status`).
 
 ---
 
-*Structure analysis: 2026-08-24*
+*Structure analysis: 2026-09-05*

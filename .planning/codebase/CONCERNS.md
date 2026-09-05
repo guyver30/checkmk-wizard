@@ -1,526 +1,180 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-08-24
+**Analysis Date:** 2026-09-05
 
 ## Tech Debt
 
-### No End-to-End Testing Against Live Environment
+**No resume/checkpoint support across the 7-phase run:**
+- Issue: `run()` in `src/checkmk_wizard/wizard.py:1766-1776` chains phases 1-7 in a single process with no persisted state between phases. An uncaught exception, terminal disconnect, or `Ctrl-C` at any point loses all progress from earlier phases (scanned hosts, classification choices, onboarding results already applied server-side aren't re-discoverable by the wizard itself).
+- Files: `src/checkmk_wizard/wizard.py` (`run`, `main`)
+- Impact: A crash deep into Phase 5 (e.g. on host 40 of 50) forces a full re-run from Phase 1; the operator must remember/re-enter every prior answer. Documented as a known limitation in `docs/PLAN-CONFORMANCE-AUDIT.md` (line ~644) but never addressed.
+- Fix approach: Serialize `WizardState`/`OnboardedHost` list to disk after each phase and offer a "resume from last checkpoint" path on startup.
 
-**Issue:** The wizard has not been tested against a live Checkmk site, real network targets, or actual SSH connections. Per README.md and CHECKMK_SETUP_CONFIGURATOR_PLAN.md, all tests are isolated (mocked REST API, localhost port scanning, no real SSH). This is a significant gap.
+**Sequential (non-concurrent) per-host onboarding:**
+- Issue: `_onboard_hosts()` (`src/checkmk_wizard/wizard.py:1333-1538`) processes each host in a plain `for h in hosts:` loop — SSH connect, firewall fix, agent download/install, SMART install, and service discovery all run one host at a time even though every step is already `async`.
+- Files: `src/checkmk_wizard/wizard.py:1333`
+- Impact: Onboarding N Linux hosts takes roughly N times as long as one host (SSH round-trips, package uploads, and `sleep()`-based discovery retries in Phase 6 all serialize). Flagged as a known limitation in `docs/PLAN-CONFORMANCE-AUDIT.md` ("sequential (non-concurrent) per-host processing").
+- Fix approach: Run the per-host body under a bounded `asyncio.Semaphore` + `asyncio.gather`, mirroring the concurrency pattern already used in `scanner.py`.
 
-**Files:** `src/checkmk_wizard/wizard.py`, `src/checkmk_wizard/remote.py`, `src/checkmk_wizard/livestatus.py`
+**Config snapshot files accumulate uncleaned in the working directory:**
+- Issue: Phase 7 (`phase7_activation`, `src/checkmk_wizard/wizard.py:1751-1760`) writes `config_snapshot_<timestamp>.json` to the current working directory on every run, with no cleanup, rotation, or output-directory option.
+- Files: `src/checkmk_wizard/wizard.py:1758`; observed artifacts: `config_snapshot_20260826_163912.json`, `config_snapshot_20260826_164913.json`, `config_snapshot_20260826_165819.json` at repo root, plus six more under `src/config_snapshot_*.json` (all gitignored via `config_snapshot_*.json` in `.gitignore`, but not deleted from disk).
+- Impact: Disk clutter grows unbounded across repeated test runs; the three root-level snapshot files are owned by `root:root` (a prior run was executed with elevated privileges), which the current non-root user cannot delete without `sudo`. This is also why `uv run pytest` prints a `PytestCacheWarning: ... Permission denied: .pytest_cache/v/cache/nodeids` — `.pytest_cache/` itself has root-owned entries from the same prior privileged run.
+- Fix approach: Accept an `--output-dir` (or default to a dedicated `snapshots/` folder), and document/avoid running the wizard or its test suite as root.
 
-**Impact:** 
-- Orchestration logic in `phase1_site_bringup()` through `phase7_activation()` is untested
-- SSH automation paths may fail silently or produce unexpected output on real Linux/Windows targets
-- Livestatus integration has no real-world validation
-- Agent package installation and registration commands may not work as expected
-- Firewall automation may not correctly handle all `ufw`/`firewall-cmd`/`nft` variants
+**Fragile manual AST/regex parsing of Checkmk's on-disk config:**
+- Issue: `site.list_agent_registered_hosts()` → `_parse_host_attributes()` (`src/checkmk_wizard/site.py:181-225`) reverse-engineers WATO's `hosts.mk` files by walking a Python AST looking for one specific `host_attributes.update({...})` call shape. This already broke once (a prior regex-based version silently returned `{}` for every real file — see the docstring's "Bug fixed 2026-08-27" note) and returns `{}` silently on any parse failure, print no warning.
+- Files: `src/checkmk_wizard/site.py:181-225`, called from `wizard.py:335` (delete-site warning flow)
+- Impact: A future Checkmk release that changes how `hosts.mk` is generated (e.g. a different call shape or an additional wrapping construct) will silently make agent-registration warnings disappear again — the delete-site flow would stop warning about stale agent registrations with no visible error, reproducing the exact 2026-08-27 bug in a new form.
+- Fix approach: Add a self-check (e.g. warn if zero hosts are found across a site known to have `hosts.mk` files) or prefer the REST API (`list_hosts()`, already in `api.py`) over local file parsing wherever a live site connection is available.
 
-**Fix approach:** 
-1. Create integration test environment with a disposable Checkmk instance
-2. Add end-to-end test suite that exercises all 7 phases against live environment
-3. Add regression tests for known firewall/OS combinations
-4. Document known working configurations and tested versions
+**Manual/fragile Livestatus CSV parsing:**
+- Issue: `livestatus.query_host_states()` (`src/checkmk_wizard/livestatus.py:44-56`) parses the raw LQL CSV response by splitting each line on the first `;` only and silently `continue`-ing past any line that doesn't parse as an int state — no column-count validation, no handling of embedded semicolons.
+- Files: `src/checkmk_wizard/livestatus.py:47-55`
+- Impact: A malformed or unexpected response silently drops hosts from the returned state map rather than surfacing an error; Phase 7's post-activation table (`wizard.py:1726-1735`) would then show `"unknown"` for a host with no visible cause. Explicitly flagged as still-present in `docs/PLAN-CONFORMANCE-AUDIT.md` ("Already known ... confirmed still present").
+- Fix approach: Request `OutputFormat: json` instead of `csv` (Livestatus supports it) and parse with `json.loads`, eliminating the manual split logic entirely.
 
-### SSH Host Key Verification Disabled
+**No pre-flight check that Livestatus is reachable before Phase 7 queries it:**
+- Issue: `phase7_activation()` calls `livestatus.query_host_states()` unconditionally once `hosts` is non-empty (`wizard.py:1726-1735`); `query_host_states()` itself does not catch `OSError`/`socket.timeout` from `socket.create_connection()`.
+- Files: `src/checkmk_wizard/livestatus.py:34`, `src/checkmk_wizard/wizard.py:1726`
+- Impact: If Livestatus-over-TCP was never actually enabled (e.g. the container-mode path in Phase 1 warned about this but the operator proceeded anyway — `wizard.py:374-380`), Phase 7 raises an uncaught `OSError`/`ConnectionRefusedError` and crashes the wizard on its very last phase, after all onboarding work is already done.
+- Fix approach: Wrap the `query_host_states()` call in `phase7_activation()` with a `try/except OSError` and print a yellow warning instead of crashing, consistent with every other phase's degrade-gracefully pattern.
 
-**Issue:** In `src/checkmk_wizard/remote.py` line 105, `known_hosts=None` disables SSH host key verification entirely, making the wizard vulnerable to man-in-the-middle attacks.
-
-**Files:** `src/checkmk_wizard/remote.py:105`
-
-**Impact:** 
-- An attacker on the network could intercept SSH connections and capture credentials or inject malicious agent packages
-- No way to detect if connecting to an unexpected/compromised host
-
-**Fix approach:** 
-1. Change to `known_hosts="~/.ssh/known_hosts"` to use the user's existing known_hosts file
-2. Add a `--trust-new-keys` flag to allow new keys on first connection only
-3. Implement interactive key verification: prompt user to verify fingerprint on first connection
-4. Document the security implications and configuration options clearly
-
-### Secrets Passed as Command Arguments
-
-**Issue:** Functions `linux_register_command()` (line 197-207) and `windows_register_command()` (line 210-217) in `src/checkmk_wizard/remote.py` pass passwords as shell command arguments. Even with `shlex.quote()`, these are visible in process listings and shell history.
-
-**Files:** `src/checkmk_wizard/remote.py:197-217`
-
-**Impact:** 
-- Automation secrets exposed in `ps auxww`, shell history, audit logs
-- Risk of credential leakage if logs are captured or system is compromised
-- Violates credential handling best practices
-
-**Fix approach:** 
-1. For Linux: use `echo <secret> | cmk-agent-ctl register ... --password -` (if supported) to pass via stdin
-2. For Windows: write secret to a temporary file with restricted permissions and use `--password-file`
-3. Test with actual `cmk-agent-ctl` to confirm these alternatives work
-4. Clear secrets from memory immediately after use
-
-### Livestatus Socket Error Handling
-
-**Issue:** `src/checkmk_wizard/livestatus.py:query_host_states()` (lines 18-57) connects to a UNIX socket without checking if the file exists, if permissions allow access, or if the socket is actually accessible. Connection failures raise bare `OSError` exceptions.
-
-**Files:** `src/checkmk_wizard/livestatus.py:18-57`
-
-**Impact:** 
-- Phase 7 (`phase7_activation()` in wizard.py) may crash with cryptic error if:
-  - Site was just activated and Livestatus hasn't started yet
-  - Socket file is in wrong location or has wrong permissions
-  - Site process crashed or was stopped
-- No way to distinguish between "Livestatus not ready yet" vs. "permission denied" vs. "host truly down"
-- User gets no actionable guidance on how to proceed
-
-**Fix approach:** 
-1. Add pre-flight checks: verify socket file exists and is readable before connecting
-2. Wrap socket operations in specific exception classes (e.g. `LivestatusSocketNotFound`, `LivestatusPermissionDenied`)
-3. Implement retry with exponential backoff for transient failures (e.g. Livestatus starting up)
-4. Provide detailed error messages: "Livestatus socket not found at [path] — site may not have activated yet"
-5. Add timeout to `socket.connect()` to avoid hanging indefinitely
-
-### Network Scanner Could Hang on Large Ranges
-
-**Issue:** `src/checkmk_wizard/scanner.py:scan_network()` (lines 63-85) has no timeout at the network/chunk level, only at the individual port level (DEFAULT_TIMEOUT = 1.5s). A /16 network chunked into /24s = 256 chunks × ~254 hosts per chunk = ~65k hosts. Even with semaphore capping concurrency to 256, this could take hours and provide no feedback beyond per-chunk progress.
-
-**Files:** `src/checkmk_wizard/scanner.py:63-85`
-
-**Impact:** 
-- User runs scan on a /16 and the wizard hangs for extended periods with no way to estimate remaining time
-- On slow networks, 1.5s port timeout × 3 ports × 65k hosts = many minutes
-- No way to cancel mid-scan
-- Phase 3 (`phase3_discovery()` in wizard.py) could block indefinitely
-
-**Fix approach:** 
-1. Add network-level timeout (e.g. 30 minutes max per chunk)
-2. Implement per-chunk progress callbacks with time estimates
-3. Add keyboard interrupt handling (Ctrl+C) to gracefully cancel
-4. Warn user if CIDR is larger than /22 and recommend starting smaller
-5. Cache results per chunk to allow resuming if interrupted
-
----
+**No `[tool.ruff]` / lint configuration despite `.ruff_cache/` present:**
+- Issue: `pyproject.toml` has no `[tool.ruff]` section; ruff (evidenced by `.ruff_cache/`) is apparently run with all defaults, no project-specific rule selection, line length, or per-file ignores.
+- Files: `pyproject.toml` (no `[tool.ruff]` block)
+- Impact: Lint behavior is whatever ruff's shifting defaults happen to be on whichever version is installed locally, with no reproducibility across contributors/CI. One inline `# noqa: DTZ005` in `wizard.py:1758` implies at least the `DTZ` rule set is active by default, but the project doesn't pin or declare it.
+- Fix approach: Add an explicit `[tool.ruff]` (and `[tool.ruff.lint]`) section pinning the rule selection currently relied upon.
 
 ## Known Bugs
 
-### Incomplete Error Recovery in Phase 5
+**`_create_or_update_host()` cannot move a host between folders on fallback:**
+- Symptoms: When Phase 5 promotes a scanned IP into a named host inside a non-root Phase-2 folder, and Phase 3's IP-named placeholder already exists (e.g. Phase 2 was skipped or the folder assignment logic didn't stage it there), the fallback path in `_create_or_update_host()` (`src/checkmk_wizard/wizard.py:804-828`) only calls `update_host_attributes()` — Checkmk's host-config `PUT` does not support changing a host's folder. The host silently stays in whatever folder it was originally created in.
+- Files: `src/checkmk_wizard/wizard.py:804-828`
+- Trigger: A Phase-3-staged placeholder host ends up in a different folder than where Phase 5 tries to place its promoted counterpart, and the create collides.
+- Workaround: Documented directly in the function's docstring and in `docs/WIZARD-OPERATION.md`; in the current common path (Phase 3 now stages hosts directly into their eventual Phase 2 folder) this rarely triggers, but it is not eliminated for every code path — e.g. a host that changes folder assignment between scan and promotion.
 
-**Update (2026-08-25), partial fix:** the most common trigger for this bug
-was Phase 3 staging every scanned IP as a host under `host_name=ip`
-(`wizard.py:184-186`), which collided with Phase 5's `create_host` call
-whenever the user kept the default hostname (== IP) — silently dropping
-`tag_agent`/`tag_snmp_ds`/`snmp_community`/`ipaddress` for the common path,
-not just the naming-violation edge case described below. Phase 5 now goes
-through `_create_or_update_host()` (`wizard.py:247-266`), which falls back
-to `update_host_attributes()` on a collision instead of failing. See
-`docs/PLAN-CONFORMANCE-AUDIT.md` Phase 5 section, 2026-08-25 entry, for
-details and the remaining limitation (folder placement isn't corrected by
-the fallback). The "continues anyway" bug described below is still
-present for genuine create failures (e.g. an actually invalid hostname) —
-only its most frequent trigger is closed.
+**`bootstrap_agent_registration_secret()` is not live-verified:**
+- Symptoms: Unknown/unconfirmed — the function's own docstring (`src/checkmk_wizard/api.py:493-499`) states its `auth_option` reset-via-PUT request shape was inferred from two other, separately-verified endpoints, not tested end-to-end against a running Checkmk site.
+- Files: `src/checkmk_wizard/api.py:464-546`
+- Trigger: Container-mode Phase 1 bring-up (`wizard.py:444-461`) when no local `agent_registration` secret file is readable and a `cmkadmin_password` was supplied.
+- Workaround: On failure, the wizard catches `CheckmkAPIError` and falls back to reusing the general `automation` credential for registration (`wizard.py:456-461`) — a silent-but-safe degrade, not a crash, but the "dedicated least-privilege registration user" feature may simply never activate in container mode without anyone noticing.
 
-**Issue:** In `phase5_onboarding()` (wizard.py, lines 177-258), if a host create/update fails, the wizard continues to attempt firewall and agent install anyway. This can lead to installing an agent on a host object that was never successfully created in Checkmk.
-
-**Files:** `src/checkmk_wizard/wizard.py:177-258`
-
-**Impact:** 
-- Agent installed on target but host object missing/misconfigured in Checkmk
-- User gets confusing state: host appears "up" but never shows in Checkmk monitoring
-- No clear path to recover — requires manual cleanup and re-run
-
-**Trigger:** 
-1. Run phase 5
-2. Enter hostname that violates Checkmk naming rules (e.g. contains invalid characters, duplicate hostname exists)
-3. Host create fails with CheckmkAPIError
-4. Wizard continues with firewall/SSH/agent install
-
-**Fix approach:** 
-1. Check `create_host()` response for success before proceeding to firewall/install steps
-2. Add a "continue anyway?" prompt if host creation fails
-3. Skip SSH automation steps for hosts that weren't successfully created
-4. Return detailed error to user instead of silently proceeding
-
-### Folder Assignment Race Condition
-
-**Update (2026-08-25), largely mitigated:** Phase 4 no longer lets the
-operator type an arbitrary folder name by hand — `OnboardedHost.folder`
-now always comes from `ScannedHost.folder`, which is either `/` (always
-exists) or a folder Phase 2 itself just created via the REST API in the
-same run. The typo/nonexistent-folder scenario this concern describes is
-closed. Residual gap: if a folder's `create_folder()` call in Phase 2
-itself fails (e.g. a permissions issue), the wizard still records that
-folder's subnet and Phase 3 will still scan/stage into it, hitting this
-same class of error again in Phase 3/5 — not pre-flight-checked. See
-`docs/PLAN-CONFORMANCE-AUDIT.md`, Phase 2/3, 2026-08-25 entry.
-
-**Issue:** In `phase5_onboarding()` (wizard.py, line 201-205), hosts are created with a folder that may not exist if Phase 2 was skipped or if folder creation failed. The API will likely reject this, but the error handling is generic.
-
-**Files:** `src/checkmk_wizard/wizard.py:201-205`
-
-**Impact:** 
-- Host creation fails with unclear error message if folder doesn't exist
-- User has no way to know if it's a naming issue, permissions issue, or folder not found
-
-**Fix approach:** 
-1. Pre-flight check: verify all folders in `onboarded` list exist before Phase 5 starts
-2. If a folder is missing, offer to create it or reassign to root
-3. Return specific error message: "Folder '[folder]' does not exist"
-
----
+**SNMP `snmp_community` attribute payload shape is unverified:**
+- Symptoms: Unknown/unconfirmed — the SNMP host-creation path (`wizard.py:1349-1373`) sends `"snmp_community": {"type": "v1_v2_community", "community": ...}` with an inline comment explicitly noting "the exact snmp_community attribute schema below was not confirmed against live Checkmk REST API docs."
+- Files: `src/checkmk_wizard/wizard.py:1354-1369`
+- Trigger: Onboarding any host classified as `os_family == "snmp"` in Phase 4.
+- Workaround: None built in; `CheckmkAPIError` from a rejected payload is caught and printed as a yellow warning (`wizard.py:1371-1372`), so the host may end up created without a working SNMP community — verify against the target site's own OpenAPI spec before relying on this in production, per the code comment.
 
 ## Security Considerations
 
-### Automation Secret Storage and Prompt
+**Plaintext HTTP is the default transport for all REST and GUI-login traffic:**
+- Risk: `CheckmkConnection.proto` defaults to `"http"` (`src/checkmk_wizard/api.py:36`), and every bootstrap/password-change helper (`bootstrap_automation_user`, `bootstrap_agent_registration_secret`, `change_cmkadmin_password` in `api.py`) also defaults `proto="http"`. The REST client's `Authorization: Bearer <user> <secret>` header (`api.py:64`) and the GUI login's `_username`/`_password` form POST (`api.py:301-311`) are therefore sent in cleartext by default over the network to `checkmk_host`.
+- Files: `src/checkmk_wizard/api.py:36`, `:64`, `:301-311`, `:359`, `:506`, `:582`
+- Current mitigation: None — the wizard never prompts for or defaults to `https`, and there's no TLS-verification-skip warning either way since HTTP is simply assumed.
+- Recommendations: Default to `https` (with an explicit opt-out for lab/loopback use), or at minimum warn the operator when `checkmk_host` resolves to something other than `localhost`/loopback and `proto` is still `http`.
 
-**Risk:** Phase 1 (`phase1_site_bringup()`, lines 44-89) generates a random `cmkadmin` password and prints it to the console. If this is redirected to a log file or captured by a terminal multiplexer, it's visible in logs.
+**Registration/sudo secrets appear in remote process argv, visible via `ps`:**
+- Risk: `linux_register_command()`/`windows_register_command()` (`src/checkmk_wizard/remote.py:342-371`) embed the plaintext automation/registration secret directly in a `cmk-agent-ctl register --password <secret>` command string. This string is executed on the target host via `_run_sudo()` (`remote.py:190-206`), which runs `sudo -S -p '' <cmd>` as a single shell command — for the duration of that command's execution, any local user on the target with process-list access (`ps aux`, `/proc/<pid>/cmdline`) can read the plaintext secret.
+- Files: `src/checkmk_wizard/remote.py:342-371` (command construction), `remote.py:421-438`, `remote.py:441-494` (execution sites), `wizard.py:1413-1416`, `1453-1456`, `1569-1574` (also printed to the console/terminal scrollback in manual-instructions paths)
+- Current mitigation: None. The sudo *password itself* is fed via stdin (`_run_sudo`'s `input=` parameter) and does not appear in argv — only the registration secret is exposed this way.
+- Recommendations: Use `cmk-agent-ctl register`'s support for reading the password from stdin (if available) or a temporary credential file with restrictive permissions, removed immediately after use, instead of passing it as a CLI argument.
 
-**Files:** `src/checkmk_wizard/wizard.py:44-89`
+**SSH host-key verification is disabled for every managed host:**
+- Risk: `_connect()` (`src/checkmk_wizard/remote.py:172-178`) passes `known_hosts=None` to `asyncssh.connect()` unconditionally, disabling host-key verification for every SSH session the wizard opens (firewall fixes, agent install, SMART setup, service discovery scans).
+- Files: `src/checkmk_wizard/remote.py:173`
+- Current mitigation: None — no `known_hosts` file, no TOFU (trust-on-first-use) prompt, no warning printed to the operator.
+- Recommendations: At minimum, print a one-time warning when connecting to a host for the first time; ideally support an optional `known_hosts` path and only fall back to `None` when the operator explicitly opts in (e.g. for lab environments).
 
-**Current mitigation:** 
-- Console output only (not persisted by default)
-- User is told "save this" and expected to copy/paste
-- Random token generated with `secrets.token_urlsafe(16)` (cryptographically sound)
+**Generated passwords and secrets are printed to the terminal in plaintext:**
+- Risk: The freshly generated `cmkadmin` password (`secrets.token_urlsafe(16)`, `wizard.py:215`) and every automation/registration secret path print the actual credential value to the console (`wizard.py:220`, and every `linux_register_command`/`windows_register_command` printed in the manual-instructions fallback paths, e.g. `wizard.py:1416`, `:1574`).
+- Files: `src/checkmk_wizard/wizard.py:215-220`, `:1413-1416`, `:1453-1456`, `:1569-1574`
+- Current mitigation: None — no `--quiet`/redaction option; relies entirely on the operator's terminal not being logged, screen-shared, or recorded (note: `screen1.png` and `PROMPT_LOG.md` exist in this working tree, illustrating the kind of artifact that can inadvertently capture such output).
+- Recommendations: Offer a redacted/masked display mode, or write one-time secrets to a short-lived local file the operator must explicitly open, rather than echoing to stdout.
 
-**Recommendations:** 
-1. Accept `cmkadmin` password as input or environment variable instead of generating one
-2. Avoid printing the password — require user to retrieve it from the site's automation.secret file manually
-3. Add a note in README about disabling shell history for the session if credentials are sensitive
-
-### Hardcoded Firewall Port and Protocol
-
-**Risk:** Agent Receiver port (8000) is hardcoded in multiple places. If Checkmk is configured with a non-standard port, the wizard's firewall rules will be incorrect.
-
-**Files:** 
-- `src/checkmk_wizard/remote.py:23` (AGENT_RECEIVER_PORT = 8000)
-- `src/checkmk_wizard/wizard.py:218-219` (used in probe)
-- `src/checkmk_wizard/remote.py:129-164` (hardcoded in manual instructions)
-
-**Current mitigation:** None — assumes port 8000 always
-
-**Recommendations:** 
-1. Query the site via REST API to determine the actual Agent Receiver port (`GET /version` or a site config endpoint)
-2. Make port configurable via environment variable or config file
-3. Store port in CheckmkConnection so all phases use the same value
-4. Document assumption that port 8000 is used
-
-### Package Integrity Not Verified
-
-**Risk:** Agent packages downloaded in `phase5_onboarding()` (wizard.py, line 245) are not verified for integrity or authenticity. A compromised local network could inject malicious binaries.
-
-**Files:** `src/checkmk_wizard/wizard.py:245`, `src/checkmk_wizard/api.py:143-150`
-
-**Current mitigation:** HTTPS is used (assumed, via httpx default), but no checksum verification
-
-**Recommendations:** 
-1. Request SHA256 checksum from the REST API along with the package
-2. Verify downloaded package matches checksum before installing
-3. Allow user to manually verify fingerprints if desired
-
----
+**`.planning/.pending-auth-captures.jsonl` present and untracked in the working tree:**
+- Risk: An untracked file named `.pending-auth-captures.jsonl` exists under `.planning/` (outside this project's own `src/checkmk_wizard` code — likely produced by tooling around this repository rather than the wizard itself). Its name strongly suggests captured authentication material.
+- Files: `.planning/.pending-auth-captures.jsonl` (existence noted only; contents were not read per this audit's data-handling rules)
+- Current mitigation: Not covered by `.gitignore` — currently shows as untracked (`??`) in `git status`, meaning it would be swept into a `git add -A`/`git add .` if one were ever run.
+- Recommendations: Confirm what writes this file and whether it belongs in `.gitignore`; if it can contain real credentials, ensure it is never committed and is deleted/rotated after use.
 
 ## Performance Bottlenecks
 
-### Sequential Host Processing in Phase 5
+**Phase 3 network scan concurrency is a single fixed global semaphore per scan:**
+- Problem: `scan_network()` (`src/checkmk_wizard/scanner.py:63-85`) uses one `asyncio.Semaphore(concurrency)` (default 256) shared across every host×port probe in a /24 chunk, with `timeout=1.5s` per probe (`DEFAULT_TIMEOUT`). For a filtered/firewalled subnet, most probes take the full timeout before failing, and the concurrency ceiling means a full /24 × 3-ports scan can still take on the order of `(254*3/256) * 1.5s ≈ 4.5s` per chunk in the worst case, scaling further for larger CIDRs (multiple /24 chunks processed sequentially — `for chunk in chunk_network(network):` in `scan_network()`, `scanner.py:75`).
+- Files: `src/checkmk_wizard/scanner.py:63-85`
+- Cause: Chunks are processed one at a time rather than concurrently; only within a chunk is there any parallelism.
+- Improvement path: Run chunks concurrently too (bounded by the same or a second semaphore), rather than sequential `for chunk in chunk_network(network)`.
 
-**Issue:** `phase5_onboarding()` (wizard.py, lines 198-258) processes each host sequentially. For 100 hosts, even with fast SSH it could take 10+ minutes (1-2 min per host for firewall + OS check + agent download + install + register).
-
-**Files:** `src/checkmk_wizard/wizard.py:177-258`
-
-**Cause:** Each host waits for SSH connection, firewall check, OS compatibility check, package download, SCP transfer, install, and registration — all serial.
-
-**Improvement path:** 
-1. Download agent package once (shared across all Linux hosts of the same type)
-2. Cache compatibility check results per OS type
-3. Consider limited concurrency for SSH operations (e.g. 5 hosts in parallel) to balance throughput vs. resource usage
-4. Separate REST API calls (which are fast) from SSH operations (which are slow)
-
-### Network Scanner Inefficiency at Scale
-
-**Issue:** `scan_network()` (scanner.py) doesn't report progress as it scans, only per-chunk (line 82-83). User gets one update per /24 chunk, which could be 1-2 minutes apart on slow networks.
-
-**Files:** `src/checkmk_wizard/scanner.py:48-85`
-
-**Improvement path:** 
-1. Add per-host progress callback to show "scanning X.X.X.X..." in real-time
-2. Estimate remaining time based on current scan rate
-3. Allow user to set aggressive vs. conservative port timeout (trade speed for accuracy)
-
----
+**Phase 6 discovery retries add up to ~60s of blocking `asyncio.sleep` per host with unresolved services:**
+- Problem: `phase6_discovery()` (`src/checkmk_wizard/wizard.py:1612-1648`) retries `start_service_discovery(mode="fix_all")` after fixed delays `_DISCOVERY_RETRY_DELAYS_SECONDS = (10, 20, 30)` (`wizard.py:1590`) whenever any Phase-5-requested service hasn't shown up yet — per host, sequentially (see "Sequential ... onboarding" tech-debt item above).
+- Files: `src/checkmk_wizard/wizard.py:1590`, `:1632-1644`
+- Cause: Combined with the sequential per-host loop, a batch of 10 Linux hosts that are all slow to report services could add up to ~10 minutes of pure wait time to a single wizard run.
+- Improvement path: Run the retry loop across hosts concurrently (each host's own delay independent of the others), consistent with the sequential-onboarding fix noted above.
 
 ## Fragile Areas
 
-### Firewall Detection and Manipulation
+**`_expected_open_ports_by_hostname()` / `_ping_only_hostnames()` depend on precise IP/hostname bookkeeping across phases:**
+- Files: `src/checkmk_wizard/wizard.py:830-916`
+- Why fragile: These two functions reconstruct "which scanned host is this now called" by cross-referencing `ScannedHost.ip` against `OnboardedHost.ip` in two separately-maintained lists (`scan_results`, `onboarded`) built across three different phases (3, 4, 5). Any future change that lets a host's IP change between scan and promotion, or that introduces duplicate IPs across folders, would silently misattribute expected-open-port or ping-only rules to the wrong host.
+- Safe modification: Any change to `ScannedHost`/`OnboardedHost` field semantics (especially `ip`) must be accompanied by updates to both functions and their existing tests in `tests/test_wizard.py` (`test_expected_open_ports_by_hostname_skips_hosts_with_no_ports` and neighbors).
+- Test coverage: Covered by unit tests, but only for single-folder, non-duplicate-IP scenarios — no test exercises duplicate IPs across two different Phase-2 folders.
 
-**Files:** `src/checkmk_wizard/remote.py:129-164`
-
-**Why fragile:** 
-- Relies on `command -v` to detect `ufw`, `firewall-cmd`, or `nft` — order matters (checks ufw first)
-- Each firewall has different syntax and requires different permissions
-- `sudo` is hardcoded — what if user can't sudo? What if `NOPASSWD` isn't configured?
-- Detects by running commands; if host is sluggish, timeout could trigger unnecessarily
-- No rollback if rule addition fails partway through
-
-**Safe modification:** 
-1. Before modifying firewall, always show the command that will be run and ask for confirmation
-2. Implement `--dry-run` mode to show what would happen without executing
-3. Add explicit `sudo -n` (non-interactive) check before attempting
-4. Log all firewall commands and their exit codes for audit trail
-5. Implement rollback: if install fails, remove the firewall rule that was added
-
-### OS Compatibility Check
-
-**Files:** `src/checkmk_wizard/remote.py:167-194`
-
-**Why fragile:** 
-- Compares target OS to the Checkmk host's OS exactly (line 184: `target.id == expected.id and target.version_id == expected.version_id`)
-- This is too strict: Ubuntu 22.04 package may work on Ubuntu 22.10
-- Silently returns `None` on any error, which means "compatibility unknown — proceed anyway"
-- Parsing `/etc/os-release` is fragile if format is non-standard
-
-**Safe modification:** 
-1. Implement proper package compatibility matrix (e.g. "deb packages for Ubuntu ≥ 20.04", "rpm for RHEL ≥ 8")
-2. Explicitly list tested combinations
-3. Distinguish between "unknown" and "incompatible" — return `CompatibilityCheckError` if check itself fails
-4. Test parsing against real `/etc/os-release` files from multiple distros
-
-### Livestatus CSV Parsing
-
-**Files:** `src/checkmk_wizard/livestatus.py:18-57`
-
-**Why fragile:** 
-- Manual CSV parsing without CSV module (lines 48-56)
-- Uses `line.partition(";")` which only splits on first semicolon — what if hostname contains `;`?
-- State parsing is lenient: `int(state)` catches `ValueError` and silently ignores malformed lines
-- No handling if Livestatus returns an error response instead of data
-
-**Safe modification:** 
-1. Use Python's `csv` module instead of manual parsing
-2. Validate that state is exactly 0, 1, or 2 — raise error on unexpected values
-3. Check for Livestatus error responses (e.g. "500 Internal Error")
-4. Document that hostnames containing semicolons are not supported
-
-**Test coverage:** Currently not tested at all. Add unit tests for CSV parsing with edge cases (empty response, malformed lines, missing state columns).
-
-### REST API Error Handling
-
-**Files:** `src/checkmk_wizard/api.py:63-85`
-
-**Why fragile:** 
-- Generic `CheckmkAPIError` raised for all failures; no distinction between 400 (bad request), 401 (auth failed), 403 (forbidden), 404 (not found), 500 (server error)
-- Caller can't decide whether to retry, skip, or fail
-- No retry logic for transient 5xx errors
-
-**Safe modification:** 
-1. Create subclasses: `CheckmkAPIClientError` (4xx), `CheckmkAPIServerError` (5xx)
-2. Implement automatic retry with exponential backoff for 5xx
-3. Return different guidance based on error type:
-   - 401: "Check authentication credentials"
-   - 404: "Host/folder doesn't exist"
-   - 400: "Invalid request — check input data"
-   - 500+: "Checkmk server error — retry or contact administrator"
-
----
+**`_gui_login()` CSRF/session-cookie flow is coupled to Checkmk's HTML login page structure:**
+- Files: `src/checkmk_wizard/api.py:286-313`
+- Why fragile: `bootstrap_automation_user()`, `bootstrap_agent_registration_secret()`, and `change_cmkadmin_password()` all depend on scraping a `global_csrf_token = "..."` JavaScript assignment out of the raw login page HTML via a single regex (`_CSRF_TOKEN_RE`, `api.py:286`). A Checkmk UI update that changes this variable name, quoting style, or moves CSRF handling to a meta tag/cookie would break all three bootstrap functions at once with a generic "no CSRF token found" error, not a Checkmk-version-specific one.
+- Safe modification: Any Checkmk version bump used for testing should include manually re-verifying this regex still matches; consider capturing the exact Checkmk version this was verified against (already partially done — code comments cite "2.4.0p35 CE" throughout) and asserting/warning on version drift.
+- Test coverage: Exercised via mocked HTTP responses (`respx`) in `tests/test_api.py`, which by construction always match the assumed HTML shape — provides no protection against upstream Checkmk changing that shape.
 
 ## Scaling Limits
 
-### Network Scanner Concurrency
+**Full-batch shared SSH/sudo credentials assume homogeneous Linux fleet:**
+- Current capacity: `_establish_ssh_access()` (`wizard.py:1231-1296`) collects one SSH username/password-or-key and, if needed, one sudo password for the *entire* batch of Linux hosts, tested against only the first host (`linux_hosts[0].ip`).
+- Limit: A batch where even one Linux host has different SSH credentials falls back to manual instructions for *that host only* (each remote.py function's own `check_ssh_reachable()` guard) — acceptable for small/homogeneous fleets but doesn't scale to environments with per-host credential rotation or varied service accounts.
+- Scaling path: Support per-host (or per-group) credential sets, prompted once per distinct credential set rather than once globally.
 
-**Current capacity:** 
-- Fixed concurrency: `DEFAULT_CONCURRENCY = 256` (line 19, scanner.py)
-- Scales to ~65k hosts on a /16 network (256 chunks × 254 hosts per chunk)
-- Per-chunk scan time: ~254 hosts × 3 ports × 1.5s timeout = 1140s = 19 min per chunk (worst case, no open ports)
-
-**Limit:** At 256 concurrent connections, the wizard will hit kernel descriptor limits on hosts with low `ulimit -n` (default 1024). For a /16, 256 concurrent × 1.5s timeout = 384 potential concurrent connections if all hosts fail to answer quickly.
-
-**Scaling path:** 
-1. Make concurrency configurable (allow user to lower for constrained environments, raise for powerful ones)
-2. Implement adaptive concurrency: start at 256, back off if hitting "too many open files" errors
-3. Add `ulimit` check before scanning to warn user
-4. Split very large CIDR blocks (>/16) into multiple sequential scans
-
-### Host Onboarding Throughput
-
-**Current capacity:** 
-- Phase 5 processes hosts sequentially
-- Per host: 1-2 min for SSH+firewall+OS check+agent install+register
-- For 100 hosts: 100-200 minutes
-
-**Limit:** No hard limit, but user experience degrades significantly over 50 hosts
-
-**Scaling path:** 
-1. Add parallel SSH handling (e.g. 5-10 concurrent SSH sessions)
-2. Move REST API calls (fast) out of the serial path
-3. Implement batching: REST host creates first (parallel), then SSH operations (limited parallel)
-4. Add progress bar with ETA
-
-### Activation Performance
-
-**Current:** Phase 7 activates changes and queries Livestatus for all onboarded hosts. For very large deployments (1000+ hosts), this could time out.
-
-**Scaling path:** 
-1. Make health check optional for large deployments
-2. Implement async Livestatus queries or return after first N hosts show up
-
----
+**Phase 3 scanning holds full result sets in memory and issues one `create_host` call per discovered IP sequentially:**
+- Current capacity: `phase3_discovery()` (`wizard.py:633-704`) calls `client.create_host()` once per scanned+alive IP, in a plain `for r in results:` loop, immediately after each subnet's scan completes.
+- Limit: A large subnet (e.g. a /16 chunked into 256 /24s) with many responsive hosts would issue hundreds of sequential REST calls with no batching/concurrency, extending wizard runtime roughly linearly with host count.
+- Scaling path: Batch host creation with bounded concurrency, same as the scanning improvement noted under Performance Bottlenecks.
 
 ## Dependencies at Risk
 
-### asyncssh 2.24.0
-
-**Risk:** asyncssh is not in the Checkmk ecosystem; it's a general-purpose library. Breaking changes or security vulnerabilities in this library could block the wizard.
-
-**Impact:** 
-- SSH automation (Phase 5.1/5.2) stops working if asyncssh version is incompatible
-- Need to audit for security advisories
-
-**Migration plan:** 
-1. Monitor asyncssh releases for security updates
-2. Have a plan to use paramiko or built-in `ssh` subprocess calls as fallback
-3. Document minimum supported asyncssh version
-
-### httpx 0.28.1
-
-**Risk:** HTTP client library not specific to Checkmk. Could have TLS/certificate validation issues.
-
-**Impact:** 
-- REST API calls fail if httpx has a bug
-- Certificate validation might not work correctly in all environments
-
-**Migration plan:** 
-- Consider pinning to known-good version
-- Monitor for security updates
-- Test against various Python/OpenSSL combinations
-
----
+**`asyncssh`, `httpx`, `questionary`, `rich` are unpinned above a minimum version (`>=`):**
+- Risk: `pyproject.toml` declares all four core dependencies with `>=` lower bounds only (`asyncssh>=2.24.0`, `httpx>=0.28.1`, `questionary>=2.1.1`, `rich>=15.0.0`), no upper bounds. `uv.lock` pins exact resolved versions for reproducible installs, but a `uv sync --upgrade` (or a fresh lock) could pull in a breaking major version of any of these with no warning from the manifest itself.
+- Impact: A breaking `asyncssh` or `httpx` release could silently change connection/auth semantics (e.g. `known_hosts` handling, timeout behavior) used throughout `remote.py`/`api.py`.
+- Migration plan: Add upper-bound or exact pins for at least `asyncssh` and `httpx` given how deeply their specific API surface (`asyncssh.connect(known_hosts=...)`, `httpx.AsyncClient` header/timeout semantics) is relied upon.
 
 ## Missing Critical Features
 
-### No Resume/Checkpoint Support
+**No full site backup — only hosts + folders, no rules/users:**
+- Problem: Phase 7's `config_snapshot_*.json` (`wizard.py:1737-1760`) only captures `list_hosts()` and `list_folders()`. Every rule created by the wizard itself (TCP-port checks, PING checks, threshold rules, service-discovery rules — all in `wizard.py`'s `_create_*_rules` helpers) plus any pre-existing site-wide rules, users, and roles are absent from the snapshot.
+- Blocks: Using the snapshot as a genuine disaster-recovery artifact, as originally scoped in `docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md` ("known good baseline ... for diffing/disaster recovery") — explicitly documented in `docs/PLAN-CONFORMANCE-AUDIT.md` as a "scope correction, not full closure."
 
-**Issue:** If the wizard crashes or is interrupted mid-execution, there's no way to resume from where it left off. User must start from Phase 1 again.
-
-**Impact:** 
-- Re-running creates duplicate host objects, folders
-- Idempotency is not guaranteed (Phase 2 folder creation may fail if folder already exists)
-- User must manually track which phases completed
-
-**Blocking:** Not critical for initial MVP, but becomes important with larger deployments
-
-**Fix approach:** 
-1. Write phase completion checkpoints to a local state file after each phase
-2. On startup, offer to resume from last checkpoint
-3. Make all operations idempotent (e.g. update host instead of create if it already exists)
-
-### No Dry-Run Mode
-
-**Issue:** Wizard makes live changes to Checkmk without a way to preview what will happen.
-
-**Impact:** 
-- User can't see plan before executing
-- Risky for production environments
-
-**Fix approach:** 
-1. Add `--dry-run` flag to all phases
-2. Show what would be created/modified without actually making changes
-3. Allow user to review plan and confirm before proceeding
-
-### No Configuration File Support
-
-**Issue:** All input is interactive. For repeated setups or automation, this is tedious.
-
-**Impact:** 
-- Can't script the wizard
-- Must manually enter subnet, hosts, credentials every time
-
-**Fix approach:** 
-1. Support YAML/JSON config file with all phase inputs
-2. Fall back to prompts if config file missing
-3. Document config file schema
-
----
+**Disabled-services baseline ruleset never implemented:**
+- Problem: The original plan's Phase 6 baseline-ruleset scope included suppressing known-noisy disabled-services checks; this remains deliberately deferred (`docs/PLAN-CONFORMANCE-AUDIT.md`, "Disabled-services baseline ruleset — still deliberately deferred") since there is no "ask the operator to pick from what's there" mitigation analogous to the systemd/Windows service-selection flow.
+- Blocks: Fully automated noise-free monitoring baselines without a manual post-onboarding cleanup pass in the Checkmk UI.
 
 ## Test Coverage Gaps
 
-### Wizard Orchestration Logic (Phases 1-7)
+**No test exercises duplicate IPs across multiple Phase 2 folders:**
+- What's not tested: `_expected_open_ports_by_hostname()`/`_ping_only_hostnames()` (`wizard.py:830-916`) behavior when the same IP is somehow scanned into two different folders in one run.
+- Files: `tests/test_wizard.py` (no matching test found via `grep -n "def test_"` search for this scenario)
+- Risk: Silent misattribution of TCP-port/PING rules to the wrong host if this edge case is ever hit in practice.
+- Priority: Low (requires an unusual dual-folder-scan-of-same-subnet setup to trigger).
 
-**What's not tested:** 
-- The entire `run()` and `main()` functions (wizard.py:318-331)
-- All 7 phase functions' interaction and state management
-- Error handling across phases (e.g. Phase 1 fails → how do Phases 2-7 behave?)
-- User prompt handling and validation
+**No integration/live-site test for `bootstrap_agent_registration_secret()`:**
+- What's not tested: End-to-end behavior against a real Checkmk site — only mocked HTTP responses via `respx` in `tests/test_api.py` (`test_bootstrap_agent_registration_secret_success` and neighbors), which the function's own docstring already flags as unverified against a live site.
+- Files: `tests/test_api.py:399-461`, `src/checkmk_wizard/api.py:464-546`
+- Risk: The mocked tests can pass while the real Checkmk endpoint rejects the actual request shape — this exact class of failure has already occurred once for the sibling systemd-discovery ruleset (per `docs/PLAN-CONFORMANCE-AUDIT.md`'s account of needing live-site debugging to get that payload shape right).
+- Priority: Medium — affects a real, reachable code path (container-mode Phase 1 bring-up), not a hypothetical one.
 
-**Files:** `src/checkmk_wizard/wizard.py:318-331`
-
-**Risk:** 
-- Phases may call each other with invalid state
-- Global questionary prompts may not behave as expected in test/CI environments
-- Resource cleanup (e.g. CheckmkClient context manager) may leak on error
-
-**Coverage:** 0% (not tested at all)
-
-### Livestatus Integration
-
-**What's not tested:** 
-- `query_host_states()` function
-- CSV parsing logic
-- Socket errors and retry behavior
-- Empty results, malformed responses
-
-**Files:** `src/checkmk_wizard/livestatus.py`
-
-**Risk:** 
-- Phase 7 health check silently fails or crashes
-- User gets no feedback on host states
-
-**Coverage:** 0% (not tested at all)
-
-### SSH Remote Operations
-
-**What's not tested:** 
-- Real SSH connections (mocked, only function signatures tested)
-- Firewall detection and rule application
-- Agent installation and registration
-- OS compatibility checks
-
-**Files:** `src/checkmk_wizard/remote.py`
-
-**Risk:** 
-- All firewall and SSH automation fails silently or with cryptic errors on real hosts
-- No real-world data on which firewall backends and Linux distros work
-
-**Coverage:** ~30% (only command generation and parsing tested; not actual SSH operations)
-
-### Checkmk API Client
-
-**What's not tested:** 
-- Real HTTP calls (mocked via respx)
-- Edge cases: 404 responses, 500 errors, slow servers, network timeouts
-- Retry behavior on transient failures
-- Large response bodies (e.g. downloading multi-MB agent packages)
-
-**Files:** `src/checkmk_wizard/api.py`
-
-**Risk:** 
-- Untested 5xx retry logic may fail in production
-- Large package downloads may crash or time out
-
-**Coverage:** ~70% (happy path covered, error cases minimal)
-
-### Network Scanner
-
-**What's not tested:** 
-- Real network scanning
-- Large /16 networks (only tested on localhost)
-- Actual firewall/filtering behavior
-- Timeout and hang recovery
-
-**Files:** `src/checkmk_wizard/scanner.py`
-
-**Risk:** 
-- Hangs on real networks if something goes wrong
-- Progress reporting doesn't work as expected
-
-**Coverage:** ~50% (basic logic tested on localhost, not at scale)
-
-**Priority:** Add integration tests for the wizard's orchestration and livestatus, prioritize SSH/firewall real-world testing.
+**No test for concurrent/large-batch scanning or onboarding performance characteristics:**
+- What's not tested: Runtime/behavior of `scan_network()` or `_onboard_hosts()` under realistic host counts (tens to hundreds) — existing tests use small, fixed host lists.
+- Files: `tests/test_scanner.py`, `tests/test_wizard.py`
+- Risk: The sequential-processing performance issues noted above have no regression test that would catch a further slowdown or catch a future concurrency fix's correctness.
+- Priority: Low — these are known, already-documented performance characteristics, not silent bugs.
 
 ---
 
-*Concerns audit: 2026-08-24*
+*Concerns audit: 2026-09-05*
