@@ -27,7 +27,11 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
   2. Restarting the mosquitto container preserves previously retained messages, because `persistence true` is set against a mounted volume
   3. The WebSocket listener enforces a read-only ACL — a WS client can subscribe to any topic but a publish attempt is rejected; only the poller's internal TCP connection can publish
   4. `compose.yaml` exposes the new WebSockets port to the LAN alongside the existing `1883` port
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 08-01-PLAN.md — Broker config artifacts: mosquitto.conf (two listeners, auth, persistence), mosquitto.acl (read-only wsreader), reproducible password-file generator
+- [ ] 08-02-PLAN.md — Canonical deploy/compose.yaml (corrected /mosquitto/config mounts, WS on host 9002) + paho-mqtt dependency
+- [ ] 08-03-PLAN.md — Live smoke test proving BRK-01/02/03, Podman setup doc repointed at deploy/
 
 ### Phase 9: Poller Core
 **Goal**: A long-running poller keeps MQTT retained state in sync with Checkmk Livestatus, self-healing across restarts with no persisted state of its own required
@@ -72,7 +76,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 
 | Phase | Plans Complete | Status | Completed |
 |-------|-----------------|--------|-----------|
-| 8. Broker Infrastructure Hardening | 0/TBD | Not started | - |
+| 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 0/TBD | Not started | - |
 | 10. Checkmk Tag-Group & Onboarding Integration | 0/TBD | Not started | - |
 | 11. Live Dashboard | 0/TBD | Not started | - |
