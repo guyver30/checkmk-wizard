@@ -392,17 +392,19 @@ podman compose exec mosquitto mosquitto_sub -h localhost -p 1883 \
 | A2 | Downloads/week figure for `paho-mqtt` ("millions/month") is asserted from general knowledge, not re-measured via pypistats this session (pypistats.org rate-limited the request) | Package Legitimacy Audit | Cosmetic only — package legitimacy is otherwise established via slopcheck + long release history (first release 0.4.90) + Eclipse Foundation ownership, none of which depend on the exact download figure |
 | A3 | No official symlink or fallback exists from `/etc/mosquitto/mosquitto.conf` to `/mosquitto/config/mosquitto.conf` in the `eclipse-mosquitto:2.1-alpine` image — based on reading the image's Dockerfile/entrypoint source directly (HIGH confidence) plus absence of any documented mention of such a symlink across multiple community sources, but not verified by actually running the container | Pitfall 1 / Pattern 3 | If a symlink turns out to exist after all, the existing baseline doc's mount path would have been working correctly all along, and Pitfall 1's fix would be unnecessary (harmless either way — moving to the documented default path is correct regardless) |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does the currently-running (if any) mosquitto container on the user's actual deployment host already have this mount-path problem, and if so, is there already-accumulated retained state to migrate/lose?**
    - What we know: The doc describes the intended setup; whether it's actually deployed and running right now with the `/etc/mosquitto/` mount is unknown from this repo alone.
    - What's unclear: Whether Phase 8's implementation needs a "before you deploy this, note any existing retained state will not carry over" callout for the user.
    - Recommendation: Planner should add a note (not a blocking task) in the plan's deploy instructions: back up `mosquitto_data` volume contents before applying, if a live stack already exists.
+   - RESOLVED: Implemented in `08-03-PLAN.md` Task 2 as a migration callout referencing `podman volume export`.
 
 2. **Exact behavior of Mosquitto's `log_type` verbosity needed to see "Denied PUBLISH" lines, for the optional supplementary smoke-test log check.**
    - What we know: The message format and that it's an ACL-denial log line (confirmed via GitHub issue discussion, MEDIUM confidence — not the official man page).
    - What's unclear: The exact minimum `log_type` value needed (`all` vs `notice` vs `warning`) to guarantee it appears without also being buried in unrelated debug noise.
    - Recommendation: Treat the functional (subscribe-and-wait) check as the required verification; the log-grep check is optional polish, not a blocking requirement — don't spend planning time nailing the exact log_type value.
+   - RESOLVED: `08-03-PLAN.md` Task 1 makes the functional subscribe-and-wait check the required verification; no log-grep check is made mandatory.
 
 ## Environment Availability
 
