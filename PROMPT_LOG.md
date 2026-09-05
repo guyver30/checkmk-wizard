@@ -66,3 +66,4 @@
 - 2026-08-27 21:05 — "so for a warning, it's better to use utilization (over a period of 1 minute for example)"
 - 2026-08-27 21:10 — "how to set rules for certain services captured by checkmk agent: like cpu warning and critical level, disk space, etc"
 - 2026-08-27 21:20 — "ok let's add rules for cpu load, cpu utilization (averaged over 1 minute), memory used, disk space used. Suggest typical values for warning and critical" — implemented `_create_threshold_rules()` in Phase 5 (optional, gated on linux/windows hosts), tests, docs
+- 2026-09-05 (time not shown) — "/bm:resume-work" (slash command, no args)

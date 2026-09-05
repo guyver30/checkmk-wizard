@@ -114,6 +114,54 @@ def start_site(site: str) -> str:
     return result.stdout
 
 
+def livestatus_tcp_enabled(site: str) -> bool:
+    """Whether Livestatus-over-TCP is already turned on for this site."""
+    result = subprocess.run(
+        ["omd", "config", site, "show", "LIVESTATUS_TCP"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() == "on"
+
+
+def site_running(site: str) -> bool:
+    """Whether at least one daemon of this site is currently running.
+
+    `omd status <site>` exits 0 (all running) or 1 (partially running) in
+    either case some daemon is up; 2 means fully stopped.
+    """
+    result = subprocess.run(["omd", "status", site], capture_output=True, text=True, check=False)
+    return result.returncode != 2
+
+
+def enable_livestatus_tcp(site: str) -> None:
+    """Turn on Livestatus-over-TCP for this site.
+
+    Required unconditionally: the wizard's Phase 7 health check
+    (`livestatus.query_host_states()`) connects over TCP, not the site's
+    local UNIX socket, so it can run from a different container/host than
+    Checkmk itself. Restarts the site if it was already running, since
+    this setting only takes effect on daemon (re)start — a plain `omd
+    start` on an already-running site is a no-op and won't pick it up.
+    """
+    if livestatus_tcp_enabled(site):
+        return
+    was_running = site_running(site)
+    result = subprocess.run(
+        ["omd", "config", site, "set", "LIVESTATUS_TCP", "on"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SiteBootstrapError(f"omd config set LIVESTATUS_TCP failed:\n{result.stdout}{result.stderr}".strip())
+    if was_running:
+        restart = subprocess.run(["omd", "restart", site], capture_output=True, text=True, check=False)
+        if restart.returncode != 0 and "failed" in restart.stdout.lower():
+            raise SiteBootstrapError(f"omd restart failed:\n{restart.stdout}{restart.stderr}".strip())
+
+
 def remove_site(site: str) -> str:
     """Delete an OMD site entirely — stops it and removes its config, data,
     and system user/group. Only this site is affected; the Checkmk install

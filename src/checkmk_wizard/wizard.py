@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import os
 import re
 import secrets
 import socket
@@ -25,6 +26,7 @@ from checkmk_wizard.api import (
     CheckmkAPIError,
     CheckmkClient,
     CheckmkConnection,
+    bootstrap_agent_registration_secret,
     bootstrap_automation_user,
     change_cmkadmin_password,
 )
@@ -212,6 +214,7 @@ async def _prompt_change_cmkadmin_password(checkmk_host: str, site_name: str, cu
 async def _create_fresh_site(site_name: str, checkmk_host: str) -> None:
     admin_password = secrets.token_urlsafe(16)
     console.print(site.create_site(site_name, admin_password), style="dim", end="")
+    site.enable_livestatus_tcp(site_name)
     console.print(site.start_site(site_name), style="dim", end="")
     console.print(
         f"Site created. cmkadmin password (save this): [bold yellow]{admin_password}[/bold yellow]"
@@ -227,9 +230,11 @@ async def _create_fresh_site(site_name: str, checkmk_host: str) -> None:
         )
 
 
-async def _prompt_new_site_name(taken: set[str]) -> str:
+async def _prompt_new_site_name(
+    taken: set[str], prompt: str = "New Checkmk site name:", default: str = ""
+) -> str:
     while True:
-        raw_name = await questionary.text("New Checkmk site name:").ask_async()
+        raw_name = await questionary.text(prompt, default=default).ask_async()
         if not _SITE_NAME_RE.match(raw_name):
             console.print(
                 "[red]Invalid site name — must start with a letter, contain only "
@@ -241,16 +246,52 @@ async def _prompt_new_site_name(taken: set[str]) -> str:
             return raw_name
 
 
+def _probe_livestatus_tcp(host: str, port: int = livestatus.DEFAULT_PORT, timeout: float = 2.0) -> bool:
+    """Best-effort check that Livestatus-over-TCP is reachable at host:port.
+
+    Only used in container mode, where the wizard has no local 'omd'
+    access to turn LIVESTATUS_TCP on itself (see
+    `site.enable_livestatus_tcp()` for the host-native equivalent) — a
+    silent miss here would otherwise only surface as a crash at the very
+    end of the run, in Phase 7.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 async def phase1_site_bringup() -> CheckmkConnection:
     console.rule("[bold]Phase 1 — Site Bring-up")
 
-    if not site.omd_installed():
-        console.print(f"[red]{site.CHECKMK_NOT_INSTALLED_INSTRUCTIONS}[/red]")
-        raise SystemExit(1)
+    # No local 'omd' means this wizard is running somewhere other than the
+    # Checkmk host/container itself (e.g. a separate "worker" container) —
+    # site creation/deletion (both `omd`-only operations) aren't possible
+    # from here. Connect to a site that already exists instead — e.g. one
+    # the Checkmk container's own entrypoint auto-created via
+    # CMK_SITE_ID/CMK_PASSWORD at startup.
+    container_mode = not site.omd_installed()
 
     site_name: str | None = None
     reuse_existing = False
-    existing_sites = site.list_sites()
+    if container_mode:
+        console.print(
+            "[yellow]'omd' isn't on PATH — assuming this wizard is running in a "
+            "separate container from Checkmk itself.[/yellow] Site creation/deletion "
+            "aren't available from here; connecting to a site that already exists "
+            "instead (e.g. one the Checkmk container's own entrypoint created).\n"
+            "[dim]If that's not the case and Checkmk simply isn't installed on this "
+            f"host, see below instead:\n{site.CHECKMK_NOT_INSTALLED_INSTRUCTIONS}[/dim]"
+        )
+        site_name = await _prompt_new_site_name(
+            set(),
+            prompt="Site name to connect to (already created by the Checkmk container):",
+            default=os.environ.get("CMK_SITE_ID", ""),
+        )
+        reuse_existing = True
+
+    existing_sites = [] if container_mode else site.list_sites()
     while site_name is None:
         if not existing_sites:
             site_name = await _prompt_new_site_name(set(existing_sites))
@@ -324,21 +365,67 @@ async def phase1_site_bringup() -> CheckmkConnection:
         else:
             checkmk_host = raw_host
 
-    if reuse_existing:
+    creds: site.SiteCredentials | None = None
+    if container_mode:
+        console.print(
+            f"[dim]No local 'omd' access — skipping site create/start for '{site_name}'; "
+            "assuming it's already up.[/dim]"
+        )
+        if not _probe_livestatus_tcp(checkmk_host):
+            console.print(
+                f"[yellow]Could not reach Livestatus on {checkmk_host}:{livestatus.DEFAULT_PORT} — "
+                "Phase 7's host-state check will fail unless this is turned on for the site "
+                f"(on the Checkmk host/container: `omd config {site_name} set LIVESTATUS_TCP on "
+                f"&& omd restart {site_name}`).[/yellow]"
+            )
+
+        # No local file to read an existing 'automation' secret from — the
+        # cmkadmin password is whatever was set on the Checkmk container
+        # (e.g. its CMK_PASSWORD env var), and lets the wizard create/reuse
+        # the 'automation' user itself via REST, the same mechanism
+        # _create_fresh_site() below uses for a wizard-created site.
+        cmkadmin_password = await questionary.password(
+            "cmkadmin password (set when the Checkmk container was created — leave "
+            "blank to skip and provide an automation secret directly instead):"
+        ).ask_async()
+        if cmkadmin_password:
+            try:
+                secret = await bootstrap_automation_user(checkmk_host, site_name, cmkadmin_password)
+                creds = site.SiteCredentials(site=site_name, automation_user="automation", automation_secret=secret)
+                console.print("[green]Automation user 'automation' created automatically.[/green]")
+            except CheckmkAPIError as exc:
+                console.print(
+                    f"[yellow]Could not auto-create the 'automation' user ({exc}) — likely "
+                    "already exists from a previous run. You'll be prompted for its secret "
+                    "manually below.[/yellow]"
+                )
+    elif reuse_existing:
         console.print(f"Reusing existing site [bold]{site_name}[/bold].")
+        # Sites created before this wizard turned on LIVESTATUS_TCP by
+        # default won't have it — restarts the site if needed to apply.
+        site.enable_livestatus_tcp(site_name)
         # no-op if already running; omd handles that
         console.print(site.start_site(site_name), style="dim", end="")
     else:
         console.print(f"Creating new site [bold]{site_name}[/bold].")
         await _create_fresh_site(site_name, checkmk_host)
 
-    creds = site.get_site_credentials(site_name)
+    if creds is None:
+        creds = site.get_site_credentials(site_name)
     if creds is None:
         console.print(
             "[yellow]No default 'automation' user secret found on disk.[/yellow]\n"
             "Create one manually: Setup > Users > Add user, authentication mode "
             "'Automation secret for machine accounts', then paste the secret below."
         )
+        if container_mode:
+            console.print(
+                "[dim]If this site was freshly created (e.g. by the Checkmk container's own "
+                "entrypoint), it likely already has a default 'automation' user — fetch its "
+                "secret from wherever Checkmk itself is running instead of creating a new "
+                f"user, e.g.:\n  podman exec <checkmk-container> cat /omd/sites/{site_name}/"
+                "var/check_mk/web/automation/automation.secret[/dim]"
+            )
         secret = ""
         while not secret:
             secret = await questionary.password("Automation secret:").ask_async()
@@ -353,18 +440,39 @@ async def phase1_site_bringup() -> CheckmkConnection:
     # Use it for cmk-agent-ctl register (Phase 5.2) instead of the broader
     # 'automation' REST credential, when it's available.
     registration_creds = site.get_site_credentials(site_name, automation_user="agent_registration")
+    registration_reset_attempted = False
+    if registration_creds is None and container_mode and cmkadmin_password:
+        # Same trick as the 'automation' user above: no local file to read
+        # its secret from, but 'agent_registration' is a built-in account
+        # every site already ships (unlike 'automation', which the wizard
+        # creates from scratch) — reset its secret via REST instead of
+        # creating a new user.
+        registration_reset_attempted = True
+        try:
+            secret = await bootstrap_agent_registration_secret(checkmk_host, site_name, cmkadmin_password)
+            registration_creds = site.SiteCredentials(
+                site=site_name, automation_user="agent_registration", automation_secret=secret
+            )
+            console.print("[green]Reset the 'agent_registration' user's secret automatically.[/green]")
+        except CheckmkAPIError as exc:
+            console.print(
+                f"[yellow]Could not reset the 'agent_registration' user's secret ({exc}) — "
+                "agent registration will reuse the general 'automation' credential.[/yellow]"
+            )
+
     if registration_creds is not None:
         console.print(
             "[green]Using the dedicated 'agent_registration' user[/green] for agent "
             "registration (separate from the general automation account)."
         )
-    else:
+    elif not registration_reset_attempted:
         console.print(
             "[yellow]No 'agent_registration' user found — agent registration will reuse "
             "the general 'automation' credential.[/yellow] For tighter scoping, create a "
             "user named 'agent_registration' with the 'Agent registration user' role "
             "(Setup > Users) and re-run the wizard."
         )
+    # else: the reset attempt above already explained why it's falling back.
 
     connection = CheckmkConnection(
         host=checkmk_host,
@@ -1616,7 +1724,7 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
         return
 
     if hosts:
-        states = livestatus.query_host_states(connection.site, [h.hostname for h in hosts])
+        states = livestatus.query_host_states(connection.host, [h.hostname for h in hosts])
         table = Table(title="Post-activation host state")
         table.add_column("Host")
         table.add_column("State")

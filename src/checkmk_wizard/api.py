@@ -320,7 +320,7 @@ async def bootstrap_automation_user(
     proto: str = "http",
     username: str = "automation",
     cmkadmin_user: str = "cmkadmin",
-) -> None:
+) -> str:
     """Auto-provision the REST 'automation' user right after a fresh site is
     created, instead of requiring the operator to click through Setup >
     Users manually. A fresh Checkmk site does NOT ship a general-purpose
@@ -336,9 +336,12 @@ async def bootstrap_automation_user(
     `POST /domain-types/user_config/collections/all` with
     `auth_option.store_automation_secret: true`, which writes the secret
     in cleartext to the exact path `site.read_automation_secret()` already
-    reads — so the caller doesn't need to thread the secret through, it's
-    picked up on the next `get_site_credentials()` call same as any other
-    site-provisioned automation user.
+    reads — so a caller with local filesystem access to the site doesn't
+    need to thread the secret through, it's picked up on the next
+    `get_site_credentials()` call same as any other site-provisioned
+    automation user. Returns the same secret directly too, for a caller
+    that doesn't have that local access (e.g. running in a separate
+    container from the site — see `wizard.py`'s container-mode Phase 1).
 
     Checkmk's generic REST API docs (context7) don't cover this exact
     request body or the login-page CSRF flow — both were verified instead
@@ -348,10 +351,11 @@ async def bootstrap_automation_user(
     secret → automation.secret file appears on disk).
 
     Raises `CheckmkAPIError` on any failure (wrong password, unexpected
-    HTML, non-2xx response) — this is best-effort; the caller should treat
-    a failure here as "fall back to the existing manual instructions",
-    never as fatal.
+    HTML, non-2xx response, e.g. `username` already exists) — this is
+    best-effort; the caller should treat a failure here as "fall back to
+    the existing manual instructions", never as fatal.
     """
+    secret = secrets.token_urlsafe(24)
     base = f"{proto}://{host}/{site}/check_mk"
     login_url = f"{base}/login.py"
     async with httpx.AsyncClient() as client:
@@ -372,7 +376,7 @@ async def bootstrap_automation_user(
                     "fullname": "Wizard Automation User",
                     "auth_option": {
                         "auth_type": "automation",
-                        "secret": secrets.token_urlsafe(24),
+                        "secret": secret,
                         "store_automation_secret": True,
                     },
                     # Matches CHECKMK_SETUP_CONFIGURATOR_PLAN.md's own stated
@@ -453,6 +457,93 @@ async def bootstrap_automation_user(
                     is_running = status_resp.json().get("extensions", {}).get("is_running", False)
         except httpx.HTTPError:
             pass
+
+    return secret
+
+
+async def bootstrap_agent_registration_secret(
+    host: str,
+    site: str,
+    cmkadmin_password: str,
+    proto: str = "http",
+    username: str = "agent_registration",
+    cmkadmin_user: str = "cmkadmin",
+) -> str:
+    """Reset the secret of Checkmk's built-in 'agent_registration' automation
+    user via REST, for a caller with no local access to its secret file —
+    same idea as `bootstrap_automation_user()`, applied to the narrower
+    registration-only account (see `wizard.py`'s container-mode Phase 1).
+
+    Unlike 'automation', this does NOT create the user — per live Checkmk
+    docs, 'agent_registration' is provisioned by default on every site
+    ("the automation user 'agent_registration' is created by default
+    during installation," docs.checkmk.com/latest/en/agent_linux.html,
+    "Registration > Overview and prerequisites"; scoped solely to host
+    registration, docs.checkmk.com/latest/en/hosts_autoregister.html) —
+    but doesn't necessarily have a *stored* secret file the wizard can
+    read (the same docs note "you must ensure the automation secret is
+    saved"). This logs in via the same cmkadmin GUI-session-cookie flow
+    `bootstrap_automation_user()` uses, fetches the existing user object's
+    ETag, then `PUT`s a freshly generated `auth_option` — mirroring
+    `change_cmkadmin_password()`'s own GET-ETag-then-PUT flow against the
+    same `/objects/user_config/<user>` endpoint, just for a
+    'automation'-type account instead of a 'password'-type one. Leaves
+    every other field on the account (crucially, its role) untouched.
+
+    **Not live-verified** against a running site, unlike every other
+    function in this module — the `auth_option` reset-via-PUT shape here
+    is inferred from two independently live-verified endpoints
+    (`bootstrap_automation_user()`'s POST `auth_option` sub-schema and
+    `change_cmkadmin_password()`'s GET-ETag-then-PUT flow for this same
+    endpoint), not tested end-to-end. Verify against a live site before
+    depending on it.
+
+    Raises `CheckmkAPIError` on any failure — best-effort, same contract
+    as `bootstrap_automation_user()`: caller should fall back to existing
+    manual instructions, never treat this as fatal.
+    """
+    secret = secrets.token_urlsafe(24)
+    base = f"{proto}://{host}/{site}/check_mk"
+    login_url = f"{base}/login.py"
+    async with httpx.AsyncClient() as client:
+        try:
+            await _gui_login(client, login_url, site, cmkadmin_user, cmkadmin_password)
+
+            get_resp = await client.get(
+                f"{base}/api/v1/objects/user_config/{username}",
+                headers={"Accept": "application/json"},
+            )
+            if get_resp.status_code != 200:
+                try:
+                    body: Any = get_resp.json()
+                except ValueError:
+                    body = get_resp.text
+                raise CheckmkAPIError("GET", str(get_resp.url), get_resp.status_code, body)
+            etag = get_resp.headers.get("ETag")
+            if not etag:
+                raise CheckmkAPIError("GET", str(get_resp.url), get_resp.status_code, "missing ETag header")
+
+            put_resp = await client.put(
+                f"{base}/api/v1/objects/user_config/{username}",
+                json={
+                    "auth_option": {
+                        "auth_type": "automation",
+                        "secret": secret,
+                        "store_automation_secret": True,
+                    }
+                },
+                headers={"Accept": "application/json", "If-Match": etag},
+            )
+            if put_resp.status_code != 200:
+                try:
+                    body = put_resp.json()
+                except ValueError:
+                    body = put_resp.text
+                raise CheckmkAPIError("PUT", str(put_resp.url), put_resp.status_code, body)
+        except httpx.HTTPError as exc:
+            raise CheckmkAPIError("GET/PUT", login_url, 0, str(exc)) from exc
+
+    return secret
 
 
 async def change_cmkadmin_password(

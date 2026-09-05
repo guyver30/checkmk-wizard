@@ -1,21 +1,21 @@
 """Minimal Livestatus client for the Phase 7 post-activation health check.
 
-Queries the site's local Livestatus UNIX socket
-(/omd/sites/<site>/tmp/run/live) using the standard LQL text protocol:
-a query terminated by a blank line, response requested as CSV via
-OutputFormat/ColumnHeaders headers.
+Connects to the site's Livestatus port over TCP — not the local UNIX
+socket — so the wizard can run from a different container/host than the
+Checkmk site itself. `site.enable_livestatus_tcp()` turns this on for
+every site the wizard creates or reuses. Uses the standard LQL text
+protocol: a query terminated by a blank line, response requested as CSV
+via OutputFormat/ColumnHeaders headers.
 """
 
 from __future__ import annotations
 
 import socket
 
-
-def socket_path(site: str) -> str:
-    return f"/omd/sites/{site}/tmp/run/live"
+DEFAULT_PORT = 6557
 
 
-def query_host_states(site: str, host_names: list[str]) -> dict[str, int]:
+def query_host_states(host: str, host_names: list[str], port: int = DEFAULT_PORT) -> dict[str, int]:
     """Return {host_name: state} for the given hosts (0=UP, 1=DOWN, 2=UNREACHABLE).
 
     Hosts not yet known to Livestatus (e.g. not yet activated) are omitted
@@ -31,8 +31,7 @@ def query_host_states(site: str, host_names: list[str]) -> dict[str, int]:
         "ColumnHeaders: off\n"
         "\n"
     )
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.connect(socket_path(site))
+    with socket.create_connection((host, port), timeout=10) as sock:
         sock.sendall(query.encode())
         sock.shutdown(socket.SHUT_WR)
         chunks = []
