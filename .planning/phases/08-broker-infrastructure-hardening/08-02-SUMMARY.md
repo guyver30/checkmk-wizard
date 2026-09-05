@@ -100,6 +100,15 @@ None - no external service configuration required. Note: this plan only creates/
 - Existing pytest suite unaffected: `uv run pytest -q` still passes all 222 tests
 - No blockers for Plan 03 or Phase 9
 
+## Self-Check: PASSED
+
+- FOUND: deploy/compose.yaml
+- FOUND: .planning/phases/08-broker-infrastructure-hardening/08-02-SUMMARY.md
+- FOUND: paho-mqtt in pyproject.toml
+- FOUND: commit 04399f1
+- FOUND: commit 62db29f
+- FOUND: commit 0fa3c70
+
 ---
 *Phase: 08-broker-infrastructure-hardening*
 *Completed: 2026-09-05*
