@@ -1,145 +1,93 @@
 # External Integrations
 
-**Analysis Date:** 2026-08-24
+**Analysis Date:** 2026-09-05
 
 ## APIs & External Services
 
-**Checkmk REST API v1:**
-- Service: Checkmk monitoring platform (v2.4.0+)
-- What it's used for: Host configuration, folder management, service discovery, configuration activation
-- SDK/Client: Custom async wrapper in `src/checkmk_wizard/api.py` (CheckmkClient using httpx)
-- Auth: Bearer token authentication with two credentials: username (e.g., "automation") and secret (automation API key)
-- Endpoint Base: `http://{host}/{site}/check_mk/api/v1`
-- Protocol: HTTP/HTTPS (configurable via `proto` parameter in CheckmkConnection)
-- Phases using it:
-  - Phase 1: `GET /version` (connectivity verification)
-  - Phase 2: `POST /domain-types/folder_config/collections/all` (folder creation)
-  - Phase 3-5: `POST /domain-types/host_config/collections/all`, `PUT /objects/host_config/{hostname}` (host creation and updates)
-  - Phase 5: `GET /domain-types/agent/actions/download/invoke` (Linux agent package download)
-  - Phase 6: `POST /domain-types/service_discovery_run/actions/start/invoke` (service discovery)
-  - Phase 7: `GET /domain-types/activation_run/collections/pending_changes`, `POST /domain-types/activation_run/actions/activate-changes/invoke` (activation)
+**Checkmk REST API (v1):**
+- Service: Checkmk Community Edition site's own REST API, under `<proto>://<host>/<site>/check_mk/api/v1`
+  - SDK/Client: `httpx.AsyncClient`, wrapped by `CheckmkClient` (`src/checkmk_wizard/api.py`)
+  - Auth: Bearer token — `Authorization: Bearer <username> <secret>` header, built from a `CheckmkConnection` dataclass (`src/checkmk_wizard/api.py:30-53`)
+  - Covers: folder/host CRUD, agent binary download, service discovery, pending-changes activation, active-check rule creation (`src/checkmk_wizard/api.py:117-282`)
+
+**Checkmk GUI session login (`login.py`):**
+- Service: Checkmk's cookie-based web login flow, used only where no REST automation credential exists yet
+  - SDK/Client: raw `httpx.AsyncClient` (not `CheckmkClient`) — `src/checkmk_wizard/api.py:289-621`
+  - Auth: `cmkadmin` username/password + scraped CSRF token (`global_csrf_token` regex, `src/checkmk_wizard/api.py:286`), resulting in an `auth_<site>` session cookie
+  - Used by: `bootstrap_automation_user()` (creates the REST `automation` user), `bootstrap_agent_registration_secret()` (resets the built-in `agent_registration` user's secret), `change_cmkadmin_password()` (changes `cmkadmin`'s own login password)
+  - Not covered by Checkmk's official REST API docs — endpoints/payloads reverse-engineered from a live 2.4.0p35 CE site's own OpenAPI spec and endpoint source, per extensive docstrings in `api.py`
+
+**Checkmk Livestatus (LQL over TCP):**
+- Service: Checkmk's monitoring-core query protocol, port 6557 (`DEFAULT_PORT`)
+  - SDK/Client: raw `socket` (no library) — `src/checkmk_wizard/livestatus.py`
+  - Auth: none (network-level access only — must be explicitly enabled via `omd config <site> set LIVESTATUS_TCP on`)
+  - Used for: post-activation host-state health checks (`query_host_states()`)
+
+**Checkmk Agent Receiver / `cmk-agent-ctl`:**
+- Service: not called over HTTP directly by this codebase; invoked as a subprocess/remote command on target hosts
+  - Client: SSH command execution via `asyncssh` — `cmk-agent-ctl register --hostname --server --site --user --password` run on the remote Linux target (`src/checkmk_wizard/remote.py`)
+  - Auth: dedicated `agent_registration` automation user (falls back to the general `automation` user) plus SSH credentials to the target host itself
+  - Port: Agent Receiver listens on 8000 (`AGENT_RECEIVER_PORT`, `src/checkmk_wizard/remote.py:31`)
+  - Windows targets: no SSH automation — the wizard prints manual `cmk-agent-ctl.exe register` instructions instead
 
 ## Data Storage
 
 **Databases:**
-- Not used - Checkmk manages its own database; this tool is a client-side configurator
+- None. No SQL/NoSQL database client or ORM in dependencies.
 
 **File Storage:**
-- Local filesystem only
-  - Reads: `/omd/sites/{site}/var/check_mk/web/automation/{user}/automation.secret` (Phase 1 credential bootstrap)
-  - Writes: `config_snapshot_{timestamp}.json` in current working directory (Phase 7 output)
+- Local filesystem only:
+  - Reads OMD site config/secrets directly from `/omd/sites/<site>/...` (host-native mode) — `src/checkmk_wizard/site.py` (`read_automation_secret()`, `list_agent_registered_hosts()` parsing `etc/check_mk/conf.d/wato/**/hosts.mk`)
+  - Bundled `smartmontools` `.deb` packages under `docs/smart/` are copied to remote hosts over SSH/SFTP (`src/checkmk_wizard/remote.py`)
+  - `config_snapshot_*.json` files written to the repo root at runtime (gitignored via `config_snapshot_*.json` in `.gitignore`) — appear to be wizard-run output snapshots, not fixtures
 
 **Caching:**
-- None - Stateless tool; all configuration persisted directly to Checkmk
+- None
 
 ## Authentication & Identity
 
 **Auth Provider:**
-- Checkmk native automation user (built-in to every site)
-- Implementation: Bearer token sent as `Authorization: Bearer {username} {secret}` header
-- User creation: Manual via web UI (Setup > Users) with authentication mode "Automation secret for machine accounts"
-- Secret storage: Filesystem (`/omd/sites/{site}/var/check_mk/web/automation/{user}/automation.secret`)
-- No external identity provider (LDAP, OAuth, etc.)
+- Custom — entirely Checkmk's own built-in user/automation-credential system, no external identity provider (no OAuth/SAML/OIDC)
+  - `cmkadmin` — Checkmk's built-in superuser, used only for GUI-session bootstrapping flows
+  - `automation` — REST API user, auto-provisioned by the wizard if missing (`bootstrap_automation_user()`) or read from the local secret file (`site.get_site_credentials()`)
+  - `agent_registration` — Checkmk's built-in least-privilege user for `cmk-agent-ctl register`, secret bootstrapped over REST if not locally readable (`bootstrap_agent_registration_secret()`)
+  - SSH credentials (password or private key, `src/checkmk_wizard/remote.py:SSHCredentials`) — used to reach target hosts for firewall configuration and agent installation, independent of any Checkmk credential
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- Not integrated - All errors bubble up as exceptions to caller
+- None (no Sentry/error-tracking SDK)
 
 **Logs:**
-- Console-based via `rich` library (styled terminal output)
-- Log levels: Info, Warning, Yellow/Red error messages (semantic, not structured)
-- No persistent logging to file or external service
+- No structured logging framework — output is interactive terminal UI via `rich.console.Console` (`src/checkmk_wizard/wizard.py`); errors surface as `CheckmkAPIError`/`SiteBootstrapError` exceptions with the raw request/response detail embedded
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- On-premises: Must run on the Checkmk host itself (requires local filesystem and `omd` CLI access)
-- Not suitable for cloud or remote deployment
+- Not a hosted service — a CLI tool run either directly on a Checkmk host (host-native mode) or from a companion "worker" container (container mode) alongside a Podman-based stack (Checkmk, Mosquitto, MinIO) documented in `docs/Podman setup for checkmk, minio, mosquitto, worker.md`
 
 **CI Pipeline:**
-- Not configured - Project tests mock all external services (respx for httpx, no live Checkmk required)
-- Tests run with: `uv run pytest`
+- None detected — no `.github/workflows`, no `.gitlab-ci.yml`, no other CI config in the repo
 
 ## Environment Configuration
 
 **Required env vars:**
-- None - Application is stateless and driven by interactive user input
+- `CMK_SITE_ID` (optional) — pre-fills the site-name prompt in container mode (`src/checkmk_wizard/wizard.py:290`)
+- `CMK_PASSWORD` (referenced conceptually, not read directly by the wizard) — the Checkmk container's own `cmkadmin` bootstrap password; the wizard prompts for it interactively instead of reading the env var
 
 **Secrets location:**
-- `/omd/sites/{site}/var/check_mk/web/automation/{user}/automation.secret` (local filesystem; requires Phase 1 user setup in web UI)
-- Credentials provided interactively if file doesn't exist
+- Checkmk automation secrets: `/omd/sites/<site>/var/check_mk/web/<user>/automation.secret` (host-native mode, read directly off disk)
+- In container mode, no local secret file exists — secrets are instead minted over the REST/GUI-login flow (`bootstrap_automation_user()`, `bootstrap_agent_registration_secret()`) and held only in memory for the wizard's session
+- `.env`/credential files: none present in the repo (verified no `.env*`, no `credentials.*` files)
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- None - Tool is pull-based only
+- None — this is a CLI tool with no listening server/endpoints
 
 **Outgoing:**
-- None - Tool makes only synchronous REST API calls to Checkmk
-
-## Livestatus Integration
-
-**Service:** Checkmk Livestatus (local monitoring query engine)
-- What it's used for: Post-activation health check (Phase 7) to query host state
-- Protocol: UNIX socket + LQL (Livestatus Query Language) text protocol
-- Socket path: `/omd/sites/{site}/tmp/run/live`
-- Client: Custom minimal sync socket client in `src/checkmk_wizard/livestatus.py` (no external library)
-- Query format: Plain text LQL terminated by blank line, response as CSV
-- Example query:
-  ```
-  GET hosts
-  Columns: name state
-  OutputFormat: csv
-  ColumnHeaders: off
-  ```
-- Return states: 0 (UP), 1 (DOWN), 2 (UNREACHABLE), or omitted if host not yet known
-
-## SSH & Remote Execution
-
-**Service:** Target Linux hosts (via SSH for Phase 5 automation)
-- What it's used for: Firewall configuration, agent installation, OS compatibility checks
-- SDK/Client: asyncssh 2.24.0+ (async SSH/SFTP client)
-- Auth modes: Password or private key file path (configurable per session)
-- Port: 22 (standard SSH)
-- Operations:
-  - Firewall detection and rule addition (ufw, firewall-cmd, or nft)
-  - OS release detection via `/etc/os-release` (used for agent package compatibility check)
-  - Agent package upload via SFTP
-  - Agent package installation (dpkg or rpm)
-  - Agent registration via `cmk-agent-ctl register` command
-- Fallback: If SSH automation fails, wizard provides manual step-by-step instructions
-
-## Network Scanning
-
-**Service:** Target network (via TCP connect probes)
-- What it's used for: Phase 3 network discovery to identify responsive hosts
-- Protocol: Custom async TCP connect scanner (asyncio-based, no external library)
-- Port scanning: Configurable default ports (22, 80, 443); user can specify custom ports
-- Scan strategy: Bounded concurrency (default 256 concurrent connections) with /24 subnet chunking for large networks
-- Result: List of responsive hosts with open ports
-- No fingerprinting applied (manual host classification in Phase 4)
-
-## Agent Installation
-
-**Service:** Checkmk Agent (Phase 5.2)
-- Download protocol: REST API (binary download endpoint `/domain-types/agent/actions/download/invoke`)
-- Supported formats: `.deb` (Debian/Ubuntu), `.rpm` (RedHat/CentOS/SUSE)
-- Installation: Pushed to target over SFTP, installed locally with dpkg/rpm
-- Registration: `cmk-agent-ctl register` command (must run on target host; cannot be invoked remotely)
-- Receiver port: 8000 (Agent Receiver listens here for incoming registrations)
-
-## OMD Site Management
-
-**Service:** Local OMD (Open Monitoring Distribution) site bootstrap
-- What it's used for: Phase 1 site creation and startup
-- Interface: Local subprocess calls to `omd` CLI
-- Operations:
-  - `omd create --admin-password {pwd} {site}` (creates site with known cmkadmin password)
-  - `omd start {site}` (starts site services; no-op if already running)
-- Execution context: Must run as user with OMD access (typically `root` or OMD site user)
-- Credential bootstrap: Reads automation secret file post-creation
+- None invoked directly by `src/checkmk_wizard/`. Note: `docs/src/mqtt_notify.py` and `docs/src/mqtt_publisher_changes.py` are example Checkmk *notification scripts* (using `paho.mqtt.client`, not a project dependency) documented as reference material for wiring Checkmk's own notification system to an MQTT broker (Mosquitto) in the Podman stack — these are deployment artifacts for the target Checkmk site, not code invoked by this wizard.
 
 ---
 
-*Integration audit: 2026-08-24*
+*Integration audit: 2026-09-05*

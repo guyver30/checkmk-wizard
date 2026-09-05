@@ -1,273 +1,180 @@
-<!-- refreshed: 2026-08-24 -->
+<!-- refreshed: 2026-09-05 -->
 # Architecture
 
-**Analysis Date:** 2026-08-24
+**Analysis Date:** 2026-09-05
 
 ## System Overview
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│                    Interactive Terminal UI Layer                         │
-│          questionary prompts + rich console output formatting             │
-│                         wizard.py (phases 1-7)                           │
-└────┬────────────────────┬──────────────────────┬───────────────┬─────────┘
-     │                    │                      │               │
-     │                    │                      │               │
-┌────▼──────┐  ┌──────────▼────────┐  ┌─────────▼──────┐  ┌─────▼────────┐
-│  Site      │  │  Network Scanner  │  │  API Client    │  │   Remote SSH │
-│ Bootstrap  │  │   (Async TCP)     │  │  (HTTP/REST)   │  │  & Firewall  │
-│  site.py   │  │  scanner.py       │  │  api.py        │  │  remote.py   │
-└────┬──────┘  └──────────┬─────────┘  └────────┬───────┘  └──────┬────────┘
-     │                    │                      │                │
-     └────────────────────┼──────────────────────┼────────────────┘
-                          │                      │
-                 ┌────────▼──────────────────────▼─────────┐
-                 │      Livestatus Socket Query            │
-                 │         livestatus.py                   │
-                 │   (Phase 7 health check only)           │
-                 └────────┬──────────────────────────────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        │                 │                 │
-    ┌───▼───┐        ┌────▼────┐      ┌────▼──────┐
-    │  OMD   │        │Checkmk  │      │ Local SSH │
-    │ Site   │        │REST API │      │ Targets   │
-    │ (/omd) │        │(Remote) │      │ (Linux)   │
-    └────────┘        └─────────┘      └───────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Interactive Terminal Wizard                      │
+│                  `src/checkmk_wizard/wizard.py`                      │
+│   Phase 1..7 orchestration, questionary prompts, rich console I/O    │
+└───────┬───────────┬────────────┬────────────┬────────────┬──────────┘
+        │            │            │            │            │
+        ▼            ▼            ▼            ▼            ▼
+┌───────────┐ ┌─────────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐
+│  site.py  │ │   api.py    │ │remote.py │ │scanner.py│ │livestatus. │
+│ omd CLI   │ │ Checkmk     │ │ SSH host │ │ async TCP│ │py — TCP    │
+│ subprocess│ │ REST client │ │ automation│ │ port scan│ │ LQL client │
+└─────┬─────┘ └──────┬──────┘ └────┬─────┘ └────┬─────┘ └─────┬──────┘
+      │              │              │            │             │
+      ▼              ▼              ▼            ▼             ▼
+┌──────────┐  ┌──────────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────┐
+│  omd CLI │  │ Checkmk REST │ │ SSH/     │ │ raw TCP  │ │ Livestatus  │
+│  (local  │  │ API (httpx)  │ │ asyncssh │ │ connect  │ │ TCP socket  │
+│  host)   │  │ over HTTP    │ │ to target│ │ sweep    │ │ (site:6557) │
+│          │  │ site         │ │ hosts    │ │          │ │             │
+└──────────┘  └──────────────┘ └──────────┘ └──────────┘ └─────────────┘
 ```
 
 ## Component Responsibilities
 
 | Component | Responsibility | File |
 |-----------|----------------|------|
-| **Interactive Wizard** | Phases 1-7 orchestration, user prompts, progress display | `src/checkmk_wizard/wizard.py` |
-| **REST API Client** | Checkmk v1 API calls (folders, hosts, discovery, activation) | `src/checkmk_wizard/api.py` |
-| **Site Bootstrap** | OMD site creation/startup, automation credential discovery | `src/checkmk_wizard/site.py` |
-| **Network Scanner** | Async TCP port sweep with bounded concurrency | `src/checkmk_wizard/scanner.py` |
-| **Remote SSH Ops** | Firewall detection/fix, OS compatibility check, agent install | `src/checkmk_wizard/remote.py` |
-| **Livestatus Query** | Host state lookup from site socket (post-activation) | `src/checkmk_wizard/livestatus.py` |
+| Wizard orchestration | 7-phase interactive flow, prompts, in-memory state, snapshot export | `src/checkmk_wizard/wizard.py` |
+| Checkmk REST client | Typed async wrapper over Checkmk's v1 REST API; bootstrap helpers for automation users/passwords via GUI-session login | `src/checkmk_wizard/api.py` |
+| OMD site management | Local `omd` CLI subprocess wrapper (create/start/stop/delete site, read automation secrets, parse `hosts.mk`) | `src/checkmk_wizard/site.py` |
+| Remote host automation | SSH-based (asyncssh) firewall fix, agent install/registration, systemd discovery, smartmontools install — Linux only; Windows produces manual instructions | `src/checkmk_wizard/remote.py` |
+| Network scanner | Bounded-concurrency asyncio TCP-connect sweep across a CIDR (chunked into /24s) | `src/checkmk_wizard/scanner.py` |
+| Health check client | Minimal hand-rolled Livestatus (LQL) TCP client for post-activation host-state query | `src/checkmk_wizard/livestatus.py` |
+| CLI entry point | Thin `__main__` shim calling `wizard.main()` | `src/checkmk_wizard/__main__.py` |
 
 ## Pattern Overview
 
-**Overall:** Layered async pipeline with orchestrated phases
+**Overall:** Single-process **scripted pipeline / procedural phase orchestrator** — not a layered web app. There is no persistent server, database, or HTTP API of its own; the tool is a stateful CLI script that drives an *external* system (a Checkmk OMD site) to a desired configuration end-state through a sequence of named phases (Phase 1 through Phase 7), each an `async def phaseN_xxx(...)` function in `wizard.py`.
 
 **Key Characteristics:**
-- **Sequential phase execution:** Each phase runs to completion before the next; phases share state via `WizardState` or parameters
-- **Async throughout:** All I/O operations (HTTP, SSH, network scanning) are async using `asyncio`
-- **Fail-safe degradation:** Firewall and agent install have manual fallback instructions; no single failure blocks the entire flow
-- **Interactive during discovery:** User makes decisions (folder structure, host classification, SSH credentials) at specific decision points
-- **Local execution:** Runs on the Checkmk host itself; accesses OMD site files and drives `omd` commands locally
+- Fully async (`asyncio`), using `async/await` throughout for I/O (HTTP via httpx, SSH via asyncssh, raw sockets for scanning/Livestatus).
+- State is a few plain `@dataclass` objects threaded explicitly between phase functions (`CheckmkConnection`, `ScannedHost`, `OnboardedHost`, `WizardState`) — no global mutable session object, no ORM, no persistence layer beyond a final JSON snapshot file.
+- Each external system boundary (OMD CLI, Checkmk REST API, SSH, TCP scanning, Livestatus) is isolated in its own single-purpose module with no cross-imports between those modules themselves — only `wizard.py` imports and composes all of them.
+- Best-effort/graceful-degradation is a first-class design goal: nearly every external call site wraps failures (`except CheckmkAPIError`) and prints a warning instead of aborting, so one host's or one rule's failure doesn't halt the whole run. Contrast this with the phase-level driver (`run()`), which does not wrap phase failures — an unhandled exception in a phase aborts the whole run.
+- Heavy inline documentation of *why*, not just *what* — most non-trivial functions carry paragraph-length docstrings/comments recording live-verified Checkmk REST API behavior, since this project treats Checkmk's actual server behavior (not just its docs) as the source of truth. New code should preserve this style: cite what was verified and how.
 
 ## Layers
 
-**Presentation (UI):**
-- Purpose: Capture user input and display progress/results
-- Location: `src/checkmk_wizard/wizard.py` (phase functions)
-- Contains: `questionary` prompts, `rich` console formatting, phase-level orchestration logic
-- Depends on: All service layers; `questionary`, `rich`
-- Used by: Entry point `main()` in `wizard.py`
+**Presentation / interaction layer:**
+- Purpose: prompts (`questionary`), progress bars/tables (`rich`), all user-facing text.
+- Location: `src/checkmk_wizard/wizard.py` (prompt helper functions like `_prompt_new_site_name`, `_prompt_ssh_credentials`, `_prompt_threshold_levels`).
+- Contains: `questionary.*` calls, `console.print`/`console.rule`, `rich.table.Table`/`rich.progress.Progress` usage.
+- Depends on: the orchestration layer below it for what to prompt about.
+- Used by: nothing above it — this is the outermost layer (terminal).
 
-**Orchestration (Phases):**
-- Purpose: Sequence operations and manage control flow between phases
-- Location: `src/checkmk_wizard/wizard.py` (phase1-7 functions, `run()`, `main()`)
-- Contains: Phase logic, state sharing via function parameters and `WizardState`
-- Depends on: Service layers (API client, site bootstrap, scanner, remote, livestatus)
-- Used by: `main()` entry point
+**Orchestration layer (phases):**
+- Purpose: sequence the 7 phases, decide branching (container mode vs. host mode, SSH vs. manual, snmp/ping/linux/windows), build the dataclasses passed between phases.
+- Location: `src/checkmk_wizard/wizard.py` (`phase1_site_bringup` ... `phase7_activation`, `run()`, `main()`).
+- Contains: `async def phaseN_*` functions, private helpers prefixed `_` scoped to a phase (e.g. `_onboard_hosts`, `_create_expected_open_port_rules`).
+- Depends on: `api.py`, `site.py`, `remote.py`, `scanner.py`, `livestatus.py`.
+- Used by: `__main__.py` only (via `main()`).
 
-**Service/Domain (Business Logic):**
-- Purpose: Implement domain-specific operations
-- Location: `src/checkmk_wizard/{api,site,scanner,remote,livestatus}.py`
-- Contains: 
-  - `api.py`: Checkmk REST client with per-phase endpoint groupings
-  - `site.py`: OMD subprocess operations, credential file reading
-  - `scanner.py`: Async TCP connection probes with semaphore concurrency control
-  - `remote.py`: SSH firewall/compatibility checks, agent installation
-  - `livestatus.py`: Livestatus socket protocol query
-- Depends on: External libraries (`httpx`, `asyncssh`, `asyncio`)
-- Used by: Phase functions in `wizard.py`
-
-**External Integration:**
-- Checkmk REST API (v1) — all host/folder/activation operations
-- OMD command-line (`omd create`, `omd start`)
-- SSH (asyncssh) — firewall/OS/agent operations on Linux targets
-- Livestatus socket — post-activation host state queries
-- Local filesystem — automation secret, agent packages
+**External-system client layer:**
+- Purpose: talk to one external system each, translating its protocol into typed Python calls/dataclasses/exceptions.
+- Location: `api.py` (Checkmk REST), `site.py` (`omd` subprocess), `remote.py` (SSH/asyncssh), `scanner.py` (raw asyncio sockets), `livestatus.py` (raw TCP/LQL).
+- Contains: dataclasses for request/response shapes, `async def` (or sync for `site.py`, which shells out) functions, module-specific exception types (`CheckmkAPIError`, `SiteBootstrapError`).
+- Depends on: `httpx` (api.py), `asyncssh` (remote.py), `subprocess`/`ast` (site.py), stdlib `asyncio`/`socket` (scanner.py, livestatus.py).
+- Used by: `wizard.py` exclusively — these modules never import each other or `wizard.py`.
 
 ## Data Flow
 
-### Primary Request Path (Full Wizard Run)
+### Primary Request Path (one wizard run)
 
-1. **Phase 1 — Site Bring-up** (`phase1_site_bringup()` in `wizard.py:44-89`)
-   - Prompt for site name and Checkmk host
-   - Check if site exists via `site.site_exists()` (`site.py:34-35`)
-   - Create site if needed via `site.create_site()` (`site.py:38-47`)
-   - Start site via `site.start_site()` (`site.py:50-53`)
-   - Retrieve automation credentials via `site.get_site_credentials()` (`site.py:69-73`)
-   - Prompt for secret if not found
-   - Validate via `CheckmkClient.get_version()` (`api.py:89-91`)
-   - Returns: `CheckmkConnection` object with auth details
+1. Entry: `checkmk-wizard` console script → `checkmk_wizard.wizard:main` (`pyproject.toml` `[project.scripts]`) → `main()` → `asyncio.run(run())` (`src/checkmk_wizard/wizard.py:1778-1780`).
+2. `run()` (`wizard.py:1766-1775`) calls each phase in order, holding results in local variables (`connection`, `folder_subnets`, `scan_results`, `onboarded`) — no shared mutable state object survives across phases except what's explicitly passed as arguments/return values.
+3. Phase 1 (`phase1_site_bringup`, `wizard.py:265-493`): detects container vs. host mode via `site.omd_installed()`; creates/reuses an OMD site via `site.py`; bootstraps REST credentials via `api.bootstrap_automation_user`/`bootstrap_agent_registration_secret`; returns a `CheckmkConnection`.
+4. `async with CheckmkClient(connection) as client:` opens the REST client for the rest of the run (`wizard.py:1768`).
+5. Phase 2 (`phase2_folders`): optional folder creation + per-folder Checkmk-native network scan config via `client.create_folder`/`update_folder_attributes`.
+6. Phase 3 (`phase3_discovery`): runs `scanner.scan_network()` per folder subnet, stages every found IP as an inert host via `client.create_host` (tags `no-agent`/`no-snmp`), returns `list[ScannedHost]`.
+7. Phase 4 (`phase4_classification`): purely interactive promotion of scanned IPs to named `OnboardedHost` records (no network calls).
+8. Phase 5 (`phase5_onboarding` → `_onboard_hosts`): per-host branch by `os_family` (snmp/ping/linux/windows) — creates/updates the real host object, and for Linux with SSH creds, drives `remote.py` functions (firewall fix, OS compatibility check, agent download via `client.download_agent` + install, registration, smartmontools). Also creates shared rules (`active_checks:tcp`, `active_checks:icmp`, discovery-selection rulesets, optional threshold rulesets) via `client.create_rule`.
+9. Phase 6 (`phase6_discovery`): activates pending changes (`client.activate_changes`), then runs `client.start_service_discovery(mode="fix_all")` per host with bounded retries, verifying expected services actually became monitored.
+10. Phase 7 (`phase7_activation`): re-activates pending changes, queries host state via `livestatus.query_host_states`, pulls `client.list_hosts`/`client.list_folders` and writes a `config_snapshot_<timestamp>.json` file to the working directory (`wizard.py:1751-1760`).
 
-2. **Phase 2 — Folder Structure** (`phase2_folders()` in `wizard.py:95-111`)
-   - User decides if folders are needed
-   - For each folder name, call `CheckmkClient.create_folder()` (`api.py:95-107`)
-   - API: `POST /domain-types/folder_config/collections/all`
-   - No state persisted; phase can be skipped entirely
+### Secondary Flow: Best-Effort Bootstrap of REST Credentials
 
-3. **Phase 3 — Network Discovery** (`phase3_discovery()` in `wizard.py:116-146`)
-   - Prompt for CIDR and ports
-   - Call `scan_network()` (`scanner.py:63-85`) with progress callback
-   - Async TCP probes via `scan_host()` → `_probe_port()` (`scanner.py:48-53, 32-45`)
-   - Stage scan results into Checkmk via `CheckmkClient.create_host()` for each IP (`api.py:111-125`)
-   - API: `POST /domain-types/host_config/collections/all`
-   - Returns: `list[HostScanResult]` (IPs + open ports)
-
-4. **Phase 4 — Host Classification** (`phase4_classification()` in `wizard.py:152-171`)
-   - User selects which IPs to promote to named hosts
-   - For each selected IP, prompt for hostname, folder, OS family
-   - Returns: `list[OnboardedHost]` (hostname, folder, OS, IP)
-   - No API calls; purely interactive
-
-5. **Phase 5 — Host Onboarding** (`phase5_onboarding()` in `wizard.py:177-258`)
-   - Phase 5.1 (Firewall):
-     - For each Linux host, probe port 8000 via `remote.probe_port()` (`remote.py:81-101`)
-     - SSH to target via `remote.check_ssh_reachable()` → `_connect()` (`remote.py:113-119, 104-110`)
-     - Detect firewall backend (ufw/firewall-cmd/nft) via SSH command tests
-     - Apply allow rule via `remote.fix_firewall_linux()` (`remote.py:129-164`)
-     - Return: `ActionResult` (automated, manual_required, or failed_fallback_manual)
-   - Phase 5.2 (Agent Install):
-     - Prompt for SSH credentials (password or key path)
-     - Check OS compatibility via `remote.check_os_compatibility()` (`remote.py:167-194`)
-     - Download agent via `CheckmkClient.download_agent()` (`api.py:143-150`)
-     - API: `GET /domain-types/agent/actions/download/invoke`
-     - Push package via SFTP, install (dpkg/rpm), register via `remote.install_agent_linux()` (`remote.py:220-272`)
-   - Windows targets: print manual instructions only
-   - Update host in Checkmk via `CheckmkClient.create_host()` with `tag_agent` attribute
-
-6. **Phase 6 — Discovery & Baseline** (`phase6_discovery()` in `wizard.py:271-278`)
-   - For each onboarded host, call `CheckmkClient.start_service_discovery()` (`api.py:154-160`)
-   - API: `POST /domain-types/service_discovery_run/actions/start/invoke`
-
-7. **Phase 7 — Activation & Validation** (`phase7_activation()` in `wizard.py:284-312`)
-   - Get pending changes ETag via `CheckmkClient.get_pending_changes_etag()` (`api.py:164-169`)
-   - Activate via `CheckmkClient.activate_changes()` (`api.py:171-187`)
-   - API: `POST /domain-types/activation_run/actions/activate-changes/invoke`
-   - Query host states via `livestatus.query_host_states()` (`livestatus.py:18-57`)
-     - Connects to `/omd/sites/{site}/tmp/run/live` socket
-     - Sends LQL query: `GET hosts\nColumns: name state\n`
-     - Parses CSV response into `{hostname: state_int}` map
-   - Write snapshot JSON to disk with onboarded hosts and timestamp
-   - Print final status table
+1. `api.bootstrap_automation_user()` (`api.py:316-461`) logs into Checkmk's GUI session (`_gui_login`, CSRF-token scrape + POST to `login.py`) using `cmkadmin`, since no REST automation secret exists yet on a fresh site.
+2. Creates the `automation` user via REST with `store_automation_secret: true`.
+3. Immediately self-activates that one pending change (still authenticated as `cmkadmin`) to avoid a later "foreign changes" 401 once the wizard switches to the new automation user for all further calls — polls the activation's `is_running` flag rather than trusting the redirect-based "wait for completion" link.
+4. Failure anywhere in this flow raises `CheckmkAPIError`, treated as best-effort by every caller in `wizard.py` (falls back to prompting the operator for a manually created automation secret).
 
 **State Management:**
-- `CheckmkConnection` — Connection details (host, site, username, secret); created in Phase 1, passed to API client
-- `OnboardedHost` list — Built in Phase 4, used in Phases 5-7
-- `HostScanResult` list — Built in Phase 3, used in Phase 4
-- Local variables in each phase function — No global state except the async context
+- No global session/singleton state. All cross-phase state is explicit dataclasses (`WizardState` is defined but the phases actually thread individual lists/objects directly rather than a single `WizardState` instance — `WizardState` exists as a documented shape but `run()` itself doesn't instantiate it).
+- Long-lived resources (the `CheckmkClient`'s `httpx.AsyncClient`) are scoped with `async with` for the lifetime of `run()`.
+- The only on-disk state the wizard itself writes is the final JSON snapshot (`config_snapshot_*.json`) — everything else is read live from Checkmk (REST/Livestatus) or the OMD filesystem (`site.py`) each run.
 
 ## Key Abstractions
 
-**CheckmkConnection:**
-- Purpose: Encapsulates Checkmk REST API authentication details
-- Examples: `src/checkmk_wizard/api.py:27-37`, `src/checkmk_wizard/wizard.py:75-80`
-- Pattern: Dataclass with computed `base_url` property; passed to `CheckmkClient`
+**Phase functions (`phaseN_*`):**
+- Purpose: represent one discrete stage of the setup pipeline; each is independently readable top-to-bottom and callable in tests.
+- Examples: `phase1_site_bringup`, `phase2_folders`, `phase3_discovery`, `phase4_classification`, `phase5_onboarding`, `phase6_discovery`, `phase7_activation` (all in `wizard.py`).
+- Pattern: `async def phaseN_name(...) -> <next-phase's input>`, printed under `console.rule("[bold]Phase N — ...")`.
 
-**CheckmkClient:**
-- Purpose: Thin async wrapper around Checkmk v1 REST API
-- Examples: `src/checkmk_wizard/api.py:40-187`
-- Pattern: Context manager (async with support); methods grouped by phase; raises `CheckmkAPIError` on failure
+**Result/state dataclasses:**
+- Purpose: typed, serializable-by-`__dict__` records passed between phases instead of dicts.
+- Examples: `ScannedHost`, `OnboardedHost`, `WizardState` (`wizard.py:139-166`); `CheckmkConnection` (`api.py:30-49`); `SiteCredentials` (`site.py:25-29`); `SSHCredentials`, `ActionResult`, `OSRelease`, `CompatibilityCheck`, `AgentStatusCheck`, `PortProbeResult` (`remote.py`); `HostScanResult` (`scanner.py`).
+- Pattern: plain `@dataclass`, no methods beyond the occasional `@property` (e.g. `CheckmkConnection.base_url`, `HostScanResult.is_alive`) or `__post_init__` default-filling (`CheckmkConnection.__post_init__`).
 
-**ActionResult:**
-- Purpose: Represents outcome of remote operations (firewall/install); can degrade gracefully
-- Examples: `src/checkmk_wizard/remote.py:45-49`, `src/checkmk_wizard/wizard.py:218-227`
-- Pattern: Dataclass with `outcome` (enum), `detail` (string), `manual_instructions` (optional)
+**Outcome enum for remote actions:**
+- Purpose: classify every SSH-automated step (firewall fix, agent install, smartmontools) into one of three uniform outcomes so `wizard.py` can render consistent status/color regardless of which step ran.
+- Examples: `remote.Outcome.AUTOMATED` / `MANUAL_REQUIRED` / `FAILED_FALLBACK_MANUAL` (`remote.py:34-37`), returned inside every `ActionResult`.
+- Pattern: every `remote.py` action function returns an `ActionResult(outcome, detail, manual_instructions)` regardless of success/failure, letting the caller print uniformly instead of branching on exception types.
 
-**OnboardedHost:**
-- Purpose: Represents a host promoted from scan results to named entity
-- Examples: `src/checkmk_wizard/wizard.py:26-31`, Phase 4 return
-- Pattern: Dataclass with IP, hostname, folder, OS family
-
-**HostScanResult:**
-- Purpose: Represents a discovered host + its open ports
-- Examples: `src/checkmk_wizard/scanner.py:22-29`, Phase 3 return
-- Pattern: Dataclass with IP and open_ports list; computed `is_alive` property
+**Single HTTP choke point (`CheckmkClient._request`):**
+- Purpose: every REST call funnels through one private method so error handling (turning `httpx.HTTPError`/non-2xx responses into `CheckmkAPIError`) is defined exactly once.
+- Location: `api.py:79-115`.
+- Pattern: public methods (`create_host`, `create_folder`, `create_rule`, etc.) are thin wrappers that just build the path/body and call `self._request(...)`.
 
 ## Entry Points
 
-**CLI Entrypoint:**
-- Location: `src/checkmk_wizard/__main__.py:1-4`
-- Triggers: `python -m checkmk_wizard` or `uv run checkmk-wizard` (from `pyproject.toml` script)
-- Responsibilities: Import `main()` from `wizard.py` and call it
+**Console script `checkmk-wizard`:**
+- Location: declared in `pyproject.toml` (`[project.scripts] checkmk-wizard = "checkmk_wizard.wizard:main"`), implemented at `src/checkmk_wizard/wizard.py:1778-1780`.
+- Triggers: operator runs `uv run checkmk-wizard` (or the installed console script) in an interactive terminal.
+- Responsibilities: starts the asyncio event loop and runs the full 7-phase pipeline (`run()`).
 
-**Async Entry:**
-- Location: `src/checkmk_wizard/wizard.py:318-331`
-- `main()` → calls `asyncio.run(run())`
-- `run()` → orchestrates all 7 phases sequentially
+**Module execution (`python -m checkmk_wizard`):**
+- Location: `src/checkmk_wizard/__main__.py`.
+- Triggers: `python -m checkmk_wizard` / `uv run python -m checkmk_wizard`.
+- Responsibilities: identical to the console script — imports and calls `wizard.main()`.
 
 ## Architectural Constraints
 
-- **Threading:** Single-threaded async event loop (`asyncio.run()` at top level). Network I/O uses asyncio; SSH uses `asyncssh` (async); port scanner uses bounded semaphore for concurrency control (~256 concurrent connections, tunable).
-- **Global state:** None. All state is local to function scopes or passed as parameters.
-- **Circular imports:** None detected. Module hierarchy is linear: `wizard` → `{api,site,scanner,remote,livestatus}`.
-- **Subprocess execution:** Only in `site.py` via `subprocess.run()` for OMD commands; blocks the event loop (acceptable because OMD operations are infrequent and critical path).
-- **Filesystem access:** Read-only for automation secret and `/etc/os-release`; write-only for snapshot JSON and agent package temp files.
-- **Socket access:** Livestatus queries via Unix socket; fails gracefully if socket is unavailable.
-- **Concurrency model:** Semaphore-bounded TCP probes during scan; otherwise sequential; no shared mutable state across tasks.
+- **Threading:** Single-threaded asyncio event loop throughout (`asyncio.run(run())`); no worker threads, no multiprocessing. Concurrency within a phase is cooperative (`asyncio.gather`, `asyncio.Semaphore` in `scanner.py` to bound TCP-connect fan-out to `DEFAULT_CONCURRENCY = 256`).
+- **Global state:** Module-level singletons are limited to a shared `rich.console.Console()` instance (`wizard.py:35`, `console = Console()`) and a handful of compiled regex/constant tables (`_SITE_NAME_RE`, `_HOST_NAME_RE`, `_FOLDER_NAME_RE`, `_HOSTNAME_RE`, `_DEFAULT_*_LEVELS` threshold tuples) — none of these are mutated at runtime.
+- **Local filesystem/OS coupling:** `site.py` assumes it may be running directly on the Checkmk host (shells out to `omd`, reads `/omd/sites/<site>/...` directly) — the wizard branches into a distinct "container mode" (`wizard.py:274` `site.omd_installed()` check) when `omd` isn't on PATH, skipping local-only operations (site create/delete, local secret-file reads) in favor of REST-only bootstrap paths.
+- **Bundled binary assets:** Linux SMART-monitoring support requires `.deb` packages checked into `docs/smart/` (read via `_SMARTMONTOOLS_DIR = Path(__file__).resolve().parents[2] / "docs" / "smart"`, `wizard.py:40`) — this only resolves correctly when running from a source checkout (`uv run`), not from an installed wheel, and is scoped to specific Ubuntu releases (`remote.py:118-122`, `_SMARTMONTOOLS_DEB_BY_UBUNTU_VERSION`).
+- **No test-time network/SSH:** All external I/O in tests is mocked (`respx` for httpx, monkeypatched `asyncssh.connect`/`subprocess.run`) — there is no integration test suite that talks to a live Checkmk site or real SSH host.
 
 ## Anti-Patterns
 
-### Subprocess in Async Context
+### Cross-cutting `except CheckmkAPIError` without differentiating error classes
 
-**What happens:** `site.py:38-47` and `site.py:50-53` use `subprocess.run()` (blocking) in what is otherwise an async codebase.
+**What happens:** Nearly every phase-level call site (`wizard.py`) catches the single broad `CheckmkAPIError` and prints a yellow/red warning, whether the underlying cause was a validation error (400), a conflict (409, e.g. duplicate rule), or a network failure (status_code=0, per `api.py:79-115`'s own comment).
+**Why it's wrong:** A genuine network outage (Checkmk unreachable) and "host already exists" are handled identically — the operator sees a generic warning either way and has to read the interpolated exception text to tell them apart.
+**Do this instead:** This is an accepted, intentional tradeoff documented directly in `api.py`'s `_request` docstring (status_code=0 for network failures, "no call site needs to change") — when adding new call sites, follow the same pattern rather than introducing per-status-code branching, unless a specific status code needs different recovery behavior (as `_create_or_update_host` does for the create-then-fall-back-to-update case, `wizard.py:804-827`).
 
-**Why it's wrong:** Blocks the event loop during OMD operations. On large scale or with slow OMD commands, the wizard UI becomes unresponsive.
+### Long single-file phase orchestrator
 
-**Do this instead:** Migrate to `asyncio.create_subprocess_exec()` or `subprocess.run()` in a thread pool executor (`loop.run_in_executor()`) to avoid blocking. However, this is acceptable for v0.1 given that OMD operations are rare (Phase 1 only) and non-interactive waits are brief.
-
-### Hard-Coded Paths and Constants
-
-**What happens:** Hardcoded paths like `/omd/sites/{site}/var/check_mk/web/...` and port constants (`AGENT_RECEIVER_PORT = 8000`) are scattered across modules.
-
-**Why it's wrong:** Reduces portability; changes to Checkmk site layout or custom ports require code edits.
-
-**Do this instead:** Centralize path and port constants in a `config.py` module, or query them from the Checkmk site at runtime (e.g., `omd config show`). For v0.1, hard-coded constants are acceptable given the limited scope.
-
-### Manual Fallback Instructions as Strings
-
-**What happens:** Firewall and agent install instructions are embedded in strings within `remote.py` functions, duplicated across error paths.
-
-**Why it's wrong:** Difficult to maintain; risk of inconsistency between automated and manual paths; poor localization support.
-
-**Do this instead:** Move instructions to a dedicated template engine or documentation file, and reference them via keys. For v0.1, inline strings are acceptable.
+**What happens:** `wizard.py` is 1779 lines and contains all seven phases, their private helpers, and top-level validation regexes/constants in one file.
+**Why it's wrong:** Locating a specific phase's logic requires searching within one large file; there is no per-phase module boundary.
+**Do this instead:** This is a deliberate, documented tradeoff (see `_onboard_hosts` docstring noting it was "split out... so expected-open-port rule creation... still runs even when hosts is empty") — the project favors one file with clear `# ── Phase N ── ...` section-comment banners over splitting into `phases/phase1.py` etc. New phase-level code should follow the same section-banner convention and stay in `wizard.py` rather than introducing a new phases package, unless the user explicitly requests that refactor.
 
 ## Error Handling
 
-**Strategy:** Fail-safe degradation with manual instructions.
+**Strategy:** Two-tier — exceptions are used for genuine failures, but the *orchestration* layer converts nearly all of them into a printed warning and a fallback path (manual instructions, skip, or default) rather than aborting the run. Only unrecoverable Phase 1 failures (`SystemExit(1)` when the initial REST version check fails, `wizard.py:489-491`) actually stop the wizard.
 
 **Patterns:**
-- REST API errors (`CheckmkAPIError`) are caught in phase functions and logged; the wizard prints the error and either continues (if not critical) or raises `SystemExit(1)` (Phase 1 connectivity check).
-- SSH/firewall errors return `ActionResult` with `outcome=FAILED_FALLBACK_MANUAL` and a fallback instruction string; the wizard prints this and continues.
-- Network scan timeouts are handled per-host; a timeout on one host doesn't stop scanning others.
-- Site bootstrap errors raise `SiteBootstrapError` with stderr output; the wizard does not catch this (fatal).
-- Livestatus socket errors are unhandled (fatal); if the site is up, the socket should be available.
-
-**No exceptions are silenced.** Errors either fail fast or degrade gracefully with clear user messaging.
+- Module-specific exception types: `CheckmkAPIError` (`api.py:19-27`, carries `method`/`url`/`status_code`/`body`) and `SiteBootstrapError` (`site.py:21-22`, plain `RuntimeError` subclass wrapping `omd` stdout+stderr).
+- `ActionResult`/`Outcome` in `remote.py` represents *degraded success* (falls back to manual instructions) as a normal return value, not an exception — SSH/remote failures are expected and routed to a uniform "automated / manual_required / failed_fallback_manual" tri-state rather than raised.
+- Best-effort helpers (`bootstrap_automation_user`, `bootstrap_agent_registration_secret`) document explicitly in their docstrings that callers must treat failure as "fall back to manual instructions, never fatal."
+- Retry loops (bounded, not infinite) are used where a transient timing issue is expected: `_DISCOVERY_RETRY_DELAYS_SECONDS = (10, 20, 30)` in Phase 6 (`wizard.py:1590`) for a freshly-registered agent's first data push.
 
 ## Cross-Cutting Concerns
 
-**Logging:** None. Output is via `rich.console.Console()` for user-facing messages. Debugging requires reading phase function logic or adding print statements.
+**Logging:** No logging framework — all user-facing output goes through the shared `rich.console.Console` (`console.print`/`console.rule`/`Table`/`Progress`), color-coded by severity (green=success, yellow=warning/degraded, red=failure). There is no separate log file or structured log output.
 
-**Validation:**
-- CIDR validation: `ipaddress.ip_network()` in `scanner.py:71` raises `ValueError` if malformed.
-- Port validation: User input is split and `int()` is called; invalid ports raise `ValueError`.
-- Hostname/folder/site names: No validation; passed directly to Checkmk API.
+**Validation:** Input validation is inline, per-prompt, in `wizard.py` using compiled regexes matched directly against Checkmk's own live-verified REST field patterns (`_SITE_NAME_RE`, `_FOLDER_NAME_RE`, `_HOST_NAME_RE`, `_HOSTNAME_RE`) plus small helper functions (`_valid_checkmk_host`, `_password_problems`). Server-side validation (Checkmk's REST API itself) is always still the final authority — client-side checks exist to fail fast with a clearer message, not to replace server validation.
 
-**Authentication:**
-- Checkmk REST API: Bearer token in `Authorization` header (username + secret).
-- SSH: Password or private key via `asyncssh.connect()`.
-- Local OMD access: No auth required; assumes wizard runs on the Checkmk host.
-
-**Rate Limiting:** None. TCP scanner is bounded by semaphore concurrency, not rate limits. REST API calls are sequential per phase.
+**Authentication:** Two credential types flow through `CheckmkConnection` (`api.py:30-49`): the general `username`/`secret` (REST Bearer auth, used for all `CheckmkClient` calls) and an optional narrower `registration_user`/`registration_secret` (used only for `cmk-agent-ctl register` commands), defaulting to the general credential when no dedicated `agent_registration` user secret is available. GUI-session (cookie-based) auth is a separate, one-off mechanism (`api.py`'s `_gui_login`) used only for the initial `cmkadmin`-authenticated bootstrap calls, never for ordinary REST operations.
 
 ---
 
-*Architecture analysis: 2026-08-24*
+*Architecture analysis: 2026-09-05*

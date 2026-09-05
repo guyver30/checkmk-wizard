@@ -1,242 +1,98 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-08-24
+**Analysis Date:** 2026-09-05
 
 ## Naming Patterns
 
 **Files:**
-- `snake_case.py` for module files (e.g., `api.py`, `scanner.py`, `remote.py`)
-- Test files: `test_*.py` (e.g., `test_api.py`, `test_remote.py`)
+- One module per pipeline concern, named after its domain, not its phase: `src/checkmk_wizard/api.py` (REST client), `src/checkmk_wizard/site.py` (OMD/site shell-outs), `src/checkmk_wizard/remote.py` (SSH/agent automation), `src/checkmk_wizard/scanner.py` (async TCP port scanner), `src/checkmk_wizard/livestatus.py` (Livestatus TCP client), `src/checkmk_wizard/wizard.py` (interactive orchestration of all phases).
+- Test files mirror source files 1:1: `tests/test_api.py`, `tests/test_site.py`, `tests/test_remote.py`, `tests/test_scanner.py`, `tests/test_livestatus.py`, `tests/test_wizard.py`. No `conftest.py` exists — shared fixtures/helpers are defined per-file instead (e.g. `_mock_no_ssh_and_skip_services` in `tests/test_wizard.py:67`).
 
 **Functions:**
-- `snake_case` for all function and method names (e.g., `get_version()`, `scan_host()`, `create_folder()`)
-- Private functions/methods prefixed with single underscore (e.g., `_probe_port()`, `_connect()`, `_request()`)
+- `snake_case` throughout, no exceptions.
+- Module-private helpers prefixed with a single underscore: `_request`, `_gui_login` (`src/checkmk_wizard/api.py:79,289`); `_probe_port`, `_valid_checkmk_host`, `_password_problems`, `_prompt_new_site_name` (`src/checkmk_wizard/scanner.py:32`, `src/checkmk_wizard/wizard.py:88,123`). These are still imported directly by tests (e.g. `tests/test_wizard.py:20-61` imports two dozen underscore-prefixed names) — leading underscore signals "internal to the package", not "untestable".
+- Phase entry points in `wizard.py` are named `phaseN_<name>`: `phase1_site_bringup`, `phase2_folders`, `phase3_discovery`, `phase4_classification`, `phase5_onboarding`, `phase6_discovery` (`src/checkmk_wizard/wizard.py`, imported in `tests/test_wizard.py:55-60`).
+- Boolean-returning functions read as predicates: `omd_installed()`, `site_exists()`, `livestatus_tcp_enabled()`, `site_running()`, `agent_status_shows_connection()` (`src/checkmk_wizard/site.py:45,54,117,128`, `src/checkmk_wizard/remote.py`).
 
 **Variables:**
-- `snake_case` for all local and instance variables (e.g., `open_ports`, `host_names`, `scan_results`)
-- Constants: `UPPER_SNAKE_CASE` (e.g., `DEFAULT_PORTS`, `AGENT_RECEIVER_PORT`, `DEFAULT_TIMEOUT`)
+- `snake_case` for locals and parameters; module-level constants are `UPPER_SNAKE_CASE`: `DEFAULT_PORTS`, `DEFAULT_TIMEOUT`, `DEFAULT_CONCURRENCY` (`src/checkmk_wizard/scanner.py:17-19`), `AGENT_RECEIVER_PORT` (`src/checkmk_wizard/remote.py:31`), `DEFAULT_PORT` (`src/checkmk_wizard/livestatus.py:15`).
+- Compiled regexes are module-level constants named `_XXX_RE`: `_CSRF_TOKEN_RE` (`src/checkmk_wizard/api.py:286`), `_SITE_NAME_RE`, `_FOLDER_NAME_RE`, `_HOST_NAME_RE`, `_HOSTNAME_RE` (`src/checkmk_wizard/wizard.py:63,72,77,83`).
+- Test constants that stand in for fixtures are hoisted to module scope in ALL_CAPS: `CONN`, `BASE`, `LOGIN_URL`, `LOGIN_PAGE_HTML` (`tests/test_api.py:18-21`).
 
-**Classes:**
-- `PascalCase` for all class names (e.g., `CheckmkClient`, `HostScanResult`, `OSRelease`)
-- Exceptions: `PascalCase` with `Error` suffix (e.g., `CheckmkAPIError`, `SiteBootstrapError`)
-
-**Dataclass fields:**
-- `snake_case` for all fields in dataclasses (e.g., `host_name`, `folder`, `automation_secret`)
-
-**Enum members:**
-- `UPPER_SNAKE_CASE` for enum values (e.g., `Outcome.AUTOMATED`, `Outcome.MANUAL_REQUIRED`)
+**Types:**
+- `PascalCase` for classes and dataclasses: `CheckmkConnection`, `CheckmkClient`, `CheckmkAPIError` (`src/checkmk_wizard/api.py`); `HostScanResult` (`src/checkmk_wizard/scanner.py:22`); `SSHCredentials`, `PortProbeResult`, `ActionResult`, `OSRelease`, `CompatibilityCheck`, `AgentStatusCheck` (`src/checkmk_wizard/remote.py`); `SiteCredentials` (`src/checkmk_wizard/site.py:26`); `ScannedHost`, `OnboardedHost` (`src/checkmk_wizard/wizard.py:139,146`).
+- Enums subclass `str, Enum` so values compare/serialize as plain strings: `class Outcome(str, Enum)` (`src/checkmk_wizard/remote.py:34`).
+- Custom exceptions subclass the closest built-in and end in `Error`: `CheckmkAPIError(RuntimeError)` (`src/checkmk_wizard/api.py:19`), `SiteBootstrapError(RuntimeError)` (`src/checkmk_wizard/site.py:21`).
 
 ## Code Style
 
-**Imports:**
-- Use `from __future__ import annotations` at the top of all modules to enable modern type hint syntax
-- Organize imports in groups: standard library → third-party → local modules
-- Example from `src/checkmk_wizard/api.py`:
-```python
-from __future__ import annotations
+**Formatting:**
+- No `.prettierrc`/formatter config file found; no `black`/`ruff format` section in `pyproject.toml`. A `.ruff_cache/` directory exists (evidence `ruff` is run, likely via `uvx ruff check` per the linting default) but no `[tool.ruff]` section is committed to `pyproject.toml` — ruff runs with its own defaults (line length 88, double quotes).
+- Observed style is consistent with ruff/black defaults: double-quoted strings throughout, trailing commas in multi-line calls, 4-space indentation.
+- Every module starts with `from __future__ import annotations` (`src/checkmk_wizard/api.py:8`, `site.py:12`, `scanner.py:10`, `livestatus.py:11`, `remote.py:21`, `wizard.py:5`) — enables `X | None` union syntax and forward references under Python 3.11's runtime, and is required before it for classes referencing themselves (e.g. `OSRelease.parse(cls) -> OSRelease` in `src/checkmk_wizard/remote.py:73`).
+- Long lines wrap function signatures one-parameter-per-line when they exceed ~100 chars; short calls stay on one line (see `create_folder`/`create_host` in `src/checkmk_wizard/api.py:125-137,168-182`).
 
-from dataclasses import dataclass
-from typing import Any, Self
+**Linting:**
+- `.ruff_cache/0.16.4/` confirms ruff 0.16.4 is the linter in use, run with default rule set (no project-level rule overrides found).
+- `python-version` pinned via `.python-version` (contents: `3.11`-family) and `requires-python = ">=3.11"` in `pyproject.toml:9`.
 
-import httpx
+## Import Organization
 
-from checkmk_wizard.api import CheckmkError, CheckmkClient, CheckmkConnection
-```
+**Order (per PEP 8 / isort-style grouping, observed consistently):**
+1. `from __future__ import annotations` (always first, alone)
+2. Standard library imports, alphabetized: `asyncio`, `re`, `secrets`, `dataclasses`, `typing` (`src/checkmk_wizard/api.py:10-14`)
+3. Third-party imports: `httpx`, `asyncssh`, `questionary`, `rich.*` (`src/checkmk_wizard/api.py:16`, `src/checkmk_wizard/remote.py:29`, `src/checkmk_wizard/wizard.py:19-22`)
+4. Local package imports last, using absolute `checkmk_wizard.X` paths, never relative (`from checkmk_wizard import livestatus, remote, site` and `from checkmk_wizard.api import (...)` in `src/checkmk_wizard/wizard.py:24-33`)
 
-**Type Hints:**
-- Full type hints for all functions, method parameters, and return types required
-- Use modern Python 3.11+ syntax with `|` for unions (e.g., `str | None` instead of `Optional[str]`)
-- Use generic types from `typing` module (e.g., `dict[str, Any]`, `list[int]`)
-- Example from `src/checkmk_wizard/remote.py`:
-```python
-async def probe_port(host: str, port: int, timeout: float = 3.0) -> PortProbeResult:
-```
+Blank line separates each group. Multi-name imports from one module use parenthesized multi-line form, one name per line, alphabetized (`src/checkmk_wizard/wizard.py:25-32`).
 
-**Dataclasses:**
-- Use `@dataclass` decorator for simple data containers
-- Use `field(default_factory=list)` for mutable default values
-- Example from `src/checkmk_wizard/scanner.py`:
-```python
-@dataclass
-class HostScanResult:
-    ip: str
-    open_ports: list[int] = field(default_factory=list)
-```
-
-**Async Code:**
-- Use `async`/`await` for I/O-bound operations (HTTP, SSH, socket operations)
-- Use `asyncio.Semaphore` for concurrency control (e.g., in `scan_host()`)
-- Use context managers with `async with` for resource management
-
-**String Formatting:**
-- Use f-strings for string interpolation (e.g., `f"Scanned {chunk} — {alive}/{total} responsive"`)
-- Use raw strings for shell commands where needed
+**Path Aliases:** None — this is a plain `src/`-layout package (`src/checkmk_wizard/`) installed via `uv`/`hatchling`-style build; no bundler or `tsconfig`-style alias system applies.
 
 ## Error Handling
 
-**Custom Exceptions:**
-- Create domain-specific exception classes inheriting from appropriate base class
-- Include detailed context in exception initialization
-- Example from `src/checkmk_wizard/api.py`:
-```python
-class CheckmkAPIError(RuntimeError):
-    """Raised when the Checkmk REST API returns an error response."""
+**Patterns:**
+- One error type per subsystem, both wrapping enough context to act on: `CheckmkAPIError(method, url, status_code, body)` (`src/checkmk_wizard/api.py:19-27`) and `SiteBootstrapError(RuntimeError)` (`src/checkmk_wizard/site.py:21-22`), the latter carrying combined `stdout`+`stderr` text in its message rather than structured fields.
+- All HTTP calls funnel through one choke point — `CheckmkClient._request()` (`src/checkmk_wizard/api.py:79-115`) — so every network failure (including raw `httpx.HTTPError`/`ConnectError`) is normalized into `CheckmkAPIError` exactly once; call sites never need their own try/except for connectivity. New `CheckmkClient` methods should be added by calling `self._request(...)`, not `self._client.request(...)` directly, to preserve this guarantee.
+- Functions that shell out (`subprocess.run(..., check=False)`) always pass `check=False` explicitly and inspect `returncode` themselves, because `omd`'s exit codes are non-standard (e.g. `omd start` returns 2 on an already-running site, which is not a failure — `src/checkmk_wizard/site.py:101-114`). Raising is done by hand: `if result.returncode != 0: raise SiteBootstrapError(...)`. When a false-positive nonzero code is possible, the raise condition additionally greps the captured stdout for the literal word `"failed"` (`site.py:112,161`) rather than trusting the exit code alone.
+- "Best-effort" operations that must never abort the caller's flow catch broadly and swallow: `except httpx.HTTPError: pass` around the post-bootstrap activation poll in `bootstrap_automation_user()` (`src/checkmk_wizard/api.py:458-459`) — always accompanied by a comment explaining why swallowing is safe here specifically, not applied as a blanket habit.
+- Narrow except clauses elsewhere: `except (TimeoutError, OSError)` to distinguish real network conditions (`src/checkmk_wizard/scanner.py:38`, `src/checkmk_wizard/remote.py:168`), `except ValueError` when a `.json()` parse may fail and should fall back to raw text (`api.py:111-113,394-396`).
+- `raise X from exc` is used whenever an exception is translated from a lower-level one, preserving the original traceback (`api.py:108,399,544,620`).
+- Domain validation returns lists of human-readable problem strings instead of raising, so callers can display every issue at once: `_password_problems(pw, username) -> list[str]` (`src/checkmk_wizard/wizard.py:123-136`).
 
-    def __init__(self, method: str, url: str, status_code: int, body: Any):
-        self.method = method
-        self.url = url
-        self.status_code = status_code
-        self.body = body
-        super().__init__(f"{method} {url} -> {status_code}: {body}")
-```
+## Comments
 
-**Error Handling Pattern:**
-- Catch specific exceptions, not bare `except:` clauses
-- Use `check=False` for subprocess calls to handle errors manually
-- Provide graceful fallbacks to manual processes when automation fails
-- Example from `src/checkmk_wizard/remote.py`:
-```python
-try:
-    async with await _connect(host, creds) as conn:
-        # perform operation
-except (OSError, asyncssh.Error) as exc:
-    return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, str(exc), manual)
-```
+**When to Comment:**
+- Every non-obvious behavior is documented with *why*, frequently citing a live-verification source: "Live-verified against a real Checkmk 2.4.0p35 CE site: ..." (`src/checkmk_wizard/api.py:204-206`) or a context7 doc citation ("verified via context7: docs.checkmk.com/..." — `src/checkmk_wizard/scanner.py:3-7`, `src/checkmk_wizard/remote.py:5-18`). New code that depends on undocumented/reverse-engineered API or CLI behavior should cite how it was verified (live test, source file read, or docs URL) the same way.
+- Bug-fix commits leave a dated post-mortem comment at the fix site explaining the old broken behavior and why the new approach avoids the whole class of bug, not just the symptom: `_parse_host_attributes()`'s AST-based rewrite explicitly describes the previous greedy-regex bug it replaced (`src/checkmk_wizard/site.py:191-202`, "Bug fixed 2026-08-27").
+- Regression tests get an explanatory comment naming the real bug they guard against, not just a description of the assertion: `test_delete_site_choice_value_survives_as_sentinel` (`tests/test_wizard.py:80-92`).
+- Best-effort/fallback code explicitly states the fallback contract in a docstring line ("this is best-effort; the caller should treat a failure here as 'fall back to the existing manual instructions', never as fatal" — `src/checkmk_wizard/api.py:353-356`).
 
-**HTTP Error Handling:**
-- Check specific status codes; handle 204 (No Content) separately
-- Raise `CheckmkAPIError` for non-2xx responses
-- Example from `src/checkmk_wizard/api.py`:
-```python
-if resp.status_code not in expect and resp.status_code != 204:
-    try:
-        body: Any = resp.json()
-    except ValueError:
-        body = resp.text
-    raise CheckmkAPIError(method, str(resp.url), resp.status_code, body)
-```
-
-## Comments and Documentation
-
-**Module Docstrings:**
-- Required at the top of every module
-- Describe purpose, key responsibilities, and verified facts
-- Example from `src/checkmk_wizard/api.py`:
-```python
-"""Checkmk REST API client.
-
-Endpoints and payloads verified against live Checkmk docs via context7
-(docs.checkmk.com, REST API reference) — see docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md
-for the source citations.
-"""
-```
-
-**Function/Method Docstrings:**
-- Use for public functions and important private functions
-- Include parameter descriptions and return type info if not obvious from type hints
-- Example from `src/checkmk_wizard/remote.py`:
-```python
-async def probe_port(host: str, port: int, timeout: float = 3.0) -> PortProbeResult:
-    """Distinguish an open port from a closed (RST) vs. filtered/unreachable one.
-
-    A plain TCP connect can make this distinction without raw sockets:
-    ConnectionRefusedError means the remote stack sent RST (port closed);
-    a timeout means no response came back at all (filtered or host down).
-    """
-```
-
-**Inline Comments:**
-- Use sparingly; explain *why*, not *what*
-- Use for non-obvious logic and workarounds
-- Example from `src/checkmk_wizard/wizard.py`:
-```python
-# shlex.quote must protect the space and embedded quote in the password
-assert "p@ss w'ord" not in cmd or "'\"'\"'" in cmd
-```
-
-**Phase Organization:**
-- Use phase-numbered section comments to organize wizard workflow
-- Example from `src/checkmk_wizard/api.py`:
-```python
-# -- Phase 1: connectivity -------------------------------------------------
-
-async def get_version(self) -> dict[str, Any]:
-    # ...
-
-# -- Phase 2: folders --------------------------------------------------
-
-async def create_folder(self, ...):
-    # ...
-```
+**Docstrings:**
+- Every public module has a module-level docstring stating its phase/purpose and citing verification sources (`site.py:1-10`, `scanner.py:1-8`, `livestatus.py:1-9`, `remote.py:1-19`, `wizard.py:1-3`).
+- Public functions with non-trivial behavior get a docstring explaining *why* they exist and *why* the implementation looks the way it does — not just parameter descriptions (`bootstrap_automation_user()` in `api.py:324-357` is the densest example: rationale, verification method, failure contract, all in prose). Trivial one-liners (`site_home`, `site_exists`) have no docstring at all.
+- No formal docstring format (no Google/NumPy/Sphinx style enforced) — plain prose paragraphs, sometimes with inline backtick-quoted identifiers.
 
 ## Function Design
 
-**Parameter Order:**
-- Required parameters first, optional parameters with defaults last
-- Use keyword-only arguments (after `*`) for clarity when many parameters
-- Example from `src/checkmk_wizard/api.py`:
-```python
-async def _request(
-    self,
-    method: str,
-    path: str,
-    *,
-    json_body: dict[str, Any] | None = None,
-    params: dict[str, Any] | None = None,
-    extra_headers: dict[str, str] | None = None,
-    expect: tuple[int, ...] = (200, 201),
-) -> httpx.Response:
-```
+**Size:** Functions are kept to a single responsibility; `wizard.py`'s phase functions are the largest (each drives one interactive phase end-to-end, ~100-250 lines each) but delegate validation/formatting/API calls to small helper functions (`_password_problems`, `_valid_checkmk_host`, `_network_scan_attributes`, etc.) rather than inlining logic.
 
-**Return Values:**
-- Use structured return types (dataclasses, typed dicts) when returning multiple values
-- Return `None` explicitly for no-op cases; don't use bare `return`
-- Return empty dict `{}` or empty list `[]` instead of `None` when appropriate
+**Parameters:** Keyword-only parameters (`*`) are used once a function has more than 2-3 optional args, to force call sites to be self-documenting: `CheckmkClient._request(self, method, path, *, json_body=None, params=None, extra_headers=None, expect=(200, 201))` (`api.py:79-88`). Required positional args come first, optional ones with defaults after `*`.
 
-**Size Guidelines:**
-- Keep functions focused and concise
-- Break up long async chains into separate functions
+**Return Values:** Async I/O functions return typed dataclasses or `dict[str, Any]`/`list[dict[str, Any]]` mirroring the JSON shape, never raw `httpx.Response` except where the caller explicitly needs headers (`get_folder`, `get_host` return `httpx.Response` specifically so callers can read `ETag` — `api.py:148,200`). Absence is modeled as `None` (`read_automation_secret() -> str | None`, `site.py:257`) rather than raising, when "not found" is an expected, recoverable case.
 
 ## Module Design
 
-**Exports:**
-- All public functions/classes are module-level
-- No barrel files (no `__all__` exports used in this codebase)
-- Import specific symbols: `from checkmk_wizard.api import CheckmkClient, CheckmkConnection`
+**Exports:** No `__all__` lists anywhere — modules rely on the underscore-prefix convention to signal public vs. internal, and tests import private names directly when needed (see `tests/test_wizard.py:20-61`).
 
-**Separation of Concerns:**
-- `api.py`: REST API client and connection management
-- `scanner.py`: Network discovery and port scanning
-- `remote.py`: SSH automation, firewall, agent installation
-- `site.py`: Local OMD site lifecycle
-- `livestatus.py`: Livestatus query client
-- `wizard.py`: Interactive terminal orchestration (phases 1-7)
+**Barrel Files:** `src/checkmk_wizard/__init__.py` is empty — no re-export barrel. `src/checkmk_wizard/__main__.py` is a 4-line shim delegating to `wizard.main()`, enabling `python -m checkmk_wizard`; the `[project.scripts]` entry point in `pyproject.toml:18` (`checkmk-wizard = "checkmk_wizard.wizard:main"`) is the primary CLI entry.
 
-**Context Managers:**
-- Use `async with` for async context managers (e.g., HTTP clients, SSH connections)
-- Implement `__aenter__` and `__aexit__` for resource cleanup
-- Example from `src/checkmk_wizard/api.py`:
-```python
-async def __aenter__(self) -> Self:
-    return self
+## Dataclass Conventions
 
-async def __aexit__(self, *exc_info: object) -> None:
-    await self.close()
-```
-
-## Linting/Formatting
-
-**Configuration:**
-- No explicit `.ruff.toml` or `.flake8` config present
-- Project uses `uv` as build system (configured in `pyproject.toml`)
-- Expected to follow PEP 8 conventions by default
-- Line length: Not explicitly configured; assume default (likely 88 or 100)
-
-**Expected conventions:**
-- 4-space indentation (Python standard)
-- Trailing commas in multi-line structures
-- Docstrings in triple double-quotes
+- `@dataclass` is the default modeling tool for structured data, used pervasively instead of `TypedDict`, `NamedTuple`, or Pydantic (no Pydantic dependency exists): `CheckmkConnection`, `HostScanResult`, `SSHCredentials`, `PortProbeResult`, `ActionResult`, `OSRelease`, `CompatibilityCheck`, `AgentStatusCheck`, `SiteCredentials`, `ScannedHost`, `OnboardedHost`.
+- Post-init defaulting logic goes in `__post_init__`, not the field default itself, when one field's default depends on another field's value: `CheckmkConnection.__post_init__` defaults `registration_user`/`registration_secret` to `username`/`secret` when unset (`api.py:45-49`).
+- Mutable-default fields use `field(default_factory=...)`: `HostScanResult.open_ports: list[int] = field(default_factory=list)` (`scanner.py:25`).
+- Dataclasses may still carry computed `@property` methods for derived booleans: `HostScanResult.is_alive` (`scanner.py:27-29`).
 
 ---
 
-*Convention analysis: 2026-08-24*
+*Convention analysis: 2026-09-05*
