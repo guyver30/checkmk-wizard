@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-05T10:36:55.603Z",
+  "phase": "08",
+  "phase_name": "broker-infrastructure-hardening",
+  "phase_dir": ".planning/phases/08-broker-infrastructure-hardening",
+  "plan": "08-01",
+  "task": 3,
+  "total_tasks": 3,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": 1, "name": "Write deploy/mosquitto.conf and deploy/mosquitto.acl", "status": "done", "commit": "0cc7a7a"},
+    {"id": 2, "name": "Write deploy/gen-mosquitto-passwd.sh", "status": "done", "commit": "66686b7"},
+    {"id": 3, "name": "Generate and commit deploy/mosquitto.passwd", "status": "in_progress", "progress": "Script written and tested; execution blocked — no podman/docker/mosquitto_passwd available in this sandbox. Must run on the real deployment host."}
+  ],
+  "remaining_tasks": [
+    {"id": 3, "name": "Generate and commit deploy/mosquitto.passwd (run gen-mosquitto-passwd.sh on deployment host)", "status": "blocked_on_human"},
+    {"id": "08-03", "name": "Wave 2: live-broker smoke test + Podman doc update + real-host verification (plan 08-03)", "status": "not_started"}
+  ],
+  "blockers": [
+    {
+      "description": "deploy/mosquitto.passwd requires a real argon2id hash from the mosquitto_passwd binary (or podman/docker running the mosquitto image). None of podman, docker, or a host mosquitto_passwd binary exist in this sandbox. Hand-rolling the hash is explicitly forbidden by 08-RESEARCH.md's 'don't hand-roll' rule.",
+      "type": "human_action",
+      "workaround": "Run ./deploy/gen-mosquitto-passwd.sh on the actual Checkmk/Podman deployment host from a checkout containing commit 66686b7 or later."
+    }
+  ],
+  "human_actions_pending": [
+    {
+      "action": "On the deployment host: run ./deploy/gen-mosquitto-passwd.sh, verify it prints success and deploy/mosquitto.passwd has exactly two lines, verify `head -c 40 deploy/mosquitto.passwd` starts with `wsreader:$` (hashed, not plaintext), verify `stat -c %a deploy/mosquitto.passwd` is 644, then `git add deploy/mosquitto.passwd`.",
+      "context": "Completes task 3 of plan 08-01 so the wave can be merged and plan 08-03's live-broker smoke test can run.",
+      "blocking": true
+    }
+  ],
+  "decisions": [],
+  "uncommitted_files": [
+    ".planning/STATE.md (phase-08 begin-phase marker written by orchestrator this session)",
+    ".planning/config.json (pre-existing, unrelated to phase 08)",
+    "PROMPT_LOG.md (prompt logging, unrelated to phase 08)",
+    ".planning/.pending-auth-captures.jsonl (untracked, pre-existing, unrelated)",
+    "docs/src/ (untracked, pre-existing, unrelated)",
+    "screen1.png (untracked, pre-existing, unrelated)"
+  ],
+  "next_action": "Once deploy/mosquitto.passwd is generated and staged on the deployment host, pull/sync that file into this repo checkout, then resume the paused executor agent (agent id a06afbafce13e8f71, worktree branch worktree-agent-a06afbafce13e8f71) to finish and commit task 3 and finalize 08-01-SUMMARY.md. After that, merge both worktree-agent-a06afbafce13e8f71 (08-01) and worktree-agent-aeb0cd40745f7430d (08-02, already complete) back into main, update STATE.md/ROADMAP.md, then dispatch Wave 2 (plan 08-03).",
+  "context_notes": "Wave 1 of phase 8 (execute-phase) dispatched 08-01 and 08-02 in parallel worktrees off main@d2a661e. 08-02 (compose.yaml + paho-mqtt) completed fully and cleanly (222 tests pass) but its worktree/branch has NOT been merged to main yet — merge is deferred until the whole wave is ready to avoid partial-wave STATE.md/ROADMAP.md writes. 08-01 (mosquitto.conf/acl/gen-script) completed tasks 1-2 and stopped at a genuine environment-capability checkpoint for task 3 (password hash generation needs a real mosquitto_passwd binary or container runtime that this sandbox lacks). Both worktrees are still on disk and must not be deleted — they hold uncommitted-to-main work. Wave 2 (plan 08-03, the live smoke test) depends on both 08-01 and 08-02 and has not been dispatched."
+}
