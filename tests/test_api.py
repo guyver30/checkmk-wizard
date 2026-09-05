@@ -10,6 +10,7 @@ from checkmk_wizard.api import (
     CheckmkAPIError,
     CheckmkClient,
     CheckmkConnection,
+    bootstrap_agent_registration_secret,
     bootstrap_automation_user,
     change_cmkadmin_password,
 )
@@ -281,12 +282,13 @@ async def test_bootstrap_automation_user_success():
             )
         )
         status_route = respx.get(self_url)
-        await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
+        result = await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
 
     body = json.loads(create_route.calls.last.request.content)
     assert body["username"] == "automation"
     assert body["auth_option"]["auth_type"] == "automation"
     assert body["auth_option"]["store_automation_secret"] is True
+    assert result == body["auth_option"]["secret"]
     assert body["roles"] == ["admin"]
 
     # The user-creation call is itself a pending change attributed to
@@ -391,6 +393,69 @@ async def test_bootstrap_automation_user_raises_on_create_failure():
         )
         with pytest.raises(CheckmkAPIError):
             await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_agent_registration_secret_success():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.get(f"{BASE}/objects/user_config/agent_registration").mock(
+            return_value=Response(200, json={}, headers={"ETag": '"user-etag"'})
+        )
+        put_route = respx.put(f"{BASE}/objects/user_config/agent_registration").mock(
+            return_value=Response(200, json={})
+        )
+
+        result = await bootstrap_agent_registration_secret("cmk.example", "mysite", "adminpw")
+
+    assert put_route.calls.last.request.headers["If-Match"] == '"user-etag"'
+    body = json.loads(put_route.calls.last.request.content)
+    assert body["auth_option"]["auth_type"] == "automation"
+    assert body["auth_option"]["store_automation_secret"] is True
+    assert result == body["auth_option"]["secret"]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_agent_registration_secret_raises_when_user_not_found():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.get(f"{BASE}/objects/user_config/agent_registration").mock(
+            return_value=Response(404, json={"title": "not found"})
+        )
+        with pytest.raises(CheckmkAPIError):
+            await bootstrap_agent_registration_secret("cmk.example", "mysite", "adminpw")
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_agent_registration_secret_raises_on_put_failure():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.get(f"{BASE}/objects/user_config/agent_registration").mock(
+            return_value=Response(200, json={}, headers={"ETag": '"user-etag"'})
+        )
+        respx.put(f"{BASE}/objects/user_config/agent_registration").mock(
+            return_value=Response(403, json={"title": "forbidden"})
+        )
+        with pytest.raises(CheckmkAPIError):
+            await bootstrap_agent_registration_secret("cmk.example", "mysite", "adminpw")
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_agent_registration_secret_raises_on_failed_login():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(return_value=Response(200, text="login page again"))
+        with pytest.raises(CheckmkAPIError):
+            await bootstrap_agent_registration_secret("cmk.example", "mysite", "wrongpw")
 
 
 @pytest.mark.asyncio

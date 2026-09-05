@@ -36,15 +36,84 @@ state file. If the process is killed mid-run, the next run starts at Phase 1
 with no memory of what happened before (site/hosts already created in
 Checkmk are simply re-detected or re-created).
 
-## Phase 1 — Site Bring-up (`wizard.py:127-250`)
+## Phase 1 — Site Bring-up (`wizard.py:264-471`)
 
-1. **Pre-flight check:** `site.omd_installed()` (`site.py:44-46`) checks
-   `shutil.which("omd")`. If Checkmk isn't installed at all, prints install
-   instructions (`site.CHECKMK_NOT_INSTALLED_INSTRUCTIONS`, `site.py:31-41`
-   — download link + `apt install` example) and `raise SystemExit(1)`
-   immediately, before prompting for anything, rather than letting
-   `omd create` fail later with a raw `FileNotFoundError`/subprocess error.
-2. **Site selection** (`wizard.py:134-179`). `site.list_sites()`
+1. **Container-mode detection:** `container_mode = not site.omd_installed()`
+   (`wizard.py:273`; `site.omd_installed()` at `site.py:45-47` checks
+   `shutil.which("omd")`). Two branches from here:
+   - **`omd` found (host-native — the wizard runs on the Checkmk host
+     itself, or wherever `omd` is on `PATH`):** the full site
+     creation/selection/deletion flow below runs unchanged.
+   - **`omd` not found (container mode — the wizard runs in a separate
+     container from Checkmk, e.g. the `worker` service):** site
+     creation/deletion are `omd`-only operations and aren't possible from
+     here, so the wizard skips straight to `_prompt_new_site_name()`
+     (`wizard.py:232-238`) with a container-mode-specific prompt asking
+     for the name of a site that **already exists** (e.g. one the Checkmk
+     container's own entrypoint created via `CMK_SITE_ID`/`CMK_PASSWORD`),
+     pre-filled from the `CMK_SITE_ID` env var if the wizard's own
+     container has it set too (`os.environ.get("CMK_SITE_ID", "")`,
+     `wizard.py:289`) — real network-based site discovery isn't possible
+     (every REST endpoint is scoped under `/<site>/...`, so the name has
+     to be known before anything can be queried). Sets
+     `reuse_existing = True` unconditionally. Since `omd_installed()`
+     can't distinguish "running in a separate container" from "Checkmk
+     was never installed here at all," the same banner also prints
+     `site.CHECKMK_NOT_INSTALLED_INSTRUCTIONS` (`site.py:32-42`) as a
+     dimmed footnote, in case that's what's actually going on.
+     `site.list_sites()` is never called in this branch (there's nothing
+     local to list).
+
+     After the Checkmk-host prompt (step 2 below, unchanged in both
+     modes), instead of `_create_fresh_site()`/`enable_livestatus_tcp()`/
+     `start_site()`, it just prints that it's skipping local site
+     management, then best-effort probes Livestatus reachability with
+     `_probe_livestatus_tcp()` (`wizard.py:248-260` — a short-timeout
+     `socket.create_connection()` to `checkmk_host`:6557, never fatal) and
+     prints a warning with the exact `omd config .../omd restart` command
+     to run **on the Checkmk host/container** if it's not reachable —
+     rather than letting the miss surface as a bare exception at the very
+     end of the run, in Phase 7.
+
+     **Credential bootstrap (`wizard.py:386-400`):** prompts for the
+     `cmkadmin` password (whatever the Checkmk container's own
+     `CMK_PASSWORD` was set to) — there's no local automation-secret file
+     to read, so if given, it's used to call `bootstrap_automation_user()`
+     (`api.py:316-460`, the same mechanism `_create_fresh_site()` uses right
+     after `omd create` — see step 4 below) and the **returned secret is
+     used directly**, never re-read from disk. Left blank, or on a
+     `CheckmkAPIError` from that call (most commonly a 409 — the
+     `automation` user already exists from a previous run against this
+     same site), falls through to the ordinary credential lookup below:
+     `site.get_site_credentials()` (works if the wizard's container
+     happens to share the site's volume), then — if that's also `None` —
+     the manual-secret-paste prompt, whose message gets an extra
+     container-mode-specific hint pointing at `podman exec
+     <checkmk-container> cat .../automation.secret` instead of creating a
+     new user, since a container-created site almost always already has
+     the default `automation` user provisioned.
+
+     **Same trick extended to `agent_registration` (`wizard.py:442-475`):**
+     after the local-file lookup for that user's secret misses (step 5
+     below), if `container_mode` and a `cmkadmin_password` was given, calls
+     `bootstrap_agent_registration_secret()` (`api.py:464-547`) and uses
+     its returned secret directly — same pattern as `automation` above,
+     except this one never *creates* the user: per live Checkmk docs,
+     `agent_registration` is provisioned by default on every site, just
+     not necessarily with a stored secret file. It logs in via the same
+     cmkadmin GUI-session flow, `GET`s the existing user object for its
+     ETag, then `PUT`s a fresh `auth_option` — mirroring
+     `change_cmkadmin_password()`'s own GET-ETag-then-PUT flow against the
+     same `/objects/user_config/<user>` endpoint (step 3's "cmkadmin
+     password change" bullet), just resetting an automation secret instead
+     of a password, and leaving the account's role untouched. **Not
+     live-verified** against a running site, unlike the rest of this
+     module — see the function's own docstring for exactly what's inferred
+     versus independently verified. On failure (`CheckmkAPIError`, e.g. a
+     network/permission problem), prints a warning and falls through to
+     the existing "reuse the general automation credential" behavior,
+     same as if the reset had never been attempted.
+2. **Site selection** (host-native branch only). `site.list_sites()`
    (`site.py:57-66` — lists directory names under `/omd/sites/`, the same
    convention `site_exists()` already uses) runs first, before any prompt:
    - **No sites exist:** goes straight to `_prompt_new_site_name()`
@@ -167,11 +236,14 @@ Checkmk are simply re-detected or re-created).
    here (a stray space, an accidentally-included `http://` prefix, ...)
    used to reach `httpx` unvalidated and crash the wizard; see the
    `CheckmkClient._request()` fix below.
-   - **New site:** `_create_fresh_site()` (`wizard.py:192-206`) generates a
+   - **New site:** `_create_fresh_site()` (`wizard.py:213-228`) generates a
      random admin password via `secrets.token_urlsafe(16)`, runs
      `omd create --admin-password <pwd> <site>` as a subprocess
-     (`site.py:69-86`), then `omd start <site>` (`site.py:89-103`), then
-     **prints the generated cmkadmin password to the console**.
+     (`site.py:70-87`), then `site.enable_livestatus_tcp()`
+     (`site.py:138-162` — runs `omd config <site> set LIVESTATUS_TCP on`;
+     see step 2 of Phase 7 below for why), then `omd start <site>`
+     (`site.py:90-114`), then **prints the generated cmkadmin password to
+     the console**.
    - **cmkadmin password change (`_prompt_change_cmkadmin_password()`,
      `wizard.py:150-186`, added 2026-08-26):** immediately after printing
      the password, asks "Change the cmkadmin password now? (recommended —
@@ -211,14 +283,18 @@ Checkmk are simply re-detected or re-created).
      endpoint source (`cmk/gui/openapi/endpoints/user_config/
      request_schemas.py`, class `AuthUpdatePassword`), since context7's
      generic REST API docs don't cover this exact request body.
-   - **Existing site (reused):** just runs `omd start <site>` again
-     (no-op if already running) and reuses the existing site's credentials
-     below — no auto-provisioning attempt here, since that needs a
-     cmkadmin password the wizard only knows right after it generates one
-     itself.
+   - **Existing site (reused):** calls `site.enable_livestatus_tcp()`
+     first (a no-op if the site already has it on — e.g. a site this
+     wizard created previously; restarts the site if it was already
+     running and Livestatus TCP had to be turned on, since that setting
+     only takes effect on daemon restart), then runs `omd start <site>`
+     again (no-op if already running) and reuses the existing site's
+     credentials below — no auto-provisioning attempt here, since that
+     needs a cmkadmin password the wizard only knows right after it
+     generates one itself.
 
    `create_site()`/`start_site()`/`remove_site()` all now **return their
-   full stdout** (`site.py:69-129`), which the wizard prints to the
+   full stdout** (`site.py:70-178`), which the wizard prints to the
    console (dimmed) right after each call, and **include both stdout and
    stderr in the raised `SiteBootstrapError`** on a nonzero exit. Live-
    verified this matters: `omd`'s per-daemon progress
@@ -231,7 +307,7 @@ Checkmk are simply re-detected or re-created).
    operator would only have seen the raw Apache stderr text, not which
    daemon failed or that every other daemon started fine first.
 
-   **`start_site()` (`site.py:89-113`) also doesn't treat every nonzero
+   **`start_site()` (`site.py:90-114`) also doesn't treat every nonzero
    exit as failure.** Live-verified: `omd start` on a site that's
    **already fully running** — the ordinary case when reusing an existing
    site (step 3's "Existing site (reused)" branch above) — also returns
@@ -243,7 +319,7 @@ Checkmk are simply re-detected or re-created).
    real failure includes the literal word "failed"; the already-running
    case never does — so `start_site()` only raises when `"failed"` appears
    in stdout, regardless of exit code.
-4. `site.get_site_credentials(site_name)` (`site.py:145-149`) reads
+4. `site.get_site_credentials(site_name)` (`site.py:270-274`) reads
    `/omd/sites/<site>/var/check_mk/web/automation/automation.secret`
    directly off disk.
    - **If found:** used as-is — no user prompt. This is now the common
@@ -256,13 +332,15 @@ Checkmk are simply re-detected or re-created).
      interactively — re-prompted if left blank (`wizard.py:207-211`).
 5. Separately, looks up a **dedicated `agent_registration` credential**
    the same way (`site.get_site_credentials(site_name,
-   automation_user="agent_registration")`, `wizard.py:105`) — Checkmk ships
+   automation_user="agent_registration")`, `wizard.py:442`) — Checkmk ships
    this as a separate pre-configured, least-privilege user scoped solely to
    host registration (doc-verified: `docs.checkmk.com/latest/en/
    agent_deployment.html`). If found, it's kept separate from the REST
    credential and used only for `cmk-agent-ctl register` in Phase 5.2; if
-   not found, prints a note and Phase 5.2 falls back to reusing the general
-   `automation` credential (no prompt — silent, doc-explained fallback).
+   not found and this is container mode with a `cmkadmin_password` in
+   hand, resets its secret via REST instead (see step 1's "Same trick
+   extended to `agent_registration`" above) before falling back to reusing
+   the general `automation` credential.
 6. Builds a `CheckmkConnection(host, site, username, secret,
    registration_user, registration_secret)` (`api.py:27-50`) — `base_url`
    becomes `http://<host>/<site>/check_mk/api/v1`.
@@ -1170,12 +1248,17 @@ a different mechanism than the plan's wording, but the same outcome
    is the last chance to get changes live, so there's nothing left worth
    attempting after it fails here).
 2. If there are onboarded hosts, queries Livestatus directly:
-   - Connects to the UNIX socket `/omd/sites/<site>/tmp/run/live`
-     (`livestatus.py:14-15`).
+   - Connects over **TCP** to `connection.host`, port 6557 by default
+     (`livestatus.py:15,18`) — not the local UNIX socket. Phase 1 turns
+     Livestatus-over-TCP on for every site the wizard creates or reuses
+     (`site.enable_livestatus_tcp()`, called from `_create_fresh_site()`
+     and the reuse-existing path in `phase1_site_bringup()`), so this
+     works whether the wizard runs on the Checkmk host itself or from a
+     separate container/host.
    - Sends the raw LQL query `GET hosts\nColumns: name state\nOutputFormat:
      csv\nColumnHeaders: off\n\n` and reads the socket until EOF.
    - Parses each line by splitting on the **first** `;` only
-     (`line.partition(";")`, `livestatus.py:51`).
+     (`line.partition(";")`, `livestatus.py:44`).
    - Maps state `0→UP`, `1→DOWN`, `2→UNREACHABLE`, anything else →
      `"unknown"`, and prints a table.
 3. Pulls the site's **actual current** host/folder configuration —
@@ -1219,13 +1302,18 @@ a different mechanism than the plan's wording, but the same outcome
 - Phase 1 pre-flight check (Checkmk not installed): **fatal**
   (`SystemExit(1)`, before any prompts).
 - Phase 1 REST check failure: **fatal** (`SystemExit(1)`).
-- Site bootstrap (`omd create`/`omd start`/`omd rm`, the last only on an
-  explicit reset) failure: **fatal** (unhandled `SiteBootstrapError`).
+- Site bootstrap (`omd create`/`omd start`/`omd rm`/`omd config`
+  set/`omd restart` — the last two from `enable_livestatus_tcp()`, `omd
+  rm` only on an explicit reset) failure: **fatal** (unhandled
+  `SiteBootstrapError`).
 - Everything else (folder create, host create, firewall, agent install,
   discovery start): **caught and printed, execution continues** — the
   wizard never aborts the whole run over a single host/folder failure.
-- Livestatus socket errors in Phase 7: **unhandled** (bare exception
-  propagates if the socket is missing/unreadable).
+- Livestatus TCP errors in Phase 7: **unhandled** (bare exception
+  propagates if the connection is refused/times out — e.g. Livestatus TCP
+  not yet enabled on a site created before this wizard turned it on
+  automatically, or the port isn't reachable from wherever the wizard is
+  running).
 
 **Fixed 2026-08-25 — network-level failures used to bypass every
 `except CheckmkAPIError` in the codebase.** `CheckmkClient._request()`

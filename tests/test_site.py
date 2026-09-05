@@ -98,6 +98,85 @@ def test_start_site_raises_on_failure_with_stdout_and_stderr():
     assert "Address already in use" in str(exc_info.value)
 
 
+def test_livestatus_tcp_enabled_true_when_on():
+    with patch(
+        "subprocess.run",
+        return_value=subprocess.CompletedProcess([], 0, stdout="on\n"),
+    ) as mock_run:
+        assert site.livestatus_tcp_enabled("mysite") is True
+    mock_run.assert_called_once_with(
+        ["omd", "config", "mysite", "show", "LIVESTATUS_TCP"], capture_output=True, text=True, check=False
+    )
+
+
+def test_livestatus_tcp_enabled_false_when_off():
+    with patch(
+        "subprocess.run",
+        return_value=subprocess.CompletedProcess([], 0, stdout="off\n"),
+    ):
+        assert site.livestatus_tcp_enabled("mysite") is False
+
+
+def test_site_running_true_when_omd_status_exits_zero():
+    with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
+        assert site.site_running("mysite") is True
+
+
+def test_site_running_true_when_partially_running():
+    with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1)):
+        assert site.site_running("mysite") is True
+
+
+def test_site_running_false_when_fully_stopped():
+    with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 2)):
+        assert site.site_running("mysite") is False
+
+
+def test_enable_livestatus_tcp_noop_when_already_enabled():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess([], 0, stdout="on\n")
+        site.enable_livestatus_tcp("mysite")
+    mock_run.assert_called_once()  # only the "show" check, no "set" or restart
+
+
+def test_enable_livestatus_tcp_sets_config_when_stopped_and_does_not_restart():
+    responses = [
+        subprocess.CompletedProcess([], 0, stdout="off\n"),  # show
+        subprocess.CompletedProcess([], 2),  # status: fully stopped
+        subprocess.CompletedProcess([], 0, stdout="OK\n"),  # set
+    ]
+    with patch("subprocess.run", side_effect=responses) as mock_run:
+        site.enable_livestatus_tcp("mysite")
+    assert mock_run.call_count == 3
+    set_call = mock_run.call_args_list[2]
+    assert set_call.args[0] == ["omd", "config", "mysite", "set", "LIVESTATUS_TCP", "on"]
+
+
+def test_enable_livestatus_tcp_restarts_when_already_running():
+    responses = [
+        subprocess.CompletedProcess([], 0, stdout="off\n"),  # show
+        subprocess.CompletedProcess([], 0),  # status: running
+        subprocess.CompletedProcess([], 0, stdout="OK\n"),  # set
+        subprocess.CompletedProcess([], 0, stdout="Restarting...OK\n"),  # restart
+    ]
+    with patch("subprocess.run", side_effect=responses) as mock_run:
+        site.enable_livestatus_tcp("mysite")
+    assert mock_run.call_count == 4
+    restart_call = mock_run.call_args_list[3]
+    assert restart_call.args[0] == ["omd", "restart", "mysite"]
+
+
+def test_enable_livestatus_tcp_raises_when_set_fails():
+    responses = [
+        subprocess.CompletedProcess([], 0, stdout="off\n"),  # show
+        subprocess.CompletedProcess([], 2),  # status: fully stopped
+        subprocess.CompletedProcess([], 1, stdout="", stderr="unknown variable"),  # set fails
+    ]
+    with patch("subprocess.run", side_effect=responses):
+        with pytest.raises(site.SiteBootstrapError, match="unknown variable"):
+            site.enable_livestatus_tcp("mysite")
+
+
 def _real_hosts_mk_content(host_attributes_body: str) -> str:
     """A realistic WATO hosts.mk file — same shape as a real Checkmk 2.4
     CE site produces (live-captured), critically including the

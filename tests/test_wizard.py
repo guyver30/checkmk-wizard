@@ -44,12 +44,15 @@ from checkmk_wizard.wizard import (
     _network_scan_attributes,
     _password_problems,
     _ping_only_hostnames,
+    _probe_livestatus_tcp,
     _prompt_change_cmkadmin_password,
+    _prompt_new_site_name,
     _prompt_threshold_levels,
     _resolve_agent_registration_server,
     _smart_posix_plugin_path,
     _valid_checkmk_host,
     _verify_expected_services,
+    phase1_site_bringup,
     phase2_folders,
     phase3_discovery,
     phase4_classification,
@@ -87,6 +90,241 @@ def test_delete_site_choice_value_survives_as_sentinel():
     choice = questionary.Choice("Delete a site, then create a new one", value=_DELETE_SITE)
     assert choice.value is _DELETE_SITE
     assert choice.value != "Delete a site, then create a new one"
+
+
+@pytest.mark.asyncio
+async def test_prompt_new_site_name_uses_custom_prompt_text(monkeypatch):
+    seen_prompts = []
+    original_text = questionary.text
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return "dmc"
+
+    def fake_text(prompt, *args, **kwargs):
+        seen_prompts.append(prompt)
+        return original_text(prompt, *args, **kwargs)
+
+    monkeypatch.setattr(questionary, "text", fake_text)
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    result = await _prompt_new_site_name(set(), prompt="Site name to connect to:")
+
+    assert result == "dmc"
+    assert seen_prompts == ["Site name to connect to:"]
+
+
+def test_probe_livestatus_tcp_true_when_connection_succeeds(monkeypatch):
+    class _FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("checkmk_wizard.wizard.socket.create_connection", lambda *a, **k: _FakeSocket())
+
+    assert _probe_livestatus_tcp("checkmk") is True
+
+
+def test_probe_livestatus_tcp_false_when_connection_refused(monkeypatch):
+    def fake_create_connection(*args, **kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.socket.create_connection", fake_create_connection)
+
+    assert _probe_livestatus_tcp("checkmk") is False
+
+
+def _mock_container_mode_omd_calls(monkeypatch):
+    """Shared setup for container-mode tests: no local 'omd', Livestatus
+    probe fails harmlessly (irrelevant to these tests), and create_site/
+    start_site/remove_site/list_sites must never be called — returns the
+    list they'd record themselves into if they were."""
+    forbidden_calls = []
+
+    def fake_create_connection(*args, **kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.site.omd_installed", lambda: False)
+    monkeypatch.setattr("checkmk_wizard.wizard.socket.create_connection", fake_create_connection)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.site.create_site", lambda *a, **k: forbidden_calls.append("create_site")
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.site.start_site", lambda *a, **k: forbidden_calls.append("start_site")
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.site.remove_site", lambda *a, **k: forbidden_calls.append("remove_site")
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.site.list_sites", lambda: forbidden_calls.append("list_sites") or []
+    )
+    return forbidden_calls
+
+
+@pytest.mark.asyncio
+async def test_phase1_container_mode_skips_omd_and_connects_over_rest(monkeypatch):
+    """No local 'omd' — the wizard must not touch create_site/start_site/
+    remove_site at all, must prompt for a site name to connect to instead
+    of listing/offering to create one, must skip the cmkadmin-password
+    bootstrap when left blank, and must still reach the site over REST
+    using credentials it read locally (which, in this scenario, ARE
+    available — e.g. a shared volume)."""
+    answers = iter(["dmc", "checkmk", ""])  # site name, checkmk host, blank cmkadmin password (skip)
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    forbidden_calls = _mock_container_mode_omd_calls(monkeypatch)
+
+    def fake_get_site_credentials(site_name, automation_user="automation"):
+        if automation_user == "automation":
+            from checkmk_wizard.site import SiteCredentials
+
+            return SiteCredentials(site=site_name, automation_user="automation", automation_secret="s3cret")
+        return None
+
+    monkeypatch.setattr("checkmk_wizard.wizard.site.get_site_credentials", fake_get_site_credentials)
+
+    base_url = "http://checkmk/dmc/check_mk/api/v1"
+    with respx.mock:
+        respx.get(f"{base_url}/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        connection = await phase1_site_bringup()
+
+    assert forbidden_calls == []
+    assert connection.host == "checkmk"
+    assert connection.site == "dmc"
+    assert connection.username == "automation"
+    assert connection.secret == "s3cret"
+
+
+@pytest.mark.asyncio
+async def test_phase1_container_mode_bootstraps_automation_user_via_cmkadmin_password(monkeypatch):
+    """Given the cmkadmin password, container mode creates the 'automation'
+    user via REST (bootstrap_automation_user) and uses its returned secret
+    directly — never falling back to a local file read."""
+    answers = iter(["dmc", "checkmk", "cmkadmin-pw"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+
+    async def fake_bootstrap(host, site_name, cmkadmin_password, **kwargs):
+        assert (host, site_name, cmkadmin_password) == ("checkmk", "dmc", "cmkadmin-pw")
+        return "freshly-generated-secret"
+
+    monkeypatch.setattr("checkmk_wizard.wizard.bootstrap_automation_user", fake_bootstrap)
+
+    async def fake_registration_bootstrap_unavailable(*args, **kwargs):
+        raise CheckmkAPIError("PUT", "url", 500, "not exercised by this test")
+
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.bootstrap_agent_registration_secret", fake_registration_bootstrap_unavailable
+    )
+
+    def fail_if_called_for_automation(site_name, automation_user="automation"):
+        # The unconditional 'agent_registration' lookup further down is
+        # fine and expected to miss (returns None); only the 'automation'
+        # credential must come from the bootstrap call above, never here.
+        if automation_user == "automation":
+            raise AssertionError("get_site_credentials('automation') should not be called when bootstrap succeeds")
+        return None
+
+    monkeypatch.setattr("checkmk_wizard.wizard.site.get_site_credentials", fail_if_called_for_automation)
+
+    base_url = "http://checkmk/dmc/check_mk/api/v1"
+    with respx.mock:
+        respx.get(f"{base_url}/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        connection = await phase1_site_bringup()
+
+    assert connection.username == "automation"
+    assert connection.secret == "freshly-generated-secret"
+
+
+@pytest.mark.asyncio
+async def test_phase1_container_mode_falls_back_when_bootstrap_fails(monkeypatch):
+    """If bootstrap_automation_user() fails (e.g. the user already exists
+    from a previous run), container mode falls back to a local file read
+    (or, failing that, the manual secret prompt) instead of aborting."""
+    answers = iter(["dmc", "checkmk", "cmkadmin-pw"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+
+    async def fake_bootstrap_fails(host, site_name, cmkadmin_password, **kwargs):
+        raise CheckmkAPIError("POST", "url", 409, "user already exists")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.bootstrap_automation_user", fake_bootstrap_fails)
+
+    async def fake_registration_bootstrap_unavailable(*args, **kwargs):
+        raise CheckmkAPIError("PUT", "url", 500, "not exercised by this test")
+
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.bootstrap_agent_registration_secret", fake_registration_bootstrap_unavailable
+    )
+
+    def fake_get_site_credentials(site_name, automation_user="automation"):
+        if automation_user == "automation":
+            from checkmk_wizard.site import SiteCredentials
+
+            return SiteCredentials(site=site_name, automation_user="automation", automation_secret="existing-secret")
+        return None
+
+    monkeypatch.setattr("checkmk_wizard.wizard.site.get_site_credentials", fake_get_site_credentials)
+
+    base_url = "http://checkmk/dmc/check_mk/api/v1"
+    with respx.mock:
+        respx.get(f"{base_url}/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        connection = await phase1_site_bringup()
+
+    assert connection.secret == "existing-secret"
+
+
+@pytest.mark.asyncio
+async def test_phase1_container_mode_resets_agent_registration_secret_via_cmkadmin_password(monkeypatch):
+    """When no local 'agent_registration' secret is found, container mode
+    resets it via REST using the same cmkadmin password, rather than
+    falling back to reusing the general 'automation' credential."""
+    answers = iter(["dmc", "checkmk", "cmkadmin-pw"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+
+    async def fake_bootstrap_automation(host, site_name, cmkadmin_password, **kwargs):
+        return "automation-secret"
+
+    async def fake_bootstrap_registration(host, site_name, cmkadmin_password, **kwargs):
+        assert (host, site_name, cmkadmin_password) == ("checkmk", "dmc", "cmkadmin-pw")
+        return "registration-secret"
+
+    monkeypatch.setattr("checkmk_wizard.wizard.bootstrap_automation_user", fake_bootstrap_automation)
+    monkeypatch.setattr("checkmk_wizard.wizard.bootstrap_agent_registration_secret", fake_bootstrap_registration)
+    monkeypatch.setattr("checkmk_wizard.wizard.site.get_site_credentials", lambda *a, **k: None)
+
+    base_url = "http://checkmk/dmc/check_mk/api/v1"
+    with respx.mock:
+        respx.get(f"{base_url}/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        connection = await phase1_site_bringup()
+
+    assert connection.registration_user == "agent_registration"
+    assert connection.registration_secret == "registration-secret"
 
 
 @pytest.mark.parametrize(
