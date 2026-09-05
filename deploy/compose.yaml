@@ -1,0 +1,99 @@
+services:
+  # 1. Official Checkmk Raw
+  checkmk:
+    image: checkmk/check-mk-raw:2.4.0-latest
+    container_name: checkmk
+    restart: unless-stopped
+    hostname: checkmk
+    environment:
+      - CMK_SITE_ID=dmc
+      - CMK_PASSWORD=cmkadmin
+      - TZ=Asia/Singapore
+    ports:
+      - "8080:5000"     # Web UI
+      - "8000:8000"     # Agent TLS registration
+      - "6556:6556"     # Agent pull mode
+    volumes:
+      - checkmk_data:/omd/sites
+      - /etc/localtime:/etc/localtime:ro
+    tmpfs:
+      - /omd/sites/dmc/tmp:rw,size=512M,mode=1777
+    networks:
+      - cmk_net
+
+  # 2. Mosquitto Broker
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"     # plain MQTT — stays LAN-published for debugging (D-04),
+                          # now requires "poller" credentials instead of anonymous
+      - "9002:9001"     # WebSockets — host 9002 avoids colliding with minio's
+                          # own published console port (host 9001) below
+    volumes:
+      # was ./mosquitto.conf:/etc/mosquitto/mosquitto.conf:ro,z — the image's
+      # baked-in CMD only reads /mosquitto/config/mosquitto.conf, so the old
+      # path silently never loaded the custom config
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro,z
+      - ./mosquitto.acl:/mosquitto/config/mosquitto.acl:ro,z
+      - ./mosquitto.passwd:/mosquitto/config/mosquitto.passwd:ro,z
+      - mosquitto_data:/mosquitto/data:z
+      - mosquitto_log:/mosquitto/log:z
+    networks:
+      - cmk_net
+
+  # 3. MinIO S3 Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "9000:9000"     # S3 API Endpoint
+      - "9001:9001"     # Web Console
+    volumes:
+      - minio_data:/data:z
+    networks:
+      - cmk_net
+
+  # 4. Automation Worker (Python 3.12 + uv) — runs checkmk-wizard (§8) and
+  # any other scripts placed under ./app, e.g. the MQTT publisher.
+  worker:
+    image: python:3.12-slim
+    container_name: automation-worker
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./app:/app:z
+    environment:
+      - CMK_REST_API=http://checkmk:5000/dmc/check_mk/api/1.0
+      - CMK_SITE=dmc
+      # Same name/value as the checkmk service's own CMK_SITE_ID above —
+      # checkmk-wizard reads this (if present) to pre-fill its site-name
+      # prompt in container mode, since it has no local 'omd' to list
+      # sites with and no network-based way to discover one either.
+      - CMK_SITE_ID=dmc
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+    command: >
+      bash -c "pip install --no-cache-dir uv &&
+               tail -f /dev/null"
+    networks:
+      - cmk_net
+
+volumes:
+  checkmk_data:
+  mosquitto_data:
+  mosquitto_log:
+  minio_data:
+
+networks:
+  cmk_net:
+    driver: bridge
