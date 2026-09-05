@@ -69,32 +69,32 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BRK-01 | TBD | Pending |
-| BRK-02 | TBD | Pending |
-| BRK-03 | TBD | Pending |
-| PLR-01 | TBD | Pending |
-| PLR-02 | TBD | Pending |
-| PLR-03 | TBD | Pending |
-| PLR-04 | TBD | Pending |
-| PLR-05 | TBD | Pending |
-| PLR-06 | TBD | Pending |
-| PLR-07 | TBD | Pending |
-| PLR-08 | TBD | Pending |
-| TAG-01 | TBD | Pending |
-| TAG-02 | TBD | Pending |
-| TAG-03 | TBD | Pending |
-| DASH-01 | TBD | Pending |
-| DASH-02 | TBD | Pending |
-| DASH-03 | TBD | Pending |
-| DASH-04 | TBD | Pending |
-| DASH-05 | TBD | Pending |
-| DASH-06 | TBD | Pending |
+| BRK-01 | Phase 8 | Pending |
+| BRK-02 | Phase 8 | Pending |
+| BRK-03 | Phase 8 | Pending |
+| PLR-01 | Phase 9 | Pending |
+| PLR-02 | Phase 9 | Pending |
+| PLR-03 | Phase 9 | Pending |
+| PLR-04 | Phase 9 | Pending |
+| PLR-05 | Phase 9 | Pending |
+| PLR-06 | Phase 9 | Pending |
+| PLR-07 | Phase 9 | Pending |
+| PLR-08 | Phase 9 | Pending |
+| TAG-01 | Phase 10 | Pending |
+| TAG-02 | Phase 10 | Pending |
+| TAG-03 | Phase 10 | Pending |
+| DASH-01 | Phase 11 | Pending |
+| DASH-02 | Phase 11 | Pending |
+| DASH-03 | Phase 11 | Pending |
+| DASH-04 | Phase 11 | Pending |
+| DASH-05 | Phase 11 | Pending |
+| DASH-06 | Phase 11 | Pending |
 
 **Coverage:**
 - v1 requirements: 20 total
-- Mapped to phases: 0 (assigned during roadmap creation)
-- Unmapped: 20 ⚠️ (expected prior to roadmap step)
+- Mapped to phases: 20 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-09-05*
-*Last updated: 2026-09-05 after initial definition*
+*Last updated: 2026-09-05 after roadmap creation (Phases 8-11)*
