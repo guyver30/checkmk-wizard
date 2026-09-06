@@ -36,8 +36,10 @@ up in a later plan.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import socket
 from dataclasses import dataclass, field
 
 DEFAULT_LIVESTATUS_PORT = 6557
@@ -72,6 +74,10 @@ _SERVICE_STATE_NAMES = {0: "OK", 1: "WARN", 2: "CRIT", 3: "UNKNOWN"}
 _TOPIC_UNSAFE_CHARS = ("+", "#", "/")
 
 _logger = logging.getLogger(__name__)
+
+
+class LivestatusError(RuntimeError):
+    """Raised for any Livestatus network failure or malformed response."""
 
 
 def _env_int(name: str, default: int) -> int:
@@ -269,3 +275,149 @@ def extract_device_type(tags: dict) -> str:
     if "tag_device_type" in tags:
         return tags["tag_device_type"]
     return UNKNOWN_DEVICE_TYPE
+
+
+def _livestatus_request(host: str, port: int, query: str, timeout: float) -> str:
+    """Send one LQL query and return the raw response body.
+
+    Every Livestatus network failure funnels through this one choke
+    point and is normalized into `LivestatusError` exactly once (same
+    pattern as `CheckmkClient._request` in `src/checkmk_wizard/api.py`),
+    so call sites never need their own try/except for connectivity.
+    Extends `src/checkmk_wizard/livestatus.py`'s exact transport idiom;
+    only the LQL headers differ.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            sock.sendall(query.encode())
+            sock.shutdown(socket.SHUT_WR)
+            chunks = []
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+    except (TimeoutError, OSError) as exc:
+        raise LivestatusError(f"Livestatus request to {host}:{port} failed: {exc}") from exc
+    return b"".join(chunks).decode(errors="replace")
+
+
+def available_host_columns(host: str, port: int, timeout: float) -> set[str]:
+    """Return the column names the live site's `hosts` table actually exposes.
+
+    Checkmk publishes no static column reference for the `hosts` table;
+    the documented way to get ground truth is a live `GET columns` query
+    (docs.checkmk.com/latest/en/livestatus_references.html) — resolves
+    09-RESEARCH.md Open Question 1 / Assumptions A1-A3.
+    """
+    query = "GET columns\nColumns: name\nFilter: table = hosts\nOutputFormat: json\n\n"
+    body = _livestatus_request(host, port, query, timeout)
+    if not body.strip():
+        return set()
+    try:
+        rows = json.loads(body)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise LivestatusError(f"Malformed columns response from {host}:{port}: {exc}") from exc
+    return {row[0] for row in rows}
+
+
+def select_host_columns(available: set[str]) -> list[str]:
+    """Build the column list to request, degrading unverified optional columns gracefully.
+
+    Every name in REQUIRED_HOST_COLUMNS must be present or the query
+    cannot proceed at all. Optional columns (parents/tags/filename etc.)
+    are included only when the live site actually exposes them; an
+    absent optional column is a logged degradation, not a hard failure.
+    """
+    missing = [name for name in REQUIRED_HOST_COLUMNS if name not in available]
+    if missing:
+        raise LivestatusError(
+            f"Livestatus hosts table is missing required column(s): {', '.join(missing)}"
+        )
+    columns = list(REQUIRED_HOST_COLUMNS)
+    for name in OPTIONAL_HOST_COLUMNS:
+        if name in available:
+            columns.append(name)
+        else:
+            _logger.warning(
+                "Livestatus hosts table does not expose optional column %r; "
+                "degrading to a safe default for that field",
+                name,
+            )
+    return columns
+
+
+def build_hosts_query(columns: list[str]) -> str:
+    return f"GET hosts\nColumns: {' '.join(columns)}\nOutputFormat: json\n\n"
+
+
+def query_devices(host: str, port: int, columns: list[str], timeout: float) -> list[DeviceSnapshot]:
+    """Run one `GET hosts` round trip and parse it into typed DeviceSnapshot records.
+
+    Defensive by design (T-09-03): a malformed response, a topic-unsafe
+    host name, or a non-numeric state field skips that one row (or the
+    whole cycle, for a fully malformed response) rather than crashing
+    the poll loop.
+    """
+    body = _livestatus_request(host, port, build_hosts_query(columns), timeout)
+    if not body.strip():
+        return []
+    try:
+        rows = json.loads(body)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise LivestatusError(f"Malformed hosts response from {host}:{port}: {exc}") from exc
+
+    index = {name: position for position, name in enumerate(columns)}
+    snapshots: list[DeviceSnapshot] = []
+    for row in rows:
+        try:
+            name = row[index["name"]]
+        except (IndexError, TypeError):
+            _logger.warning("Skipping malformed hosts row: %r", row)
+            continue
+        if not is_publishable_device_id(name):
+            _logger.warning("Skipping host %r: not publishable as an MQTT topic segment", name)
+            continue
+        try:
+            host_state = int(row[index["state"]])
+        except (IndexError, TypeError, ValueError):
+            _logger.warning("Skipping host %r: non-numeric state", name)
+            continue
+
+        worst_service_state = 0
+        if "worst_service_state" in index:
+            try:
+                worst_service_state = int(row[index["worst_service_state"]])
+            except (TypeError, ValueError):
+                _logger.warning("Skipping host %r: non-numeric worst_service_state", name)
+                continue
+
+        downtime_depth = 0
+        if "scheduled_downtime_depth" in index:
+            try:
+                downtime_depth = int(row[index["scheduled_downtime_depth"]])
+            except (TypeError, ValueError):
+                downtime_depth = 0
+
+        acknowledged = bool(row[index["acknowledged"]]) if "acknowledged" in index else False
+
+        raw_parents = row[index["parents"]] if "parents" in index else None
+        parents = list(raw_parents) if isinstance(raw_parents, list) else []
+
+        raw_tags = row[index["tags"]] if "tags" in index else None
+        tags = raw_tags if isinstance(raw_tags, dict) else {}
+
+        folder = derive_folder(row[index["filename"]]) if "filename" in index else ""
+
+        snapshots.append(
+            DeviceSnapshot(
+                id=name,
+                state=compute_overall_state(host_state, worst_service_state),
+                in_downtime=downtime_depth > 0,
+                acknowledged=acknowledged,
+                device_type=extract_device_type(tags),
+                folder=folder,
+                parents=parents,
+            )
+        )
+    return snapshots
