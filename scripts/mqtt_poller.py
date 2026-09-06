@@ -27,20 +27,27 @@ approaches this module must not repeat: the paho-mqtt v1 callback API
 socket instead of TCP, and a single full-blob retained topic instead of
 this project's per-device topic contract.
 
-This plan (09-01) builds only the non-networked half of the poller:
-environment-driven configuration, pure state/topology/bounded-log
-helpers, and the Livestatus query layer that turns one `GET hosts` round
-trip into typed `DeviceSnapshot` records. MQTT publishing itself is wired
-up in a later plan.
+MQTT client lifecycle and publish helpers below follow
+`scripts/smoke_test_broker.py`'s live-tested paho-mqtt 2.1.0
+`CallbackAPIVersion.VERSION2` idioms (this repo's own proven reference,
+built and verified against a real deployed broker in Phase 8) rather
+than generic docs.
 """
 
 from __future__ import annotations
 
+import argparse
+import datetime
 import json
 import logging
 import os
+import signal
 import socket
+import sys
+import threading
 from dataclasses import dataclass, field
+
+import paho.mqtt.client as mqtt
 
 DEFAULT_LIVESTATUS_PORT = 6557
 DEFAULT_MQTT_PORT = 1883
@@ -48,6 +55,10 @@ DEFAULT_POLL_INTERVAL_SECONDS = 60
 DEFAULT_HISTORY_MAX_ENTRIES = 20
 DEFAULT_EVENTS_MAX_ENTRIES = 50
 DEFAULT_RECONCILE_TIMEOUT_SECONDS = 5.0
+# Not env-configurable (D-04 scopes env vars to the settings it names): this
+# is the per-request socket timeout for the poller's own Livestatus calls,
+# matching src/checkmk_wizard/livestatus.py's existing hardcoded default.
+DEFAULT_LIVESTATUS_TIMEOUT_SECONDS = 10.0
 
 TOPIC_TOPOLOGY = "lan/devices/topology"
 TOPIC_EVENTS = "lan/events/recent"
@@ -421,3 +432,463 @@ def query_devices(host: str, port: int, columns: list[str], timeout: float) -> l
             )
         )
     return snapshots
+
+
+def utc_now_iso() -> str:
+    """Return the current UTC time in ISO 8601, matching wizard.py's `datetime.UTC` convention."""
+    return datetime.datetime.now(datetime.UTC).isoformat()
+
+
+def build_mqtt_client(config: PollerConfig) -> mqtt.Client:
+    """Construct, authenticate and connect the poller's long-lived MQTT client.
+
+    Configuring the LWT happens before connecting because paho-mqtt's
+    own docstring states it has no effect otherwise -- this ordering is
+    load-bearing, not stylistic. Reconnect/backoff is deliberately left
+    to the library (`reconnect_delay_set` + `loop_start`), not
+    hand-rolled, per RESEARCH.md's "Don't Hand-Roll" guidance. This is
+    the only client in the module configured with a will; the
+    short-lived `reconcile_state` client deliberately has none (T-09-06).
+    """
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.username_pw_set(config.mqtt_username, config.mqtt_password)
+    client.will_set(
+        TOPIC_POLLER_STATUS,
+        payload=json.dumps({"status": "offline"}),
+        qos=1,
+        retain=True,
+    )
+
+    def on_connect(client, userdata, flags, reason_code, properties=None):
+        # Birth message: last_poll is None until the first cycle completes.
+        publish_poller_status(client, since=utc_now_iso(), last_poll=None, device_count=0)
+
+    client.on_connect = on_connect
+    client.reconnect_delay_set(min_delay=1, max_delay=120)
+    client.connect(config.mqtt_host, config.mqtt_port, keepalive=30)
+    client.loop_start()
+    return client
+
+
+def _publish_json(client: mqtt.Client, topic: str, payload: object, qos: int, retain: bool) -> None:
+    """Serialize `payload` as JSON and publish, one choke point for every publish helper.
+
+    Mirrors `CheckmkClient._request()`'s pattern (src/checkmk_wizard/api.py):
+    every publish goes through here so a transient broker hiccup
+    (`TimeoutError`/`OSError`) degrades exactly one publish rather than
+    killing the poll loop (T-09-03).
+
+    Continuous vs. change-triggered QoS rule (RESEARCH.md's resolved
+    table): the every-cycle status topic uses QoS 0 (self-correcting by
+    the next cycle), every change-triggered topic uses QoS 1. Callers
+    choose `qos`; this function does not second-guess it.
+    """
+    try:
+        client.publish(topic, json.dumps(payload), qos=qos, retain=retain)
+    except (TimeoutError, OSError) as exc:
+        _logger.warning("Failed to publish to %s: %s", topic, exc)
+
+
+def publish_device_status(client: mqtt.Client, snapshot: DeviceSnapshot, timestamp: str) -> None:
+    """Publish one device's current status. QoS 0: republished every cycle from live data."""
+    payload = {
+        "id": snapshot.id,
+        "state": snapshot.state,
+        "in_downtime": snapshot.in_downtime,
+        "acknowledged": snapshot.acknowledged,
+        "device_type": snapshot.device_type,
+        "folder": snapshot.folder,
+        "timestamp": timestamp,
+    }
+    _publish_json(client, device_status_topic(snapshot.id), payload, qos=0, retain=True)
+
+
+def publish_topology(client: mqtt.Client, nodes: list[dict], timestamp: str) -> None:
+    """Publish the full device topology. QoS 1: only republished when it actually changes."""
+    payload = {"devices": nodes, "timestamp": timestamp}
+    _publish_json(client, TOPIC_TOPOLOGY, payload, qos=1, retain=True)
+
+
+def publish_history(client: mqtt.Client, device_id: str, entries: list[dict]) -> None:
+    """Publish one device's full bounded transition history (already truncated by the caller)."""
+    _publish_json(client, device_history_topic(device_id), entries, qos=1, retain=True)
+
+
+def publish_events(client: mqtt.Client, entries: list[dict]) -> None:
+    """Publish the full bounded global events feed (already truncated by the caller)."""
+    _publish_json(client, TOPIC_EVENTS, entries, qos=1, retain=True)
+
+
+def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
+    """Clear a removed device's retained status and history topics.
+
+    A zero-length retained payload is MQTT's own defined "clear this
+    retained topic" semantic -- the same mechanism as
+    `scripts/smoke_test_broker.py::_cleanup`, already proven against the
+    real deployed broker. Uses `wait_for_publish` like that function does,
+    since a tombstone matters more than most publishes: the removed
+    device must not linger as a stale retained message.
+    """
+    for topic in (device_status_topic(device_id), device_history_topic(device_id)):
+        try:
+            info = client.publish(topic, payload=None, retain=True, qos=1)
+            info.wait_for_publish(timeout=5)
+        except (TimeoutError, OSError) as exc:
+            _logger.warning("Failed to publish tombstone to %s: %s", topic, exc)
+
+
+def publish_poller_status(
+    client: mqtt.Client, since: str, last_poll: str | None, device_count: int
+) -> None:
+    """Publish the poller's liveness status: birth (`last_poll=None`) or a per-cycle heartbeat.
+
+    MQTT's LWT only fires on an ungraceful TCP disconnect, so a poller
+    whose poll loop has stalled while its network thread keeps the
+    socket alive would otherwise read as permanently "online" forever.
+    The refreshed `last_poll` published every cycle is what lets Phase
+    11's DASH-04 staleness check ("now - last_poll > threshold") catch
+    that condition (RESEARCH.md Pitfall C).
+    """
+    payload = {
+        "status": "online",
+        "since": since,
+        "last_poll": last_poll,
+        "device_count": device_count,
+    }
+    _publish_json(client, TOPIC_POLLER_STATUS, payload, qos=1, retain=True)
+
+
+@dataclass
+class PollerState:
+    """In-process poll-cycle state. Never persisted -- rebuilt via `reconcile_state` on restart."""
+
+    previous_nodes: dict[str, dict]
+    last_status: dict[str, str]
+    history: dict[str, list[dict]]
+    events: list[dict]
+    since: str
+
+
+def parse_topology_payload(payload: bytes) -> dict[str, dict]:
+    """Parse a retained `lan/devices/topology` payload into `{id: node}`.
+
+    An empty payload (the tombstone case, or "never published before") and
+    malformed JSON both degrade to the empty dict rather than raising: a
+    corrupt retained message must fall back to a cold start, not
+    crash-loop a `restart: unless-stopped` container (T-09-05).
+    """
+    if not payload:
+        return {}
+    try:
+        data = json.loads(payload)
+    except (json.JSONDecodeError, ValueError) as exc:
+        _logger.warning("Malformed topology payload during reconciliation: %s", exc)
+        return {}
+    devices = data.get("devices", []) if isinstance(data, dict) else []
+    return {node["id"]: node for node in devices if isinstance(node, dict) and "id" in node}
+
+
+def parse_events_payload(payload: bytes) -> list[dict]:
+    """Parse a retained bounded-array payload (`lan/events/recent` or a per-device history topic).
+
+    Same empty/malformed-degrades-to-empty contract as
+    `parse_topology_payload`. Reused for per-device history payloads too:
+    both are "a bounded JSON array of entry dicts", so one parser covers
+    both shapes.
+    """
+    if not payload:
+        return []
+    try:
+        data = json.loads(payload)
+    except (json.JSONDecodeError, ValueError) as exc:
+        _logger.warning("Malformed events/history payload during reconciliation: %s", exc)
+        return []
+    return data if isinstance(data, list) else []
+
+
+def reconcile_state(config: PollerConfig) -> PollerState:
+    """Rebuild `PollerState` from the broker's own retained topics -- never a local file.
+
+    Only `previous_nodes` drives tombstone and topology-change decisions,
+    and it comes from exactly one retained topic (`lan/devices/topology`),
+    so Mosquitto delivers exactly one message (or none, on cold start)
+    right after SUBACK. There is no ambiguous "have all retained messages
+    arrived yet" wait, unlike a wildcard subscription across N per-device
+    topics would have (RESEARCH.md's resolved reconciliation strategy).
+
+    The wildcard `lan/devices/+/history` subscription below is
+    best-effort cosmetic restoration only: a history array that arrives
+    late simply gets rebuilt from the next transition onward -- a
+    bounded, self-correcting log gap, never a wrong tombstone or a wrong
+    status.
+
+    Per-device status is deliberately NOT reconciled at all: it is
+    republished fresh from live Livestatus every cycle (`run_cycle`), so
+    it has no "previous" value worth recovering.
+
+    This is what satisfies "self-heals across restarts with no persisted
+    state of its own" (PLR-02): the durable store is Mosquitto's
+    `persistence true` from Phase 8, not a poller-owned file.
+
+    This function's client deliberately has no will configured -- its own
+    (normal) disconnect at the end of this function must never publish a
+    false offline poller status for the actual running poller (T-09-06).
+    """
+    topology_result: list[bytes] = []
+    events_result: list[bytes] = []
+    history_payloads: dict[str, bytes] = {}
+    topology_received = threading.Event()
+
+    def on_message(client, userdata, msg):
+        parts = msg.topic.split("/")
+        if msg.topic == TOPIC_TOPOLOGY:
+            topology_result.append(msg.payload)
+            topology_received.set()
+        elif msg.topic == TOPIC_EVENTS:
+            events_result.append(msg.payload)
+        elif len(parts) == 4 and parts[0] == "lan" and parts[1] == "devices" and parts[3] == "history":
+            history_payloads[parts[2]] = msg.payload
+
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.username_pw_set(config.mqtt_username, config.mqtt_password)
+    client.on_message = on_message
+    try:
+        client.connect(config.mqtt_host, config.mqtt_port, keepalive=30)
+        client.subscribe(TOPIC_TOPOLOGY, qos=1)
+        client.subscribe(TOPIC_EVENTS, qos=1)
+        client.subscribe("lan/devices/+/history", qos=1)
+        client.loop_start()
+        topology_received.wait(timeout=config.reconcile_timeout_seconds)
+    finally:
+        client.loop_stop()
+        client.disconnect()
+
+    previous_nodes = parse_topology_payload(topology_result[0] if topology_result else b"")
+    events = parse_events_payload(events_result[0] if events_result else b"")
+    history = {device_id: parse_events_payload(payload) for device_id, payload in history_payloads.items()}
+
+    return PollerState(
+        previous_nodes=previous_nodes,
+        last_status={},
+        history=history,
+        events=events,
+        since=utc_now_iso(),
+    )
+
+
+def run_cycle(
+    client: mqtt.Client, config: PollerConfig, state: PollerState, snapshots: list[DeviceSnapshot]
+) -> None:
+    """Run one poll cycle: publish status, detect changes, tombstone removals.
+
+    Status publishes first for every snapshot -- it's correct regardless
+    of anything else this cycle discovers. Topology/tombstone/history/
+    events are then computed from the diff between this cycle's live
+    Livestatus snapshot and `state.previous_nodes`/`state.last_status`.
+
+    No "first cycle" suppression flag is needed: `state.last_status`
+    starts empty on both a cold start and a warm restart (`reconcile_state`
+    deliberately never reconciles per-device status), so a restarted
+    poller mathematically cannot compute a false transition on its first
+    cycle -- the suppression falls out of the data structure rather than
+    needing a flag.
+    """
+    now = utc_now_iso()
+
+    for snapshot in snapshots:
+        publish_device_status(client, snapshot, now)
+
+    nodes = topology_nodes(snapshots)
+    snapshots_by_id = {snapshot.id: snapshot for snapshot in snapshots}
+    current_ids = set(snapshots_by_id)
+    previous_ids = set(state.previous_nodes)
+    removed_ids = previous_ids - current_ids
+    added_ids = current_ids - previous_ids
+
+    events_this_cycle: list[dict] = []
+
+    for device_id in removed_ids:
+        publish_tombstone(client, device_id)
+        last_state = state.last_status.pop(device_id, None)
+        state.history.pop(device_id, None)
+        events_this_cycle.append(
+            {
+                "timestamp": now,
+                "device_id": device_id,
+                "event": "removed",
+                "from": last_state,
+                "to": None,
+            }
+        )
+
+    for device_id in added_ids:
+        events_this_cycle.append(
+            {
+                "timestamp": now,
+                "device_id": device_id,
+                "event": "added",
+                "from": None,
+                "to": snapshots_by_id[device_id].state,
+            }
+        )
+
+    for snapshot in snapshots:
+        previous_state = state.last_status.get(snapshot.id)
+        if previous_state is not None and previous_state != snapshot.state:
+            events_this_cycle.append(
+                {
+                    "timestamp": now,
+                    "device_id": snapshot.id,
+                    "event": "state_change",
+                    "from": previous_state,
+                    "to": snapshot.state,
+                }
+            )
+            device_history = append_bounded(
+                state.history.get(snapshot.id, []),
+                {"timestamp": now, "from": previous_state, "to": snapshot.state},
+                config.history_max_entries,
+            )
+            state.history[snapshot.id] = device_history
+            publish_history(client, snapshot.id, device_history)
+
+    if topology_signature(nodes) != topology_signature(list(state.previous_nodes.values())):
+        publish_topology(client, nodes, now)
+
+    if events_this_cycle:
+        state.events = (state.events + events_this_cycle)[-config.events_max_entries :]
+        publish_events(client, state.events)
+
+    publish_poller_status(client, since=state.since, last_poll=now, device_count=len(snapshots))
+
+    state.previous_nodes = {node["id"]: node for node in nodes}
+    state.last_status = {snapshot.id: snapshot.state for snapshot in snapshots}
+
+
+def run_forever(config: PollerConfig) -> int:
+    """Run the poller until interrupted: reconcile, connect, then poll forever.
+
+    Column probing happens once at startup (not per cycle) via
+    `available_host_columns`/`select_host_columns`; a `LivestatusError`
+    here is fatal (the site cannot answer the poller's most basic query)
+    and returns non-zero with a clear message naming the missing
+    columns. Every subsequent per-cycle `LivestatusError` is caught and
+    logged instead -- the poll interval itself is the retry backoff
+    (RESEARCH.md's "Don't Hand-Roll"), so no separate retry state
+    machine is added.
+    """
+    configure_logging(config.log_level)
+    state = reconcile_state(config)
+    client = build_mqtt_client(config)
+
+    try:
+        available = available_host_columns(
+            config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+        )
+        columns = select_host_columns(available)
+    except LivestatusError as exc:
+        _logger.error("Cannot start: %s", exc)
+        client.loop_stop()
+        client.disconnect()
+        return 1
+
+    stop_event = threading.Event()
+
+    def _handle_signal(signum, frame):
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    while not stop_event.is_set():
+        try:
+            snapshots = query_devices(
+                config.livestatus_host,
+                config.livestatus_port,
+                columns,
+                DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+            )
+        except LivestatusError as exc:
+            _logger.warning("Skipping cycle: %s", exc)
+        else:
+            run_cycle(client, config, state, snapshots)
+        stop_event.wait(timeout=config.poll_interval_seconds)
+
+    # Graceful stop must leave the same retained value the LWT would have
+    # left, so a `podman compose stop poller` and a `kill -9` look
+    # identical to the dashboard.
+    _publish_json(client, TOPIC_POLLER_STATUS, {"status": "offline"}, qos=1, retain=True)
+    client.loop_stop()
+    client.disconnect()
+    return 0
+
+
+def main() -> int:
+    """CLI entry point. Runtime configuration is env-var-only (D-04); flags are diagnostics only."""
+    parser = argparse.ArgumentParser(
+        description="LAN poller: Livestatus -> retained MQTT topics. "
+        "Runtime settings come entirely from environment variables (see PollerConfig.from_env)."
+    )
+    parser.add_argument(
+        "--check-columns",
+        action="store_true",
+        help="Probe the live Livestatus site, print each REQUIRED_HOST_COLUMNS/"
+        "OPTIONAL_HOST_COLUMNS name with present/missing, then exit "
+        "(0 if all required columns are present, 1 otherwise).",
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run exactly one poll cycle then exit, for manual verification.",
+    )
+    args = parser.parse_args()
+    config = PollerConfig.from_env()
+
+    if args.check_columns:
+        configure_logging(config.log_level)
+        try:
+            available = available_host_columns(
+                config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+            )
+        except LivestatusError as exc:
+            _logger.error("Column check failed: %s", exc)
+            return 1
+        ok = True
+        for name in REQUIRED_HOST_COLUMNS:
+            present = name in available
+            ok = ok and present
+            print(f"{'present' if present else 'MISSING'}: {name} (required)")
+        for name in OPTIONAL_HOST_COLUMNS:
+            print(f"{'present' if name in available else 'missing'}: {name} (optional)")
+        return 0 if ok else 1
+
+    if args.once:
+        configure_logging(config.log_level)
+        state = reconcile_state(config)
+        client = build_mqtt_client(config)
+        try:
+            available = available_host_columns(
+                config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+            )
+            columns = select_host_columns(available)
+            snapshots = query_devices(
+                config.livestatus_host,
+                config.livestatus_port,
+                columns,
+                DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+            )
+        except LivestatusError as exc:
+            _logger.error("One-shot cycle failed: %s", exc)
+            client.loop_stop()
+            client.disconnect()
+            return 1
+        run_cycle(client, config, state, snapshots)
+        client.loop_stop()
+        client.disconnect()
+        return 0
+
+    return run_forever(config)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
