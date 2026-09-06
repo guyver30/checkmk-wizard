@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 8 context gathered
-last_updated: "2026-09-06T06:21:05.000Z"
-last_activity: 2026-09-06 - Merged phase 08 Wave 1 (plans 08-01, 08-02) into main; deploy/ now complete on main
+last_updated: "2026-09-06T06:52:00.000Z"
+last_activity: 2026-09-06 -- Plan 08-03 Tasks 1-2 complete (smoke test script + doc repoint); Task 3 paused at human-verify checkpoint
 progress:
   total_phases: 4
   completed_phases: 0
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 ## Current Position
 
 Phase: 08 (broker-infrastructure-hardening) — EXECUTING
-Plan: 2 of 3 (Wave 1 complete — 08-01, 08-02 merged; Wave 2 — 08-03 — ready to dispatch)
+Plan: 3 of 3 (08-01, 08-02 complete; 08-03 Tasks 1-2 done, Task 3 paused at human-verify checkpoint on real deployment host)
 Status: Executing Phase 08
-Last activity: 2026-09-06 -- Wave 1 merged into main
+Last activity: 2026-09-06 -- Plan 08-03 Tasks 1-2 merged; awaiting live smoke-test verification
 
 Progress: [██████░░░░] 67%
 
