@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 8 context gathered
-last_updated: "2026-09-06T05:42:09.000Z"
-last_activity: 2026-09-06 - Completed quick task 260906-iwo: Update docs/Podman setup for checkmk, minio, mosquitto, worker.md to add Podman installation instructions for a fresh Linux machine
+last_updated: "2026-09-06T06:07:12.000Z"
+last_activity: 2026-09-06 - Completed quick task 260906-jm0: Add unqualified-search-registries fix to §1.1 Install Podman
 progress:
   total_phases: 4
   completed_phases: 0
@@ -78,6 +78,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260906-iwo | Update docs/Podman setup for checkmk, minio, mosquitto, worker.md to add Podman installation instructions for a fresh Linux machine | 2026-09-06 | 2ba6b7e | [260906-iwo-update-docs-podman-setup-for-checkmk-min](./quick/260906-iwo-update-docs-podman-setup-for-checkmk-min/) |
+| 260906-jm0 | Add unqualified-search-registries fix to §1.1 Install Podman | 2026-09-06 | 1e636aa | [260906-jm0-add-unqualified-search-registries-fix-to](./quick/260906-jm0-add-unqualified-search-registries-fix-to/) |
 
 ## Deferred Items
 
