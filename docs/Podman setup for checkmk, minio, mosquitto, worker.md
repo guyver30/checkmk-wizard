@@ -6,6 +6,55 @@ A modular, rootless Podman deployment running stock official images across an is
 
 ## 1. Prerequisites (Rootless Podman Setup)
 
+§1.1 gets Podman onto a machine that has never had it before; §1.2 makes that installation usable rootless and persistent across reboots.
+
+### 1.1. Install Podman
+
+On Debian or Ubuntu, install Podman itself, `uidmap` (provides `newuidmap`/`newgidmap` — rootless Podman cannot start a container without them), and `podman-compose`:
+
+```bash
+sudo apt update
+sudo apt install -y podman uidmap podman-compose
+```
+
+Debian 12+ and Ubuntu 22.04+ ship a Podman recent enough for everything this doc uses. Older releases package a Podman too old to support the `podman compose` subcommand — upgrade the distro release first if you're on something older than that.
+
+On RHEL, Fedora, or CentOS Stream, via `dnf`:
+
+```bash
+sudo dnf install -y podman podman-compose
+```
+
+If you'd rather pull in the full toolchain than just these two packages, the `container-tools` package group (`sudo dnf install -y @container-tools`) is the RHEL/CentOS equivalent bundle.
+
+`podman compose` is only a shim — it delegates to whichever external compose provider it finds (`docker-compose` or `podman-compose`), so one of those two has to be installed or every `podman compose` command later in this doc fails. That's the same delegation visible in the systemd failure log further down this doc (`/usr/libexec/docker/cli-plugins/docker-compose`) — installing `podman-compose` now is what makes that delegation succeed instead of erroring.
+
+Verify the install:
+
+```bash
+podman --version
+podman info --format '{{.Host.Security.Rootless}}'
+# expected: true — if it prints false you are running as root, and the
+# rest of this doc's rootless assumptions do not hold
+podman run --rm docker.io/library/hello-world
+```
+
+**Rootless UID/GID ranges:** the distro package normally allocates these for you, so this is a check, not a step. Confirm your user has a range in both files:
+
+```bash
+grep "^$USER:" /etc/subuid /etc/subgid
+# want a line in *both* files, e.g. youruser:100000:65536
+```
+
+If either file has no line for your user, add one and re-map any containers already created under the old, empty range:
+
+```bash
+sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
+podman system migrate
+```
+
+### 1.2. Enable the rootless Podman socket
+
 Enable the Podman systemd user socket and ensure rootless background persistence:
 
 ```bash
