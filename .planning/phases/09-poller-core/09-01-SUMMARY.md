@@ -128,6 +128,15 @@ None - no external service configuration required. This plan has no live-network
 - Plan 09-02 will add the `datetime`, `paho.mqtt.client` (and likely `sys` for a `main()`/CLI entry point) imports this plan intentionally deferred, plus the MQTT publisher, startup topology reconciliation, and the poll loop itself.
 - No blockers. The Livestatus column names (`parents`, `tags`, `filename`) used by `query_devices` remain unverified against a live Checkmk site per RESEARCH.md Open Question 1 — recommend a live `GET columns` check against the real deployment host before or during Plan 09-02/09-03's live smoke testing, consistent with this project's established "live-verify against a real Checkmk site" convention.
 
+## Self-Check: PASSED
+
+- FOUND: `scripts/mqtt_poller.py`
+- FOUND: `tests/test_mqtt_poller.py`
+- FOUND: `.planning/phases/09-poller-core/09-01-SUMMARY.md`
+- FOUND commit: `d636c06`
+- FOUND commit: `6c41882`
+- FOUND commit: `0b9b2d2`
+
 ---
 *Phase: 09-poller-core*
 *Completed: 2026-09-06*
