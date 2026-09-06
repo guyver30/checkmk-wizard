@@ -98,10 +98,16 @@ export DOCKER_HOST="unix:///run/user/1000/podman/podman.sock"
 
 ## 2. Directory Structure
 
+The canonical `compose.yaml`, `mosquitto.conf`, `mosquitto.acl`, `mosquitto.passwd` and `gen-mosquitto-passwd.sh` now live under this repo's own `deploy/` directory (see §3) rather than loose inside `checkmk-stack/`:
+
 ```text
 checkmk-stack/
-├── compose.yaml
-├── mosquitto.conf
+├── deploy/                 # this repo's deploy/ directory, copied or symlinked in
+│   ├── compose.yaml
+│   ├── mosquitto.conf
+│   ├── mosquitto.acl
+│   ├── mosquitto.passwd
+│   └── gen-mosquitto-passwd.sh
 └── app/
     └── checkmk-wizard/     # checkout of the checkmk-wizard repo — see §8
 
@@ -119,122 +125,24 @@ cd checkmk-stack
 
 ## 3. Configuration Files
 
-### `mosquitto.conf`
+The full 4-service stack (`checkmk`, `mosquitto`, `minio`, `worker`) and the hardened Mosquitto configuration are checked into this repo under [`deploy/`](../deploy/) as the single source of truth — see [`deploy/compose.yaml`](../deploy/compose.yaml), [`deploy/mosquitto.conf`](../deploy/mosquitto.conf) and [`deploy/mosquitto.acl`](../deploy/mosquitto.acl). This doc no longer duplicates their contents inline, so the two can't silently drift apart; copy or symlink `deploy/` into your `checkmk-stack/` directory (see §2) and run `podman compose` from there.
 
-Configures listener binding to all container interfaces (`0.0.0.0`) so both internal containers and external LAN devices can reach the broker.
+A few things worth knowing that aren't obvious just from reading those files:
 
-```text
-listener 1883 0.0.0.0
-allow_anonymous true
-persistence true
-persistence_location /mosquitto/data/
+- **Mosquitto's listeners bind to all container interfaces (`0.0.0.0`)** so both internal containers and external LAN devices can reach the broker — the plain-MQTT listener on 1883 stays published to the LAN for debugging, and a second listener (`protocol websockets`) is published separately for browser-based clients.
+- **Podman-compatible `tmpfs` flags (`mode=1777`)** on the `checkmk` service prevent permission errors for the unprivileged Checkmk site user (`UID 1000`).
 
-```
+### First-time credential setup
 
-### `compose.yaml`
-
-Uses official, unmodified images. Podman-compatible `tmpfs` flags (`mode=1777`) prevent permission errors for the unprivileged Checkmk site user (`UID 1000`).
-
-```yaml
-services:
-  # 1. Official Checkmk Raw
-  checkmk:
-    image: checkmk/check-mk-raw:2.4.0-latest
-    container_name: checkmk
-    restart: unless-stopped
-    hostname: checkmk
-    environment:
-      - CMK_SITE_ID=dmc
-      - CMK_PASSWORD=cmkadmin
-      - TZ=Asia/Singapore
-    ports:
-      - "8080:5000"     # Web UI
-      - "8000:8000"     # Agent TLS registration
-      - "6556:6556"     # Agent pull mode
-    volumes:
-      - checkmk_data:/omd/sites
-      - /etc/localtime:/etc/localtime:ro
-    tmpfs:
-      - /omd/sites/dmc/tmp:rw,size=512M,mode=1777
-    networks:
-      - cmk_net
-
-  # 2. Mosquitto Broker
-  mosquitto:
-    image: eclipse-mosquitto:2
-    container_name: mosquitto
-    restart: unless-stopped
-    ports:
-      - "1883:1883"
-    volumes:
-      - ./mosquitto.conf:/etc/mosquitto/mosquitto.conf:ro,z
-      - mosquitto_data:/mosquitto/data:z
-      - mosquitto_log:/mosquitto/log:z
-    networks:
-      - cmk_net
-
-  # 3. MinIO S3 Object Storage
-  minio:
-    image: minio/minio:latest
-    container_name: minio
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
-    ports:
-      - "9000:9000"     # S3 API Endpoint
-      - "9001:9001"     # Web Console
-    volumes:
-      - minio_data:/data:z
-    networks:
-      - cmk_net
-
-  # 4. Automation Worker (Python 3.12 + uv) — runs checkmk-wizard (§8) and
-  # any other scripts placed under ./app, e.g. the MQTT publisher.
-  worker:
-    image: python:3.12-slim
-    container_name: automation-worker
-    restart: unless-stopped
-    working_dir: /app
-    volumes:
-      - ./app:/app:z
-    environment:
-      - CMK_REST_API=http://checkmk:5000/dmc/check_mk/api/1.0
-      - CMK_SITE=dmc
-      # Same name/value as the checkmk service's own CMK_SITE_ID above —
-      # checkmk-wizard reads this (if present) to pre-fill its site-name
-      # prompt in container mode, since it has no local 'omd' to list
-      # sites with and no network-based way to discover one either.
-      - CMK_SITE_ID=dmc
-      - MQTT_HOST=mosquitto
-      - MQTT_PORT=1883
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-    command: >
-      bash -c "pip install --no-cache-dir uv &&
-               tail -f /dev/null"
-    networks:
-      - cmk_net
-
-volumes:
-  checkmk_data:
-  mosquitto_data:
-  mosquitto_log:
-  minio_data:
-
-networks:
-  cmk_net:
-    driver: bridge
-
-```
+`deploy/mosquitto.passwd` is checked in with disposable default credentials (see §6). To rotate them, re-run [`deploy/gen-mosquitto-passwd.sh`](../deploy/gen-mosquitto-passwd.sh) — optionally with `WS_PASSWORD=` / `POLLER_PASSWORD=` environment overrides — and commit (or otherwise redeploy) the resulting file. This script is the supported way to regenerate the password file; it invokes the broker's own `mosquitto_passwd` via `podman run`/`docker run`, so no local Mosquitto install is required.
 
 **Note on `CMK_PASSWORD`:** this is the `cmkadmin` login password checkmk-wizard's container mode will ask you to re-enter at Phase 1, so it can bootstrap the site's `automation`/`agent_registration` REST users itself (see §8.3). `cmkadmin` is fine for a disposable local/test stack; change it to something you'd actually want to type before running this against anything you care about.
 
 ---
 
 ## 4. Deployment
+
+**Migrating an already-running stack:** if a stack was already running against the old `/etc/mosquitto/mosquitto.conf` mount, `deploy/compose.yaml` corrects the mount path to `/mosquitto/config/mosquitto.conf` (the only path the `eclipse-mosquitto` image's baked-in `CMD` actually reads) and adds authentication/ACL enforcement that wasn't there before. This changes which config the broker loads, and any retained messages accumulated under the previous configuration should be backed up first if they matter — `podman volume export mosquitto_data -o mosquitto_data-backup.tar` before redeploying. This is an operator note, not a blocking step.
 
 ```bash
 # Start all containers in the background
@@ -276,7 +184,8 @@ If you skip this step, checkmk-wizard still runs fine through Phase 6 — it jus
 | **Checkmk UI** | `http://<HOST_IP>:8080/cmk/` | `http://checkmk:5000/cmk/` |
 | **Checkmk API** | `http://<HOST_IP>:8080/cmk/check_mk/api/1.0/` | `http://checkmk:5000/cmk/check_mk/api/1.0/` |
 | **Checkmk Livestatus** | *N/A (not published — internal only, see §5)* | `checkmk:6557` |
-| **Mosquitto** | `<HOST_IP>:1883` | `mosquitto:1883` |
+| **Mosquitto** | `<HOST_IP>:1883` (requires `poller` credentials — no longer anonymous) | `mosquitto:1883` |
+| **Mosquitto (WebSockets)** | `ws://<HOST_IP>:9002` | `ws://mosquitto:9001` |
 | **MinIO S3** | `http://<HOST_IP>:9000` | `http://minio:9000` |
 | **MinIO Console** | `http://<HOST_IP>:9001` | *N/A (Browser only)* |
 
@@ -284,6 +193,10 @@ Default credentials:
 
 * **Checkmk:** `cmkadmin` / `cmkadmin`
 * **MinIO:** `minioadmin` / `minioadmin`
+* **Mosquitto (poller, MQTT 1883):** `poller` / `poller`
+* **Mosquitto (wsreader, WebSockets 9002, read-only):** `wsreader` / `wsreader`
+
+These Mosquitto credentials are disposable dev/local defaults, same as `cmkadmin`/`minioadmin` above — rotate them (see §3's "First-time credential setup") before exposing this stack beyond a trusted LAN.
 
 ---
 
@@ -308,6 +221,26 @@ print(f\"MinIO Buckets: {s3.list_buckets()}\")
 "
 
 ```
+
+### Broker smoke test
+
+[`scripts/smoke_test_broker.py`](../scripts/smoke_test_broker.py) proves the Mosquitto hardening actually holds against a live broker — configuration alone doesn't demonstrate it. From the repo checkout on the deployment host:
+
+```bash
+uv run python scripts/smoke_test_broker.py
+```
+
+From inside the `worker` container (which cannot restart its sibling `mosquitto` service, hence `--skip-restart`):
+
+```bash
+uv run python scripts/smoke_test_broker.py --host mosquitto --ws-port 9001 --skip-restart
+```
+
+What each check proves:
+
+- `poller_publish` / `ws_subscribe` — the WebSockets listener is reachable and distinct from 1883
+- `ws_publish_denied` — the `wsreader` ACL is read-only; a write attempt never reaches an independent privileged subscriber
+- `persistence_across_restart` — a retained message survives a broker restart (skipped by `--skip-restart`)
 
 ---
 
