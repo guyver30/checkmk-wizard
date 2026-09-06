@@ -1,6 +1,8 @@
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 # scripts/ is not an importable package (no precedent in this repo for
 # importing a scripts/*.py module from tests/ — scripts/smoke_test_broker.py
@@ -15,6 +17,14 @@ poller = importlib.util.module_from_spec(_SPEC)
 # a bare AttributeError if the module was never registered.
 sys.modules["mqtt_poller"] = poller
 _SPEC.loader.exec_module(poller)
+
+
+def _fake_connection(response: bytes) -> MagicMock:
+    sock = MagicMock()
+    sock.recv.side_effect = [response, b""]
+    sock.__enter__.return_value = sock
+    sock.__exit__.return_value = False
+    return sock
 
 
 # --- compute_overall_state --------------------------------------------------
@@ -161,3 +171,133 @@ def test_poller_config_repr_never_contains_the_password_value(monkeypatch):
     rendered = repr(config)
     assert "***" in rendered
     assert "supersecret" not in rendered
+
+
+# --- build_hosts_query / select_host_columns --------------------------------
+
+
+def test_build_hosts_query_produces_exact_lql_text():
+    assert poller.build_hosts_query(["name", "state"]) == (
+        "GET hosts\nColumns: name state\nOutputFormat: json\n\n"
+    )
+
+
+def test_select_host_columns_orders_required_then_available_optional():
+    result = poller.select_host_columns({"name", "state", "parents"})
+    assert result == ["name", "state", "parents"]
+
+
+def test_select_host_columns_raises_on_missing_required_column():
+    try:
+        poller.select_host_columns({"state"})
+    except poller.LivestatusError as exc:
+        assert "name" in str(exc)
+    else:
+        raise AssertionError("expected LivestatusError")
+
+
+def test_select_host_columns_omits_unavailable_optional_columns():
+    result = poller.select_host_columns({"name", "state"})
+    assert result == ["name", "state"]
+
+
+# --- available_host_columns ---------------------------------------------------
+
+
+def test_available_host_columns_sends_expected_lql_query():
+    sock = _fake_connection(b'[["name"], ["state"]]')
+    with patch("socket.create_connection", return_value=sock):
+        result = poller.available_host_columns("checkmk", poller.DEFAULT_LIVESTATUS_PORT, 10)
+    sent = sock.sendall.call_args[0][0].decode()
+    assert sent == "GET columns\nColumns: name\nFilter: table = hosts\nOutputFormat: json\n\n"
+    assert result == {"name", "state"}
+
+
+# --- query_devices --------------------------------------------------------------
+
+
+def test_query_devices_parses_full_row_into_device_snapshot():
+    columns = [
+        "name",
+        "state",
+        "scheduled_downtime_depth",
+        "acknowledged",
+        "worst_service_state",
+        "parents",
+        "tags",
+        "filename",
+    ]
+    row = [
+        "web1",
+        0,
+        1,
+        True,
+        2,
+        ["switch-01"],
+        {"device_type": "server"},
+        "/omd/sites/dmc/etc/check_mk/conf.d/wato/vlan10/hosts.mk",
+    ]
+    sock = _fake_connection(json.dumps([row]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot.id == "web1"
+    assert snapshot.state == "CRIT"
+    assert snapshot.in_downtime is True
+    assert snapshot.acknowledged is True
+    assert snapshot.device_type == "server"
+    assert snapshot.folder == "vlan10"
+    assert snapshot.parents == ["switch-01"]
+
+
+def test_query_devices_uses_safe_defaults_when_optional_columns_absent():
+    columns = ["name", "state"]
+    sock = _fake_connection(b'[["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot.in_downtime is False
+    assert snapshot.acknowledged is False
+    assert snapshot.parents == []
+    assert snapshot.device_type == "unknown"
+    assert snapshot.folder == ""
+
+
+def test_query_devices_skips_topic_unsafe_host_name():
+    columns = ["name", "state"]
+    sock = _fake_connection(b'[["lan/rogue", 0], ["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    ids = [snapshot.id for snapshot in snapshots]
+    assert "lan/rogue" not in ids
+    assert "web1" in ids
+
+
+def test_query_devices_raises_livestatus_error_on_malformed_json():
+    sock = _fake_connection(b"not-json{{{")
+    with patch("socket.create_connection", return_value=sock):
+        try:
+            poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10)
+        except poller.LivestatusError:
+            pass
+        else:
+            raise AssertionError("expected LivestatusError")
+
+
+def test_query_devices_raises_livestatus_error_on_socket_failure():
+    with patch("socket.create_connection", side_effect=OSError("connection refused")):
+        try:
+            poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10)
+        except poller.LivestatusError as exc:
+            assert isinstance(exc.__cause__, OSError)
+        else:
+            raise AssertionError("expected LivestatusError")
+
+
+def test_query_devices_connects_with_configured_timeout():
+    sock = _fake_connection(b"[]")
+    with patch("socket.create_connection", return_value=sock) as mock_connect:
+        poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 7.5)
+    mock_connect.assert_called_once_with(("checkmk", poller.DEFAULT_LIVESTATUS_PORT), timeout=7.5)
