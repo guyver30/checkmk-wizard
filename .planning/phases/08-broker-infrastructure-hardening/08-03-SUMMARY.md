@@ -27,24 +27,24 @@ key-files:
 key-decisions:
   - "check_persistence_across_restart's retry-loop connect/subscribe/wait logic was extracted into a standalone _wait_for_retained_payload() helper rather than defining the on_message closure inline inside the for loop, to satisfy ruff's B023 (function-definition-in-loop) lint rule while preserving the bounded-retry behavior"
 
-requirements-completed: []  # Tasks 1-2 (script + doc) done and verified statically; BRK-01/02/03 live proof is pending Task 3's human checkpoint against the real deployment host
+requirements-completed: [BRK-01, BRK-02, BRK-03]
 
 # Metrics
-duration: ~45min (Tasks 1-2; Task 3 paused at checkpoint)
+duration: ~45min (Tasks 1-2, 2026-09-06) + live verification on deployment host (2026-09-06, after an unrelated deploy/mosquitto.conf syntax bug was fixed as quick task 260906-mm9)
 completed: 2026-09-06
 ---
 
 # Phase 8 Plan 3: Live Broker Smoke Test + Podman Doc Repoint Summary
 
-**Standalone paho-mqtt 2.x smoke-test script (`scripts/smoke_test_broker.py`) proving all three broker-hardening requirements against a live Mosquitto instance, plus the Podman setup doc repointed at `deploy/` as its single source of truth — live verification against the real deployment host is paused at Task 3's checkpoint.**
+**Standalone paho-mqtt 2.x smoke-test script (`scripts/smoke_test_broker.py`) proving all three broker-hardening requirements against a live Mosquitto instance, plus the Podman setup doc repointed at `deploy/` as its single source of truth — all four checks PASSED on the real deployment host, completing BRK-01/02/03.**
 
 ## Performance
 
-- **Duration:** ~45 min (Tasks 1-2)
+- **Duration:** ~45 min (Tasks 1-2) + live verification round-trip (Task 3)
 - **Started:** 2026-09-06
-- **Completed:** Tasks 1-2 complete; Task 3 paused at checkpoint
-- **Tasks:** 2 of 3 completed (Task 3 is a `checkpoint:human-verify` gate, `gate="blocking"`)
-- **Files modified:** 2
+- **Completed:** 2026-09-06 — all 3 tasks done
+- **Tasks:** 3 of 3 completed
+- **Files modified:** 2 (this plan) + 1 unrelated fix (deploy/mosquitto.conf, via quick task 260906-mm9)
 
 ## Accomplishments
 - `scripts/smoke_test_broker.py` implements all four ordered checks (`check_poller_publish`, `check_ws_subscribe`, `check_ws_publish_denied`, `check_persistence_across_restart`), each printing a single `[PASS]`/`[FAIL]` line, using paho-mqtt 2.x's `CallbackAPIVersion.VERSION2` API throughout (not the legacy v1 pattern)
@@ -59,7 +59,7 @@ Each task was committed atomically:
 1. **Task 1: Write scripts/smoke_test_broker.py** - `4a5d9de` (feat)
 2. **Task 2: Repoint the Podman setup doc at deploy/ and document the new endpoint and credentials** - `520916a` (docs)
 
-Task 3 (checkpoint:human-verify, `gate="blocking"`) is paused — see "Checkpoint" below. No commit produced by this session for Task 3; the plan's own `<action>` treats "attempt automation first, then pause" as the designed behavior when no container runtime is present, not a deviation.
+3. **Task 3: Deploy the hardened stack and run the smoke test on the real host** - resolved via human-verify checkpoint, no commit (live verification only, no files modified by this task itself)
 
 ## Files Created/Modified
 - `scripts/smoke_test_broker.py` - Standalone, argparse-driven live-broker verification script (378 lines): four ordered checks proving BRK-01 (WS reachability), BRK-02 (persistence across restart), BRK-03 (WS read-only ACL enforcement), plus a `finally`-guarded cleanup of its own `lan/smoketest/*` retained topics
@@ -100,19 +100,22 @@ None beyond the two auto-fixed issues above.
 
 ## User Setup Required
 
-**Task 3 (live verification) requires action on the real deployment host.** See "Checkpoint" below — the deployment host is currently running the OLD, un-hardened `compose.yaml`/`mosquitto.conf` and has not yet been redeployed with this phase's `deploy/` artifacts.
+Resolved. The operator redeployed `deploy/`'s files onto the real Podman host and ran the smoke test twice:
+
+1. **First attempt** surfaced a real, unrelated bug: `deploy/mosquitto.conf` crash-looped mosquitto (exit code 3, "Unknown configuration variable '#'") due to an indented comment-continuation line that mosquitto's parser tokenized as a directive. Fixed separately as quick task `260906-mm9` (commit `2eff022`) — an indented `#` line is not a valid mosquitto.conf comment; comments must start at column 0.
+2. **Second attempt**, after redeploying the fixed config: mosquitto started cleanly (both listeners open, config loaded without error), and all four smoke-test checks passed.
 
 ## Next Phase Readiness
 
-- Tasks 1 and 2 are complete, statically verified, and committed (`4a5d9de`, `520916a`).
-- Task 3 is a `checkpoint:human-verify` gate (`gate="blocking"`) — this plan cannot be marked fully complete, and Phase 8's roadmap success criteria cannot be marked demonstrated, until the human runs the live smoke test on the deployment host and reports the result.
-- No blockers for the static artifacts themselves; the only remaining work is live-infrastructure verification, which this sandbox cannot perform (no `podman`/`docker` present, confirmed again this session).
+- All three tasks complete. Phase 8's roadmap success criteria (BRK-01/02/03) are now demonstrated by an automated, repeatable command (`scripts/smoke_test_broker.py`), not just static inspection.
+- `deploy/` and the Podman setup doc can no longer drift apart — the doc holds no duplicated configuration.
+- Phase 9 (Poller Core) can now build against a proven-working, authenticated, ACL-scoped, persistent broker.
 
-## Checkpoint
+## Checkpoint — RESOLVED
 
 **Type:** human-verify
 **Plan:** 08-03
-**Progress:** 2/3 tasks complete
+**Progress:** 3/3 tasks complete
 
 ### Completed Tasks
 
@@ -120,42 +123,27 @@ None beyond the two auto-fixed issues above.
 | ---- | ---- | ------ | ----- |
 | 1 | Write scripts/smoke_test_broker.py | `4a5d9de` | `scripts/smoke_test_broker.py` |
 | 2 | Repoint the Podman setup doc at deploy/ and document the new endpoint and credentials | `520916a` | `docs/Podman setup for checkmk, minio, mosquitto, worker.md` |
+| 3 | Deploy the hardened stack and run the smoke test on the real host | (live verification only) | — |
 
-### Current Task
+### Live Verification Result
 
-**Task 3:** Deploy the hardened stack and run the smoke test on the real host
-**Status:** blocked — no container runtime in this sandbox
-**Blocked by:** `command -v podman docker` returns nothing here (confirmed again this session, consistent with 08-01/08-02's findings)
+```
+[PASS] poller_publish
+[PASS] ws_subscribe
+[PASS] ws_publish_denied
+[PASS] persistence_across_restart
+[SUMMARY] all checks passed
+```
 
-### Checkpoint Details
+All four checks proved their respective requirements on the real deployment host:
+- `poller_publish` — the poller's authenticated write path on 1883 works (D-05: no longer anonymous)
+- `ws_subscribe` — BRK-01: the WebSockets listener (host 9002 / container 9001) is reachable and distinct from 1883
+- `ws_publish_denied` — BRK-03: the `wsreader` WS user's publish never reached an independent privileged subscriber (read-only ACL enforced)
+- `persistence_across_restart` — BRK-02: the retained seed survived a broker restart
 
-Automation was attempted first, per the plan's own instruction: `command -v podman docker` returned nothing, and running `uv run python scripts/smoke_test_broker.py --timeout 3` against this sandbox (no broker at all, real or hardened) produced honest `[FAIL]` lines for every live check (`Connection refused`) rather than a false pass, and the persistence check's restart step raised an uncaught `FileNotFoundError` for the missing `podman` binary — confirming the script fails loudly rather than silently passing when infrastructure is absent.
+### Resolution Notes
 
-**Important — the real deployment host is not yet ready for this test.** Per the known environment constraint for this session: the deployment host (running `checkmk`, `mosquitto`, `minio`, `worker` containers, verified up earlier this session) is still running the OLD, un-hardened `compose.yaml`/`mosquitto.conf` — it has **not yet been redeployed** with this phase's `deploy/` artifacts (from 08-01/08-02, already merged to `main`). Before the smoke test can pass, the operator needs to:
-
-1. Copy `deploy/`'s five files (`compose.yaml`, `mosquitto.conf`, `mosquitto.acl`, `mosquitto.passwd`, `gen-mosquitto-passwd.sh`) into the existing `~/checkmk-stack` directory on the deployment host, **keeping that directory name** so the existing `checkmk_data` volume is preserved (not recreated under a new compose-project name).
-2. From `~/checkmk-stack`: `podman compose up -d` (or `podman compose restart mosquitto` if only the broker's config changed) — expect no port-binding errors (the WS listener is now on host `9002`, not `9001`, avoiding the MinIO console collision).
-3. Only then run the smoke test.
-
-### How to Verify
-
-On the host running the Podman stack, from this repo checkout (after the redeploy above):
-
-1. `cd deploy && podman compose up -d` — expect all four containers to reach a running state with no "address already in use" error (that would mean the 9002 mapping regressed to 9001). If deploying into an existing `~/checkmk-stack` directory instead of a fresh `deploy/` checkout, run from there instead, per the redeploy note above.
-2. `podman compose ps` — expect `mosquitto` Up, not restart-looping. If it exits immediately, run `podman compose logs mosquitto` and look for "Unable to open acl_file" / "Unable to open password file" — a file-permission problem, since the in-container broker runs as UID 1883 and the mounted files must be mode 644.
-3. `podman compose exec mosquitto cat /mosquitto/config/mosquitto.conf` — expect the hardened content with both listeners, confirming the mount-path correction took effect.
-4. From the repo root: `uv run python scripts/smoke_test_broker.py`
-   Expect four `[PASS]` lines and exit code 0:
-   - `[PASS] poller_publish` — the poller authenticated on 1883 and published a retained seed
-   - `[PASS] ws_subscribe` — a WebSockets client on host 9002 connected and received that retained value (BRK-01)
-   - `[PASS] ws_publish_denied` — the `wsreader` publish never reached an independent privileged subscriber (BRK-03)
-   - `[PASS] persistence_across_restart` — the retained seed survived `podman compose restart mosquitto` (BRK-02)
-5. Negative control: `podman compose exec mosquitto mosquitto_sub -h localhost -p 1883 -u wsreader -P wsreader -t 'lan/#' -C 1 -W 5` should subscribe fine (read allowed), while `podman compose exec mosquitto mosquitto_pub -h localhost -p 1883 -u wsreader -P wsreader -t lan/acl-probe -m x` publishes with no client-visible error yet leaves nothing readable on `lan/acl-probe`.
-6. Confirm no leftovers: `podman compose exec mosquitto mosquitto_sub -h localhost -p 1883 -u poller -P poller -t 'lan/smoketest/#' -C 1 -W 3` should time out with no payload, proving the script cleaned up its retained topics.
-
-### Awaiting
-
-Operator to redeploy `deploy/` onto the running stack, run the smoke test, and either reply "approved" (all four `[PASS]`, `mosquitto` stays Up, `lan/smoketest/#` empty afterwards) or paste the failing `[FAIL]` line plus `podman compose logs mosquitto` output so the underlying artifact (Plan 01's config or Plan 02's compose wiring) can be fixed rather than loosening the check.
+The first live run did not reach the broker at all (`Connection refused` on every check) because `deploy/mosquitto.conf` had a genuine syntax bug — an indented trailing-comment continuation line that mosquitto's parser rejects — crash-looping the container. This was outside plan 08-03's scope (it lives in Plan 01's artifact) and was fixed as a standalone quick task (`260906-mm9`) rather than folded into this plan. Once fixed and redeployed, the smoke test passed cleanly on the first subsequent attempt.
 
 ## Self-Check: PASSED
 
@@ -163,7 +151,8 @@ Operator to redeploy `deploy/` onto the running stack, run the smoke test, and e
 - FOUND: docs/Podman setup for checkmk, minio, mosquitto, worker.md (modified)
 - FOUND: commit 4a5d9de
 - FOUND: commit 520916a
+- FOUND: live verification — all four smoke-test checks PASSED on the real deployment host
 
 ---
 *Phase: 08-broker-infrastructure-hardening*
-*Completed: Tasks 1-2 on 2026-09-06; Task 3 paused at checkpoint*
+*Completed: 2026-09-06 — all three tasks done, BRK-01/02/03 proven live*
