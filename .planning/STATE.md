@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-09-06T08:24:00.000Z"
-last_activity: 2026-09-06 - Completed quick task 260906-mm9: Fix mosquitto.conf syntax bug (indented comment continuation crashed the broker)
+stopped_at: Phase 8 complete
+last_updated: "2026-09-06T08:35:00.000Z"
+last_activity: 2026-09-06 - Phase 08 complete — all four smoke-test checks PASSED on real deployment host (BRK-01/02/03 proven live)
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
-  percent: 67
+  completed_plans: 3
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Phase 08 — broker-infrastructure-hardening
+**Current focus:** Phase 08 — broker-infrastructure-hardening (COMPLETE) — Phase 09 (Poller Core) not yet planned
 
 ## Current Position
 
-Phase: 08 (broker-infrastructure-hardening) — EXECUTING
-Plan: 3 of 3 (08-01, 08-02 complete; 08-03 Tasks 1-2 done, Task 3 paused at human-verify checkpoint on real deployment host)
-Status: Executing Phase 08
-Last activity: 2026-09-06 -- Plan 08-03 Tasks 1-2 merged; awaiting live smoke-test verification
+Phase: 08 (broker-infrastructure-hardening) — COMPLETE
+Plan: 3 of 3 (08-01, 08-02, 08-03 all complete; BRK-01/02/03 proven via live smoke test)
+Status: Phase 08 complete — ready to plan Phase 09
+Last activity: 2026-09-06 -- All four smoke-test checks PASSED on real deployment host
 
-Progress: [██████░░░░] 67%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
