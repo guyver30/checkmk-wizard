@@ -88,6 +88,47 @@ services:
     networks:
       - cmk_net
 
+  # 5. Livestatus to MQTT Poller
+  poller:
+    image: python:3.12-slim
+    container_name: mqtt-poller
+    restart: unless-stopped
+    depends_on:
+      - checkmk
+      - mosquitto
+    working_dir: /scripts
+    volumes:
+      # ../scripts resolves relative to this compose file's own directory
+      # (deploy/), so `podman compose` must be run from the repo checkout's
+      # deploy/ directory (see docs/Podman setup for checkmk, minio,
+      # mosquitto, worker.md §2/§4). Set POLLER_SCRIPTS_DIR to an absolute
+      # path for layouts that differ. Mounted read-only, and mounts the
+      # git-tracked scripts/ directory rather than the uncommitted ./app
+      # (see the worker service's own volume above) so a fresh checkout
+      # deploys without a manual copy step.
+      - ${POLLER_SCRIPTS_DIR:-../scripts}:/scripts:ro,z
+    command: >
+      bash -c "pip install --no-cache-dir paho-mqtt==2.1.0 &&
+               exec python -u /scripts/mqtt_poller.py"
+    environment:
+      - LIVESTATUS_HOST=checkmk
+      - LIVESTATUS_PORT=6557
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      # Disposable Phase 8 credentials already in deploy/mosquitto.passwd;
+      # rotate via deploy/gen-mosquitto-passwd.sh (see §3's "First-time
+      # credential setup"), same as this stack's other default credentials.
+      - MQTT_USERNAME=poller
+      - MQTT_PASSWORD=poller
+      - POLL_INTERVAL_SECONDS=60
+      - RECONCILE_TIMEOUT_SECONDS=5
+      - HISTORY_MAX_ENTRIES=20
+      - EVENTS_MAX_ENTRIES=50
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+    networks:
+      - cmk_net
+
 volumes:
   checkmk_data:
   mosquitto_data:

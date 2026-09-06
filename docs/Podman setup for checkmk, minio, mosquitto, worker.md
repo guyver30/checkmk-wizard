@@ -98,20 +98,22 @@ export DOCKER_HOST="unix:///run/user/1000/podman/podman.sock"
 
 ## 2. Directory Structure
 
-The canonical `compose.yaml`, `mosquitto.conf`, `mosquitto.acl`, `mosquitto.passwd` and `gen-mosquitto-passwd.sh` now live under this repo's own `deploy/` directory (see §3) rather than loose inside `checkmk-stack/`:
+The canonical `compose.yaml`, `mosquitto.conf`, `mosquitto.acl`, `mosquitto.passwd` and `gen-mosquitto-passwd.sh` live under this repo's own `deploy/` directory (see §3). Since Phase 9, `deploy/compose.yaml` also bind-mounts `../scripts` for the `poller` service (§6's MQTT topic contract), and that path resolves relative to wherever `compose.yaml` itself sits — so the repo checkout (§8.1's clone command) must exist **before** `podman compose up`, and `podman compose` must be run from the checkout's own `deploy/` directory, not from a copy of `deploy/` placed loose in `checkmk-stack/`:
 
 ```text
 checkmk-stack/
-├── deploy/                 # this repo's deploy/ directory, copied or symlinked in
-│   ├── compose.yaml
-│   ├── mosquitto.conf
-│   ├── mosquitto.acl
-│   ├── mosquitto.passwd
-│   └── gen-mosquitto-passwd.sh
 └── app/
-    └── checkmk-wizard/     # checkout of the checkmk-wizard repo — see §8
+    └── checkmk-wizard/     # checkout of the checkmk-wizard repo — see §8.1
+        └── deploy/         # this repo's own deploy/ directory; `podman
+            ├── compose.yaml           # compose` is run from here (§4),
+            ├── mosquitto.conf         # not from a separate copy
+            ├── mosquitto.acl
+            ├── mosquitto.passwd
+            └── gen-mosquitto-passwd.sh
 
 ```
+
+A `deploy/` copied or symlinked elsewhere (this doc's pre-Phase-9 layout) leaves the `poller` service with no `../scripts` to mount on a fresh checkout. If your layout genuinely can't follow this structure, set `POLLER_SCRIPTS_DIR` to an absolute path pointing at this repo's `scripts/` directory instead.
 
 Create the working directory and workspace folder:
 
@@ -125,12 +127,13 @@ cd checkmk-stack
 
 ## 3. Configuration Files
 
-The full 4-service stack (`checkmk`, `mosquitto`, `minio`, `worker`) and the hardened Mosquitto configuration are checked into this repo under [`deploy/`](../deploy/) as the single source of truth — see [`deploy/compose.yaml`](../deploy/compose.yaml), [`deploy/mosquitto.conf`](../deploy/mosquitto.conf) and [`deploy/mosquitto.acl`](../deploy/mosquitto.acl). This doc no longer duplicates their contents inline, so the two can't silently drift apart; copy or symlink `deploy/` into your `checkmk-stack/` directory (see §2) and run `podman compose` from there.
+The full 5-service stack (`checkmk`, `mosquitto`, `minio`, `worker`, `poller`) and the hardened Mosquitto configuration are checked into this repo under [`deploy/`](../deploy/) as the single source of truth — see [`deploy/compose.yaml`](../deploy/compose.yaml), [`deploy/mosquitto.conf`](../deploy/mosquitto.conf) and [`deploy/mosquitto.acl`](../deploy/mosquitto.acl). This doc no longer duplicates their contents inline, so the two can't silently drift apart; run `podman compose` from the checkout's own `deploy/` directory (see §2).
 
 A few things worth knowing that aren't obvious just from reading those files:
 
 - **Mosquitto's listeners bind to all container interfaces (`0.0.0.0`)** so both internal containers and external LAN devices can reach the broker — the plain-MQTT listener on 1883 stays published to the LAN for debugging, and a second listener (`protocol websockets`) is published separately for browser-based clients.
 - **Podman-compatible `tmpfs` flags (`mode=1777`)** on the `checkmk` service prevent permission errors for the unprivileged Checkmk site user (`UID 1000`).
+- **The `poller` runs as its own `restart: unless-stopped` service**, not inside `worker` — this keeps the always-on live Livestatus-to-MQTT bridge running independently of the `worker` container's interactive, on-demand wizard usage, so neither one can interfere with the other.
 
 ### First-time credential setup
 
@@ -145,12 +148,23 @@ A few things worth knowing that aren't obvious just from reading those files:
 **Migrating an already-running stack:** if a stack was already running against the old `/etc/mosquitto/mosquitto.conf` mount, `deploy/compose.yaml` corrects the mount path to `/mosquitto/config/mosquitto.conf` (the only path the `eclipse-mosquitto` image's baked-in `CMD` actually reads) and adds authentication/ACL enforcement that wasn't there before. This changes which config the broker loads, and any retained messages accumulated under the previous configuration should be backed up first if they matter — `podman volume export mosquitto_data -o mosquitto_data-backup.tar` before redeploying. This is an operator note, not a blocking step.
 
 ```bash
+# Run from the repo checkout's own deploy/ directory (see §2) — this is
+# what makes deploy/compose.yaml's ../scripts mount for the poller service
+# resolve correctly without setting POLLER_SCRIPTS_DIR
+cd app/checkmk-wizard/deploy
+
 # Start all containers in the background
 podman compose up -d
 
 # Verify initialization
 podman compose ps
 
+```
+
+Watch the poller's poll cycles as they happen:
+
+```bash
+podman compose logs -f poller
 ```
 
 ---
@@ -198,6 +212,20 @@ Default credentials:
 
 These Mosquitto credentials are disposable dev/local defaults, same as `cmkadmin`/`minioadmin` above — rotate them (see §3's "First-time credential setup") before exposing this stack beyond a trusted LAN.
 
+### MQTT topic contract (poller)
+
+The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these topics; everything else is a consumer. Browser clients read them over the WebSockets listener (§1's endpoint table) with the read-only `wsreader` credentials — only the `poller` user can publish (`deploy/mosquitto.acl`).
+
+| Topic | Publish Trigger | QoS | Retain | Payload keys |
+| --- | --- | --- | --- | --- |
+| `lan/devices/{id}/status` | Every poll cycle, for every known device | 0 | true | `id`, `state` (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`), `in_downtime`, `acknowledged`, `device_type`, `folder`, `timestamp` |
+| `lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle | 1 | true | `devices` (list of `{id, parents, device_type, folder}`), `timestamp` |
+| `lan/devices/{id}/history` | Only on an actual state transition for that device | 1 | true | Full bounded array (max `HISTORY_MAX_ENTRIES`) of `{timestamp, from, to}` |
+| `lan/events/recent` | Only on any device's state transition, or a device add/remove | 1 | true | Full bounded array (max `EVENTS_MAX_ENTRIES`) of `{timestamp, device_id, event, from, to}` |
+| `lan/poller/status` | Birth (on connect), heartbeat (every poll cycle), and LWT (on ungraceful disconnect) or graceful stop | 1 | true | `{status, since, last_poll, device_count}` (birth/heartbeat) or `{status: "offline"}` (LWT/graceful stop) |
+
+A removed device is tombstoned by publishing an empty retained payload to its `status` and `history` topics.
+
 ---
 
 ## 7. Verification & Pipeline Testing
@@ -241,6 +269,40 @@ What each check proves:
 - `poller_publish` / `ws_subscribe` — the WebSockets listener is reachable and distinct from 1883
 - `ws_publish_denied` — the `wsreader` ACL is read-only; a write attempt never reaches an independent privileged subscriber
 - `persistence_across_restart` — a retained message survives a broker restart (skipped by `--skip-restart`)
+
+### Poller smoke test
+
+[`scripts/smoke_test_poller.py`](../scripts/smoke_test_poller.py) proves the live Livestatus column set and four of the five Phase 9 success criteria against a running stack — configuration alone doesn't demonstrate any of this. From the repo checkout on the deployment host:
+
+```bash
+uv run python scripts/smoke_test_poller.py
+```
+
+From inside the `worker` container (which cannot restart or kill its sibling `poller` service, hence `--skip-restart-checks`):
+
+```bash
+uv run python scripts/smoke_test_poller.py --host mosquitto --livestatus-host checkmk --skip-restart-checks
+```
+
+What each check proves:
+
+- `check_livestatus_columns` — the live site's `hosts` table actually exposes the columns the poller queries (resolves RESEARCH.md Open Question 1)
+- `check_device_status_retained` — Success Criterion 1 (PLR-03, PLR-08): a retained `lan/devices/{id}/status` payload matches the fixed contract
+- `check_topology_retained` — the payload half of PLR-01/PLR-04
+- `check_poller_liveness` — the positive half of Success Criterion 5 (PLR-07): the poller's own heartbeat
+- `check_topology_quiet` — Success Criterion 3 (PLR-04): unrelated poll cycles produce no topology republish (skipped by `--skip-slow`)
+- `check_ghost_tombstone` — Success Criterion 4 (PLR-06): a host that disappeared while the poller was down gets tombstoned (skipped by `--skip-restart-checks`)
+- `check_lwt_offline` — the LWT half of Success Criterion 5 (PLR-07) (skipped by `--skip-restart-checks`)
+
+`uv run python scripts/mqtt_poller.py --check-columns` is the standalone way to confirm which Livestatus `hosts` columns a given site actually exposes, without running the full smoke test.
+
+**Manual tombstone test:** the fifth Phase 9 success criterion (a real Checkmk host deletion) needs a live Checkmk site to delete a host from, so it isn't automated. Delete a host in the Checkmk UI, activate changes, wait one poll interval, then confirm with:
+
+```bash
+mosquitto_sub -h <host> -p 1883 -u poller -P poller -t 'lan/devices/<host>/status' -v
+```
+
+that the retained payload is now empty and the host is gone from `lan/devices/topology`.
 
 ---
 
