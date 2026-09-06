@@ -35,8 +35,8 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 Plans:
 **Wave 1**
 
-- [ ] 08-01-PLAN.md — Broker config artifacts: mosquitto.conf (two listeners, auth, persistence), mosquitto.acl (read-only wsreader), reproducible password-file generator
-- [ ] 08-02-PLAN.md — Canonical deploy/compose.yaml (corrected /mosquitto/config mounts, WS on host 9002) + paho-mqtt dependency
+- [x] 08-01-PLAN.md — Broker config artifacts: mosquitto.conf (two listeners, auth, persistence), mosquitto.acl (read-only wsreader), reproducible password-file generator
+- [x] 08-02-PLAN.md — Canonical deploy/compose.yaml (corrected /mosquitto/config mounts, WS on host 9002) + paho-mqtt dependency
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

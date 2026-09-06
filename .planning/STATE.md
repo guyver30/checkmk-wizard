@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 8 context gathered
-last_updated: "2026-09-06T06:12:41.000Z"
-last_activity: 2026-09-06 - Completed quick task 260906-jqk: Add omd stop/set/start fix to §5 Enable Livestatus-over-TCP
+last_updated: "2026-09-06T06:21:05.000Z"
+last_activity: 2026-09-06 - Merged phase 08 Wave 1 (plans 08-01, 08-02) into main; deploy/ now complete on main
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 3
-  completed_plans: 0
-  percent: 0
+  completed_plans: 2
+  percent: 67
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 ## Current Position
 
 Phase: 08 (broker-infrastructure-hardening) — EXECUTING
-Plan: 1 of 3
+Plan: 2 of 3 (Wave 1 complete — 08-01, 08-02 merged; Wave 2 — 08-03 — ready to dispatch)
 Status: Executing Phase 08
-Last activity: 2026-09-05 -- Phase 08 execution started
+Last activity: 2026-09-06 -- Wave 1 merged into main
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██████░░░░] 67%
 
 ## Performance Metrics
 
@@ -80,6 +80,7 @@ None yet.
 | 260906-iwo | Update docs/Podman setup for checkmk, minio, mosquitto, worker.md to add Podman installation instructions for a fresh Linux machine | 2026-09-06 | 2ba6b7e | [260906-iwo-update-docs-podman-setup-for-checkmk-min](./quick/260906-iwo-update-docs-podman-setup-for-checkmk-min/) |
 | 260906-jm0 | Add unqualified-search-registries fix to §1.1 Install Podman | 2026-09-06 | 1e636aa | [260906-jm0-add-unqualified-search-registries-fix-to](./quick/260906-jm0-add-unqualified-search-registries-fix-to/) |
 | 260906-jqk | Add omd stop/set/start fix to §5 Enable Livestatus-over-TCP | 2026-09-06 | 0753107 | [260906-jqk-add-omd-stop-set-start-fix-to-5-enable-l](./quick/260906-jqk-add-omd-stop-set-start-fix-to-5-enable-l/) |
+| 260906-jxk | Fix §7 endpoint path and 200-expectation to accept 401 as valid pre-bootstrap reachability proof | 2026-09-06 | 91ecec0 | [260906-jxk-fix-7-endpoint-path-and-200-expectation-](./quick/260906-jxk-fix-7-endpoint-path-and-200-expectation-/) |
 
 ## Deferred Items
 
