@@ -2,6 +2,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # scripts/ is not an importable package (no precedent in this repo for
@@ -469,3 +470,336 @@ def test_publish_json_swallows_oserror_from_client():
     mock_client = MagicMock()
     mock_client.publish.side_effect = OSError("broker down")
     poller.publish_events(mock_client, [{"event": "added"}])  # must not raise
+
+
+# --- parse_topology_payload / parse_events_payload --------------------------
+
+
+def test_parse_topology_payload_empty_returns_empty_dict():
+    assert poller.parse_topology_payload(b"") == {}
+
+
+def test_parse_topology_payload_parses_devices_keyed_by_id():
+    payload = json.dumps(
+        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": ""}], "timestamp": "t"}
+    ).encode()
+    assert poller.parse_topology_payload(payload) == {
+        "a": {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    }
+
+
+def test_parse_topology_payload_malformed_json_returns_empty_dict():
+    assert poller.parse_topology_payload(b"not-json{{{") == {}
+
+
+def test_parse_events_payload_empty_returns_empty_list():
+    assert poller.parse_events_payload(b"") == []
+
+
+def test_parse_events_payload_parses_list():
+    payload = json.dumps([{"event": "added"}]).encode()
+    assert poller.parse_events_payload(payload) == [{"event": "added"}]
+
+
+def test_parse_events_payload_malformed_json_returns_empty_list():
+    assert poller.parse_events_payload(b"not-json{{{") == []
+
+
+# --- reconcile_state ----------------------------------------------------------
+
+
+def _make_message(topic: str, payload: bytes):
+    return SimpleNamespace(topic=topic, payload=payload)
+
+
+def test_reconcile_state_does_not_set_a_will():
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+        poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
+
+    mock_client.will_set.assert_not_called()
+
+
+def test_reconcile_state_returns_cold_start_state_when_nothing_retained():
+    with patch.object(poller, "mqtt"):
+        state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
+
+    assert state.previous_nodes == {}
+    assert state.last_status == {}
+    assert state.events == []
+
+
+def test_reconcile_state_seeds_previous_nodes_from_retained_topology():
+    topology_payload = json.dumps(
+        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": ""}], "timestamp": "t"}
+    ).encode()
+
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+
+        def _subscribe(topic, qos=None):
+            if topic == poller.TOPIC_TOPOLOGY:
+                mock_client.on_message(
+                    mock_client, None, _make_message(poller.TOPIC_TOPOLOGY, topology_payload)
+                )
+
+        mock_client.subscribe.side_effect = _subscribe
+        state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
+
+    assert state.previous_nodes == {"a": {"id": "a", "parents": [], "device_type": "server", "folder": ""}}
+
+
+# --- run_cycle ------------------------------------------------------------------
+
+
+def _snapshot(
+    id_,
+    state="OK",
+    parents=None,
+    device_type="server",
+    folder="",
+    in_downtime=False,
+    acknowledged=False,
+):
+    return poller.DeviceSnapshot(
+        id=id_,
+        state=state,
+        in_downtime=in_downtime,
+        acknowledged=acknowledged,
+        device_type=device_type,
+        folder=folder,
+        parents=parents or [],
+    )
+
+
+def _poller_state(previous_nodes=None, last_status=None, history=None, events=None):
+    return poller.PollerState(
+        previous_nodes=previous_nodes or {},
+        last_status=last_status or {},
+        history=history or {},
+        events=events if events is not None else [],
+        since="2026-09-06T00:00:00+00:00",
+    )
+
+
+def _published(mock_client, topic):
+    return [call for call in mock_client.publish.call_args_list if call.args[0] == topic]
+
+
+def test_run_cycle_publishes_one_status_per_snapshot_with_retain():
+    client = MagicMock()
+    state = _poller_state()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b")])
+
+    status_calls = _published(client, "lan/devices/a/status") + _published(client, "lan/devices/b/status")
+    assert len(status_calls) == 2
+    for call in status_calls:
+        assert call.kwargs["retain"] is True
+
+
+def test_run_cycle_skips_topology_publish_when_unchanged():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a")])
+
+    assert _published(client, poller.TOPIC_TOPOLOGY) == []
+
+
+def test_run_cycle_publishes_topology_on_cold_start():
+    client = MagicMock()
+    state = _poller_state()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a")])
+
+    assert len(_published(client, poller.TOPIC_TOPOLOGY)) == 1
+
+
+def test_run_cycle_publishes_topology_on_reparent():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": ["x"], "device_type": "server", "folder": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a", parents=["y"])])
+
+    assert len(_published(client, poller.TOPIC_TOPOLOGY)) == 1
+
+
+def test_run_cycle_publishes_topology_on_add():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b")])
+
+    assert len(_published(client, poller.TOPIC_TOPOLOGY)) == 1
+
+
+def test_run_cycle_publishes_topology_on_remove():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+
+    poller.run_cycle(client, _make_config(), state, [])
+
+    assert len(_published(client, poller.TOPIC_TOPOLOGY)) == 1
+
+
+def test_run_cycle_removed_device_tombstones_status_and_history_and_events():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
+
+    poller.run_cycle(client, _make_config(), state, [])
+
+    tombstones = [c for c in client.publish.call_args_list if c.kwargs.get("payload", "unset") is None]
+    assert {c.args[0] for c in tombstones} == {"lan/devices/a/status", "lan/devices/a/history"}
+    for call in tombstones:
+        assert call.kwargs["retain"] is True
+        assert call.kwargs["qos"] == 1
+    assert "a" not in state.last_status
+    assert "a" not in state.history
+
+    events_calls = _published(client, poller.TOPIC_EVENTS)
+    assert len(events_calls) == 1
+    entry = json.loads(events_calls[0].args[1])[-1]
+    assert entry["device_id"] == "a"
+    assert entry["event"] == "removed"
+    assert entry["from"] == "OK"
+    assert entry["to"] is None
+
+
+def test_run_cycle_added_device_appends_added_event():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b", state="WARN")])
+
+    events_calls = _published(client, poller.TOPIC_EVENTS)
+    assert len(events_calls) == 1
+    entries = json.loads(events_calls[0].args[1])
+    entry = next(e for e in entries if e["device_id"] == "b")
+    assert entry["event"] == "added"
+    assert entry["from"] is None
+    assert entry["to"] == "WARN"
+
+
+def test_run_cycle_state_change_appends_history_and_event_and_publishes_both_topics():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a", state="CRIT")])
+
+    history_calls = _published(client, "lan/devices/a/history")
+    assert len(history_calls) == 1
+    history_entries = json.loads(history_calls[0].args[1])
+    assert history_entries[-1]["from"] == "OK"
+    assert history_entries[-1]["to"] == "CRIT"
+
+    events_calls = _published(client, poller.TOPIC_EVENTS)
+    assert len(events_calls) == 1
+    entry = json.loads(events_calls[0].args[1])[-1]
+    assert entry["event"] == "state_change"
+    assert entry["from"] == "OK"
+    assert entry["to"] == "CRIT"
+
+
+def test_run_cycle_no_changes_publishes_no_history_or_events():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a", state="OK")])
+
+    assert _published(client, poller.TOPIC_EVENTS) == []
+    assert _published(client, "lan/devices/a/history") == []
+
+
+def test_run_cycle_cold_start_emits_no_state_change_events():
+    client = MagicMock()
+    state = _poller_state()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a")])
+
+    events_calls = _published(client, poller.TOPIC_EVENTS)
+    if events_calls:
+        entries = json.loads(events_calls[0].args[1])
+        assert all(entry["event"] != "state_change" for entry in entries)
+
+
+def test_run_cycle_truncates_history_and_events_to_configured_bounds():
+    client = MagicMock()
+    config = _make_config(history_max_entries=2, events_max_entries=1)
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    state = _poller_state(
+        previous_nodes={"a": node_a},
+        last_status={"a": "OK"},
+        history={"a": [{"timestamp": "t0", "from": "UNKNOWN", "to": "OK"}]},
+        events=[{"timestamp": "t0", "device_id": "z", "event": "added", "from": None, "to": "OK"}],
+    )
+
+    poller.run_cycle(client, config, state, [_snapshot("a", state="CRIT")])
+
+    assert len(state.history["a"]) <= 2
+    assert len(state.events) <= 1
+
+
+def test_run_cycle_publishes_heartbeat_with_refreshed_last_poll_and_device_count():
+    client = MagicMock()
+    state = _poller_state()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b")])
+
+    status_calls = _published(client, poller.TOPIC_POLLER_STATUS)
+    assert len(status_calls) == 1
+    payload = json.loads(status_calls[0].args[1])
+    assert payload["device_count"] == 2
+    assert payload["last_poll"] is not None
+    assert payload["status"] == "online"
+
+
+# --- run_forever ---------------------------------------------------------------
+
+
+class _OneShotEvent:
+    """Fake `threading.Event` that reports "stop" after its first `wait()` call.
+
+    Lets a `run_forever` test exercise exactly one loop iteration without
+    real signal delivery or real sleeping.
+    """
+
+    def __init__(self):
+        self._stopped = False
+
+    def is_set(self):
+        return self._stopped
+
+    def set(self):
+        self._stopped = True
+
+    def wait(self, timeout=None):
+        self._stopped = True
+        return False
+
+
+def test_run_forever_survives_livestatus_error_and_does_not_raise():
+    fake_client = MagicMock()
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "query_devices", side_effect=poller.LivestatusError("boom")),
+        patch.object(poller, "run_cycle") as mock_run_cycle,
+        patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
+        patch.object(poller.signal, "signal"),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result == 0
+    mock_run_cycle.assert_not_called()
