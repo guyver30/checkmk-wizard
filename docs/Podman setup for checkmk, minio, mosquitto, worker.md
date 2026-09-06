@@ -254,13 +254,16 @@ checkmk-wizard's Phase 7 post-activation health check connects to the site's Liv
 Run this once, right after the site first comes up (a fresh `podman compose up`, or any time you delete/recreate the site inside the `checkmk` container):
 
 ```bash
+podman compose exec checkmk omd stop dmc
 podman compose exec checkmk omd config dmc set LIVESTATUS_TCP on
-podman compose exec checkmk omd restart dmc
+podman compose exec checkmk omd start dmc
 ```
+
+`omd config ... set` refuses to change config variables while the site is running — it errors with `Cannot change config variables while site is running.` — which is why the site is stopped first and then *started* rather than left running and restarted afterward. A site freshly brought up by §4's `podman compose up -d` is already running when you reach this step, so the stop is always needed, not situational. Stopping the site for this loses nothing: flipping `LIVESTATUS_TCP` is a config change, not a code change or a data wipe, so the site's monitoring data, hosts, and history all live in the `checkmk_data` volume and survive the stop/start untouched.
 
 This binds Livestatus on port **6557** by default (Checkmk's own default `LIVESTATUS_TCP_PORT`) — matching what checkmk-wizard already expects, so nothing else needs configuring. No `ports:` entry is needed in `compose.yaml` for this: containers on the same `cmk_net` bridge can already reach `checkmk:6557` directly by service name, without publishing the port to the host/LAN — and it should stay that way, since Livestatus's wire protocol has no authentication of its own and relies entirely on network-level isolation.
 
-*(There's also a documented `CMK_LIVESTATUS_TCP` boot-time environment variable for the official image that may let you skip this manual step — not verified here against this specific image/version, so the `omd config`/`omd restart` steps above are the confirmed way. If you try the env var, verify Phase 7 actually works end-to-end before relying on it.)*
+*(There's also a documented `CMK_LIVESTATUS_TCP` boot-time environment variable for the official image that may let you skip this manual step — not verified here against this specific image/version, so the `omd stop`/`omd config`/`omd start` steps above are the confirmed way. If you try the env var, verify Phase 7 actually works end-to-end before relying on it.)*
 
 If you skip this step, checkmk-wizard still runs fine through Phase 6 — it just prints a warning at Phase 1 ("Could not reach Livestatus on checkmk:6557") and Phase 7's host-state table will fail at the very end of the run.
 
