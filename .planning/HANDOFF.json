@@ -1,45 +1,36 @@
 {
   "version": "1.0",
-  "timestamp": "2026-09-05T10:36:55.603Z",
-  "phase": "08",
-  "phase_name": "broker-infrastructure-hardening",
-  "phase_dir": ".planning/phases/08-broker-infrastructure-hardening",
-  "plan": "08-01",
-  "task": 3,
-  "total_tasks": 3,
+  "timestamp": "2026-09-06T11:15:48.100Z",
+  "phase": "09",
+  "phase_name": "poller-core",
+  "phase_dir": ".planning/phases/09-poller-core",
+  "plan": "09-04",
+  "task": 1,
+  "total_tasks": 2,
   "status": "paused",
   "completed_tasks": [
-    {"id": 1, "name": "Write deploy/mosquitto.conf and deploy/mosquitto.acl", "status": "done", "commit": "0cc7a7a"},
-    {"id": 2, "name": "Write deploy/gen-mosquitto-passwd.sh", "status": "done", "commit": "66686b7"},
-    {"id": 3, "name": "Generate and commit deploy/mosquitto.passwd", "status": "in_progress", "progress": "Script written and tested; execution blocked — no podman/docker/mosquitto_passwd available in this sandbox. Must run on the real deployment host."}
+    {"id": "09-01", "name": "Poller core foundation (config, state/topology helpers, Livestatus query layer)", "status": "done", "commit": "051fdb7"},
+    {"id": "09-02", "name": "MQTT wiring (client lifecycle, publish helpers, reconciliation, poll loop)", "status": "done", "commit": "277d85d"},
+    {"id": "09-03", "name": "Deployability (compose poller service, smoke_test_poller.py, operator docs)", "status": "done", "commit": "8d77358"},
+    {"id": "09-04-task-1", "name": "Live verification on the deployment host", "status": "blocked", "progress": "Executor reached the blocking human-verify checkpoint immediately; no files modified, nothing committed (verification-only task)"}
   ],
   "remaining_tasks": [
-    {"id": 3, "name": "Generate and commit deploy/mosquitto.passwd (run gen-mosquitto-passwd.sh on deployment host)", "status": "blocked_on_human"},
-    {"id": "08-03", "name": "Wave 2: live-broker smoke test + Podman doc update + real-host verification (plan 08-03)", "status": "not_started"}
+    {"id": "09-04-task-1", "name": "Live verification on the deployment host", "status": "awaiting_human_action"},
+    {"id": "09-04-task-2", "name": "Record the live-verified column set and apply any corrections", "status": "not_started", "depends_on": "09-04-task-1 output"}
   ],
   "blockers": [
-    {
-      "description": "deploy/mosquitto.passwd requires a real argon2id hash from the mosquitto_passwd binary (or podman/docker running the mosquitto image). None of podman, docker, or a host mosquitto_passwd binary exist in this sandbox. Hand-rolling the hash is explicitly forbidden by 08-RESEARCH.md's 'don't hand-roll' rule.",
-      "type": "human_action",
-      "workaround": "Run ./deploy/gen-mosquitto-passwd.sh on the actual Checkmk/Podman deployment host from a checkout containing commit 66686b7 or later."
-    }
+    {"description": "Task 1 of plan 09-04 requires running verification commands on a real Checkmk/Podman/Mosquitto deployment host, which this sandbox does not have. The plan explicitly forbids simulating or fabricating results.", "type": "human_action", "workaround": "none — must be run by the developer on the real host"}
   ],
   "human_actions_pending": [
-    {
-      "action": "On the deployment host: run ./deploy/gen-mosquitto-passwd.sh, verify it prints success and deploy/mosquitto.passwd has exactly two lines, verify `head -c 40 deploy/mosquitto.passwd` starts with `wsreader:$` (hashed, not plaintext), verify `stat -c %a deploy/mosquitto.passwd` is 644, then `git add deploy/mosquitto.passwd`.",
-      "context": "Completes task 3 of plan 08-01 so the wave can be merged and plan 08-03's live-broker smoke test can run.",
-      "blocking": true
-    }
+    {"action": "On the real deployment host, from the repo checkout's deploy/ dir: `podman compose config >/dev/null && podman compose up -d poller`, then `podman compose logs -f poller` to watch one poll cycle", "context": "Brings the new poller compose service up and confirms it starts cleanly with no credential leakage in logs", "blocking": true},
+    {"action": "Run `uv run python scripts/mqtt_poller.py --check-columns` and report the full verbatim output — specifically whether `parents`, `tags`, and `filename` Livestatus columns are present", "context": "Closes RESEARCH.md Assumptions A1-A3, which were carried forward from training knowledge rather than live-verified", "blocking": true},
+    {"action": "Run `uv run python scripts/smoke_test_poller.py --host localhost --livestatus-host localhost --compose-dir deploy` and report the `[SUMMARY]` line (plus any `[FAIL]` lines and surrounding poller logs)", "context": "Automates every Phase 9 success criterion except real-host deletion", "blocking": true},
+    {"action": "Manually delete a host in the Checkmk UI, activate changes, wait one poll interval, then run `mosquitto_sub -h localhost -p 1883 -u poller -P poller -t 'lan/#' -v -C 20` and report any deviation from expected (empty status payload, removal from topology, `removed` event in lan/events/recent)", "context": "The one thing smoke_test_poller.py cannot automate", "blocking": true}
   ],
-  "decisions": [],
-  "uncommitted_files": [
-    ".planning/STATE.md (phase-08 begin-phase marker written by orchestrator this session)",
-    ".planning/config.json (pre-existing, unrelated to phase 08)",
-    "PROMPT_LOG.md (prompt logging, unrelated to phase 08)",
-    ".planning/.pending-auth-captures.jsonl (untracked, pre-existing, unrelated)",
-    "docs/src/ (untracked, pre-existing, unrelated)",
-    "screen1.png (untracked, pre-existing, unrelated)"
+  "decisions": [
+    {"decision": "Did not auto-approve the plan 09-04 Task 1 checkpoint despite AUTO_MODE=true", "rationale": "AUTO_MODE's human-verify auto-approval is meant for simple confirmatory checkpoints; this checkpoint's entire purpose is collecting real, unfabricated Livestatus/MQTT behavior from a live Checkmk 2.4.0p35 site (RESEARCH.md Assumptions A1-A4). Auto-approving would defeat the plan's stated purpose ('nothing here is done until a live site says so').", "phase": "09"}
   ],
-  "next_action": "Once deploy/mosquitto.passwd is generated and staged on the deployment host, pull/sync that file into this repo checkout, then resume the paused executor agent (agent id a06afbafce13e8f71, worktree branch worktree-agent-a06afbafce13e8f71) to finish and commit task 3 and finalize 08-01-SUMMARY.md. After that, merge both worktree-agent-a06afbafce13e8f71 (08-01) and worktree-agent-aeb0cd40745f7430d (08-02, already complete) back into main, update STATE.md/ROADMAP.md, then dispatch Wave 2 (plan 08-03).",
-  "context_notes": "Wave 1 of phase 8 (execute-phase) dispatched 08-01 and 08-02 in parallel worktrees off main@d2a661e. 08-02 (compose.yaml + paho-mqtt) completed fully and cleanly (222 tests pass) but its worktree/branch has NOT been merged to main yet — merge is deferred until the whole wave is ready to avoid partial-wave STATE.md/ROADMAP.md writes. 08-01 (mosquitto.conf/acl/gen-script) completed tasks 1-2 and stopped at a genuine environment-capability checkpoint for task 3 (password hash generation needs a real mosquitto_passwd binary or container runtime that this sandbox lacks). Both worktrees are still on disk and must not be deleted — they hold uncommitted-to-main work. Wave 2 (plan 08-03, the live smoke test) depends on both 08-01 and 08-02 and has not been dispatched."
+  "uncommitted_files": [],
+  "next_action": "Wait for the developer to run the 5 verification steps in plan 09-04 Task 1 on their real deployment host and report back: the verbatim --check-columns output, the smoke-test [SUMMARY] line, and any deviation from the manual tombstone test. Once received, spawn a continuation bm:gsd-executor agent (worktree isolation, base = current main HEAD) for plan 09-04 with that verbatim output, to complete Task 2 (record the Live-verified citation in scripts/mqtt_poller.py, apply any corrections, update the setup doc's tombstone-test paragraph if needed, then create 09-04-SUMMARY.md). After merge, run the full post-wave sequence (tests, roadmap.update-plan-progress, tracking commit), then proceed to execute-phase's code_review_gate → verify_phase_goal → update_roadmap to close out Phase 9.",
+  "context_notes": "Phase 9 (poller-core) is a 4-wave, 4-plan phase with a strict dependency chain (09-01 -> 09-02 -> 09-03 -> 09-04). Waves 1-3 executed via bm:gsd-executor subagents in isolated git worktrees, merged back to main one at a time (no-ff merges, STATE.md/ROADMAP.md backed up and restored around each merge to avoid last-merge-wins clobbering), with the full pytest suite (284 tests) re-run and passing after every merge. Wave 4 (plan 09-04) is intentionally non-autonomous (autonomous: false) and its Task 1 is a blocking human-verify checkpoint that cannot be run in this sandbox (no podman/broker/Checkmk site here). The executor was spawned, correctly identified this, modified nothing, and returned the checkpoint verbatim. Execution is otherwise unaffected by unrelated pre-existing uncommitted changes in the working tree at session start (deleted .planning/HANDOFF.json, modified .planning/config.json, untracked docs/src/, screen1.png, .planning/.pending-auth-captures.jsonl) — those predate this session and were left untouched throughout, except this HANDOFF.json write itself."
 }
