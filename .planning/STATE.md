@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
+status: executing
 stopped_at: Phase 8 context gathered
-last_updated: "2026-09-05T09:41:09.061Z"
-last_activity: 2026-09-05 — Roadmap created (Phases 8-11, continuing after existing wizard's Validated Phase 1-7)
+last_updated: "2026-09-06T05:42:09.000Z"
+last_activity: 2026-09-06 - Completed quick task 260906-iwo: Update docs/Podman setup for checkmk, minio, mosquitto, worker.md to add Podman installation instructions for a fresh Linux machine
 progress:
   total_phases: 4
   completed_phases: 0
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Phase 8 - Broker Infrastructure Hardening
+**Current focus:** Phase 08 — broker-infrastructure-hardening
 
 ## Current Position
 
-Phase: 8 of 11 (Broker Infrastructure Hardening)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-09-05 — Roadmap created (Phases 8-11, continuing after existing wizard's Validated Phase 1-7)
+Phase: 08 (broker-infrastructure-hardening) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 08
+Last activity: 2026-09-05 -- Phase 08 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -72,6 +72,12 @@ None yet.
 
 - Phase 9 (Poller Core) and Phase 10 (Tag-Group Integration) flagged by research as needing a live-verification research pass during planning (Livestatus diff/QoS strategy; Checkmk REST API `tag_<group_id>` attribute shape) — see .planning/research/SUMMARY.md Research Flags.
 - Phase 8's read-only WS ACL was flagged by research as a critical, easy-to-retrofit-wrong risk if deferred — kept as v1 scope in this phase rather than pushed to v1.x.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260906-iwo | Update docs/Podman setup for checkmk, minio, mosquitto, worker.md to add Podman installation instructions for a fresh Linux machine | 2026-09-06 | 2ba6b7e | [260906-iwo-update-docs-podman-setup-for-checkmk-min](./quick/260906-iwo-update-docs-podman-setup-for-checkmk-min/) |
 
 ## Deferred Items
 
