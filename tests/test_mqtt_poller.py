@@ -301,3 +301,171 @@ def test_query_devices_connects_with_configured_timeout():
     with patch("socket.create_connection", return_value=sock) as mock_connect:
         poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 7.5)
     mock_connect.assert_called_once_with(("checkmk", poller.DEFAULT_LIVESTATUS_PORT), timeout=7.5)
+
+
+# --- MQTT client lifecycle and publish helpers ------------------------------
+
+
+def _make_config(**overrides) -> "poller.PollerConfig":
+    defaults = {
+        "livestatus_host": "checkmk",
+        "livestatus_port": poller.DEFAULT_LIVESTATUS_PORT,
+        "mqtt_host": "mosquitto",
+        "mqtt_port": poller.DEFAULT_MQTT_PORT,
+        "mqtt_username": "poller",
+        "mqtt_password": "secret",
+        "poll_interval_seconds": 60,
+        "history_max_entries": 2,
+        "events_max_entries": 3,
+        "reconcile_timeout_seconds": 5.0,
+        "log_level": "INFO",
+    }
+    defaults.update(overrides)
+    return poller.PollerConfig(**defaults)
+
+
+def test_build_mqtt_client_will_set_before_connect_with_offline_payload():
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+        result = poller.build_mqtt_client(_make_config())
+
+    assert result is mock_client
+    call_names = [name for name, _args, _kwargs in mock_client.mock_calls]
+    assert call_names.index("will_set") < call_names.index("connect")
+
+    args, kwargs = mock_client.will_set.call_args
+    assert args[0] == poller.TOPIC_POLLER_STATUS
+    assert json.loads(kwargs["payload"]) == {"status": "offline"}
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_build_mqtt_client_configures_reconnect_backoff_and_starts_loop():
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+        poller.build_mqtt_client(_make_config())
+
+    mock_client.reconnect_delay_set.assert_called_once_with(min_delay=1, max_delay=120)
+    mock_client.loop_start.assert_called_once()
+
+
+def test_build_mqtt_client_uses_version2_callback_api():
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        poller.build_mqtt_client(_make_config())
+
+    mock_mqtt.Client.assert_called_once_with(mock_mqtt.CallbackAPIVersion.VERSION2)
+
+
+def test_build_mqtt_client_on_connect_publishes_online_birth_message():
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+        poller.build_mqtt_client(_make_config())
+        on_connect = mock_client.on_connect
+        mock_client.publish.reset_mock()
+        on_connect(mock_client, None, {}, 0, None)
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == poller.TOPIC_POLLER_STATUS
+    payload = json.loads(args[1])
+    assert payload["status"] == "online"
+    assert payload["last_poll"] is None
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_publish_device_status_uses_qos0_and_exact_payload_keys():
+    mock_client = MagicMock()
+    snapshot = poller.DeviceSnapshot(
+        id="web1",
+        state="OK",
+        in_downtime=False,
+        acknowledged=False,
+        device_type="server",
+        folder="vlan10",
+        parents=[],
+    )
+    poller.publish_device_status(mock_client, snapshot, "2026-09-06T00:00:00+00:00")
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == "lan/devices/web1/status"
+    payload = json.loads(args[1])
+    assert set(payload.keys()) == {
+        "id",
+        "state",
+        "in_downtime",
+        "acknowledged",
+        "device_type",
+        "folder",
+        "timestamp",
+    }
+    assert kwargs["qos"] == 0
+    assert kwargs["retain"] is True
+
+
+def test_publish_topology_uses_qos1_and_devices_envelope():
+    mock_client = MagicMock()
+    nodes = [{"id": "a", "parents": [], "device_type": "server", "folder": ""}]
+    poller.publish_topology(mock_client, nodes, "2026-09-06T00:00:00+00:00")
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == poller.TOPIC_TOPOLOGY
+    payload = json.loads(args[1])
+    assert payload == {"devices": nodes, "timestamp": "2026-09-06T00:00:00+00:00"}
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_publish_history_publishes_full_array():
+    mock_client = MagicMock()
+    entries = [{"timestamp": "t1", "from": "OK", "to": "CRIT"}]
+    poller.publish_history(mock_client, "web1", entries)
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == "lan/devices/web1/history"
+    assert json.loads(args[1]) == entries
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_publish_events_publishes_full_array():
+    mock_client = MagicMock()
+    entries = [{"timestamp": "t1", "device_id": "web1", "event": "added", "from": None, "to": "OK"}]
+    poller.publish_events(mock_client, entries)
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == poller.TOPIC_EVENTS
+    assert json.loads(args[1]) == entries
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_publish_tombstone_clears_both_status_and_history_topics():
+    mock_client = MagicMock()
+    poller.publish_tombstone(mock_client, "web1")
+
+    calls = mock_client.publish.call_args_list
+    assert len(calls) == 2
+    topics = {call.args[0] for call in calls}
+    assert topics == {"lan/devices/web1/status", "lan/devices/web1/history"}
+    for call in calls:
+        assert call.kwargs["payload"] is None
+        assert call.kwargs["retain"] is True
+        assert call.kwargs["qos"] == 1
+
+
+def test_publish_poller_status_payload_shape():
+    mock_client = MagicMock()
+    poller.publish_poller_status(mock_client, since="t0", last_poll="t1", device_count=5)
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == poller.TOPIC_POLLER_STATUS
+    payload = json.loads(args[1])
+    assert payload == {"status": "online", "since": "t0", "last_poll": "t1", "device_count": 5}
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_publish_json_swallows_oserror_from_client():
+    mock_client = MagicMock()
+    mock_client.publish.side_effect = OSError("broker down")
+    poller.publish_events(mock_client, [{"event": "added"}])  # must not raise
