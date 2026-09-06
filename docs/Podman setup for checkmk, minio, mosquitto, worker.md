@@ -289,7 +289,7 @@ Default credentials:
 
 ## 7. Verification & Pipeline Testing
 
-Verify end-to-end communication across the bridge network from inside the worker container:
+Verify end-to-end communication across the bridge network from inside the worker container. A 401 here is expected and counts as a pass at this point in the guide -- the automation REST user (and its secret, the only credential Checkmk's Bearer auth accepts) is not bootstrapped until Section 8, so a 401 or a 200 both prove the worker reached Checkmk's REST API, as opposed to a connection error, timeout, or proxy-level 404, which would indicate a genuine reachability problem:
 
 ```bash
 podman compose exec worker bash -c "
@@ -298,8 +298,8 @@ import requests, os
 from minio import Minio
 
 # Checkmk API check
-cmk = requests.get(os.environ[\"CMK_REST_API\"] + \"/domain-types/version/actions/show/invoke\")
-print(f\"Checkmk API: {cmk.status_code}\")
+cmk = requests.get(os.environ[\"CMK_REST_API\"] + \"/version\")
+print(f\"Checkmk API: {cmk.status_code}\" + (\" (reachable)\" if cmk.status_code in (200, 401) else \" (UNEXPECTED - check network/site status)\"))
 
 # MinIO check
 s3 = Minio(\"minio:9000\", access_key=\"minioadmin\", secret_key=\"minioadmin\", secure=False)
