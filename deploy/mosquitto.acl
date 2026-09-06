@@ -1,0 +1,13 @@
+# Per-user topic ACL for the Mosquitto broker.
+# Source: mosquitto.org/documentation/plugins/acl-file/
+#
+# Default-deny: an authenticated user with no matching "user" block below
+# gets NO access at all. A bare "topic" line outside a "user" block would
+# apply only to anonymous clients, and allow_anonymous is false in
+# deploy/mosquitto.conf, so no such line is written here.
+
+user poller
+topic readwrite #
+
+user wsreader
+topic read lan/#
