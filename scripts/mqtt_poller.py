@@ -27,20 +27,23 @@ approaches this module must not repeat: the paho-mqtt v1 callback API
 socket instead of TCP, and a single full-blob retained topic instead of
 this project's per-device topic contract.
 
-This plan (09-01) builds only the non-networked half of the poller:
-environment-driven configuration, pure state/topology/bounded-log
-helpers, and the Livestatus query layer that turns one `GET hosts` round
-trip into typed `DeviceSnapshot` records. MQTT publishing itself is wired
-up in a later plan.
+MQTT client lifecycle and publish helpers below follow
+`scripts/smoke_test_broker.py`'s live-tested paho-mqtt 2.1.0
+`CallbackAPIVersion.VERSION2` idioms (this repo's own proven reference,
+built and verified against a real deployed broker in Phase 8) rather
+than generic docs.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
 import socket
 from dataclasses import dataclass, field
+
+import paho.mqtt.client as mqtt
 
 DEFAULT_LIVESTATUS_PORT = 6557
 DEFAULT_MQTT_PORT = 1883
@@ -421,3 +424,125 @@ def query_devices(host: str, port: int, columns: list[str], timeout: float) -> l
             )
         )
     return snapshots
+
+
+def utc_now_iso() -> str:
+    """Return the current UTC time in ISO 8601, matching wizard.py's `datetime.UTC` convention."""
+    return datetime.datetime.now(datetime.UTC).isoformat()
+
+
+def build_mqtt_client(config: PollerConfig) -> mqtt.Client:
+    """Construct, authenticate and connect the poller's long-lived MQTT client.
+
+    `will_set()` is called before `connect()` because paho-mqtt's own
+    docstring states it has no effect otherwise -- this ordering is
+    load-bearing, not stylistic. Reconnect/backoff is deliberately left
+    to the library (`reconnect_delay_set` + `loop_start`), not
+    hand-rolled, per RESEARCH.md's "Don't Hand-Roll" guidance.
+    """
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.username_pw_set(config.mqtt_username, config.mqtt_password)
+    client.will_set(
+        TOPIC_POLLER_STATUS,
+        payload=json.dumps({"status": "offline"}),
+        qos=1,
+        retain=True,
+    )
+
+    def on_connect(client, userdata, flags, reason_code, properties=None):
+        # Birth message: last_poll is None until the first cycle completes.
+        publish_poller_status(client, since=utc_now_iso(), last_poll=None, device_count=0)
+
+    client.on_connect = on_connect
+    client.reconnect_delay_set(min_delay=1, max_delay=120)
+    client.connect(config.mqtt_host, config.mqtt_port, keepalive=30)
+    client.loop_start()
+    return client
+
+
+def _publish_json(client: mqtt.Client, topic: str, payload: object, qos: int, retain: bool) -> None:
+    """Serialize `payload` as JSON and publish, one choke point for every publish helper.
+
+    Mirrors `CheckmkClient._request()`'s pattern (src/checkmk_wizard/api.py):
+    every publish goes through here so a transient broker hiccup
+    (`TimeoutError`/`OSError`) degrades exactly one publish rather than
+    killing the poll loop (T-09-03).
+
+    Continuous vs. change-triggered QoS rule (RESEARCH.md's resolved
+    table): the every-cycle status topic uses QoS 0 (self-correcting by
+    the next cycle), every change-triggered topic uses QoS 1. Callers
+    choose `qos`; this function does not second-guess it.
+    """
+    try:
+        client.publish(topic, json.dumps(payload), qos=qos, retain=retain)
+    except (TimeoutError, OSError) as exc:
+        _logger.warning("Failed to publish to %s: %s", topic, exc)
+
+
+def publish_device_status(client: mqtt.Client, snapshot: DeviceSnapshot, timestamp: str) -> None:
+    """Publish one device's current status. QoS 0: republished every cycle from live data."""
+    payload = {
+        "id": snapshot.id,
+        "state": snapshot.state,
+        "in_downtime": snapshot.in_downtime,
+        "acknowledged": snapshot.acknowledged,
+        "device_type": snapshot.device_type,
+        "folder": snapshot.folder,
+        "timestamp": timestamp,
+    }
+    _publish_json(client, device_status_topic(snapshot.id), payload, qos=0, retain=True)
+
+
+def publish_topology(client: mqtt.Client, nodes: list[dict], timestamp: str) -> None:
+    """Publish the full device topology. QoS 1: only republished when it actually changes."""
+    payload = {"devices": nodes, "timestamp": timestamp}
+    _publish_json(client, TOPIC_TOPOLOGY, payload, qos=1, retain=True)
+
+
+def publish_history(client: mqtt.Client, device_id: str, entries: list[dict]) -> None:
+    """Publish one device's full bounded transition history (already truncated by the caller)."""
+    _publish_json(client, device_history_topic(device_id), entries, qos=1, retain=True)
+
+
+def publish_events(client: mqtt.Client, entries: list[dict]) -> None:
+    """Publish the full bounded global events feed (already truncated by the caller)."""
+    _publish_json(client, TOPIC_EVENTS, entries, qos=1, retain=True)
+
+
+def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
+    """Clear a removed device's retained status and history topics.
+
+    A zero-length retained payload is MQTT's own defined "clear this
+    retained topic" semantic -- the same mechanism as
+    `scripts/smoke_test_broker.py::_cleanup`, already proven against the
+    real deployed broker. Uses `wait_for_publish` like that function does,
+    since a tombstone matters more than most publishes: the removed
+    device must not linger as a stale retained message.
+    """
+    for topic in (device_status_topic(device_id), device_history_topic(device_id)):
+        try:
+            info = client.publish(topic, payload=None, retain=True, qos=1)
+            info.wait_for_publish(timeout=5)
+        except (TimeoutError, OSError) as exc:
+            _logger.warning("Failed to publish tombstone to %s: %s", topic, exc)
+
+
+def publish_poller_status(
+    client: mqtt.Client, since: str, last_poll: str | None, device_count: int
+) -> None:
+    """Publish the poller's liveness status: birth (`last_poll=None`) or a per-cycle heartbeat.
+
+    MQTT's LWT only fires on an ungraceful TCP disconnect, so a poller
+    whose poll loop has stalled while its network thread keeps the
+    socket alive would otherwise read as permanently "online" forever.
+    The refreshed `last_poll` published every cycle is what lets Phase
+    11's DASH-04 staleness check ("now - last_poll > threshold") catch
+    that condition (RESEARCH.md Pitfall C).
+    """
+    payload = {
+        "status": "online",
+        "since": since,
+        "last_poll": last_poll,
+        "device_count": device_count,
+    }
+    _publish_json(client, TOPIC_POLLER_STATUS, payload, qos=1, retain=True)
