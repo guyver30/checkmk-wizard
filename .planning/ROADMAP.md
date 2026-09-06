@@ -59,7 +59,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 09-01-PLAN.md — Poller foundation: env-var config, topic-injection guard, worst-of state aggregation, bounded-log/topology helpers, and the single-round-trip Livestatus JSON query layer with a live column probe
+- [x] 09-01-PLAN.md — Poller foundation: env-var config, topic-injection guard, worst-of state aggregation, bounded-log/topology helpers, and the single-round-trip Livestatus JSON query layer with a live column probe
 
 **Wave 2** *(blocked on Wave 1)*
 
@@ -111,6 +111,6 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 | Phase | Plans Complete | Status | Completed |
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
-| 9. Poller Core | 0/4 | Not started | - |
+| 9. Poller Core | 1/4 | In Progress|  |
 | 10. Checkmk Tag-Group & Onboarding Integration | 0/TBD | Not started | - |
 | 11. Live Dashboard | 0/TBD | Not started | - |

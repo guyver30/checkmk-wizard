@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
+status: executing
 stopped_at: Phase 9 context gathered
-last_updated: "2026-09-06T09:40:51.681Z"
-last_activity: 2026-09-06 -- All four smoke-test checks PASSED on real deployment host
+last_updated: "2026-09-06T10:04:39.058Z"
+last_activity: 2026-09-06 -- Phase 09 execution started
 progress:
   total_phases: 4
   completed_phases: 1
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Phase 08 — broker-infrastructure-hardening (COMPLETE) — Phase 09 (Poller Core) not yet planned
+**Current focus:** Phase 09 — poller-core
 
 ## Current Position
 
-Phase: 08 (broker-infrastructure-hardening) — COMPLETE
-Plan: 3 of 3 (08-01, 08-02, 08-03 all complete; BRK-01/02/03 proven via live smoke test)
-Status: Phase 08 complete — ready to plan Phase 09
-Last activity: 2026-09-06 -- All four smoke-test checks PASSED on real deployment host
+Phase: 09 (poller-core) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 09
+Last activity: 2026-09-06 -- Phase 09 execution started
 
 Progress: [██████████] 100%
 
