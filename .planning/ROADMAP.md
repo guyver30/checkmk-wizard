@@ -63,7 +63,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 09-02-PLAN.md — MQTT layer: birth/LWT client lifecycle, the five publish helpers at their resolved QoS/retain, broker-retained startup reconciliation, and the poll cycle (transitions, tombstones, topology diff, heartbeat)
+- [x] 09-02-PLAN.md — MQTT layer: birth/LWT client lifecycle, the five publish helpers at their resolved QoS/retain, broker-retained startup reconciliation, and the poll cycle (transitions, tombstones, topology diff, heartbeat)
 
 **Wave 3** *(blocked on Wave 2)*
 
@@ -111,6 +111,6 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 | Phase | Plans Complete | Status | Completed |
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
-| 9. Poller Core | 1/4 | In Progress|  |
+| 9. Poller Core | 2/4 | In Progress|  |
 | 10. Checkmk Tag-Group & Onboarding Integration | 0/TBD | Not started | - |
 | 11. Live Dashboard | 0/TBD | Not started | - |
