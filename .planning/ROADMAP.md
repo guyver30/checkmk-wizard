@@ -67,7 +67,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 09-03-PLAN.md — Dedicated `poller` compose service, `scripts/smoke_test_poller.py` live verification script, and Podman setup doc coverage of the service, topic contract and smoke test
+- [x] 09-03-PLAN.md — Dedicated `poller` compose service, `scripts/smoke_test_poller.py` live verification script, and Podman setup doc coverage of the service, topic contract and smoke test
 
 **Wave 4** *(blocked on Wave 3)*
 
@@ -111,6 +111,6 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 | Phase | Plans Complete | Status | Completed |
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
-| 9. Poller Core | 2/4 | In Progress|  |
+| 9. Poller Core | 3/4 | In Progress|  |
 | 10. Checkmk Tag-Group & Onboarding Integration | 0/TBD | Not started | - |
 | 11. Live Dashboard | 0/TBD | Not started | - |
