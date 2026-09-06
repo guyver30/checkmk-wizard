@@ -53,6 +53,30 @@ sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
 podman system migrate
 ```
 
+**Short-name image resolution:** the next thing a fresh install hits is §4's `podman compose up -d`, which fails for every service in this stack's `compose.yaml` that names its image without a registry — `checkmk/check-mk-raw:2.4.0-latest`, `eclipse-mosquitto:2`, and `minio/minio:latest` all fail with:
+
+```text
+Error: short-name "checkmk/check-mk-raw:2.4.0-latest" did not resolve to an alias
+and no unqualified-search registries are defined in "/etc/containers/registries.conf"
+```
+
+The `worker` service (`python:3.12-slim`) is the one exception — it succeeds because Podman ships a built-in shortname alias for it in `/etc/containers/registries.conf.d/shortnames.conf`, and the other three images have no such alias.
+
+This is Podman's deliberate anti-typosquatting default, not a broken install: a fresh machine has no `unqualified-search-registries` configured anywhere, and rootless Podman would rather refuse an unqualified short name than guess which registry it should resolve against. The verify step above passes anyway because it pulls the fully-qualified `docker.io/library/hello-world`, which is why this doesn't surface until §4.
+
+The fix is a rootless per-user override, which takes precedence over the system-wide `/etc/containers/registries.conf` named in the error above:
+
+```bash
+mkdir -p ~/.config/containers
+cat > ~/.config/containers/registries.conf <<'EOF'
+unqualified-search-registries = ["docker.io"]
+EOF
+```
+
+Setting `unqualified-search-registries` to `docker.io` only re-enables short-name resolution against Docker Hub — it declares the single registry a short name is allowed to mean, it does not disable Podman's protection wholesale.
+
+No cleanup is needed: just re-run `podman compose up -d`. The three failed services never got as far as creating a container object (the failure was at the `podman run` step itself, exit code 125), so any volumes or the `cmk_net` network podman-compose already created are reused as-is on retry.
+
 ### 1.2. Enable the rootless Podman socket
 
 Enable the Podman systemd user socket and ensure rootless background persistence:
