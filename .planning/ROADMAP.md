@@ -55,7 +55,23 @@ Plans:
   4. Deleting a host from Checkmk produces empty tombstone payloads on its `lan/devices/{id}/status` and `lan/devices/{id}/history` topics within one poll cycle, and it disappears from `lan/devices/topology`; bounded `lan/devices/{id}/history` and `lan/events/recent` feeds append only on actual state transitions
   5. `lan/poller/status` carries a birth message on poller startup and moves to an offline/LWT state when the poller process dies ungracefully
 
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+**Wave 1**
+
+- [ ] 09-01-PLAN.md — Poller foundation: env-var config, topic-injection guard, worst-of state aggregation, bounded-log/topology helpers, and the single-round-trip Livestatus JSON query layer with a live column probe
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 09-02-PLAN.md — MQTT layer: birth/LWT client lifecycle, the five publish helpers at their resolved QoS/retain, broker-retained startup reconciliation, and the poll cycle (transitions, tombstones, topology diff, heartbeat)
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 09-03-PLAN.md — Dedicated `poller` compose service, `scripts/smoke_test_poller.py` live verification script, and Podman setup doc coverage of the service, topic contract and smoke test
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 09-04-PLAN.md — Live verification on the deployment host (blocking checkpoint), then record the confirmed Livestatus column set in-source and apply any corrections
 
 ### Phase 10: Checkmk Tag-Group & Onboarding Integration
 
@@ -95,6 +111,6 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 | Phase | Plans Complete | Status | Completed |
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
-| 9. Poller Core | 0/TBD | Not started | - |
+| 9. Poller Core | 0/4 | Not started | - |
 | 10. Checkmk Tag-Group & Onboarding Integration | 0/TBD | Not started | - |
 | 11. Live Dashboard | 0/TBD | Not started | - |
