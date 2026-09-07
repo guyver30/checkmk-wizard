@@ -2141,11 +2141,13 @@ async def test_phase5_windows_manual_service_entry_creates_rule(monkeypatch):
 def _mock_activation_routes():
     """phase6_discovery() now activates pending changes before running
     discovery (see _activate_pending_changes()) — register the two routes
-    that requires, same shape test_api.py's own activation tests use."""
+    that requires, same shape test_api.py's own activation tests use.
+    Returns the activate-changes POST route so callers can inspect the
+    request body it was sent."""
     respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
         return_value=Response(200, json={}, headers={"ETag": '"etag1"'})
     )
-    respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+    return respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
         return_value=Response(200, json={"id": "run1"})
     )
 
@@ -2158,6 +2160,28 @@ async def test_activate_pending_changes_success(capsys):
             result = await _activate_pending_changes(client, CONN)
     assert result is True
     assert "Changes activated" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_activate_pending_changes_forces_foreign_changes(capsys):
+    # Regression test for a live-verified real bug: on 2026-09-07, a fresh
+    # Checkmk 2.4.0 CE container-mode run died in both Phase 6 and Phase 7
+    # with 401 "There are changes from other users and foreign changes are
+    # not allowed in this API call" — Phase 1's cmkadmin-authenticated user
+    # bootstrap left pending changes that looked foreign to the
+    # `automation` REST user doing the activation. Dropping
+    # force_foreign_changes=True at the wizard's activation call site
+    # silently reintroduces this failure, which only shows up against a
+    # real site (respx can't reproduce Checkmk's own foreign-changes
+    # guard), so this pins the request body directly instead.
+    with respx.mock:
+        route = _mock_activation_routes()
+        async with CheckmkClient(CONN) as client:
+            result = await _activate_pending_changes(client, CONN)
+    assert result is True
+    request = route.calls.last.request
+    assert request.headers["If-Match"] == '"etag1"'
+    assert json.loads(request.content)["force_foreign_changes"] is True
 
 
 @pytest.mark.asyncio
