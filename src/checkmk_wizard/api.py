@@ -27,6 +27,25 @@ class CheckmkAPIError(RuntimeError):
         super().__init__(f"{method} {url} -> {status_code}: {body}")
 
 
+def _site_base(proto: str, host: str, port: int | None, site: str) -> str:
+    """Build the site's HTTP base URL (everything up to and including
+    `check_mk`), the single place the netloc is assembled for
+    `CheckmkConnection.base_url` and the three GUI-session bootstrap
+    helpers below. The port-absent branch is kept byte-identical to the
+    pre-port f-strings so a host-native site fronted by system Apache on
+    80 is unaffected; centralising the construction here keeps all four
+    call sites from drifting as the port feature evolves.
+
+    The official `checkmk/check-mk-raw` container image serves the site
+    on port 5000 internally, not 80 — verified from `deploy/compose.yaml`:
+    the `checkmk` service's `ports: "8080:5000"` mapping, and the
+    `worker` service's own `CMK_REST_API=http://checkmk:5000/dmc/check_mk/api/1.0`.
+    """
+    if port is None:
+        return f"{proto}://{host}/{site}/check_mk"
+    return f"{proto}://{host}:{port}/{site}/check_mk"
+
+
 @dataclass
 class CheckmkConnection:
     host: str
@@ -41,6 +60,12 @@ class CheckmkConnection:
     # docs/PLAN-CONFORMANCE-AUDIT.md, Phase 5, credential-scope finding.
     registration_user: str | None = None
     registration_secret: str | None = None
+    # The site's HTTP/REST/GUI port only — e.g. 5000 for the
+    # `checkmk/check-mk-raw` container image. `host` deliberately stays a
+    # bare hostname because `wizard.py` also feeds `connection.host` to
+    # Livestatus (port 6557) and to `cmk-agent-ctl register --server`
+    # (agent-receiver, port 8000), neither of which is this port.
+    port: int | None = None
 
     def __post_init__(self) -> None:
         if self.registration_user is None:
@@ -50,7 +75,7 @@ class CheckmkConnection:
 
     @property
     def base_url(self) -> str:
-        return f"{self.proto}://{self.host}/{self.site}/check_mk/api/v1"
+        return f"{_site_base(self.proto, self.host, self.port, self.site)}/api/v1"
 
 
 class CheckmkClient:
@@ -320,6 +345,7 @@ async def bootstrap_automation_user(
     proto: str = "http",
     username: str = "automation",
     cmkadmin_user: str = "cmkadmin",
+    port: int | None = None,
 ) -> str:
     """Auto-provision the REST 'automation' user right after a fresh site is
     created, instead of requiring the operator to click through Setup >
@@ -354,9 +380,12 @@ async def bootstrap_automation_user(
     HTML, non-2xx response, e.g. `username` already exists) — this is
     best-effort; the caller should treat a failure here as "fall back to
     the existing manual instructions", never as fatal.
+
+    `port` is for sites not served on the protocol default (e.g. the
+    `check-mk-raw` container's 5000).
     """
     secret = secrets.token_urlsafe(24)
-    base = f"{proto}://{host}/{site}/check_mk"
+    base = _site_base(proto, host, port, site)
     login_url = f"{base}/login.py"
     async with httpx.AsyncClient() as client:
         # Unlike CheckmkClient (whose single _request() choke point wraps
@@ -468,6 +497,7 @@ async def bootstrap_agent_registration_secret(
     proto: str = "http",
     username: str = "agent_registration",
     cmkadmin_user: str = "cmkadmin",
+    port: int | None = None,
 ) -> str:
     """Reset the secret of Checkmk's built-in 'agent_registration' automation
     user via REST, for a caller with no local access to its secret file —
@@ -501,9 +531,12 @@ async def bootstrap_agent_registration_secret(
     Raises `CheckmkAPIError` on any failure — best-effort, same contract
     as `bootstrap_automation_user()`: caller should fall back to existing
     manual instructions, never treat this as fatal.
+
+    `port` is for sites not served on the protocol default (e.g. the
+    `check-mk-raw` container's 5000).
     """
     secret = secrets.token_urlsafe(24)
-    base = f"{proto}://{host}/{site}/check_mk"
+    base = _site_base(proto, host, port, site)
     login_url = f"{base}/login.py"
     async with httpx.AsyncClient() as client:
         try:
@@ -554,6 +587,7 @@ async def change_cmkadmin_password(
     proto: str = "http",
     cmkadmin_user: str = "cmkadmin",
     enforce_password_change: bool = False,
+    port: int | None = None,
 ) -> None:
     """Change `cmkadmin`'s own login password, right after site creation —
     so the random password `omd create --admin-password` generated doesn't
@@ -578,8 +612,11 @@ async def change_cmkadmin_password(
     client-side. A policy violation (or any other failure — wrong
     `current_password`, etag mismatch) raises `CheckmkAPIError` with the
     server's own message, so the caller can surface it and re-prompt.
+
+    `port` is for sites not served on the protocol default (e.g. the
+    `check-mk-raw` container's 5000).
     """
-    base = f"{proto}://{host}/{site}/check_mk"
+    base = _site_base(proto, host, port, site)
     login_url = f"{base}/login.py"
     async with httpx.AsyncClient() as client:
         try:
