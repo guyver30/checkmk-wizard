@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 9 context gathered
-last_updated: "2026-09-07T08:01:04.415Z"
-last_activity: 2026-09-07 - Completed quick task 260907-m8w: Add explicit REST/GUI port support to checkmk-wizard
+last_updated: "2026-09-07T08:20:29.072Z"
+last_activity: 2026-09-07 - Completed quick task 260907-mp2: Fix Phase 6/7 activation 401 (force_foreign_changes)
 progress:
   total_phases: 4
   completed_phases: 1
@@ -84,6 +84,7 @@ None yet.
 | 260906-mm9 | Fix mosquitto.conf syntax bug - indented comment continuation crashes broker | 2026-09-06 | 2eff022 | [260906-mm9-fix-mosquitto-conf-syntax-bug-indented-c](./quick/260906-mm9-fix-mosquitto-conf-syntax-bug-indented-c/) |
 | 260907-lwe | Fix container-mode UX in wizard.py: default Checkmk host prompt to 'checkmk' and cmkadmin password prompt to CMK_PASSWORD env var | 2026-09-07 | a6a4628 | [260907-lwe-fix-container-mode-ux-in-wizard-py-defau](./quick/260907-lwe-fix-container-mode-ux-in-wizard-py-defau/) |
 | 260907-m8w | Add explicit REST/GUI port support (host:port at the Checkmk host prompt, threaded into CheckmkConnection + bootstrap helpers); container-mode default now checkmk:5000 | 2026-09-07 | b127458 | [260907-m8w-add-explicit-rest-gui-port-support-to-ch](./quick/260907-m8w-add-explicit-rest-gui-port-support-to-ch/) |
+| 260907-mp2 | Fix Phase 6/7 activation failing with 401 'foreign changes not allowed' — force_foreign_changes=True at the wizard's activation call site (cmkadmin bootstrap vs automation user changes) | 2026-09-07 | 1c5e375 | [260907-mp2-fix-phase-6-7-activation-failing-with-40](./quick/260907-mp2-fix-phase-6-7-activation-failing-with-40/) |
 
 ## Deferred Items
 
