@@ -87,6 +87,11 @@ services:
       # prompt in container mode, since it has no local 'omd' to list
       # sites with and no network-based way to discover one either.
       - CMK_SITE_ID=dmc
+      # Same name/value as the checkmk service's own CMK_PASSWORD above —
+      # checkmk-wizard reads this (if present) to pre-fill its cmkadmin
+      # password prompt in container mode. Keep in sync with the checkmk
+      # service's CMK_PASSWORD value.
+      - CMK_PASSWORD=cmkadmin
       - MQTT_HOST=mosquitto
       - MQTT_PORT=1883
       - S3_ENDPOINT=http://minio:9000
