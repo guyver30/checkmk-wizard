@@ -64,8 +64,14 @@ Checkmk are simply re-detected or re-created).
      `site.list_sites()` is never called in this branch (there's nothing
      local to list).
 
-     After the Checkmk-host prompt (step 2 below, unchanged in both
-     modes), instead of `_create_fresh_site()`/`enable_livestatus_tcp()`/
+     The Checkmk-host prompt (step 2 below) is no longer identical between
+     modes: `_default_checkmk_host(container_mode)` (`wizard.py`, beside
+     `_valid_checkmk_host`) suggests `checkmk` in container mode (the
+     compose service hostname, the only name that resolves to the Checkmk
+     container from a sibling container on `cmk_net`) versus `localhost`
+     in host-native mode.
+
+     After the Checkmk-host prompt, instead of `_create_fresh_site()`/`enable_livestatus_tcp()`/
      `start_site()`, it just prints that it's skipping local site
      management, then best-effort probes Livestatus reachability with
      `_probe_livestatus_tcp()` (`wizard.py:248-260` — a short-timeout
@@ -77,7 +83,10 @@ Checkmk are simply re-detected or re-created).
 
      **Credential bootstrap (`wizard.py:386-400`):** prompts for the
      `cmkadmin` password (whatever the Checkmk container's own
-     `CMK_PASSWORD` was set to) — there's no local automation-secret file
+     `CMK_PASSWORD` was set to), pre-filled from the wizard's own
+     `CMK_PASSWORD` env var when set (`os.environ.get("CMK_PASSWORD", "")`,
+     mirroring the `CMK_SITE_ID` pre-fill above) so pressing Enter accepts
+     it — there's no local automation-secret file
      to read, so if given, it's used to call `bootstrap_automation_user()`
      (`api.py:316-460`, the same mechanism `_create_fresh_site()` uses right
      after `omd create` — see step 4 below) and the **returned secret is
@@ -226,8 +235,10 @@ Checkmk are simply re-detected or re-created).
      reappeared (confirmed by running this test against the pre-fix
      regex implementation: it fails there and passes against the fix).
 3. Prompts for **Checkmk host** (hostname/IP other systems use to reach
-   this site; defaults to `localhost`) — same prompt as before, now asked
-   once site selection is settled rather than up front. **Validated**
+   this site; defaults to `localhost` in host-native mode, `checkmk` in
+   container mode — `_default_checkmk_host()`, `wizard.py`) — same prompt
+   as before, now asked once site selection is settled rather than up
+   front. **Validated**
    (`_valid_checkmk_host()`, `wizard.py:59-66`) as either a parseable IP
    address or an RFC-1123-style hostname (`_HOSTNAME_RE`, `wizard.py:54-56`)
    and re-prompted on a mismatch. This isn't a Checkmk-enforced format —
