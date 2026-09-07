@@ -1690,7 +1690,20 @@ async def _activate_pending_changes(client: CheckmkClient, connection: CheckmkCo
     """
     try:
         etag = await client.get_pending_changes_etag()
-        await client.activate_changes([connection.site], etag)
+        # force_foreign_changes=True: Phase 1's container-mode branch
+        # bootstraps the `automation` and `agent_registration` users while
+        # authenticated as cmkadmin via the GUI session-cookie flow, so
+        # those pending WATO changes are attributed to cmkadmin. Phases 2-5
+        # then run as the `automation` REST user, and activating here as
+        # `automation` with the default False hit a live-verified 401
+        # "There are changes from other users and foreign changes are not
+        # allowed in this API call" (observed 2026-09-07 against a fresh
+        # Checkmk 2.4.0 CE site in container mode). cmkadmin and
+        # `automation` are two accounts for the same single operator within
+        # one wizard run — there's no other real operator to protect
+        # against, so forcing the activation through is correct here, not a
+        # workaround.
+        await client.activate_changes([connection.site], etag, force_foreign_changes=True)
         console.print("[green]Changes activated.[/green]")
         return True
     except CheckmkAPIError as exc:

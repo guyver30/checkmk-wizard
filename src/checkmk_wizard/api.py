@@ -429,15 +429,14 @@ async def bootstrap_automation_user(
 
         # The user-creation call above is itself a pending WATO change,
         # attributed to cmkadmin (this session) — not to the new automation
-        # user. Left un-activated, Phase 7's later activate_changes() call
-        # (authenticated as the new automation user, force_foreign_changes
-        # left at its safe default of False) fails with 401 "There are
-        # changes from other users and foreign changes are not allowed" —
-        # live-verified: GET pending_changes right after user creation
-        # showed exactly one entry, user_id=cmkadmin, action edit-users.
-        # Activate it now, while still authenticated as cmkadmin activating
-        # its own change (no foreign-changes issue), so it's never still
-        # pending by the time anything else needs to activate changes.
+        # user. The wizard's own later activate_changes() call
+        # (`wizard.py:_activate_pending_changes`) now forces foreign changes
+        # through, so a lingering cmkadmin change no longer blocks it — but
+        # activating it eagerly here, while still authenticated as cmkadmin
+        # activating its own change, still keeps cmkadmin's change from
+        # lingering at all rather than relying on that later force. Live-
+        # verified: GET pending_changes right after user creation showed
+        # exactly one entry, user_id=cmkadmin, action edit-users.
         #
         # activate-changes runs as an async background job (the response
         # comes back "is_running": true immediately) — live-verified that
