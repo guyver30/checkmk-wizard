@@ -62,7 +62,14 @@ _DELETE_SITE = object()
 # container (e.g. the `worker` container running this wizard) on the
 # `cmk_net` bridge. `localhost` there is the wizard's own container, not
 # Checkmk, so it can never work as a container-mode default.
-_CONTAINER_MODE_CHECKMK_HOST = "checkmk"
+#
+# The `:5000` suffix is the REST/GUI port default, not the hostname: the
+# `checkmk/check-mk-raw` image serves the site on port 5000 inside the
+# container (`deploy/compose.yaml`'s `checkmk` service maps `8080:5000`,
+# and the `worker` service's own `CMK_REST_API` already hardcodes
+# `http://checkmk:5000/...`), so a fresh operator following
+# docs/Podman-setup §8.3 can press Enter and get a working connection.
+_CONTAINER_MODE_CHECKMK_HOST = "checkmk:5000"
 
 # OMD site name rules (docs.checkmk.com/latest/en/omd_basics.html,
 # "Creating sites"): must start with a letter, contain only letters,
@@ -100,6 +107,35 @@ def _valid_checkmk_host(value: str) -> bool:
         return True
     except ValueError:
         return bool(_HOSTNAME_RE.match(value))
+
+
+def _split_checkmk_host_port(value: str) -> tuple[str, int | None]:
+    """Split an operator-typed `host` or `host:port` into its parts.
+
+    Deliberate, narrow scope: only treated as `host:port` when `value`
+    contains **exactly one** colon; anything else (zero colons, or two-or-
+    more as in a bare IPv6 literal) is returned unsplit as `(value, None)`.
+    Every valid IPv6 literal has zero colons (impossible) or at least two,
+    so the one-colon rule can never misparse `::1` or `2001:db8::1` as
+    `host:port` — the bracketed `[::1]:5000` form is knowingly out of
+    scope; an operator needing a non-default port on an IPv6 literal can
+    use a hostname instead.
+
+    Raises `ValueError` (operator-readable message) if the host part is
+    empty, or if the port part is empty, non-numeric, or outside the
+    valid TCP port range 1-65535.
+    """
+    if value.count(":") != 1:
+        return value, None
+    host_part, _, port_part = value.partition(":")
+    if not host_part:
+        raise ValueError("host part can't be empty")
+    if not port_part.isdigit():
+        raise ValueError(f"'{port_part}' isn't a valid port number")
+    port = int(port_part)
+    if not 1 <= port <= 65535:
+        raise ValueError(f"port {port} is out of range (must be 1-65535)")
+    return host_part, port
 
 
 def _default_checkmk_host(container_mode: bool) -> str:
@@ -185,7 +221,9 @@ class WizardState:
 # ── Phase 1: Site bring-up ──────────────────────────────────────────────
 
 
-async def _prompt_change_cmkadmin_password(checkmk_host: str, site_name: str, current_password: str) -> str:
+async def _prompt_change_cmkadmin_password(
+    checkmk_host: str, site_name: str, current_password: str, checkmk_port: int | None = None
+) -> str:
     """Offer to replace the randomly-generated cmkadmin password with one
     the operator chooses. Returns whichever password is in effect
     afterwards (the new one on success, the original if declined or
@@ -218,7 +256,9 @@ async def _prompt_change_cmkadmin_password(checkmk_host: str, site_name: str, cu
             continue
 
         try:
-            await change_cmkadmin_password(checkmk_host, site_name, current_password, new_password)
+            await change_cmkadmin_password(
+                checkmk_host, site_name, current_password, new_password, port=checkmk_port
+            )
         except CheckmkAPIError as exc:
             console.print(f"[red]Checkmk rejected the password: {exc}[/red]")
             continue
@@ -227,7 +267,7 @@ async def _prompt_change_cmkadmin_password(checkmk_host: str, site_name: str, cu
         return new_password
 
 
-async def _create_fresh_site(site_name: str, checkmk_host: str) -> None:
+async def _create_fresh_site(site_name: str, checkmk_host: str, checkmk_port: int | None = None) -> None:
     admin_password = secrets.token_urlsafe(16)
     console.print(site.create_site(site_name, admin_password), style="dim", end="")
     site.enable_livestatus_tcp(site_name)
@@ -235,9 +275,11 @@ async def _create_fresh_site(site_name: str, checkmk_host: str) -> None:
     console.print(
         f"Site created. cmkadmin password (save this): [bold yellow]{admin_password}[/bold yellow]"
     )
-    admin_password = await _prompt_change_cmkadmin_password(checkmk_host, site_name, admin_password)
+    admin_password = await _prompt_change_cmkadmin_password(
+        checkmk_host, site_name, admin_password, checkmk_port
+    )
     try:
-        await bootstrap_automation_user(checkmk_host, site_name, admin_password)
+        await bootstrap_automation_user(checkmk_host, site_name, admin_password, port=checkmk_port)
         console.print("[green]Automation user 'automation' created automatically.[/green]")
     except CheckmkAPIError as exc:
         console.print(
@@ -371,15 +413,23 @@ async def phase1_site_bringup() -> CheckmkConnection:
         # else: loop back to the same menu (nothing changed).
 
     checkmk_host = None
+    checkmk_port: int | None = None
     while checkmk_host is None:
         raw_host = await questionary.text(
-            "Hostname/IP to reach this Checkmk site on (as seen by agents/browser):",
+            "Hostname/IP to reach this Checkmk site on, optionally host:port for a "
+            "non-default web/REST port (as seen by agents/browser):",
             default=_default_checkmk_host(container_mode),
         ).ask_async()
-        if not _valid_checkmk_host(raw_host):
-            console.print(f"[red]'{raw_host}' isn't a valid hostname or IP address — try again.[/red]")
+        try:
+            host_part, port_part = _split_checkmk_host_port(raw_host)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            continue
+        if not _valid_checkmk_host(host_part):
+            console.print(f"[red]'{host_part}' isn't a valid hostname or IP address — try again.[/red]")
         else:
-            checkmk_host = raw_host
+            checkmk_host = host_part
+            checkmk_port = port_part
 
     creds: site.SiteCredentials | None = None
     if container_mode:
@@ -387,6 +437,8 @@ async def phase1_site_bringup() -> CheckmkConnection:
             f"[dim]No local 'omd' access — skipping site create/start for '{site_name}'; "
             "assuming it's already up.[/dim]"
         )
+        # Livestatus (6557) is a different protocol/port than the REST/GUI
+        # port above — always probe the bare host, never checkmk_port.
         if not _probe_livestatus_tcp(checkmk_host):
             console.print(
                 f"[yellow]Could not reach Livestatus on {checkmk_host}:{livestatus.DEFAULT_PORT} — "
@@ -420,7 +472,9 @@ async def phase1_site_bringup() -> CheckmkConnection:
         ).ask_async()
         if cmkadmin_password:
             try:
-                secret = await bootstrap_automation_user(checkmk_host, site_name, cmkadmin_password)
+                secret = await bootstrap_automation_user(
+                    checkmk_host, site_name, cmkadmin_password, port=checkmk_port
+                )
                 creds = site.SiteCredentials(site=site_name, automation_user="automation", automation_secret=secret)
                 console.print("[green]Automation user 'automation' created automatically.[/green]")
             except CheckmkAPIError as exc:
@@ -438,7 +492,7 @@ async def phase1_site_bringup() -> CheckmkConnection:
         console.print(site.start_site(site_name), style="dim", end="")
     else:
         console.print(f"Creating new site [bold]{site_name}[/bold].")
-        await _create_fresh_site(site_name, checkmk_host)
+        await _create_fresh_site(site_name, checkmk_host, checkmk_port)
 
     if creds is None:
         creds = site.get_site_credentials(site_name)
@@ -479,7 +533,9 @@ async def phase1_site_bringup() -> CheckmkConnection:
         # creating a new user.
         registration_reset_attempted = True
         try:
-            secret = await bootstrap_agent_registration_secret(checkmk_host, site_name, cmkadmin_password)
+            secret = await bootstrap_agent_registration_secret(
+                checkmk_host, site_name, cmkadmin_password, port=checkmk_port
+            )
             registration_creds = site.SiteCredentials(
                 site=site_name, automation_user="agent_registration", automation_secret=secret
             )
@@ -511,6 +567,7 @@ async def phase1_site_bringup() -> CheckmkConnection:
         secret=creds.automation_secret,
         registration_user=registration_creds.automation_user if registration_creds else None,
         registration_secret=registration_creds.automation_secret if registration_creds else None,
+        port=checkmk_port,
     )
 
     async with CheckmkClient(connection) as client:
@@ -1335,6 +1392,8 @@ async def _onboard_hosts(
     creation — which now also covers scanned-but-never-promoted hosts —
     still runs even when `hosts` (the promoted list) is empty.
     """
+    # Agent-receiver (port 8000) is a different service than the REST/GUI
+    # port — always the bare host, never connection.port.
     register_server = await _resolve_agent_registration_server(hosts, connection.host)
 
     ssh_creds: remote.SSHCredentials | None = None
@@ -1754,6 +1813,8 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
         return
 
     if hosts:
+        # Livestatus (6557) is a different protocol/port than the REST/GUI
+        # port — always the bare host, never connection.port.
         states = livestatus.query_host_states(connection.host, [h.hostname for h in hosts])
         table = Table(title="Post-activation host state")
         table.add_column("Host")

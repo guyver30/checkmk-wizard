@@ -51,6 +51,7 @@ from checkmk_wizard.wizard import (
     _prompt_threshold_levels,
     _resolve_agent_registration_server,
     _smart_posix_plugin_path,
+    _split_checkmk_host_port,
     _valid_checkmk_host,
     _verify_expected_services,
     phase1_site_bringup,
@@ -328,16 +329,93 @@ async def test_phase1_container_mode_resets_agent_registration_secret_via_cmkadm
     assert connection.registration_secret == "registration-secret"
 
 
+@pytest.mark.asyncio
+async def test_phase1_container_mode_threads_explicit_rest_port(monkeypatch):
+    """Regression test for a live mid-deployment failure: answering
+    `checkmk:5000` at the host prompt against a real check-mk-raw
+    container (serving REST/GUI on 5000, not 80) used to produce `GET/POST
+    http://checkmk/dmc/check_mk/login.py -> 0: All connection attempts
+    failed`, because the port was silently dropped. The REST/GUI bootstrap
+    calls must receive port=5000, `connection.host`/`connection.port` must
+    split the answer into its bare/port parts, and the Livestatus probe
+    (a different protocol/port) must still receive the bare host only."""
+    answers = iter(["dmc", "checkmk:5000", "cmkadmin-pw"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+
+    livestatus_probe_calls = []
+
+    def fake_probe_livestatus_tcp(host, *args, **kwargs):
+        livestatus_probe_calls.append(host)
+        return True
+
+    monkeypatch.setattr("checkmk_wizard.wizard._probe_livestatus_tcp", fake_probe_livestatus_tcp)
+
+    async def fake_bootstrap_automation(host, site_name, cmkadmin_password, **kwargs):
+        assert host == "checkmk"
+        assert kwargs["port"] == 5000
+        return "automation-secret"
+
+    async def fake_bootstrap_registration(host, site_name, cmkadmin_password, **kwargs):
+        assert host == "checkmk"
+        assert kwargs["port"] == 5000
+        return "registration-secret"
+
+    monkeypatch.setattr("checkmk_wizard.wizard.bootstrap_automation_user", fake_bootstrap_automation)
+    monkeypatch.setattr("checkmk_wizard.wizard.bootstrap_agent_registration_secret", fake_bootstrap_registration)
+    monkeypatch.setattr("checkmk_wizard.wizard.site.get_site_credentials", lambda *a, **k: None)
+
+    base_url = "http://checkmk:5000/dmc/check_mk/api/v1"
+    with respx.mock:
+        respx.get(f"{base_url}/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        connection = await phase1_site_bringup()
+
+    assert connection.host == "checkmk"
+    assert connection.port == 5000
+    assert livestatus_probe_calls == ["checkmk"]
+
+
 def test_default_checkmk_host_container_mode():
     # Regression test: `localhost` doesn't reach the checkmk container from
     # the worker container — container mode must default to the compose
-    # service hostname instead.
-    assert _default_checkmk_host(container_mode=True) == "checkmk"
+    # service hostname instead. `:5000` is the REST/GUI port the
+    # check-mk-raw image actually serves the site on internally
+    # (deploy/compose.yaml maps 8080:5000), so a fresh operator following
+    # docs/Podman-setup §8.3 gets a working connection by pressing Enter.
+    assert _default_checkmk_host(container_mode=True) == "checkmk:5000"
 
 
 def test_default_checkmk_host_host_native_mode():
-    # Host-native mode must keep suggesting `localhost` exactly as before.
+    # Host-native mode must keep suggesting `localhost` exactly as before —
+    # this feature must be a no-op there (system Apache fronts the site on
+    # the protocol default port).
     assert _default_checkmk_host(container_mode=False) == "localhost"
+
+
+@pytest.mark.parametrize(
+    "raw_value,expected",
+    [
+        ("checkmk", ("checkmk", None)),
+        ("checkmk:5000", ("checkmk", 5000)),
+        ("192.168.1.1:8080", ("192.168.1.1", 8080)),
+        ("::1", ("::1", None)),
+        ("2001:db8::1", ("2001:db8::1", None)),
+    ],
+)
+def test_split_checkmk_host_port(raw_value, expected):
+    assert _split_checkmk_host_port(raw_value) == expected
+
+
+@pytest.mark.parametrize("raw_value", ["checkmk:", "checkmk:abc", "checkmk:0", "checkmk:70000"])
+def test_split_checkmk_host_port_raises_on_malformed_input(raw_value):
+    with pytest.raises(ValueError):
+        _split_checkmk_host_port(raw_value)
 
 
 @pytest.mark.asyncio
@@ -388,7 +466,9 @@ async def test_phase1_container_mode_prefills_host_and_cmkadmin_from_cmk_passwor
 
     host_prompt = next(p for p in recorded_defaults if p.startswith("Hostname/IP to reach"))
     cmkadmin_prompt = next(p for p in recorded_defaults if p.startswith("cmkadmin password"))
-    assert recorded_defaults[host_prompt] == "checkmk"
+    # "checkmk:5000" (not just "checkmk") is the container-mode default —
+    # the check-mk-raw image serves REST/GUI on 5000 internally.
+    assert recorded_defaults[host_prompt] == "checkmk:5000"
     assert recorded_defaults[cmkadmin_prompt] == "compose-pw"
 
 
