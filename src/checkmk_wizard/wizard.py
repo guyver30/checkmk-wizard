@@ -57,6 +57,13 @@ def _smart_posix_plugin_path(site_name: str) -> Path:
 # see the comment at its use site for why this can't just be `value=None`.
 _DELETE_SITE = object()
 
+# The `checkmk` service's compose-level `hostname:` in deploy/compose.yaml —
+# the only name that resolves to the Checkmk container from a sibling
+# container (e.g. the `worker` container running this wizard) on the
+# `cmk_net` bridge. `localhost` there is the wizard's own container, not
+# Checkmk, so it can never work as a container-mode default.
+_CONTAINER_MODE_CHECKMK_HOST = "checkmk"
+
 # OMD site name rules (docs.checkmk.com/latest/en/omd_basics.html,
 # "Creating sites"): must start with a letter, contain only letters,
 # digits, and underscores, max 16 characters.
@@ -93,6 +100,15 @@ def _valid_checkmk_host(value: str) -> bool:
         return True
     except ValueError:
         return bool(_HOSTNAME_RE.match(value))
+
+
+def _default_checkmk_host(container_mode: bool) -> str:
+    """Named function rather than an inline ternary so both branches are
+    unit-testable without driving a full host-native Phase 1 run (there is
+    no host-native phase1_site_bringup test today, and adding one would
+    require stubbing `omd` site creation end to end).
+    """
+    return _CONTAINER_MODE_CHECKMK_HOST if container_mode else "localhost"
 
 
 # cmkadmin password requirements. Checkmk's own default policy (Setup >
@@ -358,7 +374,7 @@ async def phase1_site_bringup() -> CheckmkConnection:
     while checkmk_host is None:
         raw_host = await questionary.text(
             "Hostname/IP to reach this Checkmk site on (as seen by agents/browser):",
-            default="localhost",
+            default=_default_checkmk_host(container_mode),
         ).ask_async()
         if not _valid_checkmk_host(raw_host):
             console.print(f"[red]'{raw_host}' isn't a valid hostname or IP address — try again.[/red]")
@@ -384,9 +400,23 @@ async def phase1_site_bringup() -> CheckmkConnection:
         # (e.g. its CMK_PASSWORD env var), and lets the wizard create/reuse
         # the 'automation' user itself via REST, the same mechanism
         # _create_fresh_site() below uses for a wizard-created site.
-        cmkadmin_password = await questionary.password(
-            "cmkadmin password (set when the Checkmk container was created — leave "
+        #
+        # Pre-filled from the same CMK_PASSWORD env var the Checkmk
+        # container's own entrypoint uses (mirroring the CMK_SITE_ID
+        # pre-fill above) — safe because the prompt stays masked
+        # (questionary.password) and the value is never persisted, only
+        # sent once over REST to bootstrap_automation_user().
+        cmk_password_default = os.environ.get("CMK_PASSWORD", "")
+        cmkadmin_password_message = (
+            "cmkadmin password (defaulted from the CMK_PASSWORD env var — leave "
             "blank to skip and provide an automation secret directly instead):"
+            if cmk_password_default
+            else "cmkadmin password (set when the Checkmk container was created — leave "
+            "blank to skip and provide an automation secret directly instead):"
+        )
+        cmkadmin_password = await questionary.password(
+            cmkadmin_password_message,
+            default=cmk_password_default,
         ).ask_async()
         if cmkadmin_password:
             try:
