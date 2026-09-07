@@ -66,10 +66,12 @@ Checkmk are simply re-detected or re-created).
 
      The Checkmk-host prompt (step 2 below) is no longer identical between
      modes: `_default_checkmk_host(container_mode)` (`wizard.py`, beside
-     `_valid_checkmk_host`) suggests `checkmk` in container mode (the
+     `_valid_checkmk_host`) suggests `checkmk:5000` in container mode (the
      compose service hostname, the only name that resolves to the Checkmk
-     container from a sibling container on `cmk_net`) versus `localhost`
-     in host-native mode.
+     container from a sibling container on `cmk_net`, plus `:5000` because
+     the `check-mk-raw` image serves the site on port 5000 internally —
+     `deploy/compose.yaml` maps `8080:5000`) versus `localhost` in
+     host-native mode.
 
      After the Checkmk-host prompt, instead of `_create_fresh_site()`/`enable_livestatus_tcp()`/
      `start_site()`, it just prints that it's skipping local site
@@ -235,10 +237,24 @@ Checkmk are simply re-detected or re-created).
      reappeared (confirmed by running this test against the pre-fix
      regex implementation: it fails there and passes against the fix).
 3. Prompts for **Checkmk host** (hostname/IP other systems use to reach
-   this site; defaults to `localhost` in host-native mode, `checkmk` in
-   container mode — `_default_checkmk_host()`, `wizard.py`) — same prompt
-   as before, now asked once site selection is settled rather than up
-   front. **Validated**
+   this site; defaults to `localhost` in host-native mode, `checkmk:5000`
+   in container mode — `_default_checkmk_host()`, `wizard.py`) — same
+   prompt as before, now asked once site selection is settled rather than
+   up front. The input optionally takes a `host:port` suffix, split off by
+   `_split_checkmk_host_port()` (`wizard.py`, beside `_valid_checkmk_host`)
+   before the host part is validated: exactly one colon is treated as
+   `host:port`, so a bare IPv6 literal (zero or two-or-more colons, e.g.
+   `::1`, `2001:db8::1`) is never misparsed. Leaving off the port entirely
+   produces byte-identical REST/GUI URLs to before this feature existed.
+   The parsed port applies **only** to the wizard's REST/GUI calls
+   (`bootstrap_automation_user`, `bootstrap_agent_registration_secret`,
+   `change_cmkadmin_password`, and the `CheckmkConnection` used for the
+   REST client) — Livestatus (always port 6557) and the address passed to
+   `cmk-agent-ctl register --server` (agent-receiver, port 8000) keep
+   using the bare host, since both are different services on different,
+   fixed ports.
+
+   **Validated**
    (`_valid_checkmk_host()`, `wizard.py:59-66`) as either a parseable IP
    address or an RFC-1123-style hostname (`_HOSTNAME_RE`, `wizard.py:54-56`)
    and re-prompted on a mismatch. This isn't a Checkmk-enforced format —
