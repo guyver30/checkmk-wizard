@@ -191,6 +191,51 @@ If you skip this step, checkmk-wizard still runs fine through Phase 6 — it jus
 
 ---
 
+## 5.1. Enable ICMP/PING checks (required for Checkmk's PING service)
+
+Checkmk's PING service runs the `check_icmp` plugin, which needs a raw ICMP socket. Under rootless Podman that requires two unrelated things to be true at once — a container capability and a host kernel setting — and each fails with a different, misleading symptom. Both are required together; fixing only one still leaves PING broken.
+
+**Container capability (already done — informational only).** `check_icmp` ships with the file capability `cap_net_raw=ep`, but rootless Podman's default container capability set excludes `CAP_NET_RAW`, so the kernel refuses to grant it at exec time. `deploy/compose.yaml` already adds `cap_add: [NET_RAW]` to the `checkmk` service — you don't need to add it yourself. The symptom this fixes: Checkmk reports `Return code of 126 is out of bounds - plugin may not be executable` on the PING service of every host. This is an exec-level error, not a reachability failure — a genuine network problem surfaces as a normal `check_icmp` CRIT such as "100% packet loss", so RC 126 is never a NAT/VMware-networking symptom even though it superficially looks like one.
+
+**Picking the capability up on an already-running stack.** This is the general procedure for any `deploy/compose.yaml` change that requires a container to be *recreated* (not merely restarted) to take effect — capabilities, mounts, ports. `podman-compose` 1.0.6 has no `rm` subcommand, and its recreate-on-`up` logic can silently fall back to restarting the *old* container in place when another container is registered as a dependent (here, `mqtt-poller` depends on `checkmk`), so `podman compose up -d` alone can appear to succeed while changing nothing. The working order is: stop and remove the dependent container(s) first, then the target container, then bring each back up in turn:
+
+```bash
+podman stop mqtt-poller && podman rm mqtt-poller
+podman stop checkmk && podman rm checkmk
+podman compose up -d checkmk
+podman compose up -d poller
+```
+
+Removing these containers loses no data — Checkmk's site lives in the `checkmk_data` volume and the poller is stateless. This step is only needed on an already-running stack; a first-ever `podman compose up -d` from §4 creates the container with the capability already applied.
+
+**Host sysctl (the part you must do yourself).** Rootless Podman's netavark/pasta networking relays container ICMP through the host's unprivileged "ping socket" mechanism rather than a true host-level raw socket, and that mechanism is gated by the `net.ipv4.ping_group_range` sysctl. Its default value `1 0` is an empty range — it permits no group at all to open a ping socket — so all relayed ICMP is dropped silently, with no error logged on either the container or the host side. Confirm you're in this situation with:
+
+```bash
+podman info --format '{{.Host.NetworkBackend}}'   # expect: netavark
+sysctl net.ipv4.ping_group_range                  # expect: net.ipv4.ping_group_range = 1  0
+```
+
+Then apply the fix — immediately, and persisted across reboots:
+
+```bash
+sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+echo 'net.ipv4.ping_group_range = 0 2147483647' | sudo tee /etc/sysctl.d/99-podman-ping.conf
+```
+
+This is a host-level setting with no representation in `deploy/compose.yaml` or any other repo file — it's a property of the Podman host, which is why it's the one part of this fix a fresh deployment must perform by hand. The `sysctl -w` takes effect immediately with no container restart needed; the `/etc/sysctl.d/` file is what survives a reboot. Both are wanted.
+
+**Confirming it works.** Run `check_icmp` directly against a host you know is reachable, such as your LAN gateway:
+
+```bash
+podman compose exec checkmk /omd/sites/dmc/lib/nagios/plugins/check_icmp -H 192.168.0.1
+```
+
+Expected output: `OK - 192.168.0.1 rta 1.072ms lost 0%` (substitute your own LAN gateway).
+
+If you skip this step, there are two distinct failure signatures depending on which half is missing: without the capability, every PING service reports `Return code of 126 is out of bounds - plugin may not be executable`. With the capability but without the sysctl, `check_icmp` runs cleanly but reports 100% packet loss to every target — including the LAN gateway that the host itself can ping successfully — which is indistinguishable from a genuine network fault unless you check this sysctl specifically.
+
+---
+
 ## 6. Endpoints & Network Access
 
 | Service | LAN / Browser URL | Internal Network DNS (Inside Containers) |
