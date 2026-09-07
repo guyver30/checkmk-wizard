@@ -5,6 +5,19 @@ services:
     container_name: checkmk
     restart: unless-stopped
     hostname: checkmk
+    # Bug fixed 2026-09-07: PING/check_icmp services reported CRIT with
+    # "Return code of 126 is out of bounds - plugin may not be executable"
+    # against every host. check_icmp needs a raw ICMP socket (file
+    # capability cap_net_raw=ep on the binary, live-verified via `getcap`),
+    # but rootless Podman's default container capability set excludes
+    # CAP_NET_RAW (confirmed via `cat /proc/self/status` inside the
+    # container: CapBnd had bit 13 clear, and `podman inspect`'s CapAdd was
+    # empty) — the kernel refuses to grant a file capability that isn't in
+    # the container's own bounding set, which surfaces as exactly this
+    # "exec: Operation not permitted" / RC 126, unrelated to any actual
+    # network/NAT reachability to the polled devices.
+    cap_add:
+      - NET_RAW
     environment:
       - CMK_SITE_ID=dmc
       - CMK_PASSWORD=cmkadmin
