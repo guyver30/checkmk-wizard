@@ -19,6 +19,10 @@ CONN = CheckmkConnection(host="cmk.example", site="mysite", username="automation
 BASE = "http://cmk.example/mysite/check_mk/api/v1"
 LOGIN_URL = "http://cmk.example/mysite/check_mk/login.py"
 LOGIN_PAGE_HTML = '<script>var global_csrf_token = "the-csrf-token";</script>'
+# Port-aware counterparts to the constants above — the `:5000` regression
+# baseline for the container-mode REST/GUI port feature.
+PORT_BASE = "http://cmk.example:5000/mysite/check_mk/api/v1"
+PORT_LOGIN_URL = "http://cmk.example:5000/mysite/check_mk/login.py"
 
 
 def test_connection_registration_credential_defaults_to_rest_credential():
@@ -41,6 +45,21 @@ def test_connection_registration_credential_can_be_overridden():
     # REST credential is untouched by the override.
     assert conn.username == "automation"
     assert conn.secret == "s3cret"
+
+
+def test_connection_base_url_without_port_is_unchanged():
+    # Regression guard: adding port support must not alter any URL for a
+    # port-less host (the default no-port branch must stay byte-identical
+    # to before this feature existed).
+    conn = CheckmkConnection(host="cmk.example", site="mysite", username="automation", secret="s3cret")
+    assert conn.base_url == BASE
+
+
+def test_connection_base_url_with_port():
+    conn = CheckmkConnection(
+        host="cmk.example", site="mysite", username="automation", secret="s3cret", port=5000
+    )
+    assert conn.base_url == PORT_BASE
 
 
 @pytest.mark.asyncio
@@ -393,6 +412,79 @@ async def test_bootstrap_automation_user_raises_on_create_failure():
         )
         with pytest.raises(CheckmkAPIError):
             await bootstrap_automation_user("cmk.example", "mysite", "adminpw")
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_success_with_port():
+    # A container-mode site (e.g. check-mk-raw serving on 5000) must hit
+    # the `:5000` login and API URLs, not the default-port ones.
+    with respx.mock:
+        respx.get(PORT_LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(PORT_LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        create_route = respx.post(f"{PORT_BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        respx.get(f"{PORT_BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(200, json={"value": []}, headers={"ETag": '"the-etag"'})
+        )
+        self_url = f"{PORT_BASE}/objects/activation_run/run-id"
+        respx.post(f"{PORT_BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(
+                200,
+                json={"links": [{"rel": "self", "href": self_url}], "extensions": {"is_running": False}},
+            )
+        )
+        result = await bootstrap_automation_user("cmk.example", "mysite", "adminpw", port=5000)
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["username"] == "automation"
+    assert result == body["auth_option"]["secret"]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_agent_registration_secret_success_with_port():
+    with respx.mock:
+        respx.get(PORT_LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(PORT_LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.get(f"{PORT_BASE}/objects/user_config/agent_registration").mock(
+            return_value=Response(200, json={}, headers={"ETag": '"user-etag"'})
+        )
+        put_route = respx.put(f"{PORT_BASE}/objects/user_config/agent_registration").mock(
+            return_value=Response(200, json={})
+        )
+
+        result = await bootstrap_agent_registration_secret("cmk.example", "mysite", "adminpw", port=5000)
+
+    assert put_route.calls.last.request.headers["If-Match"] == '"user-etag"'
+    body = json.loads(put_route.calls.last.request.content)
+    assert result == body["auth_option"]["secret"]
+
+
+@pytest.mark.asyncio
+async def test_change_cmkadmin_password_success_with_port():
+    with respx.mock:
+        respx.get(PORT_LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(PORT_LOGIN_URL).mock(
+            return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+        )
+        respx.get(f"{PORT_BASE}/objects/user_config/cmkadmin").mock(
+            return_value=Response(200, json={}, headers={"ETag": '"user-etag"'})
+        )
+        put_route = respx.put(f"{PORT_BASE}/objects/user_config/cmkadmin").mock(return_value=Response(200, json={}))
+
+        await change_cmkadmin_password("cmk.example", "mysite", "oldpw", "N3wSecure!Pass", port=5000)
+
+    assert put_route.calls.last.request.headers["If-Match"] == '"user-etag"'
+    body = json.loads(put_route.calls.last.request.content)
+    assert body["auth_option"] == {
+        "auth_type": "password",
+        "password": "N3wSecure!Pass",
+        "enforce_password_change": False,
+    }
 
 
 @pytest.mark.asyncio
