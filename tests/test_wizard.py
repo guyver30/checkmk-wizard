@@ -37,6 +37,7 @@ from checkmk_wizard.wizard import (
     _collect_expected_services,
     _create_or_update_host,
     _create_service_discovery_rules,
+    _default_checkmk_host,
     _establish_ssh_access,
     _expected_open_ports_by_hostname,
     _looks_loopback,
@@ -325,6 +326,116 @@ async def test_phase1_container_mode_resets_agent_registration_secret_via_cmkadm
 
     assert connection.registration_user == "agent_registration"
     assert connection.registration_secret == "registration-secret"
+
+
+def test_default_checkmk_host_container_mode():
+    # Regression test: `localhost` doesn't reach the checkmk container from
+    # the worker container — container mode must default to the compose
+    # service hostname instead.
+    assert _default_checkmk_host(container_mode=True) == "checkmk"
+
+
+def test_default_checkmk_host_host_native_mode():
+    # Host-native mode must keep suggesting `localhost` exactly as before.
+    assert _default_checkmk_host(container_mode=False) == "localhost"
+
+
+@pytest.mark.asyncio
+async def test_phase1_container_mode_prefills_host_and_cmkadmin_from_cmk_password(monkeypatch):
+    # Regression test: `localhost` doesn't reach the checkmk container from
+    # the worker container, and operators previously had to retype a
+    # cmkadmin password the environment already knew via CMK_PASSWORD.
+    monkeypatch.setenv("CMK_PASSWORD", "compose-pw")
+
+    recorded_defaults = {}
+    original_text = questionary.text
+    original_password = questionary.password
+
+    def fake_text(prompt, *args, **kwargs):
+        recorded_defaults[prompt] = kwargs.get("default")
+        return original_text(prompt, *args, **kwargs)
+
+    def fake_password(prompt, *args, **kwargs):
+        recorded_defaults[prompt] = kwargs.get("default")
+        return original_password(prompt, *args, **kwargs)
+
+    monkeypatch.setattr(questionary, "text", fake_text)
+    monkeypatch.setattr(questionary, "password", fake_password)
+
+    answers = iter(["dmc", "checkmk", ""])  # site name, checkmk host, blank cmkadmin password (skip)
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+
+    def fake_get_site_credentials(site_name, automation_user="automation"):
+        if automation_user == "automation":
+            from checkmk_wizard.site import SiteCredentials
+
+            return SiteCredentials(site=site_name, automation_user="automation", automation_secret="s3cret")
+        return None
+
+    monkeypatch.setattr("checkmk_wizard.wizard.site.get_site_credentials", fake_get_site_credentials)
+
+    base_url = "http://checkmk/dmc/check_mk/api/v1"
+    with respx.mock:
+        respx.get(f"{base_url}/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        await phase1_site_bringup()
+
+    host_prompt = next(p for p in recorded_defaults if p.startswith("Hostname/IP to reach"))
+    cmkadmin_prompt = next(p for p in recorded_defaults if p.startswith("cmkadmin password"))
+    assert recorded_defaults[host_prompt] == "checkmk"
+    assert recorded_defaults[cmkadmin_prompt] == "compose-pw"
+
+
+@pytest.mark.asyncio
+async def test_phase1_container_mode_cmkadmin_default_blank_when_cmk_password_unset(monkeypatch):
+    # Hermetic against a developer machine that happens to export
+    # CMK_PASSWORD: with it unset, the cmkadmin prompt's default must be
+    # blank, and pressing Enter (blank answer) must still take the
+    # existing "skip bootstrap, read the local automation secret" path.
+    monkeypatch.delenv("CMK_PASSWORD", raising=False)
+
+    recorded_defaults = {}
+    original_password = questionary.password
+
+    def fake_password(prompt, *args, **kwargs):
+        recorded_defaults[prompt] = kwargs.get("default")
+        return original_password(prompt, *args, **kwargs)
+
+    monkeypatch.setattr(questionary, "password", fake_password)
+
+    answers = iter(["dmc", "checkmk", ""])  # site name, checkmk host, blank cmkadmin password (skip)
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+
+    def fake_get_site_credentials(site_name, automation_user="automation"):
+        if automation_user == "automation":
+            from checkmk_wizard.site import SiteCredentials
+
+            return SiteCredentials(site=site_name, automation_user="automation", automation_secret="local-secret")
+        return None
+
+    monkeypatch.setattr("checkmk_wizard.wizard.site.get_site_credentials", fake_get_site_credentials)
+
+    base_url = "http://checkmk/dmc/check_mk/api/v1"
+    with respx.mock:
+        respx.get(f"{base_url}/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        connection = await phase1_site_bringup()
+
+    cmkadmin_prompt = next(p for p in recorded_defaults if p.startswith("cmkadmin password"))
+    assert recorded_defaults[cmkadmin_prompt] == ""
+    assert connection.secret == "local-secret"
 
 
 @pytest.mark.parametrize(

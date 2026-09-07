@@ -339,9 +339,9 @@ podman compose exec -it worker bash -c "cd /app/checkmk-wizard && uv run checkmk
 What to expect, that's different from running it directly on a Checkmk host:
 
 - **Phase 1 opens by announcing container mode** ("'omd' isn't on PATH — assuming this wizard is running in a separate container from Checkmk itself") and skips straight to a site-name prompt, pre-filled with `dmc` from the `CMK_SITE_ID` env var (§3) — just confirm it, or type a different name if you changed `CMK_SITE_ID` on the `checkmk` service.
-- **Checkmk host/IP prompt:** enter `checkmk` (the service's hostname on `cmk_net` — the default "localhost" suggestion won't resolve from inside the `worker` container).
+- **Checkmk host/IP prompt:** pre-filled with `checkmk` (the service's hostname on `cmk_net`, which is what actually resolves to Checkmk from inside the `worker` container) — just press Enter, and only type a different host if the Checkmk service is reachable under another name.
 - **Livestatus reachability check:** warns immediately if §5 wasn't done yet — fix it and re-run, or ignore and fix it before Phase 7.
-- **cmkadmin password prompt:** enter whatever `CMK_PASSWORD` is set to on the `checkmk` service (§3). The wizard uses it once, over the REST API, to bootstrap the `automation` and `agent_registration` REST users itself — it's never stored anywhere by the wizard. Leave it blank instead if you'd rather paste an automation secret directly (fetched via `podman compose exec checkmk cat /omd/sites/dmc/var/check_mk/web/automation/automation.secret`, for example).
+- **cmkadmin password prompt:** pre-filled from the `worker` container's own `CMK_PASSWORD` (§3) — press Enter to accept it. The wizard uses it once, over the REST API, to bootstrap the `automation` and `agent_registration` REST users itself — it's never stored anywhere by the wizard. Clear it and leave it blank instead if you'd rather paste an automation secret directly (fetched via `podman compose exec checkmk cat /omd/sites/dmc/var/check_mk/web/automation/automation.secret`, for example).
 - **Phase 3 network scanning / Phase 5 SSH onboarding** reach out to your actual LAN from the `worker` container over `cmk_net`'s bridge (outbound NAT) — same subnets/targets you'd scan and SSH into from any other host on that network, no extra container networking config needed.
 
 ### 8.4. Re-running later
