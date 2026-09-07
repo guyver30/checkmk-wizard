@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 9 context gathered
-last_updated: "2026-09-06T10:04:39.058Z"
-last_activity: 2026-09-06 -- Phase 09 execution started
+last_updated: "2026-09-07T07:46:04.972Z"
+last_activity: 2026-09-07 - Completed quick task 260907-lwe: Fix container-mode UX in wizard.py
 progress:
   total_phases: 4
   completed_phases: 1
@@ -82,6 +82,7 @@ None yet.
 | 260906-jqk | Add omd stop/set/start fix to §5 Enable Livestatus-over-TCP | 2026-09-06 | 0753107 | [260906-jqk-add-omd-stop-set-start-fix-to-5-enable-l](./quick/260906-jqk-add-omd-stop-set-start-fix-to-5-enable-l/) |
 | 260906-jxk | Fix §7 endpoint path and 200-expectation to accept 401 as valid pre-bootstrap reachability proof | 2026-09-06 | 91ecec0 | [260906-jxk-fix-7-endpoint-path-and-200-expectation-](./quick/260906-jxk-fix-7-endpoint-path-and-200-expectation-/) |
 | 260906-mm9 | Fix mosquitto.conf syntax bug - indented comment continuation crashes broker | 2026-09-06 | 2eff022 | [260906-mm9-fix-mosquitto-conf-syntax-bug-indented-c](./quick/260906-mm9-fix-mosquitto-conf-syntax-bug-indented-c/) |
+| 260907-lwe | Fix container-mode UX in wizard.py: default Checkmk host prompt to 'checkmk' and cmkadmin password prompt to CMK_PASSWORD env var | 2026-09-07 | a6a4628 | [260907-lwe-fix-container-mode-ux-in-wizard-py-defau](./quick/260907-lwe-fix-container-mode-ux-in-wizard-py-defau/) |
 
 ## Deferred Items
 
