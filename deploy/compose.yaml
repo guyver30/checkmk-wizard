@@ -68,7 +68,17 @@ services:
     restart: unless-stopped
     working_dir: /app
     volumes:
-      - ./app:/app:z
+      # Bug fixed 2026-09-07: this was "./app:/app:z", correct only for the
+      # pre-Phase-9 layout where compose.yaml lived at checkmk-stack/deploy/
+      # (a sibling of checkmk-stack/app/). The 09-03 poller service's
+      # "../scripts" mount required moving compose.yaml to live inside the
+      # repo checkout itself (checkmk-stack/app/checkmk-wizard/deploy/, see
+      # docs/Podman setup...md §2), which silently broke this path: "./app"
+      # then resolved to an empty auto-created deploy/app/ instead of the
+      # checkmk-stack/app/ directory the repo actually lives in. "../.."
+      # from deploy/ lands on checkmk-stack/app/, matching §8.1's promise
+      # that the repo lands in the worker container at /app/checkmk-wizard.
+      - ../..:/app:z
     environment:
       - CMK_REST_API=http://checkmk:5000/dmc/check_mk/api/1.0
       - CMK_SITE=dmc
