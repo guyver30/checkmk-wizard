@@ -421,7 +421,7 @@ def query_devices(host: str, port: int, columns: list[str], timeout: float) -> l
         if "worst_service_state" in index:
             try:
                 worst_service_state = int(row[index["worst_service_state"]])
-            except (TypeError, ValueError):
+            except (IndexError, TypeError, ValueError):
                 _logger.warning("Skipping host %r: non-numeric worst_service_state", name)
                 continue
 
@@ -429,18 +429,30 @@ def query_devices(host: str, port: int, columns: list[str], timeout: float) -> l
         if "scheduled_downtime_depth" in index:
             try:
                 downtime_depth = int(row[index["scheduled_downtime_depth"]])
-            except (TypeError, ValueError):
+            except (IndexError, TypeError, ValueError):
                 downtime_depth = 0
 
-        acknowledged = bool(row[index["acknowledged"]]) if "acknowledged" in index else False
+        try:
+            acknowledged = bool(row[index["acknowledged"]]) if "acknowledged" in index else False
+        except (IndexError, TypeError):
+            acknowledged = False
 
-        raw_parents = row[index["parents"]] if "parents" in index else None
+        try:
+            raw_parents = row[index["parents"]] if "parents" in index else None
+        except (IndexError, TypeError):
+            raw_parents = None
         parents = list(raw_parents) if isinstance(raw_parents, list) else []
 
-        raw_tags = row[index["tags"]] if "tags" in index else None
+        try:
+            raw_tags = row[index["tags"]] if "tags" in index else None
+        except (IndexError, TypeError):
+            raw_tags = None
         tags = raw_tags if isinstance(raw_tags, dict) else {}
 
-        folder = derive_folder(row[index["filename"]]) if "filename" in index else ""
+        try:
+            folder = derive_folder(row[index["filename"]]) if "filename" in index else ""
+        except (IndexError, TypeError):
+            folder = ""
 
         snapshots.append(
             DeviceSnapshot(

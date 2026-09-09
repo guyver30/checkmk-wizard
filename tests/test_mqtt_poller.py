@@ -276,6 +276,50 @@ def test_query_devices_skips_topic_unsafe_host_name():
     assert "web1" in ids
 
 
+def test_query_devices_survives_row_truncated_after_worst_service_state():
+    # Regression test for CR-01: `parents`/`tags`/`filename`/`acknowledged`
+    # extractions were previously unguarded `row[index[...]]` lookups, so a
+    # row shorter than the requested column list raised an uncaught
+    # IndexError that escaped the poll loop entirely instead of being
+    # skipped/defaulted per the function's own documented contract.
+    columns = [
+        "name",
+        "state",
+        "scheduled_downtime_depth",
+        "acknowledged",
+        "worst_service_state",
+        "parents",
+        "tags",
+        "filename",
+    ]
+    # Present through worst_service_state (index 4); parents/tags/filename missing.
+    truncated_row = ["web1", 0, 1, True, 2]
+    full_row = [
+        "web2",
+        0,
+        1,
+        True,
+        2,
+        ["switch-01"],
+        {"device_type": "server"},
+        "/omd/sites/dmc/etc/check_mk/conf.d/wato/vlan10/hosts.mk",
+    ]
+    sock = _fake_connection(json.dumps([truncated_row, full_row]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        # Must not raise IndexError: the truncated row falls back to safe
+        # defaults for its missing trailing columns rather than crashing.
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    ids = [snapshot.id for snapshot in snapshots]
+    assert "web1" in ids
+    assert "web2" in ids
+    web1 = next(snapshot for snapshot in snapshots if snapshot.id == "web1")
+    assert web1.in_downtime is True
+    assert web1.acknowledged is True
+    assert web1.parents == []
+    assert web1.device_type == "unknown"
+    assert web1.folder == ""
+
+
 def test_query_devices_raises_livestatus_error_on_malformed_json():
     sock = _fake_connection(b"not-json{{{")
     with patch("socket.create_connection", return_value=sock):
