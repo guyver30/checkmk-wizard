@@ -344,10 +344,10 @@ What each check proves:
 **Manual tombstone test:** the fifth Phase 9 success criterion (a real Checkmk host deletion) needs a live Checkmk site to delete a host from, so it isn't automated. Delete a host in the Checkmk UI, activate changes, wait one poll interval, then confirm with:
 
 ```bash
-mosquitto_sub -h <host> -p 1883 -u poller -P poller -t 'lan/devices/<host>/status' -v
+mosquitto_sub -h <host> -p 1883 -u poller -P poller -t 'lan/devices/<host>/status' -v -C 1 -W 5
 ```
 
-that the retained payload is now empty and the host is gone from `lan/devices/topology`.
+Live-verified 2026-09-08 (deleting `192.168.0.215`): a zero-length retained publish is a *clear*, not a delivered empty message, so `mosquitto_sub` without `-C`/`-W` would simply hang with no output. `-C 1 -W 5` makes that observable: the subscribe times out ("Timed out", RC 27) with no message received, which is what confirms the retained status was cleared. Also confirm the host is gone from `lan/devices/topology` and that a `removed` event appears in `lan/events/recent`.
 
 ---
 
