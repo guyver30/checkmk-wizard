@@ -1,35 +1,38 @@
 {
   "version": "1.0",
-  "timestamp": "2026-09-07T09:04:15.877Z",
-  "phase": "09",
-  "phase_name": "poller-core",
-  "phase_dir": ".planning/phases/09-poller-core",
-  "plan": 4,
-  "task": 1,
-  "total_tasks": 2,
+  "timestamp": "2026-09-09T02:35:19.565Z",
+  "phase": "10",
+  "phase_name": "Checkmk Tag-Group & Onboarding Integration",
+  "phase_dir": ".planning/phases/10-checkmk-tag-group-onboarding-integration",
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
   "status": "paused",
   "completed_tasks": [
-    {"id": "09-01", "name": "Poller core foundation (config, state/topology helpers, Livestatus query layer)", "status": "done", "commit": "051fdb7"},
-    {"id": "09-02", "name": "MQTT wiring (client lifecycle, publish helpers, reconciliation, poll loop)", "status": "done", "commit": "277d85d"},
-    {"id": "09-03", "name": "Deployability (compose poller service, smoke_test_poller.py, operator docs)", "status": "done", "commit": "8d77358"},
-    {"id": "09-04-task-1", "name": "Live verification on the deployment host", "status": "in_progress", "progress": "Extensive live debugging this session resolved 5 real bugs blocking verification (see decisions below), all merged to main via 4 quick tasks + 2 direct commits. --check-columns confirmed parents/tags/filename present (closes RESEARCH.md A1-A3). topology_quiet and poller_liveness confirmed PASS. Still waiting on the developer for: (1) a clean final smoke_test_poller.py [SUMMARY] line now that hosts are onboarded + activation/PING are fixed — last run showed device_status_retained/topology_retained as [FAIL] only because the site had zero hosts at that point; (2) the manual tombstone test (delete a host in the UI, confirm removal from lan/devices/topology + removed event in lan/events/recent) — not yet attempted."}
+    {"id": "research", "name": "10-RESEARCH.md — technical research (REST tag-group shape, folder derivation, poller credential gap)", "status": "done", "commit": "7f5f4a7"},
+    {"id": "patterns", "name": "10-PATTERNS.md — pattern map (analog files, code excerpts)", "status": "done", "commit": "664dbd0"},
+    {"id": "planning", "name": "6 PLAN.md files (10-01..10-06), 4 waves", "status": "done", "commit": "e7f66d2"},
+    {"id": "plan-check", "name": "gsd-plan-checker verification — PASSED, no blockers", "status": "done", "commit": null},
+    {"id": "decision-coverage-heal", "name": "Backfilled (D-NN) traceability tags for D-02/D-03/D-04/D-08/D-09/D-10 in must_haves.truths; gate now 10/10 covered", "status": "done", "commit": "664dbd0"}
   ],
   "remaining_tasks": [
-    {"id": "09-04-task-1", "name": "Live verification on the deployment host", "status": "awaiting_human_action", "remaining": ["Re-run smoke_test_poller.py with real onboarded hosts and report the final [SUMMARY] line", "Manual tombstone test: delete a host in Checkmk UI, activate, wait one poll interval, mosquitto_sub on lan/# and report the result"]},
-    {"id": "09-04-task-2", "name": "Record the live-verified column set and apply any corrections", "status": "not_started", "depends_on": "09-04-task-1 output"}
+    {"id": "10-01", "name": "device_types.json + stdlib REST/Livestatus shape probe (blocking human-verify checkpoint)", "status": "not_started", "wave": 1},
+    {"id": "10-02", "name": "create_host_tag_group/get_host_tag_group + idempotent provisioning + backfill count", "status": "not_started", "wave": 2},
+    {"id": "10-03", "name": "Poller alias column + RestError + REST folder lookup replacing derive_folder", "status": "not_started", "wave": 2},
+    {"id": "10-04", "name": "Phase 4 device_type/alias prompts, Phase 5 attribute threading, answer-iterator test repair", "status": "not_started", "wave": 3},
+    {"id": "10-05", "name": "Compose CMK_REST_* env block, smoke-test enrichment check, setup-doc provisioning", "status": "not_started", "wave": 3},
+    {"id": "10-06", "name": "Live end-to-end checkpoint, extract_device_type correction, doc terminology reconciliation", "status": "not_started", "wave": 4}
   ],
-  "blockers": [
-    {"description": "Task 1 of plan 09-04 needs two more pieces of real, unfabricated evidence from the deployment host (final smoke-test SUMMARY line, tombstone test result) before Task 2 can record verified behavior. The plan explicitly forbids simulating or fabricating results.", "type": "human_action", "workaround": "none — must be run by the developer on the real host"}
-  ],
+  "blockers": [],
   "human_actions_pending": [
-    {"action": "Run `podman compose exec poller python /scripts/smoke_test_poller.py --host mosquitto --livestatus-host checkmk --skip-restart-checks` and report the full [SUMMARY] line plus any remaining [FAIL] lines", "context": "Site now has onboarded hosts (via checkmk-wizard) and activation/PING both work — this should now show device_status_retained/topology_retained as PASS where they previously failed only for lack of hosts", "blocking": true},
-    {"action": "Manually delete a host in the Checkmk UI, activate changes, wait one poll interval, then run `mosquitto_sub -h localhost -p 1883 -u poller -P poller -t 'lan/#' -v -C 20` and report whether the deleted host's status payload goes empty, drops from lan/devices/topology, and a removed event appears in lan/events/recent", "context": "The one Phase 9 success criterion smoke_test_poller.py cannot automate", "blocking": true}
+    {"action": "During 10-01's execution: run the probe script against the real Checkmk 2.4.0p35 site to confirm the tag-group POST body shape, the folder REST field, and the Livestatus tags key", "context": "Blocking human-verify checkpoint built into 10-01-PLAN.md; downstream plans 10-02/10-03 depend on the confirmed shapes", "blocking": false},
+    {"action": "During 10-06's execution: live end-to-end verification against the real site before merging terminology reconciliation", "context": "Blocking human-verify checkpoint built into 10-06-PLAN.md, this project's established practice (mirrors Phase 9's 09-04-PLAN.md/09-VERIFICATION.md)", "blocking": false}
   ],
   "decisions": [
-    {"decision": "Fixed 5 real deployment bugs found during live verification, all merged to main this session, rather than deferring them", "rationale": "Each one directly blocked completing Phase 9's live-verification checkpoint: (1) worker container's compose bind-mount path broken by the 09-03 directory restructuring (fff4eac); (2) wizard.py container-mode host/cmkadmin prompt defaults + CMK_PASSWORD on the worker service, quick task 260907-lwe; (3) CheckmkConnection/bootstrap helpers had no port support at all, needed for the containerized Checkmk image's port 5000, quick task 260907-m8w; (4) activate_changes never passed force_foreign_changes=True, causing a recurring 401 first seen in an unrelated much-earlier session, quick task 260907-mp2; (5) checkmk container lacked CAP_NET_RAW for check_icmp (RC 126) plus the host's net.ipv4.ping_group_range sysctl blocking rootless Podman's ICMP relay (ba45197 + docs quick task 260907-nde)", "phase": "09"},
-    {"decision": "Did not auto-approve plan 09-04 Task 1's checkpoint despite AUTO_MODE=true, and still will not mark Task 1 done without the final smoke-test SUMMARY line and tombstone-test result", "rationale": "This checkpoint's entire purpose is collecting real, unfabricated Livestatus/MQTT behavior from a live Checkmk 2.4.0p35 site; the plan text says 'nothing here is done until a live site says so'", "phase": "09"}
+    {"decision": "Skipped the UI-SPEC.md design-contract gate for Phase 10", "rationale": "The workflow's keyword scan false-triggered on 'dashboard' (a Phase 11 cross-reference in the roadmap's Depends-on note) and 'ui' (a substring inside the word 'Requirements'). 10-CONTEXT.md explicitly scopes dashboard rendering to Phase 11 and defers it; Phase 10 is CLI/backend-only (wizard prompts, REST calls, poller extension). No UI-SPEC.md was generated.", "phase": "10"},
+    {"decision": "Auto-healed the decision-coverage gate by backfilling literal (D-NN) tags into 3 plans' must_haves.truths (10-02: D-08; 10-03: D-02/D-03/D-04/D-10; 10-04: D-09) rather than re-planning or prompting", "rationale": "The plan-checker agent had already confirmed all 10 CONTEXT.md decisions were semantically implemented in the plan bodies — the mechanical check.decision-coverage-plan gate only greps must_haves/truths fields for literal 'D-NN' strings, so this was a traceability gap, not a real coverage gap. This is the workflow's documented auto-heal path (plan-phase.md step 13a).", "phase": "10"}
   ],
   "uncommitted_files": [],
-  "next_action": "Ask the user (or wait for them) to run the two remaining verification steps above and report back verbatim. Once received, spawn a bm:gsd-executor continuation agent (worktree isolation, base = current main HEAD) for plan 09-04 Task 2 only: record the confirmed Livestatus column set (parents/tags/filename all present) with a dated 'Live-verified against a real Checkmk 2.4.0p36.cre CE site' citation in scripts/mqtt_poller.py following api.py's convention, apply any corrections the final smoke-test/tombstone results reveal, update the setup doc's tombstone-test paragraph if observed behavior differs, re-run uv run pytest -q and uv run ruff check, then create 09-04-SUMMARY.md. After merge: full test suite, roadmap.update-plan-progress '09' '09-04' 'complete', tracking commit. Then continue execute-phase's remaining steps — code_review_gate (bm:code-review skill on phase 09), verify_phase_goal (spawn bm:gsd-verifier), update_roadmap to close out Phase 9.",
-  "context_notes": "This was a very long live-debugging session (resumed from an earlier /bm:pause-work handoff for exactly this same plan 09-04 Task 1). The developer ran the actual verification commands on their real Podman/Checkmk deployment host and reported output back turn by turn; each failure was root-caused and fixed properly (not worked around) since several were real bugs in this repo's own code/deploy config, not just host misconfiguration. All fixes are merged to main (11 commits ahead of a since-synced origin/main at session start, now further ahead). Full test suite at 304 passed throughout. The remaining gap before Task 2 can start is purely the two pieces of live evidence listed above — everything else needed to write Task 2 is already in hand from this session's transcript (verbatim --check-columns output, confirmed working activation/port/PING fixes). Do not skip asking for the final smoke-test SUMMARY line and tombstone result — resist the temptation to infer them from 'it should work now' given all the individual fixes; this plan's stated philosophy is that Checkmk's actual live behavior, not inference, is the source of truth."
+  "next_action": "/bm:execute-phase 10",
+  "context_notes": "Phase 10 planning is fully complete and committed (commits 507d90e context, e891ee1 state, 7f5f4a7 research, e7f66d2 planning, 664dbd0 plan-check auto-heal + patterns). Nothing is in-progress mid-task — this is a clean planning->execution boundary pause, not a mid-plan interruption. Auto-advance to execute-phase was intentionally paused for context hygiene (6 plans > 2-plan threshold) so execution starts with a clean context and live wave checkpoints per plan-phase.md step 15. Resume by running /clear then /bm:execute-phase 10."
 }
