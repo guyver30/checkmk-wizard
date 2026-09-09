@@ -592,6 +592,22 @@ def publish_poller_status(
     _publish_json(client, TOPIC_POLLER_STATUS, payload, qos=1, retain=True)
 
 
+def shutdown_mqtt_client(client: mqtt.Client) -> None:
+    """Stop `client` gracefully while still leaving the same retained value the LWT would.
+
+    A graceful `client.disconnect()` sends an MQTT DISCONNECT packet, which
+    per spec makes the broker discard the client's Will Message -- so the
+    LWT's `{"status": "offline"}` never fires on this path. Every exit path
+    (fatal startup failure, `--once` completion or failure, and normal
+    shutdown) must call this instead of a bare `loop_stop()`/`disconnect()`
+    pair so the retained `lan/poller/status` topic reflects reality
+    regardless of how the process is stopped (CR-02).
+    """
+    _publish_json(client, TOPIC_POLLER_STATUS, {"status": "offline"}, qos=1, retain=True)
+    client.loop_stop()
+    client.disconnect()
+
+
 @dataclass
 class PollerState:
     """In-process poll-cycle state. Never persisted -- rebuilt via `reconcile_state` on restart."""
@@ -822,8 +838,7 @@ def run_forever(config: PollerConfig) -> int:
         columns = select_host_columns(available)
     except LivestatusError as exc:
         _logger.error("Cannot start: %s", exc)
-        client.loop_stop()
-        client.disconnect()
+        shutdown_mqtt_client(client)
         return 1
 
     stop_event = threading.Event()
@@ -851,9 +866,7 @@ def run_forever(config: PollerConfig) -> int:
     # Graceful stop must leave the same retained value the LWT would have
     # left, so a `podman compose stop poller` and a `kill -9` look
     # identical to the dashboard.
-    _publish_json(client, TOPIC_POLLER_STATUS, {"status": "offline"}, qos=1, retain=True)
-    client.loop_stop()
-    client.disconnect()
+    shutdown_mqtt_client(client)
     return 0
 
 
@@ -913,12 +926,10 @@ def main() -> int:
             )
         except LivestatusError as exc:
             _logger.error("One-shot cycle failed: %s", exc)
-            client.loop_stop()
-            client.disconnect()
+            shutdown_mqtt_client(client)
             return 1
         run_cycle(client, config, state, snapshots)
-        client.loop_stop()
-        client.disconnect()
+        shutdown_mqtt_client(client)
         return 0
 
     return run_forever(config)
