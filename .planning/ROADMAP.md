@@ -85,7 +85,25 @@ Plans:
   3. A host's VLAN value is derived from its Checkmk folder path via the REST API's structured folder segments (not raw string splitting), correctly reflecting nested folder moves
   4. Existing wizard Phase 5 onboarding tests still pass with the new tag prompt added
 
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+**Wave 1**
+
+- [ ] 10-01-PLAN.md — device_types.json config list + stdlib REST/Livestatus shape probe script, run live to resolve the tag-group POST body, the per-host folder field, and the Livestatus tags key shape
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 10-02-PLAN.md — CheckmkClient.create_host_tag_group/get_host_tag_group, the validated device_types loader, and the idempotent tag-group provisioning step with its pre-existing-host default count
+- [ ] 10-03-PLAN.md — Poller: alias column end-to-end, RestError + REST folder lookup replacing derive_folder's filename parsing, PollerConfig REST credentials with the secret redacted
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 10-04-PLAN.md — Phase 4 device_type/alias prompts, Phase 5 tag_device_type/alias on all three host-creation call sites, and repair of every answer-iterator-driven test
+- [ ] 10-05-PLAN.md — Poller deployment wiring: compose CMK_REST_* env block, a smoke-test enrichment check, and setup-doc credential provisioning plus the updated topic contract
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 10-06-PLAN.md — Live end-to-end verification (blocking checkpoint), extract_device_type corrected to the confirmed Livestatus key shape, and ROADMAP/REQUIREMENTS/PROJECT terminology reconciliation
 
 ### Phase 11: Live Dashboard
 
@@ -112,5 +130,5 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
-| 10. Checkmk Tag-Group & Onboarding Integration | 0/TBD | Not started | - |
+| 10. Checkmk Tag-Group & Onboarding Integration | 0/6 | Planned | - |
 | 11. Live Dashboard | 0/TBD | Not started | - |
