@@ -418,6 +418,26 @@ def test_build_mqtt_client_on_connect_publishes_online_birth_message():
     assert kwargs["retain"] is True
 
 
+def test_shutdown_mqtt_client_publishes_offline_before_disconnecting():
+    # Regression test for CR-02: a graceful client.disconnect() suppresses
+    # the LWT, so every intentional shutdown path must explicitly publish
+    # the offline status itself before stopping the loop/disconnecting.
+    mock_client = MagicMock()
+
+    poller.shutdown_mqtt_client(mock_client)
+
+    call_names = [name for name, _args, _kwargs in mock_client.mock_calls]
+    assert "publish" in call_names
+    assert call_names.index("publish") < call_names.index("loop_stop")
+    assert call_names.index("loop_stop") < call_names.index("disconnect")
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == poller.TOPIC_POLLER_STATUS
+    assert json.loads(args[1]) == {"status": "offline"}
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
 def test_publish_device_status_uses_qos0_and_exact_payload_keys():
     mock_client = MagicMock()
     snapshot = poller.DeviceSnapshot(
@@ -847,3 +867,26 @@ def test_run_forever_survives_livestatus_error_and_does_not_raise():
 
     assert result == 0
     mock_run_cycle.assert_not_called()
+
+
+def test_run_forever_publishes_offline_status_on_fatal_startup_failure():
+    # Regression test for CR-02: the one-time startup column probe failing
+    # must still leave the retained poller status as "offline" -- a bare
+    # client.disconnect() here previously left it stuck at "online" forever
+    # since a graceful disconnect suppresses the LWT.
+    fake_client = MagicMock()
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(
+            poller, "available_host_columns", side_effect=poller.LivestatusError("no columns")
+        ),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result == 1
+    status_calls = _published(fake_client, poller.TOPIC_POLLER_STATUS)
+    assert len(status_calls) == 1
+    assert json.loads(status_calls[0].args[1]) == {"status": "offline"}
+    fake_client.disconnect.assert_called_once()
