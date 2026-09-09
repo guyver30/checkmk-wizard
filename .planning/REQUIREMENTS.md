@@ -8,7 +8,7 @@
 ### Poller
 
 - [x] **PLR-01**: Poller connects to Checkmk Livestatus over TCP on a configurable interval and queries current host state, service-state summary counts, tags, and parent/folder info
-- [ ] **PLR-02**: Poller diffs against Livestatus's live current state each cycle (not its own in-memory history), so it self-heals across restarts with no persisted state required
+- [x] **PLR-02**: Poller diffs against Livestatus's live current state each cycle (not its own in-memory history), so it self-heals across restarts with no persisted state required
 - [x] **PLR-03**: Poller publishes per-device retained status to `lan/devices/{id}/status` every cycle, preserving Checkmk's OK/WARN/CRIT/UNKNOWN/DOWN granularity (not collapsed to plain up/down), including a timestamp for staleness detection
 - [x] **PLR-04**: Poller publishes retained topology to `lan/devices/topology` only when topology actually changes (host added/removed/reparented)
 - [x] **PLR-05**: Poller publishes a bounded per-device transition history (`lan/devices/{id}/history`) and a bounded global recent-events feed (`lan/events/recent`), appending only on actual state transitions
@@ -73,7 +73,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BRK-02 | Phase 8 | Pending |
 | BRK-03 | Phase 8 | Pending |
 | PLR-01 | Phase 9 | Complete |
-| PLR-02 | Phase 9 | Pending |
+| PLR-02 | Phase 9 | Complete |
 | PLR-03 | Phase 9 | Complete |
 | PLR-04 | Phase 9 | Complete |
 | PLR-05 | Phase 9 | Complete |
