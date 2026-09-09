@@ -13,7 +13,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - Decimal phases (8.1, 8.2): Urgent insertions (marked with INSERTED).
 
 - [x] **Phase 8: Broker Infrastructure Hardening** - Mosquitto gains a durable, access-controlled WebSockets listener alongside its existing internal TCP listener
-- [ ] **Phase 9: Poller Core** - A resilient Livestatus-to-MQTT poller publishes the per-device topic contract and self-heals across restarts (4/4 plans merged; phase-goal verification found 2 blocking gaps — see 09-VERIFICATION.md)
+- [x] **Phase 9: Poller Core** - A resilient Livestatus-to-MQTT poller publishes the per-device topic contract and self-heals across restarts (completed 2026-09-09)
 - [ ] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and folder-derived VLAN are wired into the wizard's onboarding flow
 - [ ] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract
 
@@ -111,6 +111,6 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 | Phase | Plans Complete | Status | Completed |
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
-| 9. Poller Core | 4/4 | Gaps found (see 09-VERIFICATION.md) | - |
+| 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
 | 10. Checkmk Tag-Group & Onboarding Integration | 0/TBD | Not started | - |
 | 11. Live Dashboard | 0/TBD | Not started | - |
