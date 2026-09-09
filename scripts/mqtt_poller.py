@@ -66,6 +66,28 @@ TOPIC_POLLER_STATUS = "lan/poller/status"
 
 UNKNOWN_DEVICE_TYPE = "unknown"
 
+# Live-verified against a real Checkmk 2.4.0p35 CE site on 2026-09-08: a
+# `GET columns` probe (`mqtt_poller.py --check-columns`, run via
+# scripts/smoke_test_poller.py's `check_livestatus_columns`) reported all
+# eight columns below as present -- name, state, scheduled_downtime_depth,
+# acknowledged, worst_service_state, parents, tags, filename -- closing
+# RESEARCH.md Assumptions A1 (`parents`) and A2 (`filename`). `tags` is
+# also confirmed present (closing the existence half of A3), and is
+# actually consulted by `extract_device_type()` below, but the *shape*
+# A3 also claimed -- the device-type key inside `tags` -- remains
+# unverified: every one of the 21 onboarded hosts on the live site
+# returned `tags` with neither `device_type` nor `tag_device_type` set,
+# because no host on that site currently carries a Checkmk `device_type`
+# tag group (assigning that tag is Phase 10's job, not yet run). This
+# exercised `extract_device_type()`'s `UNKNOWN_DEVICE_TYPE` fallback path
+# correctly, but not the real key shape -- re-confirm once Phase 10 lands.
+#
+# The same live run also closed Assumption A4 (reconciliation timing):
+# with the default 60s poll interval, no spurious `lan/devices/topology`
+# republish was observed across two full poll intervals (130s) of no
+# change, and the poller's own heartbeat (`lan/poller/status`) was 38s
+# old at check time -- both consistent with the timeout defaults already
+# shipped below, so no correction was needed.
 REQUIRED_HOST_COLUMNS = ("name", "state")
 OPTIONAL_HOST_COLUMNS = (
     "scheduled_downtime_depth",
