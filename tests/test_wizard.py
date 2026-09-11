@@ -31,6 +31,7 @@ from checkmk_wizard.wizard import (
     _SITE_NAME_RE,
     _SKIP_AUTOMATED_SSH,
     _SMARTMONTOOLS_DIR,
+    DEVICE_TYPE_TAG_GROUP_ID,
     OnboardedHost,
     ScannedHost,
     _activate_pending_changes,
@@ -38,8 +39,10 @@ from checkmk_wizard.wizard import (
     _create_or_update_host,
     _create_service_discovery_rules,
     _default_checkmk_host,
+    _ensure_device_type_tag_group,
     _establish_ssh_access,
     _expected_open_ports_by_hostname,
+    _load_device_types,
     _looks_loopback,
     _missing_expected_services,
     _network_scan_attributes,
@@ -929,6 +932,7 @@ async def test_phase2_folders_configures_network_scan(monkeypatch):
     monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
 
     with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/device_type").mock(return_value=Response(200, json={}))
         create_route = respx.post(f"{BASE}/domain-types/folder_config/collections/all").mock(
             return_value=Response(200, json={"id": "~vlan10"})
         )
@@ -963,6 +967,7 @@ async def test_phase2_folders_skips_network_scan_without_subnet(monkeypatch):
     monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
 
     with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/device_type").mock(return_value=Response(200, json={}))
         respx.post(f"{BASE}/domain-types/folder_config/collections/all").mock(
             return_value=Response(200, json={"id": "~vlan10"})
         )
@@ -988,6 +993,7 @@ async def test_phase2_folders_network_scan_failure_does_not_lose_folder(monkeypa
     monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
 
     with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/device_type").mock(return_value=Response(200, json={}))
         respx.post(f"{BASE}/domain-types/folder_config/collections/all").mock(
             return_value=Response(200, json={"id": "~vlan10"})
         )
@@ -1001,6 +1007,143 @@ async def test_phase2_folders_network_scan_failure_does_not_lose_folder(monkeypa
             result = await phase2_folders(client)
 
     assert result == {"/vlan10": "192.168.10.0/24"}
+
+
+def test_load_device_types_returns_list_when_other_is_first(monkeypatch, tmp_path):
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS", "Multimedia"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    assert _load_device_types() == ["other", "ACS", "Multimedia"]
+
+
+def test_load_device_types_raises_when_empty(monkeypatch, tmp_path):
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps([]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    with pytest.raises(ValueError, match=str(path)):
+        _load_device_types()
+
+
+def test_load_device_types_raises_when_other_not_first(monkeypatch, tmp_path):
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["ACS", "other"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    with pytest.raises(ValueError, match=str(path)):
+        _load_device_types()
+
+
+def test_load_device_types_raises_when_not_a_list_of_strings(monkeypatch, tmp_path):
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps({"other": True}))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    with pytest.raises(ValueError, match=str(path)):
+        _load_device_types()
+
+
+@pytest.mark.asyncio
+async def test_ensure_device_type_tag_group_no_op_when_already_present():
+    with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/{DEVICE_TYPE_TAG_GROUP_ID}").mock(
+            return_value=Response(200, json={"id": DEVICE_TYPE_TAG_GROUP_ID})
+        )
+        create_route = respx.post(f"{BASE}/domain-types/host_tag_group/collections/all")
+        async with CheckmkClient(CONN) as client:
+            await _ensure_device_type_tag_group(client)
+
+    assert not create_route.called
+
+
+@pytest.mark.asyncio
+async def test_ensure_device_type_tag_group_creates_with_other_first(monkeypatch, tmp_path):
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+
+    with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/{DEVICE_TYPE_TAG_GROUP_ID}").mock(
+            return_value=Response(404, json={"title": "Not Found"})
+        )
+        create_route = respx.post(f"{BASE}/domain-types/host_tag_group/collections/all").mock(
+            return_value=Response(200, json={"id": DEVICE_TYPE_TAG_GROUP_ID})
+        )
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={"value": []})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _ensure_device_type_tag_group(client)
+
+    sent_body = json.loads(create_route.calls.last.request.content)
+    assert sent_body["id"] == DEVICE_TYPE_TAG_GROUP_ID
+    assert sent_body["tags"][0]["id"] == "other"
+
+
+@pytest.mark.asyncio
+async def test_ensure_device_type_tag_group_prints_backfill_count(monkeypatch, tmp_path, capsys):
+    # Live-verified (10-01 probe): the implicit default does not materialise
+    # as an explicit `tag_device_type` attribute, so hosts lacking that
+    # attribute entirely are the ones the default covers.
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+
+    with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/{DEVICE_TYPE_TAG_GROUP_ID}").mock(
+            return_value=Response(404, json={"title": "Not Found"})
+        )
+        respx.post(f"{BASE}/domain-types/host_tag_group/collections/all").mock(
+            return_value=Response(200, json={"id": DEVICE_TYPE_TAG_GROUP_ID})
+        )
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200,
+                json={
+                    "value": [
+                        {"extensions": {"attributes": {"ipaddress": "10.0.0.1"}}},
+                        {"extensions": {"attributes": {"ipaddress": "10.0.0.2"}}},
+                        {"extensions": {"attributes": {"tag_device_type": "ACS"}}},
+                    ]
+                },
+            )
+        )
+        async with CheckmkClient(CONN) as client:
+            await _ensure_device_type_tag_group(client)
+
+    output = capsys.readouterr().out
+    assert "2" in output
+    assert "other" in output
+
+
+@pytest.mark.asyncio
+async def test_ensure_device_type_tag_group_create_failure_does_not_raise():
+    with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/{DEVICE_TYPE_TAG_GROUP_ID}").mock(
+            return_value=Response(404, json={"title": "Not Found"})
+        )
+        respx.post(f"{BASE}/domain-types/host_tag_group/collections/all").mock(
+            return_value=Response(400, json={"title": "bad request"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _ensure_device_type_tag_group(client)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_phase2_folders_reaches_tag_group_check_when_folders_declined(monkeypatch):
+    answers = iter([False])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        tag_group_route = respx.get(f"{BASE}/objects/host_tag_group/{DEVICE_TYPE_TAG_GROUP_ID}").mock(
+            return_value=Response(200, json={"id": DEVICE_TYPE_TAG_GROUP_ID})
+        )
+        async with CheckmkClient(CONN) as client:
+            result = await phase2_folders(client)
+
+    assert tag_group_route.called
+    assert result == {}
 
 
 @pytest.mark.asyncio
