@@ -24,9 +24,9 @@
 
 ### Tagging
 
-- [ ] **TAG-01**: A new Checkmk host tag group captures device type, with a config-driven, site-specific choice list and a neutral `other` value in first position, so pre-existing hosts aren't silently mis-tagged when the tag group is created
-- [ ] **TAG-02**: The wizard's Phase 4 classification flow prompts for the device type per host, and Phase 5 onboarding applies it, using an attribute shape verified against a live Checkmk site's REST API
-- [ ] **TAG-03**: A generic location/group label is derived from the host's Checkmk folder association via the REST API's structured folder segments (not raw string splitting), and consumed by the poller
+- [x] **TAG-01**: A new Checkmk host tag group captures device type, with a config-driven, site-specific choice list and a neutral `other` value in first position, so pre-existing hosts aren't silently mis-tagged when the tag group is created
+- [x] **TAG-02**: The wizard's Phase 4 classification flow prompts for the device type per host, and Phase 5 onboarding applies it, using an attribute shape verified against a live Checkmk site's REST API
+- [x] **TAG-03**: A generic location/group label is derived from the host's Checkmk folder association via the REST API's structured folder segments (not raw string splitting), and consumed by the poller
 
 ### Dashboard
 
@@ -80,9 +80,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PLR-06 | Phase 9 | Complete |
 | PLR-07 | Phase 9 | Complete |
 | PLR-08 | Phase 9 | Complete |
-| TAG-01 | Phase 10 | Pending |
-| TAG-02 | Phase 10 | Pending |
-| TAG-03 | Phase 10 | Pending |
+| TAG-01 | Phase 10 | Complete |
+| TAG-02 | Phase 10 | Complete |
+| TAG-03 | Phase 10 | Complete |
 | DASH-01 | Phase 11 | Pending |
 | DASH-02 | Phase 11 | Pending |
 | DASH-03 | Phase 11 | Pending |
