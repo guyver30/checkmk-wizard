@@ -75,29 +75,35 @@ def test_append_bounded_keeps_newest_drops_oldest():
 
 def test_topology_signature_is_order_independent():
     nodes = [
-        {"id": "a", "parents": ["b"], "device_type": "server", "folder": "vlan10"},
-        {"id": "b", "parents": [], "device_type": "switch", "folder": "vlan10"},
+        {"id": "a", "parents": ["b"], "device_type": "server", "folder": "vlan10", "alias": ""},
+        {"id": "b", "parents": [], "device_type": "switch", "folder": "vlan10", "alias": ""},
     ]
     shuffled = list(reversed(nodes))
     assert poller.topology_signature(nodes) == poller.topology_signature(shuffled)
 
 
 def test_topology_signature_differs_on_parent_change():
-    base = [{"id": "a", "parents": ["b"], "device_type": "server", "folder": "vlan10"}]
-    changed = [{"id": "a", "parents": ["c"], "device_type": "server", "folder": "vlan10"}]
+    base = [{"id": "a", "parents": ["b"], "device_type": "server", "folder": "vlan10", "alias": ""}]
+    changed = [{"id": "a", "parents": ["c"], "device_type": "server", "folder": "vlan10", "alias": ""}]
     assert poller.topology_signature(base) != poller.topology_signature(changed)
 
 
 def test_topology_signature_differs_on_add_or_remove():
-    base = [{"id": "a", "parents": [], "device_type": "server", "folder": ""}]
-    added = base + [{"id": "b", "parents": [], "device_type": "server", "folder": ""}]
+    base = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
+    added = base + [{"id": "b", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
     assert poller.topology_signature(base) != poller.topology_signature(added)
     assert poller.topology_signature(added) != poller.topology_signature([])
 
 
 def test_topology_signature_differs_on_device_type_change():
-    base = [{"id": "a", "parents": [], "device_type": "server", "folder": ""}]
-    changed = [{"id": "a", "parents": [], "device_type": "switch", "folder": ""}]
+    base = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
+    changed = [{"id": "a", "parents": [], "device_type": "switch", "folder": "", "alias": ""}]
+    assert poller.topology_signature(base) != poller.topology_signature(changed)
+
+
+def test_topology_signature_differs_on_alias_change():
+    base = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": "Old Name"}]
+    changed = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": "New Name"}]
     assert poller.topology_signature(base) != poller.topology_signature(changed)
 
 
@@ -227,6 +233,7 @@ def test_query_devices_parses_full_row_into_device_snapshot():
         "parents",
         "tags",
         "filename",
+        "alias",
     ]
     row = [
         "web1",
@@ -237,6 +244,7 @@ def test_query_devices_parses_full_row_into_device_snapshot():
         ["switch-01"],
         {"device_type": "server"},
         "/omd/sites/dmc/etc/check_mk/conf.d/wato/vlan10/hosts.mk",
+        "Web Server 1",
     ]
     sock = _fake_connection(json.dumps([row]).encode())
     with patch("socket.create_connection", return_value=sock):
@@ -250,6 +258,7 @@ def test_query_devices_parses_full_row_into_device_snapshot():
     assert snapshot.device_type == "server"
     assert snapshot.folder == "vlan10"
     assert snapshot.parents == ["switch-01"]
+    assert snapshot.alias == "Web Server 1"
 
 
 def test_query_devices_uses_safe_defaults_when_optional_columns_absent():
@@ -264,6 +273,33 @@ def test_query_devices_uses_safe_defaults_when_optional_columns_absent():
     assert snapshot.parents == []
     assert snapshot.device_type == "unknown"
     assert snapshot.folder == ""
+    assert snapshot.alias == ""
+
+
+def test_query_devices_alias_defaults_to_empty_string_when_column_absent():
+    columns = ["name", "state", "tags"]
+    sock = _fake_connection(json.dumps([["web1", 0, {}]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].alias == ""
+
+
+def test_query_devices_alias_defaults_to_empty_string_when_row_truncated():
+    columns = ["name", "state", "tags", "alias"]
+    # Row ends before the alias column's position.
+    truncated_row = ["web1", 0, {}]
+    sock = _fake_connection(json.dumps([truncated_row]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].alias == ""
+
+
+def test_query_devices_alias_coerces_non_string_value_to_empty_string():
+    columns = ["name", "state", "alias"]
+    sock = _fake_connection(json.dumps([["web1", 0, None]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].alias == ""
 
 
 def test_query_devices_skips_topic_unsafe_host_name():
@@ -448,6 +484,7 @@ def test_publish_device_status_uses_qos0_and_exact_payload_keys():
         device_type="server",
         folder="vlan10",
         parents=[],
+        alias="Web Server 1",
     )
     poller.publish_device_status(mock_client, snapshot, "2026-09-06T00:00:00+00:00")
 
@@ -461,15 +498,17 @@ def test_publish_device_status_uses_qos0_and_exact_payload_keys():
         "acknowledged",
         "device_type",
         "folder",
+        "alias",
         "timestamp",
     }
+    assert payload["alias"] == "Web Server 1"
     assert kwargs["qos"] == 0
     assert kwargs["retain"] is True
 
 
 def test_publish_topology_uses_qos1_and_devices_envelope():
     mock_client = MagicMock()
-    nodes = [{"id": "a", "parents": [], "device_type": "server", "folder": ""}]
+    nodes = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
     poller.publish_topology(mock_client, nodes, "2026-09-06T00:00:00+00:00")
 
     args, kwargs = mock_client.publish.call_args
@@ -545,10 +584,10 @@ def test_parse_topology_payload_empty_returns_empty_dict():
 
 def test_parse_topology_payload_parses_devices_keyed_by_id():
     payload = json.dumps(
-        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": ""}], "timestamp": "t"}
+        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}], "timestamp": "t"}
     ).encode()
     assert poller.parse_topology_payload(payload) == {
-        "a": {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+        "a": {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     }
 
 
@@ -595,7 +634,7 @@ def test_reconcile_state_returns_cold_start_state_when_nothing_retained():
 
 def test_reconcile_state_seeds_previous_nodes_from_retained_topology():
     topology_payload = json.dumps(
-        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": ""}], "timestamp": "t"}
+        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}], "timestamp": "t"}
     ).encode()
 
     with patch.object(poller, "mqtt") as mock_mqtt:
@@ -610,7 +649,7 @@ def test_reconcile_state_seeds_previous_nodes_from_retained_topology():
         mock_client.subscribe.side_effect = _subscribe
         state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
 
-    assert state.previous_nodes == {"a": {"id": "a", "parents": [], "device_type": "server", "folder": ""}}
+    assert state.previous_nodes == {"a": {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}}
 
 
 # --- run_cycle ------------------------------------------------------------------
@@ -664,7 +703,7 @@ def test_run_cycle_publishes_one_status_per_snapshot_with_retain():
 
 def test_run_cycle_skips_topology_publish_when_unchanged():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a")])
@@ -683,7 +722,7 @@ def test_run_cycle_publishes_topology_on_cold_start():
 
 def test_run_cycle_publishes_topology_on_reparent():
     client = MagicMock()
-    node_a = {"id": "a", "parents": ["x"], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": ["x"], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a", parents=["y"])])
@@ -693,7 +732,7 @@ def test_run_cycle_publishes_topology_on_reparent():
 
 def test_run_cycle_publishes_topology_on_add():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b")])
@@ -703,7 +742,7 @@ def test_run_cycle_publishes_topology_on_add():
 
 def test_run_cycle_publishes_topology_on_remove():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [])
@@ -713,7 +752,7 @@ def test_run_cycle_publishes_topology_on_remove():
 
 def test_run_cycle_removed_device_tombstones_status_and_history_and_events():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
 
     poller.run_cycle(client, _make_config(), state, [])
@@ -737,7 +776,7 @@ def test_run_cycle_removed_device_tombstones_status_and_history_and_events():
 
 def test_run_cycle_added_device_appends_added_event():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b", state="WARN")])
@@ -753,7 +792,7 @@ def test_run_cycle_added_device_appends_added_event():
 
 def test_run_cycle_state_change_appends_history_and_event_and_publishes_both_topics():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a", state="CRIT")])
@@ -774,7 +813,7 @@ def test_run_cycle_state_change_appends_history_and_event_and_publishes_both_top
 
 def test_run_cycle_no_changes_publishes_no_history_or_events():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a", state="OK")])
@@ -798,7 +837,7 @@ def test_run_cycle_cold_start_emits_no_state_change_events():
 def test_run_cycle_truncates_history_and_events_to_configured_bounds():
     client = MagicMock()
     config = _make_config(history_max_entries=2, events_max_entries=1)
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(
         previous_nodes={"a": node_a},
         last_status={"a": "OK"},
