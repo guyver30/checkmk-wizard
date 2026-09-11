@@ -81,7 +81,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
   1. A new `device_type` host tag group exists in Checkmk with a config-driven, site-specific choice list, and every pre-existing host is defaulted to the neutral `other` value (listed first in the group) rather than a real device type
-  2. The wizard's Phase 4 classification flow prompts for device type per host, Phase 5 onboarding applies it, and the tag is set via a REST API attribute shape (`tag_<group_id>`) verified against a live Checkmk 2.4.0p35 site
+  2. The wizard's Phase 4 classification flow prompts for device type per host, Phase 5 onboarding applies it, and the tag is set via a REST API attribute shape (`tag_<group_id>`) verified against a live Checkmk 2.4.0p36 site
   3. A host's location/group label is derived from its Checkmk folder association via the REST API's structured folder segments (not raw string splitting), correctly reflecting nested folder moves
   4. Existing wizard Phase 4 classification tests still pass with the new tag prompt added
 
