@@ -722,6 +722,44 @@ def test_parse_topology_payload_malformed_json_returns_empty_dict():
     assert poller.parse_topology_payload(b"not-json{{{") == {}
 
 
+# Regression: a retained topology message written by a PRE-Phase-10 poller has
+# no `alias` key. Before this was fixed, the first cycle after an upgrade blew
+# up with `KeyError: 'alias'` inside topology_signature() — and because the
+# retained message is re-read on every start, `restart: unless-stopped` turned
+# that into a crash-loop. Caught on a live deployment at Phase 10's checkpoint;
+# the payload is valid JSON, so the malformed-JSON guard above never saw it.
+def test_parse_topology_payload_backfills_fields_missing_from_older_schema():
+    payload = json.dumps(
+        {"devices": [{"id": "a", "parents": ["p"], "device_type": "server", "folder": "/f"}]}
+    ).encode()
+    restored = poller.parse_topology_payload(payload)
+    assert restored["a"]["alias"] == ""
+    # Pre-existing fields must survive untouched.
+    assert restored["a"]["parents"] == ["p"]
+    assert restored["a"]["device_type"] == "server"
+    assert restored["a"]["folder"] == "/f"
+
+
+def test_topology_signature_survives_node_restored_from_older_schema():
+    """The exact crash: signature-comparing fresh nodes against restored ones."""
+    restored = poller.parse_topology_payload(
+        json.dumps({"devices": [{"id": "a", "device_type": "server", "folder": "/f"}]}).encode()
+    )
+    fresh = [{"id": "a", "parents": [], "device_type": "server", "folder": "/f", "alias": ""}]
+    # Must not raise, and an alias-less old node must compare equal to a fresh
+    # node that has no alias either — no spurious republish on every restart.
+    assert poller.topology_signature(fresh) == poller.topology_signature(list(restored.values()))
+
+
+def test_topology_signature_differs_when_restored_node_gains_an_alias():
+    """One republish after an upgrade that adds an alias is correct, not noise."""
+    restored = poller.parse_topology_payload(
+        json.dumps({"devices": [{"id": "a", "device_type": "server", "folder": "/f"}]}).encode()
+    )
+    fresh = [{"id": "a", "parents": [], "device_type": "server", "folder": "/f", "alias": "core-sw"}]
+    assert poller.topology_signature(fresh) != poller.topology_signature(list(restored.values()))
+
+
 def test_parse_events_payload_empty_returns_empty_list():
     assert poller.parse_events_payload(b"") == []
 

@@ -764,7 +764,48 @@ def parse_topology_payload(payload: bytes) -> dict[str, dict]:
         _logger.warning("Malformed topology payload during reconciliation: %s", exc)
         return {}
     devices = data.get("devices", []) if isinstance(data, dict) else []
-    return {node["id"]: node for node in devices if isinstance(node, dict) and "id" in node}
+    return {
+        node["id"]: _normalise_restored_node(node)
+        for node in devices
+        if isinstance(node, dict) and "id" in node
+    }
+
+
+# Bug fixed 2026-09-11 (found at Phase 10's live checkpoint, not by the test
+# suite): a retained topology message written by an EARLIER poller version
+# carries an earlier node shape. Phase 10 added the `alias` key to
+# `topology_nodes()` and to `topology_signature()`, so the first cycle after
+# an upgrade read a retained node with no `alias` and died with
+# `KeyError: 'alias'` inside `topology_signature`. Under
+# `restart: unless-stopped` that is a crash-loop, because every restart
+# re-reads the same retained message.
+#
+# The old payload is not *corrupt*, so it sailed straight past
+# `parse_topology_payload`'s malformed-JSON guard — which means guarding
+# harder against corruption would not have caught this. The real defect was
+# treating a cross-version payload as if it had the current schema.
+#
+# Normalising here (rather than making `topology_signature` tolerant with
+# `.get()` calls) keeps the tolerance at the single deserialisation boundary
+# where the version skew actually enters, honours the cold-start-not-
+# crash-loop contract this function's docstring already promises (T-09-05),
+# and means the next field Phase 11 adds needs one default here instead of a
+# new `.get()` at every read site.
+def _normalise_restored_node(node: dict) -> dict:
+    """Backfill a node restored from a retained payload to the current shape.
+
+    Defaults match `topology_nodes()`'s own defaults, so a node that predates
+    a field compares equal to a fresh node that genuinely has no value for it
+    — and differs from one that does, which correctly triggers exactly one
+    republish on the first cycle after an upgrade.
+    """
+    return {
+        **node,
+        "parents": node.get("parents") or [],
+        "device_type": node.get("device_type") or UNKNOWN_DEVICE_TYPE,
+        "folder": node.get("folder") or "",
+        "alias": node.get("alias") or "",
+    }
 
 
 def parse_events_payload(payload: bytes) -> list[dict]:
