@@ -39,6 +39,18 @@ console = Console()
 # via `uv run` from a checkout rather than installed as a distributed wheel.
 _SMARTMONTOOLS_DIR = Path(__file__).resolve().parents[2] / "docs" / "smart"
 
+# Single source of truth for the device-type host tag group's id. Every
+# call site that needs the `tag_<group_id>` attribute key derives it from
+# this constant (`f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"`) rather than repeating
+# the literal `tag_device_type` string.
+DEVICE_TYPE_TAG_GROUP_ID = "device_type"
+
+# device_types.json ships inside the repo checkout, not the installed
+# package, since this wizard is run via `uv run` from a checkout rather
+# than installed as a distributed wheel — same resolution shape as
+# `_SMARTMONTOOLS_DIR` above.
+_DEVICE_TYPES_PATH = Path(__file__).resolve().parents[2] / "device_types.json"
+
 
 def _smart_posix_plugin_path(site_name: str) -> Path:
     """The `smart_posix` agent plugin shipped with the *connected* site's own
@@ -611,6 +623,83 @@ def _network_scan_attributes(cidr: str) -> dict[str, Any] | None:
     }
 
 
+def _load_device_types() -> list[str]:
+    """Read and validate the checked-in device-type choice list.
+
+    Failing loudly here is deliberate and load-bearing: PITFALLS.md
+    Pitfall 8 is that Checkmk silently assigns a new tag group's first
+    listed value as the default for every host with no explicit value for
+    that group. D-06 makes first position the mechanism by which every
+    pre-existing host gets a safe, neutral value — so a reordered or
+    edited file whose first entry isn't "other" must abort the wizard run
+    rather than silently mis-tag the whole site with a real device type.
+
+    Drift caveat: this file is a seed, not a live mirror of the site's
+    actual tag group. Editing it after the tag group already exists on a
+    site has no effect, because `_ensure_device_type_tag_group` below is
+    create-once and never issues a PUT to update an existing tag group's
+    choice list.
+    """
+    try:
+        raw = json.loads(_DEVICE_TYPES_PATH.read_text())
+    except FileNotFoundError as exc:
+        raise ValueError(f"device types file not found: {_DEVICE_TYPES_PATH}") from exc
+    if not isinstance(raw, list) or not raw or not all(isinstance(item, str) for item in raw):
+        raise ValueError(f"{_DEVICE_TYPES_PATH} must contain a non-empty JSON list of strings")
+    if raw[0] != "other":
+        raise ValueError(
+            f"{_DEVICE_TYPES_PATH}: first entry must be 'other' (got {raw[0]!r}) — "
+            "Checkmk defaults every pre-existing host to the first listed tag value"
+        )
+    return raw
+
+
+async def _ensure_device_type_tag_group(client: CheckmkClient) -> None:
+    """Create the `device_type` host tag group exactly once, with `other`
+    first so every pre-existing host defaults safely (D-06), and report
+    how many pre-existing hosts that default touched (D-08).
+
+    Wrapped in `try`/`except CheckmkAPIError` and printing a warning on
+    failure rather than propagating, matching every other best-effort
+    provisioning step in this file (`phase2_folders`'s folder create,
+    `_onboard_hosts`'s host create) — a missing tag group must not abort
+    a wizard run mid-flight.
+    """
+    resp = await client.get_host_tag_group(DEVICE_TYPE_TAG_GROUP_ID)
+    if resp.status_code == 200:
+        console.print("[green]device_type tag group already present[/green] — skipping creation.")
+        return
+
+    try:
+        choices = _load_device_types()
+        await client.create_host_tag_group(
+            group_id=DEVICE_TYPE_TAG_GROUP_ID,
+            title="Device Type",
+            tags=[{"id": choice, "title": choice, "aux_tags": []} for choice in choices],
+        )
+        # Live-verified against a real Checkmk 2.4.0p35 CE site (2026-09-11
+        # probe, scripts/probe_checkmk_rest_shapes.py): a new tag group's
+        # implicit first-tag default does NOT materialise as an explicit
+        # `tag_device_type` key in a host's `extensions.attributes` — so the
+        # backfilled hosts can't be counted by matching that attribute's
+        # value against `choices[0]`. Count hosts LACKING an explicit
+        # `tag_<group_id>` attribute instead; that is the same set of hosts
+        # the implicit default silently covers.
+        attribute_key = f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"
+        hosts = await client.list_hosts()
+        defaulted = sum(
+            1
+            for h in hosts
+            if attribute_key not in h.get("extensions", {}).get("attributes", {})
+        )
+        console.print(
+            f"[green]device_type tag group created.[/green] "
+            f"{defaulted} pre-existing host(s) defaulted to device_type={choices[0]!r}."
+        )
+    except CheckmkAPIError as exc:
+        console.print(f"[yellow]could not provision device_type tag group: {exc}[/yellow]")
+
+
 async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
     """Optionally create folders, each with its own subnet to scan in
     Phase 3. Returns {folder_name: cidr_or_None} — an empty dict (no
@@ -618,6 +707,14 @@ async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
     back to a single flat scan into the root folder.
     """
     console.rule("[bold]Phase 2 — Folder Structure (optional)")
+    # Provisioning the device_type tag group must happen here, before the
+    # `use_folders` confirm below: that confirm early-returns when the
+    # operator declines folders, so anything placed after it would be
+    # skipped on the most common path. It must also run before Phase 3
+    # stages any placeholder host from the network scan — otherwise this
+    # run's own newly-scanned hosts would be counted as "pre-existing",
+    # making D-08's backfill count meaningless.
+    await _ensure_device_type_tag_group(client)
     use_folders = await questionary.confirm("Set up folders (one per VLAN/site)?", default=False).ask_async()
     if not use_folders:
         console.print("Skipping — Phase 3 will scan a single subnet into the root folder.")
