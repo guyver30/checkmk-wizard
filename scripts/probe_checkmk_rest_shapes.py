@@ -1,13 +1,13 @@
 """Diagnostic probe for Checkmk REST/Livestatus payload shapes Phase 10 needs.
 
-Targets a live Checkmk 2.4.0p35 CE site and answers three questions
+Targets a live Checkmk 2.4.0p36 CE site and answers three questions
 10-RESEARCH.md could only source from a forum post and an Ansible module,
 consistent with this project's own rule that Checkmk's live server
 behaviour, not its docs, is the source of truth (`api.py:200-206`,
 `scripts/mqtt_poller.py:69-90`):
 
 1. What JSON body does `POST /domain-types/host_tag_group/collections/all`
-   actually accept on 2.4.0p35 -- `id` or `ident`, at the group level and
+   actually accept on 2.4.0p36 -- `id` or `ident`, at the group level and
    inside each tags entry? (RESEARCH.md Assumption A1)
 2. Does `GET /domain-types/host_config/collections/all` expose a per-host
    `extensions.folder` field, and does a newly created tag group's
@@ -27,7 +27,7 @@ bare `python3` inside the poller container as well as under `uv run` on
 the host, matching `scripts/mqtt_poller.py`'s "standalone,
 dependency-light" constraint.
 
-Live-verified against a real Checkmk 2.4.0p35 CE site on 2026-09-11 (run inside
+Live-verified against a real Checkmk 2.4.0p36 CE site on 2026-09-11 (run inside
 the `automation-worker` container, REST base
 `http://checkmk:5000/dmc/check_mk/api/1.0`, site `dmc`, Checkmk 2.4.0-latest
 check-mk-raw):
@@ -331,7 +331,7 @@ def _redact_auth_header(username: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Probe a live Checkmk 2.4.0p35 CE site's REST API and Livestatus for "
+        description="Probe a live Checkmk 2.4.0p36 CE site's REST API and Livestatus for "
         "the exact payload shapes Phase 10 needs (tag-group POST body, host_config folder "
         "field, Livestatus tags key shape). Creates and deletes a throwaway tag group.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
