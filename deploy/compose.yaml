@@ -165,15 +165,20 @@ services:
       # fill it in after running the wizard's Phase 1 bootstrap — see
       # "First-time credential setup" in
       # docs/Podman setup for checkmk, minio, mosquitto, worker.md §3.
-      # The `:?` guard makes compose refuse to start with a clear message if
-      # it is unset. A *wrong* secret is still a silent degradation, not a
+      # An unset secret (empty default below) is a silent degradation, not a
       # crash: the poller keeps running and keeps publishing status, but
-      # every device's `folder` field comes back empty.
+      # every device's `folder` field comes back empty. It must default to
+      # empty rather than a required-with-error interpolation: compose
+      # interpolates variables when it parses the whole file, before
+      # selecting services, so a required-value guard here would also block
+      # `checkmk` and `mosquitto` from starting on a first-time deployment —
+      # before the automation secret this variable demands can even exist
+      # (fixed 2026-09-11, see 10-REVIEW.md CR-01).
       - CMK_REST_HOST=checkmk
       - CMK_REST_PORT=5000
       - CMK_SITE_ID=dmc
       - CMK_REST_USERNAME=automation
-      - CMK_REST_SECRET=${CMK_REST_SECRET:?set CMK_REST_SECRET in deploy/.env (copy deploy/.env.example)}
+      - CMK_REST_SECRET=${CMK_REST_SECRET:-}
     networks:
       - cmk_net
 
