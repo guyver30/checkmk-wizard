@@ -159,18 +159,21 @@ services:
       # above already set, so this is one value to configure, not three.
       # CMK_REST_PORT=5000 is the check-mk-raw image's internal REST/GUI
       # port, reachable over cmk_net without publishing anything to the
-      # host. CMK_REST_SECRET below is a PLACEHOLDER the operator MUST
-      # replace with the automation user's real secret after running the
-      # wizard's Phase 1 bootstrap — see "First-time credential setup" in
+      # host. CMK_REST_SECRET is interpolated from deploy/.env (gitignored)
+      # rather than written here, so the automation user's real secret never
+      # lands in a tracked file; copy deploy/.env.example to deploy/.env and
+      # fill it in after running the wizard's Phase 1 bootstrap — see
+      # "First-time credential setup" in
       # docs/Podman setup for checkmk, minio, mosquitto, worker.md §3.
-      # Leaving it unset or wrong is a silent degradation, not a crash:
-      # the poller keeps running and keeps publishing status, but every
-      # device's `folder` field comes back empty.
+      # The `:?` guard makes compose refuse to start with a clear message if
+      # it is unset. A *wrong* secret is still a silent degradation, not a
+      # crash: the poller keeps running and keeps publishing status, but
+      # every device's `folder` field comes back empty.
       - CMK_REST_HOST=checkmk
       - CMK_REST_PORT=5000
       - CMK_SITE_ID=dmc
       - CMK_REST_USERNAME=automation
-      - CMK_REST_SECRET=REPLACE_ME
+      - CMK_REST_SECRET=${CMK_REST_SECRET:?set CMK_REST_SECRET in deploy/.env (copy deploy/.env.example)}
     networks:
       - cmk_net
 
