@@ -661,6 +661,22 @@ def _load_device_types() -> list[str]:
     return raw
 
 
+def _device_type_and_alias_attributes(h: OnboardedHost) -> dict:
+    """Build the device-type tag (and optional alias) fragment shared by
+    every Phase 5 host-creation/update branch (snmp, ping, agent), so the
+    `tag_<group_id>` key is derived from DEVICE_TYPE_TAG_GROUP_ID exactly
+    once rather than repeated as a literal at each call site.
+
+    `alias` is omitted entirely when unset — an absent key means "Checkmk
+    keeps whatever it has", while an explicit empty value would clear an
+    alias an operator may have set directly in the UI (D-09).
+    """
+    attrs: dict = {f"tag_{DEVICE_TYPE_TAG_GROUP_ID}": h.device_type}
+    if h.alias:
+        attrs["alias"] = h.alias
+    return attrs
+
+
 async def _ensure_device_type_tag_group(client: CheckmkClient) -> None:
     """Create the `device_type` host tag group exactly once, with `other`
     first so every pre-existing host defaults safely (D-06), and report
@@ -1578,6 +1594,7 @@ async def _onboard_hosts(
                         "tag_agent": "no-agent",
                         "tag_snmp_ds": "snmp-v2" if h.snmp_version == "v2c" else "snmp-v1",
                         "snmp_community": {"type": "v1_v2_community", "community": h.snmp_community},
+                        **_device_type_and_alias_attributes(h),
                     },
                 )
                 console.print("  [green]SNMP host created[/green] — polled directly, no agent/firewall/SSH steps")
@@ -1595,7 +1612,12 @@ async def _onboard_hosts(
                     client,
                     host_name=h.hostname,
                     folder=h.folder,
-                    attributes={"ipaddress": h.ip, "tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"},
+                    attributes={
+                        "ipaddress": h.ip,
+                        "tag_agent": "no-agent",
+                        "tag_snmp_ds": "no-snmp",
+                        **_device_type_and_alias_attributes(h),
+                    },
                 )
                 console.print("  [green]Ping-only host created[/green] — reachability monitoring only, no agent/SNMP")
             except CheckmkAPIError as exc:
@@ -1607,7 +1629,12 @@ async def _onboard_hosts(
                 client,
                 host_name=h.hostname,
                 folder=h.folder,
-                attributes={"ipaddress": h.ip, "tag_agent": "cmk-agent", "tag_snmp_ds": "no-snmp"},
+                attributes={
+                    "ipaddress": h.ip,
+                    "tag_agent": "cmk-agent",
+                    "tag_snmp_ds": "no-snmp",
+                    **_device_type_and_alias_attributes(h),
+                },
             )
         except CheckmkAPIError as exc:
             console.print(f"  [yellow]host create/update: {exc}[/yellow]")
