@@ -383,7 +383,7 @@ podman compose exec worker bash -c "cd /app/checkmk-wizard && uv sync"
 Needs a real TTY — `questionary` (the interactive-prompt library the wizard uses) won't render without one, so don't drop the `-it`:
 
 ```bash
-podman compose exec -it worker bash -c "cd /app/checkmk-wizard && uv run checkmk-wizard"
+podman exec --interactive --tty automation-worker bash -c "cd /app/checkmk-wizard && uv run checkmk-wizard"
 ```
 
 What to expect, that's different from running it directly on a Checkmk host:
