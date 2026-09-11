@@ -759,6 +759,32 @@ def test_topology_signature_survives_node_restored_from_older_schema():
     assert poller.topology_signature(fresh) == poller.topology_signature(list(restored.values()))
 
 
+# Regression (CR-06, Phase 10 code review): the first crash-loop fix backfilled
+# missing keys but not wrong types, so these malformed-but-valid-JSON retained
+# payloads still broke the cold-start-not-crash-loop contract.
+def test_parse_topology_payload_skips_node_with_non_str_id():
+    """A list id raised `TypeError: unhashable type` inside the parser itself."""
+    payload = json.dumps({"devices": [{"id": ["x"]}, {"id": "good"}]}).encode()
+    restored = poller.parse_topology_payload(payload)
+    assert list(restored) == ["good"]
+
+
+def test_parse_topology_payload_coerces_string_parents_to_empty_list():
+    """`parents: "router1"` made topology_signature sort a string into chars."""
+    payload = json.dumps({"devices": [{"id": "a", "parents": "router1"}]}).encode()
+    restored = poller.parse_topology_payload(payload)
+    assert restored["a"]["parents"] == []
+    sig = poller.topology_signature(list(restored.values()))
+    assert sig == (("a", (), poller.UNKNOWN_DEVICE_TYPE, "", ""),)
+
+
+def test_parse_topology_payload_coerces_non_str_folder_and_alias():
+    payload = json.dumps({"devices": [{"id": "a", "folder": 123, "alias": None}]}).encode()
+    restored = poller.parse_topology_payload(payload)
+    assert restored["a"]["folder"] == ""
+    assert restored["a"]["alias"] == ""
+
+
 def test_topology_signature_differs_when_restored_node_gains_an_alias():
     """One republish after an upgrade that adds an alias is correct, not noise."""
     restored = poller.parse_topology_payload(
@@ -1174,3 +1200,45 @@ def test_run_forever_rest_never_succeeded_leaves_folders_empty_and_still_runs_cy
     assert result == 0
     assert captured_folders == [{}]
     mock_run_cycle.assert_called_once()
+
+
+# Regression (CR-04, Phase 10 code review): `--once` called query_devices without
+# `folders=`, so the documented one-shot verification path published retained
+# `status` AND `topology` with every folder blank, overwriting correct retained
+# values on the broker. `run_forever` passed folders correctly; only this branch
+# did not, and nothing covered `--once` at all.
+def test_once_branch_enriches_snapshots_with_folder_map(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["mqtt_poller.py", "--once"])
+    with (
+        patch.object(poller.PollerConfig, "from_env", staticmethod(lambda: _make_config())),
+        patch.object(poller, "configure_logging"),
+        patch.object(poller, "reconcile_state", return_value=poller.PollerState(previous_nodes={}, last_status={}, history={}, events=[], since="t")),
+        patch.object(poller, "build_mqtt_client"),
+        patch.object(poller, "shutdown_mqtt_client"),
+        patch.object(poller, "available_host_columns", return_value={"name", "state", "alias"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state", "alias"]),
+        patch.object(poller, "fetch_host_folders", return_value={"192.168.0.1": "folder2"}),
+        patch.object(poller, "query_devices", return_value=[]) as mock_query,
+        patch.object(poller, "run_cycle"),
+    ):
+        assert poller.main() == 0
+    assert mock_query.call_args.kwargs["folders"] == {"192.168.0.1": "folder2"}
+
+
+def test_once_branch_degrades_when_folder_fetch_fails(monkeypatch):
+    """A REST failure must not abort the one-shot run -- same posture as run_forever."""
+    monkeypatch.setattr(sys, "argv", ["mqtt_poller.py", "--once"])
+    with (
+        patch.object(poller.PollerConfig, "from_env", staticmethod(lambda: _make_config())),
+        patch.object(poller, "configure_logging"),
+        patch.object(poller, "reconcile_state", return_value=poller.PollerState(previous_nodes={}, last_status={}, history={}, events=[], since="t")),
+        patch.object(poller, "build_mqtt_client"),
+        patch.object(poller, "shutdown_mqtt_client"),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_folders", side_effect=poller.RestError("401")),
+        patch.object(poller, "query_devices", return_value=[]) as mock_query,
+        patch.object(poller, "run_cycle"),
+    ):
+        assert poller.main() == 0
+    assert mock_query.call_args.kwargs["folders"] == {}
