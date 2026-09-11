@@ -773,7 +773,14 @@ async def test_phase5_agent_host_sets_no_snmp(monkeypatch):
             await phase5_onboarding(client, CONN, [host], [])
 
     body = json.loads(create_route.calls.last.request.content)
-    assert body["attributes"] == {"ipaddress": "10.0.0.7", "tag_agent": "cmk-agent", "tag_snmp_ds": "no-snmp"}
+    # device_type defaults to "other" (OnboardedHost's own default) when
+    # not explicitly set — updated for this plan's tag_device_type addition.
+    assert body["attributes"] == {
+        "ipaddress": "10.0.0.7",
+        "tag_agent": "cmk-agent",
+        "tag_snmp_ds": "no-snmp",
+        "tag_device_type": "other",
+    }
 
 
 @pytest.mark.asyncio
@@ -797,7 +804,116 @@ async def test_phase5_ping_host_sets_no_agent_no_snmp(monkeypatch):
             await phase5_onboarding(client, CONN, [host], [])
 
     body = json.loads(create_route.calls.last.request.content)
-    assert body["attributes"] == {"ipaddress": "10.0.0.8", "tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"}
+    # device_type defaults to "other" (OnboardedHost's own default) when
+    # not explicitly set — updated for this plan's tag_device_type addition.
+    assert body["attributes"] == {
+        "ipaddress": "10.0.0.8",
+        "tag_agent": "no-agent",
+        "tag_snmp_ds": "no-snmp",
+        "tag_device_type": "other",
+    }
+
+
+@pytest.mark.asyncio
+async def test_phase5_snmp_host_carries_tag_device_type(monkeypatch):
+    _mock_no_ssh_and_skip_services(monkeypatch)
+
+    host = OnboardedHost(
+        ip="10.0.0.20",
+        hostname="switch20",
+        folder="/",
+        os_family="snmp",
+        snmp_version="v2c",
+        snmp_community="public",
+        device_type="NetworkDevice",
+    )
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.20").mock(return_value=Response(204))
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["attributes"]["tag_device_type"] == "NetworkDevice"
+
+
+@pytest.mark.asyncio
+async def test_phase5_ping_host_carries_tag_device_type(monkeypatch):
+    _mock_no_ssh_and_skip_services(monkeypatch)
+
+    host = OnboardedHost(ip="10.0.0.21", hostname="pinghost2", folder="/", os_family="ping", device_type="ACS")
+
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.21").mock(return_value=Response(204))
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        respx.post(f"{BASE}/domain-types/rule/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["attributes"]["tag_device_type"] == "ACS"
+
+
+@pytest.mark.asyncio
+async def test_phase5_agent_host_carries_tag_device_type(monkeypatch):
+    _mock_no_ssh_and_skip_services(monkeypatch)
+
+    host = OnboardedHost(
+        ip="10.0.0.22", hostname="10.0.0.22", folder="/", os_family="windows", device_type="Multimedia"
+    )
+
+    with respx.mock:
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["attributes"]["tag_device_type"] == "Multimedia"
+
+
+@pytest.mark.asyncio
+async def test_phase5_no_alias_key_when_alias_unset(monkeypatch):
+    # The absent-vs-empty distinction is the easiest thing here to get
+    # silently wrong (T-10-17): omitting the key must never become "".
+    _mock_no_ssh_and_skip_services(monkeypatch)
+
+    host = OnboardedHost(ip="10.0.0.23", hostname="10.0.0.23", folder="/", os_family="windows")
+
+    with respx.mock:
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert "alias" not in body["attributes"]
+
+
+@pytest.mark.asyncio
+async def test_phase5_alias_key_present_when_set(monkeypatch):
+    _mock_no_ssh_and_skip_services(monkeypatch)
+
+    host = OnboardedHost(
+        ip="10.0.0.24", hostname="10.0.0.24", folder="/", os_family="windows", alias="rack-2 door"
+    )
+
+    with respx.mock:
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["attributes"]["alias"] == "rack-2 door"
 
 
 @pytest.mark.asyncio
