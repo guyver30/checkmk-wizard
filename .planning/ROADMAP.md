@@ -93,8 +93,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 10-02-PLAN.md — CheckmkClient.create_host_tag_group/get_host_tag_group, the validated device_types loader, and the idempotent tag-group provisioning step with its pre-existing-host default count
-- [ ] 10-03-PLAN.md — Poller: alias column end-to-end, RestError + REST folder lookup replacing derive_folder's filename parsing, PollerConfig REST credentials with the secret redacted
+- [x] 10-02-PLAN.md — CheckmkClient.create_host_tag_group/get_host_tag_group, the validated device_types loader, and the idempotent tag-group provisioning step with its pre-existing-host default count
+- [x] 10-03-PLAN.md — Poller: alias column end-to-end, RestError + REST folder lookup replacing derive_folder's filename parsing, PollerConfig REST credentials with the secret redacted
 
 **Wave 3** *(blocked on Wave 2)*
 
@@ -130,5 +130,5 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
-| 10. Checkmk Tag-Group & Onboarding Integration | 1/6 | In Progress|  |
+| 10. Checkmk Tag-Group & Onboarding Integration | 3/6 | In Progress|  |
 | 11. Live Dashboard | 0/TBD | Not started | - |
