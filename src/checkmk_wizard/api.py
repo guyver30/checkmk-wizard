@@ -305,6 +305,51 @@ class CheckmkClient:
         resp = await self._request("POST", "/domain-types/rule/collections/all", json_body=body)
         return resp.json()
 
+    # -- Phase 2: host tag groups --------------------------------------------
+
+    async def get_host_tag_group(self, group_id: str) -> httpx.Response:
+        # Tag-group REST ids are plain (no tilde-encoding), unlike folder ids
+        # (`get_folder` uses `~{name}` because that is Checkmk's own
+        # path-separator encoding for folders, not a general id-encoding
+        # rule) — do not "fix" this to match `get_folder`.
+        # `expect=(200, 404)` lets the caller distinguish "already exists"
+        # from "needs creating" without a try/except; 404 is the normal,
+        # expected case on a fresh site, not an error condition.
+        return await self._request(
+            "GET", f"/objects/host_tag_group/{group_id}", expect=(200, 404)
+        )
+
+    # Live-verified against a real Checkmk 2.4.0p35 CE site on 2026-09-11
+    # (see scripts/probe_checkmk_rest_shapes.py's module docstring for the
+    # full probe run): POST .../host_tag_group/collections/all accepts `id`
+    # (not `ident`) as the top-level key and inside each `tags[]` entry —
+    # HTTP 200 on first attempt, no `ident` retry needed. `topic` is
+    # optional; Checkmk defaults `extensions.topic` when omitted. Load-bearing
+    # behaviour (PITFALLS.md Pitfall 8): Checkmk silently assigns `tags[0]`'s
+    # id as the default tag value for every host that has no explicit value
+    # for this group, so callers MUST list the safe/neutral choice first.
+    # The same probe run also confirmed this default does NOT materialise as
+    # an explicit per-host `extensions.attributes` key — a host defaulted this
+    # way has no `tag_<group_id>` entry at all, it stays implicit.
+    async def create_host_tag_group(
+        self,
+        group_id: str,
+        title: str,
+        tags: list[dict[str, Any]],
+        topic: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "id": group_id,
+            "title": title,
+            "tags": tags,
+        }
+        if topic is not None:
+            body["topic"] = topic
+        resp = await self._request(
+            "POST", "/domain-types/host_tag_group/collections/all", json_body=body
+        )
+        return resp.json()
+
 
 # -- Phase 1: bootstrap the 'automation' REST user ---------------------------
 

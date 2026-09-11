@@ -210,6 +210,99 @@ async def test_network_error_wrapped_as_checkmk_api_error():
 
 
 @pytest.mark.asyncio
+async def test_get_host_tag_group_does_not_raise_on_404():
+    # 404 is the normal, expected case on a fresh site (idempotency check),
+    # not an error — must not raise.
+    with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/device_type").mock(
+            return_value=Response(404, json={"title": "Not Found"})
+        )
+        async with CheckmkClient(CONN) as client:
+            resp = await client.get_host_tag_group("device_type")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_host_tag_group_returns_200_when_present():
+    with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/device_type").mock(
+            return_value=Response(200, json={"id": "device_type"})
+        )
+        async with CheckmkClient(CONN) as client:
+            resp = await client.get_host_tag_group("device_type")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_get_host_tag_group_non_404_error_raises():
+    with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/device_type").mock(
+            return_value=Response(500, json={"title": "server error"})
+        )
+        async with CheckmkClient(CONN) as client:
+            with pytest.raises(CheckmkAPIError):
+                await client.get_host_tag_group("device_type")
+
+
+@pytest.mark.asyncio
+async def test_create_host_tag_group_sends_id_shape_body():
+    # Live-verified body shape (2026-09-11 probe run): top-level `id`, not
+    # `ident`, and no `topic` key when none is supplied.
+    with respx.mock:
+        route = respx.post(f"{BASE}/domain-types/host_tag_group/collections/all").mock(
+            return_value=Response(200, json={"id": "device_type"})
+        )
+        async with CheckmkClient(CONN) as client:
+            result = await client.create_host_tag_group(
+                group_id="device_type",
+                title="Device Type",
+                tags=[
+                    {"id": "other", "title": "other", "aux_tags": []},
+                    {"id": "ACS", "title": "ACS", "aux_tags": []},
+                ],
+            )
+    assert result["id"] == "device_type"
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body["id"] == "device_type"
+    assert "ident" not in sent_body
+    assert "topic" not in sent_body
+    # First element stays first — this is the load-bearing default-value
+    # ordering (PITFALLS.md Pitfall 8).
+    assert sent_body["tags"][0]["id"] == "other"
+    assert sent_body["tags"][1]["id"] == "ACS"
+
+
+@pytest.mark.asyncio
+async def test_create_host_tag_group_includes_topic_only_when_supplied():
+    with respx.mock:
+        route = respx.post(f"{BASE}/domain-types/host_tag_group/collections/all").mock(
+            return_value=Response(200, json={"id": "device_type"})
+        )
+        async with CheckmkClient(CONN) as client:
+            await client.create_host_tag_group(
+                group_id="device_type",
+                title="Device Type",
+                tags=[{"id": "other", "title": "other", "aux_tags": []}],
+                topic="Tags",
+            )
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body["topic"] == "Tags"
+
+
+@pytest.mark.asyncio
+async def test_create_host_tag_group_error_raises_checkmk_api_error():
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/host_tag_group/collections/all").mock(
+            return_value=Response(400, json={"title": "bad request"})
+        )
+        async with CheckmkClient(CONN) as client:
+            with pytest.raises(CheckmkAPIError):
+                await client.create_host_tag_group(
+                    group_id="device_type", title="Device Type", tags=[]
+                )
+
+
+@pytest.mark.asyncio
 async def test_start_service_discovery_uses_refresh_mode():
     with respx.mock:
         route = respx.post(f"{BASE}/domain-types/service_discovery_run/actions/start/invoke").mock(
