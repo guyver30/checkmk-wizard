@@ -15,6 +15,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 8: Broker Infrastructure Hardening** - Mosquitto gains a durable, access-controlled WebSockets listener alongside its existing internal TCP listener
 - [x] **Phase 9: Poller Core** - A resilient Livestatus-to-MQTT poller publishes the per-device topic contract and self-heals across restarts (completed 2026-09-09)
 - [x] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and a folder-derived location/group label are wired into the wizard's onboarding flow (completed 2026-09-11)
+- [ ] **Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps** (INSERTED) - Urgent insertion after Phase 10
 - [ ] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract
 
 ## Phase Details
@@ -104,6 +105,27 @@ Plans:
 **Wave 4** *(blocked on Wave 3)*
 
 - [x] 10-06-PLAN.md — Live end-to-end verification (blocking checkpoint), extract_device_type corrected to the confirmed Livestatus key shape, and ROADMAP/REQUIREMENTS/PROJECT terminology reconciliation
+
+### Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps (INSERTED)
+
+**Goal**: An operator can correct device type and alias on already-onboarded hosts without re-promoting them, and the poller/worker deployment stops requiring hand-copied credentials or silent-failure guesswork
+**Depends on**: Phase 10
+**Requirements**: TAG-04, OPS-01, OPS-02, OPS-03, OPS-04
+**Source**: Phase 10 self-identified follow-up findings 1-5 (`.planning/phases/10-checkmk-tag-group-onboarding-integration/10-06-SUMMARY.md`, "Findings for Follow-up"), carried forward by `10-VERIFICATION.md`
+**Success Criteria** (what must be TRUE):
+
+  1. A folder-scoped bulk retag flow exists that lists already-onboarded hosts and updates `tag_device_type` and `alias` via `update_host_attributes`, without running promotion or altering the host's monitoring method
+  2. The `worker` compose service carries the same `CMK_REST_*` environment block the `poller` service already has, so the wizard re-run and the probe script no longer need a hand-pasted secret
+  3. The automation secret the wizard generates on a first run is displayed to the operator at the point it is created, sufficient to populate `deploy/.env` without shelling into the `checkmk` container
+  4. The poller applies one consistent failure posture across its two external dependencies (Livestatus and the Checkmk REST credential) rather than exiting for one and degrading for the other
+  5. A successful poller start emits a log line identifying the configured site, poll interval, and broker, so a healthy poller is distinguishable from a hung one in `podman logs`
+
+**Plans**: 3 plans
+
+Plans:
+- [ ] 10.1-01-PLAN.md — Live-verify whether a partial host-attribute PUT merges or replaces (blocking probe + checkpoint)
+- [ ] 10.1-02-PLAN.md — Deployment/observability gaps: worker CMK_REST_* env, automation secret display, poller startup retry and success log
+- [ ] 10.1-03-PLAN.md — Detection-driven folder-scoped bulk retag inside Phase 4, with activation and Phase 4 answer-iterator audit
 
 ### Phase 11: Live Dashboard
 
