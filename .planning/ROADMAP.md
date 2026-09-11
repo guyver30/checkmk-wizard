@@ -14,7 +14,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 
 - [x] **Phase 8: Broker Infrastructure Hardening** - Mosquitto gains a durable, access-controlled WebSockets listener alongside its existing internal TCP listener
 - [x] **Phase 9: Poller Core** - A resilient Livestatus-to-MQTT poller publishes the per-device topic contract and self-heals across restarts (completed 2026-09-09)
-- [ ] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and a folder-derived location/group label are wired into the wizard's onboarding flow
+- [x] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and a folder-derived location/group label are wired into the wizard's onboarding flow (completed 2026-09-11)
 - [ ] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract
 
 ## Phase Details
@@ -103,7 +103,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 10-06-PLAN.md — Live end-to-end verification (blocking checkpoint), extract_device_type corrected to the confirmed Livestatus key shape, and ROADMAP/REQUIREMENTS/PROJECT terminology reconciliation
+- [x] 10-06-PLAN.md — Live end-to-end verification (blocking checkpoint), extract_device_type corrected to the confirmed Livestatus key shape, and ROADMAP/REQUIREMENTS/PROJECT terminology reconciliation
 
 ### Phase 11: Live Dashboard
 
@@ -130,5 +130,5 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
-| 10. Checkmk Tag-Group & Onboarding Integration | 5/6 | In Progress|  |
+| 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 0/TBD | Not started | - |
