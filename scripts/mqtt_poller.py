@@ -89,6 +89,32 @@ UNKNOWN_DEVICE_TYPE = "unknown"
 # exercised `extract_device_type()`'s `UNKNOWN_DEVICE_TYPE` fallback path
 # correctly, but not the real key shape -- re-confirm once Phase 10 lands.
 #
+# Follow-up, live-verified against a real Checkmk 2.4.0p36.cre CE site
+# (site `dmc`) on 2026-09-11 (plan 10-06): a filtered `GET hosts` LQL
+# query against a host freshly tagged `device_type=NetworkDevice`
+# through the Checkmk UI returned `tags` keyed by the bare group id --
+# `{'device_type': 'NetworkDevice'}`, no `tag_` prefix. A3 is closed:
+# Livestatus keys custom tags the same way the wizard's own attribute
+# name suggests, not with the REST attribute's `tag_` prefix. The same
+# query against an untagged host (`checkmk_wizard`) returned
+# `{'device_type': 'other'}`, not an absent key -- Livestatus resolves a
+# tag group's configured default rather than omitting an unset tag,
+# which is the opposite of the REST API's `extensions.attributes`
+# behavior (10-01 live-verified REST omits the key entirely when a host
+# has never had the attribute explicitly set). Practical consequence:
+# once the `device_type` tag group exists on a site, `extract_device_type`
+# can no longer observe `UNKNOWN_DEVICE_TYPE` for a normal untagged host
+# -- Livestatus always resolves one of the group's real choices (`other`
+# included). `UNKNOWN_DEVICE_TYPE` surviving in a payload therefore means
+# the tag group itself is missing from the site (a pre-Phase-10 site, or
+# a site Phase 10 was never run against), not "this host has no device
+# type" -- see `extract_device_type()`'s docstring below.
+#
+# The same 2026-09-11 run confirmed the `alias` column (added by Phase
+# 10, D-10, listed below) is present and populated on 2.4.0p36.cre: the
+# operator-set alias value (`core-router-1`) was distinguishable from
+# the hostname in the retained MQTT payload.
+#
 # The same live run also closed Assumption A4 (reconciliation timing):
 # with the default 60s poll interval, no spurious `lan/devices/topology`
 # republish was observed across two full poll intervals (130s) of no
@@ -118,8 +144,8 @@ OPTIONAL_HOST_COLUMNS = (
     "parents",
     "tags",
     # Added by Phase 10 (D-10). Not covered by the 2026-09-08 column probe
-    # above -- expected present on 2.4.0p35 as a first-class Checkmk host
-    # attribute, but not yet confirmed live; plan 10-06's live run confirms it.
+    # above; live-verified present and populated on a real 2.4.0p36.cre
+    # site on 2026-09-11 (plan 10-06, see the dated follow-up note above).
     "alias",
 )
 
@@ -346,15 +372,27 @@ def topology_signature(nodes: list[dict]) -> tuple:
 
 
 def extract_device_type(tags: dict) -> str:
-    """Read a device-type tag defensively; the tag itself doesn't exist until Phase 10.
+    """Read the `device_type` tag from a Livestatus `tags` column value.
 
-    Until then, every host is untagged and the safe "unknown" default is
-    the normal, expected case, not an error condition.
+    Live-verified against a real Checkmk 2.4.0p36.cre CE site (site `dmc`)
+    on 2026-09-11 (plan 10-06): Livestatus keys a custom tag group by its
+    bare group id (`device_type`), not the `tag_` prefix the REST API uses
+    for the same attribute (`tag_device_type`) -- closing RESEARCH.md
+    Assumption A3. The same run showed Livestatus resolves the tag
+    group's configured default for an untagged host rather than omitting
+    the key, so once the `device_type` tag group exists on a site, every
+    host reports a real value -- `other` for an untagged host, never a
+    missing key.
+
+    `UNKNOWN_DEVICE_TYPE` is therefore the exceptional case, not the
+    normal one: it means the `device_type` tag group does not exist on
+    this site at all (a pre-Phase-10 site, or one Phase 10 was never run
+    against), not "this host has no device type". Callers displaying
+    `UNKNOWN_DEVICE_TYPE` (e.g. a future dashboard) should treat it as a
+    site-configuration warning, not a device category alongside `other`.
     """
     if "device_type" in tags:
         return tags["device_type"]
-    if "tag_device_type" in tags:
-        return tags["tag_device_type"]
     return UNKNOWN_DEVICE_TYPE
 
 
