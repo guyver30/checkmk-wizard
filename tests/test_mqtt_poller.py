@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import sys
+import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -151,6 +152,11 @@ _ENV_VARS = (
     "EVENTS_MAX_ENTRIES",
     "RECONCILE_TIMEOUT_SECONDS",
     "LOG_LEVEL",
+    "CMK_REST_HOST",
+    "CMK_REST_PORT",
+    "CMK_SITE_ID",
+    "CMK_REST_USERNAME",
+    "CMK_REST_SECRET",
 )
 
 
@@ -178,6 +184,111 @@ def test_poller_config_repr_never_contains_the_password_value(monkeypatch):
     rendered = repr(config)
     assert "***" in rendered
     assert "supersecret" not in rendered
+
+
+def test_poller_config_from_env_reads_rest_credentials_with_defaults(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    config = poller.PollerConfig.from_env()
+    assert config.cmk_rest_host == "checkmk"
+    assert config.cmk_rest_port == 5000
+    assert config.cmk_site_id == "dmc"
+    assert config.cmk_rest_username == ""
+    assert config.cmk_rest_secret == ""
+
+
+def test_poller_config_repr_never_contains_the_rest_secret_value(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("CMK_REST_USERNAME", "automation")
+    monkeypatch.setenv("CMK_REST_SECRET", "s3cr3t-value")
+    config = poller.PollerConfig.from_env()
+    rendered = repr(config)
+    assert "s3cr3t-value" not in rendered
+    assert "'***'" in rendered
+    # Non-secret REST fields must still render in the clear.
+    assert "cmk_rest_host='checkmk'" in rendered
+    assert "cmk_rest_port=5000" in rendered
+    assert "cmk_site_id='dmc'" in rendered
+    assert "cmk_rest_username='automation'" in rendered
+
+
+# --- cmk_rest_base_url / fetch_host_folders ---------------------------------
+
+
+def _fake_urlopen(body: bytes, status_code: int = 200):
+    response = MagicMock()
+    response.read.return_value = body
+    response.__enter__.return_value = response
+    response.__exit__.return_value = False
+    return response
+
+
+def test_cmk_rest_base_url_builds_expected_shape():
+    config = _make_config(
+        cmk_rest_host="checkmk", cmk_rest_port=5000, cmk_site_id="dmc"
+    )
+    assert poller.cmk_rest_base_url(config) == "http://checkmk:5000/dmc/check_mk/api/1.0"
+
+
+def test_fetch_host_folders_parses_extensions_folder_from_collection():
+    body = json.dumps(
+        {
+            "value": [
+                {"id": "web1", "extensions": {"folder": "/vlan10"}},
+                {"id": "web2", "extensions": {"folder": "/tower1/sub"}},
+            ]
+        }
+    ).encode()
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(body)):
+        result = poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+    assert result == {"web1": "vlan10", "web2": "tower1/sub"}
+
+
+def test_fetch_host_folders_missing_folder_field_maps_to_empty_string():
+    body = json.dumps({"value": [{"id": "web1", "extensions": {}}]}).encode()
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(body)):
+        result = poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+    assert result == {"web1": ""}
+
+
+def test_fetch_host_folders_raises_rest_error_on_connection_failure():
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+        try:
+            poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+        except poller.RestError as exc:
+            assert isinstance(exc.__cause__, OSError)
+        else:
+            raise AssertionError("expected RestError")
+
+
+def test_fetch_host_folders_raises_rest_error_on_malformed_json():
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"not-json{{{")):
+        try:
+            poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+        except poller.RestError:
+            pass
+        else:
+            raise AssertionError("expected RestError, not a bare json.JSONDecodeError")
+
+
+def test_fetch_host_folders_401_error_message_never_contains_username_or_secret():
+    http_error = urllib.error.HTTPError(
+        url="http://checkmk:5000/dmc/check_mk/api/1.0/domain-types/host_config/collections/all",
+        code=401,
+        msg="Unauthorized",
+        hdrs=None,
+        fp=None,
+    )
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        try:
+            poller.fetch_host_folders(
+                "http://checkmk:5000/dmc/check_mk/api/1.0", "secretuser", "supersecretvalue", 10
+            )
+        except poller.RestError as exc:
+            message = str(exc)
+            assert "secretuser" not in message
+            assert "supersecretvalue" not in message
+        else:
+            raise AssertionError("expected RestError")
 
 
 # --- build_hosts_query / select_host_columns --------------------------------
