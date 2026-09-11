@@ -14,7 +14,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 
 - [x] **Phase 8: Broker Infrastructure Hardening** - Mosquitto gains a durable, access-controlled WebSockets listener alongside its existing internal TCP listener
 - [x] **Phase 9: Poller Core** - A resilient Livestatus-to-MQTT poller publishes the per-device topic contract and self-heals across restarts (completed 2026-09-09)
-- [ ] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and folder-derived VLAN are wired into the wizard's onboarding flow
+- [ ] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and a folder-derived location/group label are wired into the wizard's onboarding flow
 - [ ] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract
 
 ## Phase Details
@@ -75,15 +75,15 @@ Plans:
 
 ### Phase 10: Checkmk Tag-Group & Onboarding Integration
 
-**Goal**: Checkmk captures device type per host and VLAN is reliably derived from folder structure, without silently mis-tagging existing hosts
-**Depends on**: Nothing beyond the existing wizard (technically independent of Phase 9's poller; sequenced third per this milestone's chosen horizontal-layer build order so real device-type/VLAN data exists before dashboard integration testing)
+**Goal**: Checkmk captures device type per host and a location/group label is reliably derived from folder structure, without silently mis-tagging existing hosts
+**Depends on**: Nothing beyond the existing wizard (technically independent of Phase 9's poller; sequenced third per this milestone's chosen horizontal-layer build order so real device-type/location data exists before dashboard integration testing)
 **Requirements**: TAG-01, TAG-02, TAG-03
 **Success Criteria** (what must be TRUE):
 
-  1. A new `device_type` host tag group exists in Checkmk with values including server/switch/router/iot/etc., and every pre-existing host is defaulted to a neutral `unknown` value rather than a real device type
-  2. Running the wizard's Phase 5 onboarding flow prompts for device type per host, and the tag is set via a REST API attribute shape (`tag_<group_id>`) verified against a live Checkmk 2.4.0p35 site
-  3. A host's VLAN value is derived from its Checkmk folder path via the REST API's structured folder segments (not raw string splitting), correctly reflecting nested folder moves
-  4. Existing wizard Phase 5 onboarding tests still pass with the new tag prompt added
+  1. A new `device_type` host tag group exists in Checkmk with a config-driven, site-specific choice list, and every pre-existing host is defaulted to the neutral `other` value (listed first in the group) rather than a real device type
+  2. The wizard's Phase 4 classification flow prompts for device type per host, Phase 5 onboarding applies it, and the tag is set via a REST API attribute shape (`tag_<group_id>`) verified against a live Checkmk 2.4.0p35 site
+  3. A host's location/group label is derived from its Checkmk folder association via the REST API's structured folder segments (not raw string splitting), correctly reflecting nested folder moves
+  4. Existing wizard Phase 4 classification tests still pass with the new tag prompt added
 
 **Plans**: 6 plans
 Plans:
@@ -112,7 +112,7 @@ Plans:
 **Requirements**: DASH-01, DASH-02, DASH-03, DASH-04, DASH-05, DASH-06
 **Success Criteria** (what must be TRUE):
 
-  1. `index.html` renders a live topology map (vis-network) with parent/child links, an at-a-glance stats-by-state strip, and nodes color-coded/icon-coded by device type and grouped/colored by VLAN; incoming updates merge via `DataSet.update()` without a full re-render
+  1. `index.html` renders a live topology map (vis-network) with parent/child links, an at-a-glance stats-by-state strip, and nodes color-coded/icon-coded by device type and grouped/colored by the folder-derived location/group label; incoming updates merge via `DataSet.update()` without a full re-render
   2. `devices.html` shows a live sortable device table and a recent-events panel that update in place as MQTT messages arrive
   3. `details.html` shows a per-device drill-down with a bounded status-history strip and a link out to Checkmk's own UI for that host
   4. A device whose last-seen timestamp exceeds a staleness threshold, or whose poller liveness signal (`lan/poller/status`) is stale, is shown in a distinct stale/unknown visual state separate from "down"

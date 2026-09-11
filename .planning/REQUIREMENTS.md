@@ -24,9 +24,9 @@
 
 ### Tagging
 
-- [ ] **TAG-01**: A new Checkmk host tag group captures device type (server/switch/router/iot/etc.) with a neutral `unknown` default value, so pre-existing hosts aren't silently mis-tagged when the tag group is created
-- [ ] **TAG-02**: The wizard's Phase 5 onboarding flow prompts for and sets the device-type tag per host, using an attribute shape verified against a live Checkmk site's REST API
-- [ ] **TAG-03**: VLAN is derived from the host's Checkmk folder path via the REST API's structured folder segments, not raw string splitting
+- [ ] **TAG-01**: A new Checkmk host tag group captures device type, with a config-driven, site-specific choice list and a neutral `other` value in first position, so pre-existing hosts aren't silently mis-tagged when the tag group is created
+- [ ] **TAG-02**: The wizard's Phase 4 classification flow prompts for the device type per host, and Phase 5 onboarding applies it, using an attribute shape verified against a live Checkmk site's REST API
+- [ ] **TAG-03**: A generic location/group label is derived from the host's Checkmk folder association via the REST API's structured folder segments (not raw string splitting), and consumed by the poller
 
 ### Dashboard
 
@@ -35,7 +35,7 @@
 - [ ] **DASH-03**: `details.html` shows a per-device drill-down with a bounded status-history strip, linking out to Checkmk's own UI for full service-level detail
 - [ ] **DASH-04**: Dashboard shows a distinct stale/unknown visual state (separate from down) when a device's last-seen timestamp exceeds a threshold, or when the poller's own liveness signal goes stale
 - [ ] **DASH-05**: Dashboard shows a connection-status indicator with jittered exponential-backoff reconnect for the MQTT-over-WebSockets connection
-- [ ] **DASH-06**: Dashboard color-codes/icons nodes by device type and groups/colors by VLAN
+- [ ] **DASH-06**: Dashboard color-codes/icons nodes by device type and groups/colors by the folder-derived location/group label
 
 ## v2 Requirements
 
@@ -98,3 +98,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 *Requirements defined: 2026-09-05*
 *Last updated: 2026-09-05 after roadmap creation (Phases 8-11)*
+*Terminology note: TAG-01/02/03 and DASH-06 wording was reframed from "VLAN"/"unknown"/"Phase 5" to "location/group label"/"other"/"Phase 4 prompt, Phase 5 apply" during Phase 10's `/bm:discuss-phase` session, per decisions D-01, D-02, D-06 and D-07 (`.planning/phases/10-checkmk-tag-group-onboarding-integration/10-CONTEXT.md`).*
