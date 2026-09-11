@@ -39,6 +39,7 @@ from checkmk_wizard.wizard import (
     _create_or_update_host,
     _create_service_discovery_rules,
     _default_checkmk_host,
+    _device_type_and_alias_attributes,
     _ensure_device_type_tag_group,
     _establish_ssh_access,
     _expected_open_ports_by_hostname,
@@ -1060,7 +1061,7 @@ async def test_phase2_folders_configures_network_scan(monkeypatch):
         async with CheckmkClient(CONN) as client:
             result = await phase2_folders(client)
 
-    assert result == {"/vlan10": "192.168.10.0/24"}
+    assert result[0] == {"/vlan10": "192.168.10.0/24"}
     assert update_route.called
     assert update_route.calls.last.request.headers["If-Match"] == "etag1"
     sent = json.loads(update_route.calls.last.request.content)
@@ -1123,7 +1124,7 @@ async def test_phase2_folders_network_scan_failure_does_not_lose_folder(monkeypa
         async with CheckmkClient(CONN) as client:
             result = await phase2_folders(client)
 
-    assert result == {"/vlan10": "192.168.10.0/24"}
+    assert result[0] == {"/vlan10": "192.168.10.0/24"}
 
 
 def test_load_device_types_returns_list_when_other_is_first(monkeypatch, tmp_path):
@@ -1240,7 +1241,56 @@ async def test_ensure_device_type_tag_group_create_failure_does_not_raise():
             return_value=Response(400, json={"title": "bad request"})
         )
         async with CheckmkClient(CONN) as client:
-            await _ensure_device_type_tag_group(client)  # must not raise
+            assert await _ensure_device_type_tag_group(client) is False
+
+
+# Regression (CR-02, Phase 10 code review): the get_host_tag_group probe used to
+# sit OUTSIDE this function's try block, so a 500/401/connect error propagated
+# out of phase2_folders and — since run() wraps no phase — aborted the whole
+# wizard run. Its docstring claimed otherwise. Only the POST-failure path above
+# was covered.
+@pytest.mark.asyncio
+async def test_ensure_device_type_tag_group_get_failure_does_not_raise():
+    with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/{DEVICE_TYPE_TAG_GROUP_ID}").mock(
+            return_value=Response(500, json={"title": "Internal Server Error"})
+        )
+        async with CheckmkClient(CONN) as client:
+            assert await _ensure_device_type_tag_group(client) is False
+
+
+@pytest.mark.asyncio
+async def test_ensure_device_type_tag_group_returns_true_when_already_present():
+    with respx.mock:
+        respx.get(f"{BASE}/objects/host_tag_group/{DEVICE_TYPE_TAG_GROUP_ID}").mock(
+            return_value=Response(200, json={"id": DEVICE_TYPE_TAG_GROUP_ID})
+        )
+        async with CheckmkClient(CONN) as client:
+            assert await _ensure_device_type_tag_group(client) is True
+
+
+# Regression (CR-03, Phase 10 code review): the attribute fragment set
+# tag_device_type unconditionally, so on a site where provisioning had warned
+# and continued, Checkmk rejected the unknown attribute and EVERY create_host
+# 400'd — zero hosts onboarded, surfacing as N opaque per-host warnings. alias
+# does not depend on the tag group and must still be applied.
+def test_device_type_attributes_omit_tag_when_group_unavailable():
+    h = OnboardedHost(
+        ip="10.0.0.1", hostname="h1", os_family="ping", folder="/", device_type="NetworkDevice", alias="core-1"
+    )
+    attrs = _device_type_and_alias_attributes(h, tag_group_available=False)
+    assert f"tag_{DEVICE_TYPE_TAG_GROUP_ID}" not in attrs
+    assert attrs["alias"] == "core-1"
+
+
+def test_device_type_attributes_include_tag_when_group_available():
+    """Guards against over-correcting CR-03 into never sending the tag."""
+    h = OnboardedHost(
+        ip="10.0.0.1", hostname="h1", os_family="ping", folder="/", device_type="NetworkDevice", alias="core-1"
+    )
+    attrs = _device_type_and_alias_attributes(h, tag_group_available=True)
+    assert attrs[f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"] == "NetworkDevice"
+    assert attrs["alias"] == "core-1"
 
 
 @pytest.mark.asyncio
@@ -1260,7 +1310,7 @@ async def test_phase2_folders_reaches_tag_group_check_when_folders_declined(monk
             result = await phase2_folders(client)
 
     assert tag_group_route.called
-    assert result == {}
+    assert result[0] == {}
 
 
 @pytest.mark.asyncio

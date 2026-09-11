@@ -661,7 +661,7 @@ def _load_device_types() -> list[str]:
     return raw
 
 
-def _device_type_and_alias_attributes(h: OnboardedHost) -> dict:
+def _device_type_and_alias_attributes(h: OnboardedHost, *, tag_group_available: bool = True) -> dict:
     """Build the device-type tag (and optional alias) fragment shared by
     every Phase 5 host-creation/update branch (snmp, ping, agent), so the
     `tag_<group_id>` key is derived from DEVICE_TYPE_TAG_GROUP_ID exactly
@@ -670,37 +670,65 @@ def _device_type_and_alias_attributes(h: OnboardedHost) -> dict:
     `alias` is omitted entirely when unset — an absent key means "Checkmk
     keeps whatever it has", while an explicit empty value would clear an
     alias an operator may have set directly in the UI (D-09).
+
+    `tag_group_available=False` omits the device-type tag entirely. Bug
+    fixed 2026-09-11 (Phase 10 code review, CR-03): this fragment used to
+    set `tag_<group_id>` unconditionally, but
+    `_ensure_device_type_tag_group()` is best-effort and warns rather than
+    aborting — so on a site where provisioning failed, Checkmk rejects the
+    unknown attribute and EVERY `create_host` call 400s. The visible
+    symptom was N opaque per-host warnings and zero hosts onboarded, with
+    nothing pointing at the real cause. Degrading to "onboard the host,
+    skip the tag" keeps this file's warn-and-continue convention and still
+    applies `alias`, which does not depend on the tag group.
     """
-    attrs: dict = {f"tag_{DEVICE_TYPE_TAG_GROUP_ID}": h.device_type}
+    attrs: dict = {}
+    if tag_group_available:
+        attrs[f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"] = h.device_type
     if h.alias:
         attrs["alias"] = h.alias
     return attrs
 
 
-async def _ensure_device_type_tag_group(client: CheckmkClient) -> None:
+async def _ensure_device_type_tag_group(client: CheckmkClient) -> bool:
     """Create the `device_type` host tag group exactly once, with `other`
     first so every pre-existing host defaults safely (D-06), and report
     how many pre-existing hosts that default touched (D-08).
+
+    Returns whether the tag group is available afterwards — True when it
+    already existed or was just created, False when provisioning failed.
+    Phase 5 threads this through `_device_type_and_alias_attributes()` so a
+    failure degrades to "onboard without the tag" instead of 400-ing every
+    host (CR-03).
 
     Wrapped in `try`/`except CheckmkAPIError` and printing a warning on
     failure rather than propagating, matching every other best-effort
     provisioning step in this file (`phase2_folders`'s folder create,
     `_onboard_hosts`'s host create) — a missing tag group must not abort
     a wizard run mid-flight.
-    """
-    resp = await client.get_host_tag_group(DEVICE_TYPE_TAG_GROUP_ID)
-    if resp.status_code == 200:
-        console.print("[green]device_type tag group already present[/green] — skipping creation.")
-        return
 
+    Bug fixed 2026-09-11 (Phase 10 code review, CR-02): the
+    `get_host_tag_group` probe used to sit OUTSIDE this try block, so the
+    docstring above was false for it. That call uses `expect=(200, 404)`,
+    meaning any other status (401, 500) or a connect error raised
+    `CheckmkAPIError` — and since `phase2_folders` doesn't catch and
+    `run()` wraps no phase, a transient REST blip aborted the whole wizard
+    run. The probe is inside the try now, so the documented contract
+    actually holds.
+    """
     try:
+        resp = await client.get_host_tag_group(DEVICE_TYPE_TAG_GROUP_ID)
+        if resp.status_code == 200:
+            console.print("[green]device_type tag group already present[/green] — skipping creation.")
+            return True
+
         choices = _load_device_types()
         await client.create_host_tag_group(
             group_id=DEVICE_TYPE_TAG_GROUP_ID,
             title="Device Type",
             tags=[{"id": choice, "title": choice, "aux_tags": []} for choice in choices],
         )
-        # Live-verified against a real Checkmk 2.4.0p35 CE site (2026-09-11
+        # Live-verified against a real Checkmk 2.4.0p36 CE site (2026-09-11
         # probe, scripts/probe_checkmk_rest_shapes.py): a new tag group's
         # implicit first-tag default does NOT materialise as an explicit
         # `tag_device_type` key in a host's `extensions.attributes` — so the
@@ -719,15 +747,25 @@ async def _ensure_device_type_tag_group(client: CheckmkClient) -> None:
             f"[green]device_type tag group created.[/green] "
             f"{defaulted} pre-existing host(s) defaulted to device_type={choices[0]!r}."
         )
+        return True
     except CheckmkAPIError as exc:
         console.print(f"[yellow]could not provision device_type tag group: {exc}[/yellow]")
+        console.print(
+            "[yellow]Device-type tagging is disabled for this run — hosts will still be "
+            "onboarded, without a device_type tag.[/yellow]"
+        )
+        return False
 
 
-async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
+async def phase2_folders(client: CheckmkClient) -> tuple[dict[str, str | None], bool]:
     """Optionally create folders, each with its own subnet to scan in
-    Phase 3. Returns {folder_name: cidr_or_None} — an empty dict (no
-    folders, or every folder's subnet left blank) tells Phase 3 to fall
-    back to a single flat scan into the root folder.
+    Phase 3. Returns ({folder_name: cidr_or_None}, device_type_tag_group_available).
+
+    An empty folder dict (no folders, or every folder's subnet left blank)
+    tells Phase 3 to fall back to a single flat scan into the root folder.
+    The boolean is threaded to Phase 5 so a failed tag-group provisioning
+    degrades to "onboard without the device_type tag" rather than 400-ing
+    every host (CR-03).
     """
     console.rule("[bold]Phase 2 — Folder Structure (optional)")
     # Provisioning the device_type tag group must happen here, before the
@@ -737,11 +775,11 @@ async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
     # stages any placeholder host from the network scan — otherwise this
     # run's own newly-scanned hosts would be counted as "pre-existing",
     # making D-08's backfill count meaningless.
-    await _ensure_device_type_tag_group(client)
+    tag_group_available = await _ensure_device_type_tag_group(client)
     use_folders = await questionary.confirm("Set up folders (one per location/group)?", default=False).ask_async()
     if not use_folders:
         console.print("Skipping — Phase 3 will scan a single subnet into the root folder.")
-        return {}
+        return {}, tag_group_available
 
     console.print(
         "Add folders one at a time. Each folder can have its own subnet for Phase 3 "
@@ -831,7 +869,7 @@ async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
 
     if not folder_subnets:
         console.print("No folders added — Phase 3 will scan a single subnet into the root folder.")
-    return folder_subnets
+    return folder_subnets, tag_group_available
 
 
 # ── Phase 3: Network discovery ──────────────────────────────────────────
@@ -1524,7 +1562,11 @@ async def _establish_ssh_access(test_host_ip: str) -> remote.SSHCredentials | No
 
 
 async def _onboard_hosts(
-    client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]
+    client: CheckmkClient,
+    connection: CheckmkConnection,
+    hosts: list[OnboardedHost],
+    *,
+    tag_group_available: bool = True,
 ) -> None:
     """Per-host firewall/agent/SNMP/ping onboarding loop — everything
     Phase 5 does for hosts the user actually promoted in Phase 4. Split
@@ -1594,7 +1636,7 @@ async def _onboard_hosts(
                         "tag_agent": "no-agent",
                         "tag_snmp_ds": "snmp-v2" if h.snmp_version == "v2c" else "snmp-v1",
                         "snmp_community": {"type": "v1_v2_community", "community": h.snmp_community},
-                        **_device_type_and_alias_attributes(h),
+                        **_device_type_and_alias_attributes(h, tag_group_available=tag_group_available),
                     },
                 )
                 console.print("  [green]SNMP host created[/green] — polled directly, no agent/firewall/SSH steps")
@@ -1616,7 +1658,7 @@ async def _onboard_hosts(
                         "ipaddress": h.ip,
                         "tag_agent": "no-agent",
                         "tag_snmp_ds": "no-snmp",
-                        **_device_type_and_alias_attributes(h),
+                        **_device_type_and_alias_attributes(h, tag_group_available=tag_group_available),
                     },
                 )
                 console.print("  [green]Ping-only host created[/green] — reachability monitoring only, no agent/SNMP")
@@ -1633,7 +1675,7 @@ async def _onboard_hosts(
                     "ipaddress": h.ip,
                     "tag_agent": "cmk-agent",
                     "tag_snmp_ds": "no-snmp",
-                    **_device_type_and_alias_attributes(h),
+                    **_device_type_and_alias_attributes(h, tag_group_available=tag_group_available),
                 },
             )
         except CheckmkAPIError as exc:
@@ -1783,10 +1825,12 @@ async def phase5_onboarding(
     connection: CheckmkConnection,
     hosts: list[OnboardedHost],
     scan_results: list[ScannedHost],
+    *,
+    tag_group_available: bool = True,
 ) -> None:
     console.rule("[bold]Phase 5 — Host Onboarding")
     if hosts:
-        await _onboard_hosts(client, connection, hosts)
+        await _onboard_hosts(client, connection, hosts, tag_group_available=tag_group_available)
 
     # Covers every scanned host, not just the ones promoted above — a scan
     # result the user never promoted stays a bare Phase 3 placeholder
@@ -2021,10 +2065,12 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
 async def run() -> None:
     connection = await phase1_site_bringup()
     async with CheckmkClient(connection) as client:
-        folder_subnets = await phase2_folders(client)
+        folder_subnets, tag_group_available = await phase2_folders(client)
         scan_results = await phase3_discovery(client, folder_subnets)
         onboarded = await phase4_classification(scan_results)
-        await phase5_onboarding(client, connection, onboarded, scan_results)
+        await phase5_onboarding(
+            client, connection, onboarded, scan_results, tag_group_available=tag_group_available
+        )
         await phase6_discovery(client, connection, onboarded)
         await phase7_activation(client, connection, onboarded)
     console.rule("[bold green]Done")
