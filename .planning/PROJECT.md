@@ -25,8 +25,8 @@ A single Python-based toolchain takes a bare Checkmk install all the way to a fu
 - [ ] A long-running Python poller (in the `worker` container) queries Checkmk Livestatus over TCP on an interval and detects host/topology state changes
 - [ ] Poller publishes to MQTT using a per-device topic contract: `lan/devices/topology` (retained, republished only on topology change), `lan/devices/{id}/status` (retained, republished every poll cycle), `lan/devices/{id}/history` (retained, bounded transition log), `lan/events/recent` (retained, bounded global transition feed)
 - [ ] `mosquitto.conf` gains a WebSockets listener so browser-based MQTT clients (`mqtt.js`) can subscribe directly
-- [ ] A new Checkmk host tag group captures device type (server/switch/router/iot/etc.); the wizard's Phase 5 onboarding flow prompts for and sets it per host
-- [ ] Topology links (`parent`) come from Livestatus's `parents` column; `vlan` is derived from the host's Checkmk folder path — no new Checkmk configuration needed for either
+- [ ] A new Checkmk host tag group captures device type from a config-driven, site-specific choice list; the wizard's Phase 4 classification flow prompts for it and Phase 5 onboarding sets it per host
+- [ ] Topology links (`parent`) come from Livestatus's `parents` column; a location/group label is derived from the host's Checkmk folder association — no new Checkmk configuration needed for either
 - [ ] A 3-page static HTML/CSS/JS dashboard (no build step, no backend) — `index.html` (live topology map via vis-network + an at-a-glance stats strip), `devices.html` (live sortable device table + recent-events panel), `details.html` (per-device drill-down with a bounded status-history strip) — served by a new nginx container added to `compose.yaml`
 - [ ] Dashboard shows a connection-status indicator with exponential-backoff MQTT reconnect, and merges incoming updates into existing UI state rather than re-rendering from scratch
 
