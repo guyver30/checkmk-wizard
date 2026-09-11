@@ -823,7 +823,8 @@ async def test_phase5_skips_ssh_prompt_when_no_linux_hosts(monkeypatch):
 @pytest.mark.asyncio
 async def test_phase4_offers_ping_monitoring_method(monkeypatch):
     scanned = ScannedHost(ip="10.0.0.12", open_ports=[], folder="/")
-    answers = iter([[scanned], "10.0.0.12", "ping", ""])
+    # promote, hostname, os_family, expected_open_ports, device_type, alias
+    answers = iter([[scanned], "10.0.0.12", "ping", "", "other", ""])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1151,7 +1152,8 @@ async def test_phase4_prompts_expected_open_ports_default_from_scan(monkeypatch)
     # The expected-open-ports prompt should default to what Phase 3's scan
     # actually found open on this IP.
     scanned = ScannedHost(ip="10.0.0.9", open_ports=[80, 443], folder="/")
-    answers = iter([[scanned], "10.0.0.9", "linux", "80,443"])
+    # promote, hostname, os_family, expected_open_ports, device_type, alias
+    answers = iter([[scanned], "10.0.0.9", "linux", "80,443", "other", ""])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1167,7 +1169,8 @@ async def test_phase4_prompts_expected_open_ports_default_from_scan(monkeypatch)
 @pytest.mark.asyncio
 async def test_phase4_expected_open_ports_blank_skips(monkeypatch):
     scanned = ScannedHost(ip="10.0.0.10", open_ports=[], folder="/")
-    answers = iter([[scanned], "10.0.0.10", "linux", ""])
+    # promote, hostname, os_family, expected_open_ports, device_type, alias
+    answers = iter([[scanned], "10.0.0.10", "linux", "", "other", ""])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1181,7 +1184,10 @@ async def test_phase4_expected_open_ports_blank_skips(monkeypatch):
 @pytest.mark.asyncio
 async def test_phase4_rejects_out_of_range_port(monkeypatch):
     scanned = ScannedHost(ip="10.0.0.11", open_ports=[], folder="/")
-    answers = iter([[scanned], "10.0.0.11", "linux", "99999", "443"])
+    # promote, hostname, os_family, expected_open_ports (invalid, then valid),
+    # device_type, alias — the two new prompts must come after BOTH port
+    # answers, since the ports loop retries in place.
+    answers = iter([[scanned], "10.0.0.11", "linux", "99999", "443", "other", ""])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1190,6 +1196,75 @@ async def test_phase4_rejects_out_of_range_port(monkeypatch):
 
     onboarded = await phase4_classification([scanned])
     assert onboarded[0].expected_open_ports == [443]
+
+
+@pytest.mark.asyncio
+async def test_phase4_prompts_device_type_and_offers_configured_choices(monkeypatch, tmp_path):
+    # The device-type select must offer exactly _load_device_types()'s
+    # return value, in order — this is what makes D-05 real (a site-
+    # specific taxonomy, not a hardcoded list).
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS", "Multimedia"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+
+    scanned = ScannedHost(ip="10.0.0.13", open_ports=[], folder="/")
+    answers = iter([[scanned], "10.0.0.13", "ping", "", "ACS", ""])
+    offered_choices = []
+    original_select = questionary.select
+
+    def capturing_select(message, choices=None, **kwargs):
+        if "Device type for" in message:
+            offered_choices.append([c.value for c in choices])
+        return original_select(message, choices=choices, **kwargs)
+
+    monkeypatch.setattr(questionary, "select", capturing_select)
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    onboarded = await phase4_classification([scanned])
+    assert offered_choices == [["other", "ACS", "Multimedia"]]
+    assert onboarded[0].device_type == "ACS"
+
+
+@pytest.mark.asyncio
+async def test_phase4_blank_alias_yields_none(monkeypatch, tmp_path):
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+
+    scanned = ScannedHost(ip="10.0.0.14", open_ports=[], folder="/")
+    # promote, hostname, os_family, expected_open_ports, device_type, alias
+    answers = iter([[scanned], "10.0.0.14", "ping", "", "other", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    onboarded = await phase4_classification([scanned])
+    assert onboarded[0].alias is None
+
+
+@pytest.mark.asyncio
+async def test_phase4_alias_answer_is_stripped(monkeypatch, tmp_path):
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+
+    scanned = ScannedHost(ip="10.0.0.15", open_ports=[], folder="/")
+    # promote, hostname, os_family, expected_open_ports, device_type, alias
+    answers = iter([[scanned], "10.0.0.15", "ping", "", "other", "  rack-2 door  "])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    onboarded = await phase4_classification([scanned])
+    assert onboarded[0].alias == "rack-2 door"
 
 
 @pytest.mark.asyncio

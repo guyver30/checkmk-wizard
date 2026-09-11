@@ -221,6 +221,13 @@ class OnboardedHost:
     # actively monitor. Read back by Phase 6 to verify they actually made
     # it into the "monitored" list, not just silently discovered nothing.
     expected_services: list[str] = field(default_factory=list)
+    # Defaults to the same neutral value that occupies first position in
+    # device_types.json, so an unprompted host matches what Checkmk's own
+    # tag-group default would have given it (D-06/D-07).
+    device_type: str = "other"
+    # Checkmk's own native host attribute, not a tag (D-09) — stays None
+    # when the operator wants the hostname used as-is.
+    alias: str | None = None
 
 
 @dataclass
@@ -968,6 +975,24 @@ async def phase4_classification(scan_results: list[ScannedHost]) -> list[Onboard
                 expected_open_ports = candidate_ports
                 break
 
+        # Choices come from the config loader, not a literal list, so the
+        # taxonomy stays site-specific (D-05) — a hardcoded list would need
+        # a code change per site. No validation loop needed: the operator
+        # cannot type a free-form answer.
+        device_type = await questionary.select(
+            f"Device type for {hostname}:",
+            choices=[questionary.Choice(dt, value=dt) for dt in _load_device_types()],
+        ).ask_async()
+
+        # Blank means "use the hostname" (D-09) — mirrors the blank-means-
+        # skip handling the expected_open_ports prompt above already uses.
+        raw_alias = (
+            await questionary.text(
+                f"Display name/alias for {hostname} (blank to use hostname):", default=""
+            ).ask_async()
+        ).strip()
+        alias = raw_alias or None
+
         onboarded.append(
             OnboardedHost(
                 ip=scanned.ip,
@@ -977,6 +1002,8 @@ async def phase4_classification(scan_results: list[ScannedHost]) -> list[Onboard
                 snmp_version=snmp_version,
                 snmp_community=snmp_community,
                 expected_open_ports=expected_open_ports,
+                device_type=device_type,
+                alias=alias,
             )
         )
     return onboarded
