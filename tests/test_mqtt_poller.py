@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import sys
+import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -75,44 +76,36 @@ def test_append_bounded_keeps_newest_drops_oldest():
 
 def test_topology_signature_is_order_independent():
     nodes = [
-        {"id": "a", "parents": ["b"], "device_type": "server", "folder": "vlan10"},
-        {"id": "b", "parents": [], "device_type": "switch", "folder": "vlan10"},
+        {"id": "a", "parents": ["b"], "device_type": "server", "folder": "vlan10", "alias": ""},
+        {"id": "b", "parents": [], "device_type": "switch", "folder": "vlan10", "alias": ""},
     ]
     shuffled = list(reversed(nodes))
     assert poller.topology_signature(nodes) == poller.topology_signature(shuffled)
 
 
 def test_topology_signature_differs_on_parent_change():
-    base = [{"id": "a", "parents": ["b"], "device_type": "server", "folder": "vlan10"}]
-    changed = [{"id": "a", "parents": ["c"], "device_type": "server", "folder": "vlan10"}]
+    base = [{"id": "a", "parents": ["b"], "device_type": "server", "folder": "vlan10", "alias": ""}]
+    changed = [{"id": "a", "parents": ["c"], "device_type": "server", "folder": "vlan10", "alias": ""}]
     assert poller.topology_signature(base) != poller.topology_signature(changed)
 
 
 def test_topology_signature_differs_on_add_or_remove():
-    base = [{"id": "a", "parents": [], "device_type": "server", "folder": ""}]
-    added = base + [{"id": "b", "parents": [], "device_type": "server", "folder": ""}]
+    base = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
+    added = base + [{"id": "b", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
     assert poller.topology_signature(base) != poller.topology_signature(added)
     assert poller.topology_signature(added) != poller.topology_signature([])
 
 
 def test_topology_signature_differs_on_device_type_change():
-    base = [{"id": "a", "parents": [], "device_type": "server", "folder": ""}]
-    changed = [{"id": "a", "parents": [], "device_type": "switch", "folder": ""}]
+    base = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
+    changed = [{"id": "a", "parents": [], "device_type": "switch", "folder": "", "alias": ""}]
     assert poller.topology_signature(base) != poller.topology_signature(changed)
 
 
-# --- derive_folder -------------------------------------------------------------
-
-
-def test_derive_folder_extracts_segment_after_wato():
-    assert (
-        poller.derive_folder("/omd/sites/dmc/etc/check_mk/conf.d/wato/vlan10/hosts.mk")
-        == "vlan10"
-    )
-
-
-def test_derive_folder_returns_empty_string_when_no_wato_segment():
-    assert poller.derive_folder("/some/other/path/hosts.mk") == ""
+def test_topology_signature_differs_on_alias_change():
+    base = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": "Old Name"}]
+    changed = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": "New Name"}]
+    assert poller.topology_signature(base) != poller.topology_signature(changed)
 
 
 # --- extract_device_type --------------------------------------------------------
@@ -145,6 +138,11 @@ _ENV_VARS = (
     "EVENTS_MAX_ENTRIES",
     "RECONCILE_TIMEOUT_SECONDS",
     "LOG_LEVEL",
+    "CMK_REST_HOST",
+    "CMK_REST_PORT",
+    "CMK_SITE_ID",
+    "CMK_REST_USERNAME",
+    "CMK_REST_SECRET",
 )
 
 
@@ -172,6 +170,111 @@ def test_poller_config_repr_never_contains_the_password_value(monkeypatch):
     rendered = repr(config)
     assert "***" in rendered
     assert "supersecret" not in rendered
+
+
+def test_poller_config_from_env_reads_rest_credentials_with_defaults(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    config = poller.PollerConfig.from_env()
+    assert config.cmk_rest_host == "checkmk"
+    assert config.cmk_rest_port == 5000
+    assert config.cmk_site_id == "dmc"
+    assert config.cmk_rest_username == ""
+    assert config.cmk_rest_secret == ""
+
+
+def test_poller_config_repr_never_contains_the_rest_secret_value(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("CMK_REST_USERNAME", "automation")
+    monkeypatch.setenv("CMK_REST_SECRET", "s3cr3t-value")
+    config = poller.PollerConfig.from_env()
+    rendered = repr(config)
+    assert "s3cr3t-value" not in rendered
+    assert "'***'" in rendered
+    # Non-secret REST fields must still render in the clear.
+    assert "cmk_rest_host='checkmk'" in rendered
+    assert "cmk_rest_port=5000" in rendered
+    assert "cmk_site_id='dmc'" in rendered
+    assert "cmk_rest_username='automation'" in rendered
+
+
+# --- cmk_rest_base_url / fetch_host_folders ---------------------------------
+
+
+def _fake_urlopen(body: bytes, status_code: int = 200):
+    response = MagicMock()
+    response.read.return_value = body
+    response.__enter__.return_value = response
+    response.__exit__.return_value = False
+    return response
+
+
+def test_cmk_rest_base_url_builds_expected_shape():
+    config = _make_config(
+        cmk_rest_host="checkmk", cmk_rest_port=5000, cmk_site_id="dmc"
+    )
+    assert poller.cmk_rest_base_url(config) == "http://checkmk:5000/dmc/check_mk/api/1.0"
+
+
+def test_fetch_host_folders_parses_extensions_folder_from_collection():
+    body = json.dumps(
+        {
+            "value": [
+                {"id": "web1", "extensions": {"folder": "/vlan10"}},
+                {"id": "web2", "extensions": {"folder": "/tower1/sub"}},
+            ]
+        }
+    ).encode()
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(body)):
+        result = poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+    assert result == {"web1": "vlan10", "web2": "tower1/sub"}
+
+
+def test_fetch_host_folders_missing_folder_field_maps_to_empty_string():
+    body = json.dumps({"value": [{"id": "web1", "extensions": {}}]}).encode()
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(body)):
+        result = poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+    assert result == {"web1": ""}
+
+
+def test_fetch_host_folders_raises_rest_error_on_connection_failure():
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+        try:
+            poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+        except poller.RestError as exc:
+            assert isinstance(exc.__cause__, OSError)
+        else:
+            raise AssertionError("expected RestError")
+
+
+def test_fetch_host_folders_raises_rest_error_on_malformed_json():
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"not-json{{{")):
+        try:
+            poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+        except poller.RestError:
+            pass
+        else:
+            raise AssertionError("expected RestError, not a bare json.JSONDecodeError")
+
+
+def test_fetch_host_folders_401_error_message_never_contains_username_or_secret():
+    http_error = urllib.error.HTTPError(
+        url="http://checkmk:5000/dmc/check_mk/api/1.0/domain-types/host_config/collections/all",
+        code=401,
+        msg="Unauthorized",
+        hdrs=None,
+        fp=None,
+    )
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        try:
+            poller.fetch_host_folders(
+                "http://checkmk:5000/dmc/check_mk/api/1.0", "secretuser", "supersecretvalue", 10
+            )
+        except poller.RestError as exc:
+            message = str(exc)
+            assert "secretuser" not in message
+            assert "supersecretvalue" not in message
+        else:
+            raise AssertionError("expected RestError")
 
 
 # --- build_hosts_query / select_host_columns --------------------------------
@@ -226,7 +329,7 @@ def test_query_devices_parses_full_row_into_device_snapshot():
         "worst_service_state",
         "parents",
         "tags",
-        "filename",
+        "alias",
     ]
     row = [
         "web1",
@@ -236,11 +339,13 @@ def test_query_devices_parses_full_row_into_device_snapshot():
         2,
         ["switch-01"],
         {"device_type": "server"},
-        "/omd/sites/dmc/etc/check_mk/conf.d/wato/vlan10/hosts.mk",
+        "Web Server 1",
     ]
     sock = _fake_connection(json.dumps([row]).encode())
     with patch("socket.create_connection", return_value=sock):
-        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+        snapshots = poller.query_devices(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10, folders={"web1": "vlan10"}
+        )
     assert len(snapshots) == 1
     snapshot = snapshots[0]
     assert snapshot.id == "web1"
@@ -250,6 +355,39 @@ def test_query_devices_parses_full_row_into_device_snapshot():
     assert snapshot.device_type == "server"
     assert snapshot.folder == "vlan10"
     assert snapshot.parents == ["switch-01"]
+    assert snapshot.alias == "Web Server 1"
+
+
+def test_query_devices_folder_maps_to_empty_string_when_host_absent_from_mapping():
+    snapshots = None
+    sock = _fake_connection(b'[["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10, folders={"other-host": "vlan10"}
+        )
+    assert snapshots[0].folder == ""
+
+
+def test_query_devices_folder_maps_to_empty_string_when_no_mapping_supplied():
+    sock = _fake_connection(b'[["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10)
+    assert snapshots[0].folder == ""
+
+
+def test_query_devices_wr07_site_named_wato_produces_correct_folder():
+    # Regression test for WR-07: the retired filename-string derive_folder()
+    # located a literal "wato" segment in the Livestatus filename path,
+    # which broke when the Checkmk site id was itself "wato" (a second,
+    # unrelated "wato" segment then appears earlier in the same path).
+    # The REST-sourced folder mapping has no filesystem-path parsing at
+    # all, so a site id of "wato" cannot perturb it.
+    sock = _fake_connection(b'[["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10, folders={"web1": "vlan10"}
+        )
+    assert snapshots[0].folder == "vlan10"
 
 
 def test_query_devices_uses_safe_defaults_when_optional_columns_absent():
@@ -264,6 +402,33 @@ def test_query_devices_uses_safe_defaults_when_optional_columns_absent():
     assert snapshot.parents == []
     assert snapshot.device_type == "unknown"
     assert snapshot.folder == ""
+    assert snapshot.alias == ""
+
+
+def test_query_devices_alias_defaults_to_empty_string_when_column_absent():
+    columns = ["name", "state", "tags"]
+    sock = _fake_connection(json.dumps([["web1", 0, {}]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].alias == ""
+
+
+def test_query_devices_alias_defaults_to_empty_string_when_row_truncated():
+    columns = ["name", "state", "tags", "alias"]
+    # Row ends before the alias column's position.
+    truncated_row = ["web1", 0, {}]
+    sock = _fake_connection(json.dumps([truncated_row]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].alias == ""
+
+
+def test_query_devices_alias_coerces_non_string_value_to_empty_string():
+    columns = ["name", "state", "alias"]
+    sock = _fake_connection(json.dumps([["web1", 0, None]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].alias == ""
 
 
 def test_query_devices_skips_topic_unsafe_host_name():
@@ -277,11 +442,11 @@ def test_query_devices_skips_topic_unsafe_host_name():
 
 
 def test_query_devices_survives_row_truncated_after_worst_service_state():
-    # Regression test for CR-01: `parents`/`tags`/`filename`/`acknowledged`
-    # extractions were previously unguarded `row[index[...]]` lookups, so a
-    # row shorter than the requested column list raised an uncaught
-    # IndexError that escaped the poll loop entirely instead of being
-    # skipped/defaulted per the function's own documented contract.
+    # Regression test for CR-01: `parents`/`tags`/`acknowledged` extractions
+    # were previously unguarded `row[index[...]]` lookups, so a row shorter
+    # than the requested column list raised an uncaught IndexError that
+    # escaped the poll loop entirely instead of being skipped/defaulted per
+    # the function's own documented contract.
     columns = [
         "name",
         "state",
@@ -290,9 +455,8 @@ def test_query_devices_survives_row_truncated_after_worst_service_state():
         "worst_service_state",
         "parents",
         "tags",
-        "filename",
     ]
-    # Present through worst_service_state (index 4); parents/tags/filename missing.
+    # Present through worst_service_state (index 4); parents/tags missing.
     truncated_row = ["web1", 0, 1, True, 2]
     full_row = [
         "web2",
@@ -302,7 +466,6 @@ def test_query_devices_survives_row_truncated_after_worst_service_state():
         2,
         ["switch-01"],
         {"device_type": "server"},
-        "/omd/sites/dmc/etc/check_mk/conf.d/wato/vlan10/hosts.mk",
     ]
     sock = _fake_connection(json.dumps([truncated_row, full_row]).encode())
     with patch("socket.create_connection", return_value=sock):
@@ -448,6 +611,7 @@ def test_publish_device_status_uses_qos0_and_exact_payload_keys():
         device_type="server",
         folder="vlan10",
         parents=[],
+        alias="Web Server 1",
     )
     poller.publish_device_status(mock_client, snapshot, "2026-09-06T00:00:00+00:00")
 
@@ -461,15 +625,17 @@ def test_publish_device_status_uses_qos0_and_exact_payload_keys():
         "acknowledged",
         "device_type",
         "folder",
+        "alias",
         "timestamp",
     }
+    assert payload["alias"] == "Web Server 1"
     assert kwargs["qos"] == 0
     assert kwargs["retain"] is True
 
 
 def test_publish_topology_uses_qos1_and_devices_envelope():
     mock_client = MagicMock()
-    nodes = [{"id": "a", "parents": [], "device_type": "server", "folder": ""}]
+    nodes = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
     poller.publish_topology(mock_client, nodes, "2026-09-06T00:00:00+00:00")
 
     args, kwargs = mock_client.publish.call_args
@@ -545,10 +711,10 @@ def test_parse_topology_payload_empty_returns_empty_dict():
 
 def test_parse_topology_payload_parses_devices_keyed_by_id():
     payload = json.dumps(
-        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": ""}], "timestamp": "t"}
+        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}], "timestamp": "t"}
     ).encode()
     assert poller.parse_topology_payload(payload) == {
-        "a": {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+        "a": {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     }
 
 
@@ -595,7 +761,7 @@ def test_reconcile_state_returns_cold_start_state_when_nothing_retained():
 
 def test_reconcile_state_seeds_previous_nodes_from_retained_topology():
     topology_payload = json.dumps(
-        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": ""}], "timestamp": "t"}
+        {"devices": [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}], "timestamp": "t"}
     ).encode()
 
     with patch.object(poller, "mqtt") as mock_mqtt:
@@ -610,7 +776,7 @@ def test_reconcile_state_seeds_previous_nodes_from_retained_topology():
         mock_client.subscribe.side_effect = _subscribe
         state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
 
-    assert state.previous_nodes == {"a": {"id": "a", "parents": [], "device_type": "server", "folder": ""}}
+    assert state.previous_nodes == {"a": {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}}
 
 
 # --- run_cycle ------------------------------------------------------------------
@@ -664,7 +830,7 @@ def test_run_cycle_publishes_one_status_per_snapshot_with_retain():
 
 def test_run_cycle_skips_topology_publish_when_unchanged():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a")])
@@ -683,7 +849,7 @@ def test_run_cycle_publishes_topology_on_cold_start():
 
 def test_run_cycle_publishes_topology_on_reparent():
     client = MagicMock()
-    node_a = {"id": "a", "parents": ["x"], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": ["x"], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a", parents=["y"])])
@@ -693,7 +859,7 @@ def test_run_cycle_publishes_topology_on_reparent():
 
 def test_run_cycle_publishes_topology_on_add():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b")])
@@ -703,7 +869,7 @@ def test_run_cycle_publishes_topology_on_add():
 
 def test_run_cycle_publishes_topology_on_remove():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [])
@@ -713,7 +879,7 @@ def test_run_cycle_publishes_topology_on_remove():
 
 def test_run_cycle_removed_device_tombstones_status_and_history_and_events():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
 
     poller.run_cycle(client, _make_config(), state, [])
@@ -737,7 +903,7 @@ def test_run_cycle_removed_device_tombstones_status_and_history_and_events():
 
 def test_run_cycle_added_device_appends_added_event():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b", state="WARN")])
@@ -753,7 +919,7 @@ def test_run_cycle_added_device_appends_added_event():
 
 def test_run_cycle_state_change_appends_history_and_event_and_publishes_both_topics():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a", state="CRIT")])
@@ -774,7 +940,7 @@ def test_run_cycle_state_change_appends_history_and_event_and_publishes_both_top
 
 def test_run_cycle_no_changes_publishes_no_history_or_events():
     client = MagicMock()
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a", state="OK")])
@@ -798,7 +964,7 @@ def test_run_cycle_cold_start_emits_no_state_change_events():
 def test_run_cycle_truncates_history_and_events_to_configured_bounds():
     client = MagicMock()
     config = _make_config(history_max_entries=2, events_max_entries=1)
-    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": ""}
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(
         previous_nodes={"a": node_a},
         last_status={"a": "OK"},
@@ -858,6 +1024,7 @@ def test_run_forever_survives_livestatus_error_and_does_not_raise():
         patch.object(poller, "build_mqtt_client", return_value=fake_client),
         patch.object(poller, "available_host_columns", return_value={"name", "state"}),
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_folders", return_value={}),
         patch.object(poller, "query_devices", side_effect=poller.LivestatusError("boom")),
         patch.object(poller, "run_cycle") as mock_run_cycle,
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
@@ -890,3 +1057,74 @@ def test_run_forever_publishes_offline_status_on_fatal_startup_failure():
     assert len(status_calls) == 1
     assert json.loads(status_calls[0].args[1]) == {"status": "offline"}
     fake_client.disconnect.assert_called_once()
+
+
+def test_run_forever_rest_failure_reuses_last_known_good_folder_map():
+    # A REST hiccup must degrade only the folder field for that cycle
+    # (T-10-11/T-10-12): the cycle still runs, and query_devices still
+    # receives the previous cycle's folder map rather than an empty one.
+    fake_client = MagicMock()
+    captured_folders: list[dict] = []
+
+    def _fake_query_devices(host, port, columns, timeout, *, folders=None):
+        captured_folders.append(folders)
+        return []
+
+    class _TwoShotEvent(_OneShotEvent):
+        """Lets run_forever execute exactly two loop iterations."""
+
+        def __init__(self):
+            super().__init__()
+            self._calls = 0
+
+        def wait(self, timeout=None):
+            self._calls += 1
+            if self._calls >= 2:
+                self._stopped = True
+            return False
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(
+            poller,
+            "fetch_host_folders",
+            side_effect=[{"web1": "vlan10"}, poller.RestError("REST hiccup")],
+        ),
+        patch.object(poller, "query_devices", side_effect=_fake_query_devices),
+        patch.object(poller, "run_cycle"),
+        patch.object(poller.threading, "Event", return_value=_TwoShotEvent()),
+        patch.object(poller.signal, "signal"),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result == 0
+    assert captured_folders == [{"web1": "vlan10"}, {"web1": "vlan10"}]
+
+
+def test_run_forever_rest_never_succeeded_leaves_folders_empty_and_still_runs_cycle():
+    fake_client = MagicMock()
+    captured_folders: list[dict] = []
+
+    def _fake_query_devices(host, port, columns, timeout, *, folders=None):
+        captured_folders.append(folders)
+        return []
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_folders", side_effect=poller.RestError("never up")),
+        patch.object(poller, "query_devices", side_effect=_fake_query_devices),
+        patch.object(poller, "run_cycle") as mock_run_cycle,
+        patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
+        patch.object(poller.signal, "signal"),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result == 0
+    assert captured_folders == [{}]
+    mock_run_cycle.assert_called_once()
