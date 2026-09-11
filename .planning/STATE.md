@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 10 context gathered
-last_updated: "2026-09-09T02:32:50.978Z"
-last_activity: 2026-09-06 -- Phase 09 execution started
+last_updated: "2026-09-11T03:36:20.486Z"
+last_activity: 2026-09-11 -- Phase 10 execution started
 progress:
   total_phases: 4
   completed_phases: 2
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Phase 09 — poller-core
+**Current focus:** Phase 10 — checkmk-tag-group-onboarding-integration
 
 ## Current Position
 
-Phase: 09 (poller-core) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 09
-Last activity: 2026-09-06 -- Phase 09 execution started
+Phase: 10 (checkmk-tag-group-onboarding-integration) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 10
+Last activity: 2026-09-11 -- Phase 10 execution started
 
 Progress: [██████████] 100%
 
