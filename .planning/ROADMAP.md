@@ -98,8 +98,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 10-04-PLAN.md — Phase 4 device_type/alias prompts, Phase 5 tag_device_type/alias on all three host-creation call sites, and repair of every answer-iterator-driven test
-- [ ] 10-05-PLAN.md — Poller deployment wiring: compose CMK_REST_* env block, a smoke-test enrichment check, and setup-doc credential provisioning plus the updated topic contract
+- [x] 10-04-PLAN.md — Phase 4 device_type/alias prompts, Phase 5 tag_device_type/alias on all three host-creation call sites, and repair of every answer-iterator-driven test
+- [x] 10-05-PLAN.md — Poller deployment wiring: compose CMK_REST_* env block, a smoke-test enrichment check, and setup-doc credential provisioning plus the updated topic contract
 
 **Wave 4** *(blocked on Wave 3)*
 
@@ -130,5 +130,5 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
-| 10. Checkmk Tag-Group & Onboarding Integration | 3/6 | In Progress|  |
+| 10. Checkmk Tag-Group & Onboarding Integration | 5/6 | In Progress|  |
 | 11. Live Dashboard | 0/TBD | Not started | - |
