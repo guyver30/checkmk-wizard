@@ -95,6 +95,21 @@ UNKNOWN_DEVICE_TYPE = "unknown"
 # change, and the poller's own heartbeat (`lan/poller/status`) was 38s
 # old at check time -- both consistent with the timeout defaults already
 # shipped below, so no correction was needed.
+#
+# Bug fixed 2026-09-11 (Phase 10, D-04): `filename` was confirmed present
+# by the 2026-09-08 probe above, but Phase 10 stopped consuming it. The
+# old `derive_folder()` located a literal `wato` segment in this
+# Livestatus-reported OMD filesystem path to guess a folder -- that
+# breaks outright when the Checkmk site id is itself named `wato`
+# (`.planning/phases/09-poller-core/09-REVIEW.md` finding WR-07, since a
+# site named `wato` puts a second, unrelated `wato` segment earlier in
+# the same path), and breaks silently on folder rename/restructure
+# (`.planning/research/PITFALLS.md` Pitfall 10), because it parses an
+# on-disk layout with no schema guarantee. The folder now comes from
+# Checkmk's own REST-computed `extensions.folder` association
+# (`fetch_host_folders()` below) -- a semantic value with no filesystem
+# coupling, closing the whole class of bug rather than patching this one
+# instance.
 REQUIRED_HOST_COLUMNS = ("name", "state")
 OPTIONAL_HOST_COLUMNS = (
     "scheduled_downtime_depth",
@@ -102,7 +117,6 @@ OPTIONAL_HOST_COLUMNS = (
     "worst_service_state",
     "parents",
     "tags",
-    "filename",
     # Added by Phase 10 (D-10). Not covered by the 2026-09-08 column probe
     # above -- expected present on 2.4.0p35 as a first-class Checkmk host
     # attribute, but not yet confirmed live; plan 10-06's live run confirms it.
@@ -331,24 +345,6 @@ def topology_signature(nodes: list[dict]) -> tuple:
     )
 
 
-def derive_folder(filename: str) -> str:
-    """Derive a folder path from a Livestatus `filename` (WATO config path).
-
-    Takes the path segment(s) after the `wato/` segment and drops the
-    trailing `hosts.mk`. Returns "" when there is no `wato/` segment, or
-    the host sits directly in the WATO root.
-    """
-    parts = filename.split("/")
-    try:
-        wato_index = parts.index("wato")
-    except ValueError:
-        return ""
-    segment_parts = parts[wato_index + 1 :]
-    if segment_parts and segment_parts[-1] == "hosts.mk":
-        segment_parts = segment_parts[:-1]
-    return "/".join(segment_parts)
-
-
 def extract_device_type(tags: dict) -> str:
     """Read a device-type tag defensively; the tag itself doesn't exist until Phase 10.
 
@@ -499,13 +495,25 @@ def build_hosts_query(columns: list[str]) -> str:
     return f"GET hosts\nColumns: {' '.join(columns)}\nOutputFormat: json\n\n"
 
 
-def query_devices(host: str, port: int, columns: list[str], timeout: float) -> list[DeviceSnapshot]:
+def query_devices(
+    host: str,
+    port: int,
+    columns: list[str],
+    timeout: float,
+    *,
+    folders: dict[str, str] | None = None,
+) -> list[DeviceSnapshot]:
     """Run one `GET hosts` round trip and parse it into typed DeviceSnapshot records.
 
     Defensive by design (T-09-03): a malformed response, a topic-unsafe
     host name, or a non-numeric state field skips that one row (or the
     whole cycle, for a fully malformed response) rather than crashing
     the poll loop.
+
+    `folders` is the REST-sourced host-name -> folder mapping fetched
+    once per cycle by `fetch_host_folders()` (D-04); a host missing from
+    the mapping (or a `None` mapping, e.g. a cycle whose REST fetch never
+    succeeded) degrades to folder `""` rather than raising.
     """
     body = _livestatus_request(host, port, build_hosts_query(columns), timeout)
     if not body.strip():
@@ -564,10 +572,7 @@ def query_devices(host: str, port: int, columns: list[str], timeout: float) -> l
             raw_tags = None
         tags = raw_tags if isinstance(raw_tags, dict) else {}
 
-        try:
-            folder = derive_folder(row[index["filename"]]) if "filename" in index else ""
-        except (IndexError, TypeError):
-            folder = ""
+        folder = folders.get(name, "") if folders else ""
 
         try:
             alias = row[index["alias"]] if "alias" in index else ""
@@ -954,6 +959,15 @@ def run_forever(config: PollerConfig) -> int:
     configure_logging(config.log_level)
     state = reconcile_state(config)
     client = build_mqtt_client(config)
+    rest_base_url = cmk_rest_base_url(config)
+    # Reused (never cleared) on a RestError below rather than falling back
+    # to an empty dict: `folder` participates in `topology_signature`, so
+    # blanking every folder on a transient REST failure would publish a
+    # full spurious topology change and then publish another one when
+    # REST recovered -- violating PLR-04's "republish only when topology
+    # actually changes". Reusing the last known good map keeps the
+    # signature stable across a REST blip (T-10-12).
+    last_folders: dict[str, str] = {}
 
     try:
         available = available_host_columns(
@@ -974,12 +988,27 @@ def run_forever(config: PollerConfig) -> int:
     signal.signal(signal.SIGINT, _handle_signal)
 
     while not stop_event.is_set():
+        # A folder lookup is enrichment, not the poller's core duty
+        # (RESEARCH.md Pitfall 3): unlike the mandatory Livestatus query
+        # below, a RestError here degrades only the folder field for this
+        # cycle -- it never skips the cycle or crashes the loop.
+        try:
+            last_folders = fetch_host_folders(
+                rest_base_url,
+                config.cmk_rest_username,
+                config.cmk_rest_secret,
+                DEFAULT_REST_TIMEOUT_SECONDS,
+            )
+        except RestError as exc:
+            _logger.warning("Reusing last known folder map; REST folder refresh failed: %s", exc)
+
         try:
             snapshots = query_devices(
                 config.livestatus_host,
                 config.livestatus_port,
                 columns,
                 DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+                folders=last_folders,
             )
         except LivestatusError as exc:
             _logger.warning("Skipping cycle: %s", exc)

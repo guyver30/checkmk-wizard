@@ -108,20 +108,6 @@ def test_topology_signature_differs_on_alias_change():
     assert poller.topology_signature(base) != poller.topology_signature(changed)
 
 
-# --- derive_folder -------------------------------------------------------------
-
-
-def test_derive_folder_extracts_segment_after_wato():
-    assert (
-        poller.derive_folder("/omd/sites/dmc/etc/check_mk/conf.d/wato/vlan10/hosts.mk")
-        == "vlan10"
-    )
-
-
-def test_derive_folder_returns_empty_string_when_no_wato_segment():
-    assert poller.derive_folder("/some/other/path/hosts.mk") == ""
-
-
 # --- extract_device_type --------------------------------------------------------
 
 
@@ -343,7 +329,6 @@ def test_query_devices_parses_full_row_into_device_snapshot():
         "worst_service_state",
         "parents",
         "tags",
-        "filename",
         "alias",
     ]
     row = [
@@ -354,12 +339,13 @@ def test_query_devices_parses_full_row_into_device_snapshot():
         2,
         ["switch-01"],
         {"device_type": "server"},
-        "/omd/sites/dmc/etc/check_mk/conf.d/wato/vlan10/hosts.mk",
         "Web Server 1",
     ]
     sock = _fake_connection(json.dumps([row]).encode())
     with patch("socket.create_connection", return_value=sock):
-        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+        snapshots = poller.query_devices(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10, folders={"web1": "vlan10"}
+        )
     assert len(snapshots) == 1
     snapshot = snapshots[0]
     assert snapshot.id == "web1"
@@ -370,6 +356,38 @@ def test_query_devices_parses_full_row_into_device_snapshot():
     assert snapshot.folder == "vlan10"
     assert snapshot.parents == ["switch-01"]
     assert snapshot.alias == "Web Server 1"
+
+
+def test_query_devices_folder_maps_to_empty_string_when_host_absent_from_mapping():
+    snapshots = None
+    sock = _fake_connection(b'[["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10, folders={"other-host": "vlan10"}
+        )
+    assert snapshots[0].folder == ""
+
+
+def test_query_devices_folder_maps_to_empty_string_when_no_mapping_supplied():
+    sock = _fake_connection(b'[["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10)
+    assert snapshots[0].folder == ""
+
+
+def test_query_devices_wr07_site_named_wato_produces_correct_folder():
+    # Regression test for WR-07: the retired filename-string derive_folder()
+    # located a literal "wato" segment in the Livestatus filename path,
+    # which broke when the Checkmk site id was itself "wato" (a second,
+    # unrelated "wato" segment then appears earlier in the same path).
+    # The REST-sourced folder mapping has no filesystem-path parsing at
+    # all, so a site id of "wato" cannot perturb it.
+    sock = _fake_connection(b'[["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10, folders={"web1": "vlan10"}
+        )
+    assert snapshots[0].folder == "vlan10"
 
 
 def test_query_devices_uses_safe_defaults_when_optional_columns_absent():
@@ -424,11 +442,11 @@ def test_query_devices_skips_topic_unsafe_host_name():
 
 
 def test_query_devices_survives_row_truncated_after_worst_service_state():
-    # Regression test for CR-01: `parents`/`tags`/`filename`/`acknowledged`
-    # extractions were previously unguarded `row[index[...]]` lookups, so a
-    # row shorter than the requested column list raised an uncaught
-    # IndexError that escaped the poll loop entirely instead of being
-    # skipped/defaulted per the function's own documented contract.
+    # Regression test for CR-01: `parents`/`tags`/`acknowledged` extractions
+    # were previously unguarded `row[index[...]]` lookups, so a row shorter
+    # than the requested column list raised an uncaught IndexError that
+    # escaped the poll loop entirely instead of being skipped/defaulted per
+    # the function's own documented contract.
     columns = [
         "name",
         "state",
@@ -437,9 +455,8 @@ def test_query_devices_survives_row_truncated_after_worst_service_state():
         "worst_service_state",
         "parents",
         "tags",
-        "filename",
     ]
-    # Present through worst_service_state (index 4); parents/tags/filename missing.
+    # Present through worst_service_state (index 4); parents/tags missing.
     truncated_row = ["web1", 0, 1, True, 2]
     full_row = [
         "web2",
@@ -449,7 +466,6 @@ def test_query_devices_survives_row_truncated_after_worst_service_state():
         2,
         ["switch-01"],
         {"device_type": "server"},
-        "/omd/sites/dmc/etc/check_mk/conf.d/wato/vlan10/hosts.mk",
     ]
     sock = _fake_connection(json.dumps([truncated_row, full_row]).encode())
     with patch("socket.create_connection", return_value=sock):
@@ -1008,6 +1024,7 @@ def test_run_forever_survives_livestatus_error_and_does_not_raise():
         patch.object(poller, "build_mqtt_client", return_value=fake_client),
         patch.object(poller, "available_host_columns", return_value={"name", "state"}),
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_folders", return_value={}),
         patch.object(poller, "query_devices", side_effect=poller.LivestatusError("boom")),
         patch.object(poller, "run_cycle") as mock_run_cycle,
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
@@ -1040,3 +1057,74 @@ def test_run_forever_publishes_offline_status_on_fatal_startup_failure():
     assert len(status_calls) == 1
     assert json.loads(status_calls[0].args[1]) == {"status": "offline"}
     fake_client.disconnect.assert_called_once()
+
+
+def test_run_forever_rest_failure_reuses_last_known_good_folder_map():
+    # A REST hiccup must degrade only the folder field for that cycle
+    # (T-10-11/T-10-12): the cycle still runs, and query_devices still
+    # receives the previous cycle's folder map rather than an empty one.
+    fake_client = MagicMock()
+    captured_folders: list[dict] = []
+
+    def _fake_query_devices(host, port, columns, timeout, *, folders=None):
+        captured_folders.append(folders)
+        return []
+
+    class _TwoShotEvent(_OneShotEvent):
+        """Lets run_forever execute exactly two loop iterations."""
+
+        def __init__(self):
+            super().__init__()
+            self._calls = 0
+
+        def wait(self, timeout=None):
+            self._calls += 1
+            if self._calls >= 2:
+                self._stopped = True
+            return False
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(
+            poller,
+            "fetch_host_folders",
+            side_effect=[{"web1": "vlan10"}, poller.RestError("REST hiccup")],
+        ),
+        patch.object(poller, "query_devices", side_effect=_fake_query_devices),
+        patch.object(poller, "run_cycle"),
+        patch.object(poller.threading, "Event", return_value=_TwoShotEvent()),
+        patch.object(poller.signal, "signal"),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result == 0
+    assert captured_folders == [{"web1": "vlan10"}, {"web1": "vlan10"}]
+
+
+def test_run_forever_rest_never_succeeded_leaves_folders_empty_and_still_runs_cycle():
+    fake_client = MagicMock()
+    captured_folders: list[dict] = []
+
+    def _fake_query_devices(host, port, columns, timeout, *, folders=None):
+        captured_folders.append(folders)
+        return []
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_folders", side_effect=poller.RestError("never up")),
+        patch.object(poller, "query_devices", side_effect=_fake_query_devices),
+        patch.object(poller, "run_cycle") as mock_run_cycle,
+        patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
+        patch.object(poller.signal, "signal"),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result == 0
+    assert captured_folders == [{}]
+    mock_run_cycle.assert_called_once()
