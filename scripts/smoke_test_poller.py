@@ -20,6 +20,11 @@ Each check proves one requirement:
   at least one retained `lan/devices/{id}/status` payload matches the
   fixed contract.
 - `check_topology_retained` — the payload half of PLR-01/PLR-04.
+- `check_device_enrichment` — TAG-03 (10-05-PLAN.md): proves plan 10-03's
+  alias/folder enrichment actually reached retained device payloads, and
+  distinguishes stale-poller-code, missing-CMK_REST_SECRET and the
+  WR-07 filesystem-path regression instead of reporting all three as a
+  generic empty field.
 - `check_poller_liveness` — the positive half of Success Criterion 5
   (PLR-07): the poller's own heartbeat.
 - `check_topology_quiet` — Success Criterion 3 (PLR-04): unrelated poll
@@ -55,8 +60,17 @@ import paho.mqtt.client as mqtt
 GHOST_DEVICE_ID = "smoketest-ghost"
 
 _VALID_STATES = {"OK", "WARN", "CRIT", "UNKNOWN", "DOWN"}
-_DEVICE_STATUS_KEYS = {"id", "state", "in_downtime", "acknowledged", "device_type", "folder", "timestamp"}
-_TOPOLOGY_NODE_KEYS = {"id", "parents", "device_type", "folder"}
+_DEVICE_STATUS_KEYS = {
+    "id",
+    "state",
+    "in_downtime",
+    "acknowledged",
+    "device_type",
+    "folder",
+    "alias",
+    "timestamp",
+}
+_TOPOLOGY_NODE_KEYS = {"id", "parents", "device_type", "folder", "alias"}
 
 _OPTIONAL_COLUMN_DEGRADATION = {
     "parents": "no topology links",
@@ -258,6 +272,74 @@ def check_topology_retained(host: str, tcp_port: int, user: str, password: str, 
             print(f"[FAIL] topology_retained: node {node['id']!r} parents is not a list")
             return False
     print(f"[PASS] topology_retained ({len(data['devices'])} device(s))")
+    return True
+
+
+def check_device_enrichment(host: str, tcp_port: int, user: str, password: str, timeout: float) -> bool:
+    """Assert plan 10-03's alias/folder enrichment actually reached retained device payloads.
+
+    Proves TAG-03's end-to-end half (10-05-PLAN.md): distinguishes three
+    failure modes that all otherwise look like "an empty field" --
+    a stale poller container missing the new keys entirely, a working
+    poller with no CMK_REST_SECRET (every folder empty), and the WR-07
+    regression (a folder value smuggled straight from a filesystem path).
+    """
+    try:
+        payloads = _collect_retained(host, tcp_port, user, password, "lan/devices/+/status", timeout)
+    except (TimeoutError, OSError) as exc:
+        print(f"[FAIL] device_enrichment: {exc}")
+        return False
+
+    if not payloads:
+        print("[FAIL] device_enrichment: no retained lan/devices/{id}/status payload found")
+        return False
+
+    devices: list[dict] = []
+    for payload in payloads.values():
+        try:
+            data = json.loads(payload)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            continue
+        if isinstance(data, dict):
+            devices.append(data)
+
+    if not devices:
+        print("[FAIL] device_enrichment: no retained payload parsed as JSON")
+        return False
+
+    missing_keys = [d.get("id", "?") for d in devices if "alias" not in d or "folder" not in d]
+    if missing_keys:
+        print(
+            f"[FAIL] device_enrichment: device(s) {missing_keys} missing 'alias' and/or "
+            "'folder' -- the poller container is likely running stale pre-Phase-10 code "
+            "(it bind-mounts ../scripts read-only and needs `podman compose restart poller` "
+            "to pick up changes)"
+        )
+        return False
+
+    folders = [d["folder"] for d in devices]
+    if not any(folders):
+        print(
+            "[FAIL] device_enrichment: every device's 'folder' is empty -- this is the "
+            "signature of a missing or wrong CMK_REST_SECRET (paired with CMK_REST_USERNAME) "
+            "in the poller service's environment; see deploy/compose.yaml"
+        )
+        return False
+
+    bad_folders = [f for f in folders if f and ("wato" in f or f.startswith("/omd"))]
+    if bad_folders:
+        print(
+            f"[FAIL] device_enrichment: folder value(s) {bad_folders} look like an OMD "
+            "filesystem path, not a Checkmk REST folder association -- this is the WR-07 "
+            "regression (derive_folder() must not parse 'filename')"
+        )
+        return False
+
+    aliases = [d["alias"] for d in devices]
+    if not any(aliases):
+        print("[INFO] device_enrichment: no device carries a non-empty alias (informational, not a failure -- aliases are optional)")
+
+    print(f"[PASS] device_enrichment ({len(devices)} device(s), {sum(1 for f in folders if f)} with non-empty folder)")
     return True
 
 
@@ -548,6 +630,7 @@ def main() -> int:
         check_device_status_retained(args.host, args.tcp_port, args.user, args.password, args.timeout)
     )
     results.append(check_topology_retained(args.host, args.tcp_port, args.user, args.password, args.timeout))
+    results.append(check_device_enrichment(args.host, args.tcp_port, args.user, args.password, args.timeout))
     results.append(
         check_poller_liveness(args.host, args.tcp_port, args.user, args.password, args.timeout, args.poll_interval)
     )

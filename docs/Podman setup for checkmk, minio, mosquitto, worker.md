@@ -141,6 +141,8 @@ A few things worth knowing that aren't obvious just from reading those files:
 
 **Note on `CMK_PASSWORD`:** this is the `cmkadmin` login password checkmk-wizard's container mode will ask you to re-enter at Phase 1, so it can bootstrap the site's `automation`/`agent_registration` REST users itself (see §8.3). `cmkadmin` is fine for a disposable local/test stack; change it to something you'd actually want to type before running this against anything you care about.
 
+**Note on `CMK_REST_SECRET` (poller):** the `poller` service now makes an authenticated Checkmk REST call every poll cycle to read each host's folder, alongside its unauthenticated Livestatus query. `deploy/compose.yaml` ships `CMK_REST_USERNAME=automation` and a `CMK_REST_SECRET=REPLACE_ME` placeholder for this. The real secret comes from the Checkmk UI (Setup -> Users -> the `automation` user -> Automation secret), or by reading `/omd/sites/dmc/var/check_mk/web/automation/automation.secret` inside the `checkmk` container — and it only exists once checkmk-wizard's Phase 1 bootstrap has created that user (see §8.3), so this step happens after a first wizard run. Edit the real value into `deploy/compose.yaml` (or supply it through your own environment override) and run `podman compose up -d poller` to pick it up. This copy is manual because the `poller` container deliberately has no filesystem access to `checkmk` — the same container boundary the whole stack is built around. Like `CMK_PASSWORD` above, rotate it before exposing this stack beyond a trusted LAN.
+
 ---
 
 ## 4. Deployment
@@ -263,13 +265,15 @@ The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these t
 
 | Topic | Publish Trigger | QoS | Retain | Payload keys |
 | --- | --- | --- | --- | --- |
-| `lan/devices/{id}/status` | Every poll cycle, for every known device | 0 | true | `id`, `state` (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`), `in_downtime`, `acknowledged`, `device_type`, `folder`, `timestamp` |
-| `lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle | 1 | true | `devices` (list of `{id, parents, device_type, folder}`), `timestamp` |
+| `lan/devices/{id}/status` | Every poll cycle, for every known device | 0 | true | `id`, `state` (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`), `in_downtime`, `acknowledged`, `device_type`, `folder`, `alias`, `timestamp` |
+| `lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle | 1 | true | `devices` (list of `{id, parents, device_type, folder, alias}`), `timestamp` |
 | `lan/devices/{id}/history` | Only on an actual state transition for that device | 1 | true | Full bounded array (max `HISTORY_MAX_ENTRIES`) of `{timestamp, from, to}` |
 | `lan/events/recent` | Only on any device's state transition, or a device add/remove | 1 | true | Full bounded array (max `EVENTS_MAX_ENTRIES`) of `{timestamp, device_id, event, from, to}` |
 | `lan/poller/status` | Birth (on connect), heartbeat (every poll cycle), and LWT (on ungraceful disconnect) or graceful stop | 1 | true | `{status, since, last_poll, device_count}` (birth/heartbeat) or `{status: "offline"}` (LWT/graceful stop) |
 
 A removed device is tombstoned by publishing an empty retained payload to its `status` and `history` topics.
+
+`folder` is a generic location/group label derived from the host's Checkmk folder — whatever grouping the operator chose in the wizard's Phase 2 (a VLAN, a physical location, a site, etc.). It is read from Checkmk's REST folder association (`fetch_host_folders()` in `scripts/mqtt_poller.py`), not parsed from a filesystem path — see §3's "First-time credential setup" for the credential this requires. `alias` is Checkmk's native host alias, set optionally through the wizard's Phase 4 prompt; it is empty for any host without one.
 
 ---
 
@@ -334,6 +338,7 @@ What each check proves:
 - `check_livestatus_columns` — the live site's `hosts` table actually exposes the columns the poller queries (resolves RESEARCH.md Open Question 1)
 - `check_device_status_retained` — Success Criterion 1 (PLR-03, PLR-08): a retained `lan/devices/{id}/status` payload matches the fixed contract
 - `check_topology_retained` — the payload half of PLR-01/PLR-04
+- `check_device_enrichment` — TAG-03: plan 10-03's `alias`/`folder` enrichment actually reached retained device payloads. An all-empty `folder` result points straight at the `CMK_REST_SECRET` step in §3 — that's the cause when this check fails
 - `check_poller_liveness` — the positive half of Success Criterion 5 (PLR-07): the poller's own heartbeat
 - `check_topology_quiet` — Success Criterion 3 (PLR-04): unrelated poll cycles produce no topology republish (skipped by `--skip-slow`)
 - `check_ghost_tombstone` — Success Criterion 4 (PLR-06): a host that disappeared while the poller was down gets tombstoned (skipped by `--skip-restart-checks`)
