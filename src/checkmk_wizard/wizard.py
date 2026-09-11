@@ -221,6 +221,13 @@ class OnboardedHost:
     # actively monitor. Read back by Phase 6 to verify they actually made
     # it into the "monitored" list, not just silently discovered nothing.
     expected_services: list[str] = field(default_factory=list)
+    # Defaults to the same neutral value that occupies first position in
+    # device_types.json, so an unprompted host matches what Checkmk's own
+    # tag-group default would have given it (D-06/D-07).
+    device_type: str = "other"
+    # Checkmk's own native host attribute, not a tag (D-09) — stays None
+    # when the operator wants the hostname used as-is.
+    alias: str | None = None
 
 
 @dataclass
@@ -654,6 +661,22 @@ def _load_device_types() -> list[str]:
     return raw
 
 
+def _device_type_and_alias_attributes(h: OnboardedHost) -> dict:
+    """Build the device-type tag (and optional alias) fragment shared by
+    every Phase 5 host-creation/update branch (snmp, ping, agent), so the
+    `tag_<group_id>` key is derived from DEVICE_TYPE_TAG_GROUP_ID exactly
+    once rather than repeated as a literal at each call site.
+
+    `alias` is omitted entirely when unset — an absent key means "Checkmk
+    keeps whatever it has", while an explicit empty value would clear an
+    alias an operator may have set directly in the UI (D-09).
+    """
+    attrs: dict = {f"tag_{DEVICE_TYPE_TAG_GROUP_ID}": h.device_type}
+    if h.alias:
+        attrs["alias"] = h.alias
+    return attrs
+
+
 async def _ensure_device_type_tag_group(client: CheckmkClient) -> None:
     """Create the `device_type` host tag group exactly once, with `other`
     first so every pre-existing host defaults safely (D-06), and report
@@ -968,6 +991,24 @@ async def phase4_classification(scan_results: list[ScannedHost]) -> list[Onboard
                 expected_open_ports = candidate_ports
                 break
 
+        # Choices come from the config loader, not a literal list, so the
+        # taxonomy stays site-specific (D-05) — a hardcoded list would need
+        # a code change per site. No validation loop needed: the operator
+        # cannot type a free-form answer.
+        device_type = await questionary.select(
+            f"Device type for {hostname}:",
+            choices=[questionary.Choice(dt, value=dt) for dt in _load_device_types()],
+        ).ask_async()
+
+        # Blank means "use the hostname" (D-09) — mirrors the blank-means-
+        # skip handling the expected_open_ports prompt above already uses.
+        raw_alias = (
+            await questionary.text(
+                f"Display name/alias for {hostname} (blank to use hostname):", default=""
+            ).ask_async()
+        ).strip()
+        alias = raw_alias or None
+
         onboarded.append(
             OnboardedHost(
                 ip=scanned.ip,
@@ -977,6 +1018,8 @@ async def phase4_classification(scan_results: list[ScannedHost]) -> list[Onboard
                 snmp_version=snmp_version,
                 snmp_community=snmp_community,
                 expected_open_ports=expected_open_ports,
+                device_type=device_type,
+                alias=alias,
             )
         )
     return onboarded
@@ -1551,6 +1594,7 @@ async def _onboard_hosts(
                         "tag_agent": "no-agent",
                         "tag_snmp_ds": "snmp-v2" if h.snmp_version == "v2c" else "snmp-v1",
                         "snmp_community": {"type": "v1_v2_community", "community": h.snmp_community},
+                        **_device_type_and_alias_attributes(h),
                     },
                 )
                 console.print("  [green]SNMP host created[/green] — polled directly, no agent/firewall/SSH steps")
@@ -1568,7 +1612,12 @@ async def _onboard_hosts(
                     client,
                     host_name=h.hostname,
                     folder=h.folder,
-                    attributes={"ipaddress": h.ip, "tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"},
+                    attributes={
+                        "ipaddress": h.ip,
+                        "tag_agent": "no-agent",
+                        "tag_snmp_ds": "no-snmp",
+                        **_device_type_and_alias_attributes(h),
+                    },
                 )
                 console.print("  [green]Ping-only host created[/green] — reachability monitoring only, no agent/SNMP")
             except CheckmkAPIError as exc:
@@ -1580,7 +1629,12 @@ async def _onboard_hosts(
                 client,
                 host_name=h.hostname,
                 folder=h.folder,
-                attributes={"ipaddress": h.ip, "tag_agent": "cmk-agent", "tag_snmp_ds": "no-snmp"},
+                attributes={
+                    "ipaddress": h.ip,
+                    "tag_agent": "cmk-agent",
+                    "tag_snmp_ds": "no-snmp",
+                    **_device_type_and_alias_attributes(h),
+                },
             )
         except CheckmkAPIError as exc:
             console.print(f"  [yellow]host create/update: {exc}[/yellow]")
