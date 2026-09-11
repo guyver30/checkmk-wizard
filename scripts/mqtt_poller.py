@@ -805,7 +805,7 @@ def parse_topology_payload(payload: bytes) -> dict[str, dict]:
     return {
         node["id"]: _normalise_restored_node(node)
         for node in devices
-        if isinstance(node, dict) and "id" in node
+        if isinstance(node, dict) and isinstance(node.get("id"), str) and node["id"]
     }
 
 
@@ -829,21 +829,47 @@ def parse_topology_payload(payload: bytes) -> dict[str, dict]:
 # crash-loop contract this function's docstring already promises (T-09-05),
 # and means the next field Phase 11 adds needs one default here instead of a
 # new `.get()` at every read site.
+# Bug fixed 2026-09-11 (Phase 10 code review, CR-06): the first version of this
+# normalisation handled MISSING keys but not WRONG TYPES, which left the very
+# contract it cited still broken. A retained payload is untrusted input, and two
+# malformed-but-valid-JSON shapes were reproduced against it:
+#   {"id": ["x"]}                  -> TypeError: unhashable type: 'list', raised
+#                                     inside parse_topology_payload itself, so a
+#                                     `restart: unless-stopped` container
+#                                     crash-loops -- exactly the T-09-05 failure
+#                                     this code exists to prevent.
+#   {"id": "a", "parents": "r1"}   -> survives, but topology_signature computes
+#                                     sorted("r1") and produces a character-
+#                                     exploded tuple, a silently wrong signature
+#                                     that republishes topology every cycle.
+# Types are checked with `isinstance` to match how `query_devices` already
+# validates these same fields, rather than introducing a second style.
 def _normalise_restored_node(node: dict) -> dict:
-    """Backfill a node restored from a retained payload to the current shape.
+    """Backfill AND type-check a node restored from a retained payload.
 
     Defaults match `topology_nodes()`'s own defaults, so a node that predates
     a field compares equal to a fresh node that genuinely has no value for it
     — and differs from one that does, which correctly triggers exactly one
     republish on the first cycle after an upgrade.
+
+    A value of the wrong type is treated the same as a missing one: it falls
+    back to the default rather than propagating into `topology_signature`.
+    Callers must still reject a node whose `id` is not a `str` — that one
+    cannot be defaulted, since it is the dict key.
     """
-    return {
-        **node,
-        "parents": node.get("parents") or [],
-        "device_type": node.get("device_type") or UNKNOWN_DEVICE_TYPE,
-        "folder": node.get("folder") or "",
-        "alias": node.get("alias") or "",
-    }
+    parents = node.get("parents")
+    if not isinstance(parents, list) or not all(isinstance(p, str) for p in parents):
+        parents = []
+    device_type = node.get("device_type")
+    if not isinstance(device_type, str) or not device_type:
+        device_type = UNKNOWN_DEVICE_TYPE
+    folder = node.get("folder")
+    if not isinstance(folder, str):
+        folder = ""
+    alias = node.get("alias")
+    if not isinstance(alias, str):
+        alias = ""
+    return {**node, "parents": parents, "device_type": device_type, "folder": folder, "alias": alias}
 
 
 def parse_events_payload(payload: bytes) -> list[dict]:
@@ -1150,11 +1176,28 @@ def main() -> int:
                 config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
             )
             columns = select_host_columns(available)
+            # Bug fixed 2026-09-11 (Phase 10 code review, CR-04): this branch
+            # used to omit `folders=`, so the documented one-shot verification
+            # path published retained `status` AND `topology` with every folder
+            # blank -- overwriting correct retained values on the broker with
+            # empty ones. Mirrors run_forever's own degrade-on-RestError
+            # posture rather than inventing a new one.
+            once_folders: dict[str, str] = {}
+            try:
+                once_folders = fetch_host_folders(
+                    cmk_rest_base_url(config),
+                    config.cmk_rest_username,
+                    config.cmk_rest_secret,
+                    DEFAULT_REST_TIMEOUT_SECONDS,
+                )
+            except RestError as exc:
+                _logger.warning("Folder enrichment unavailable for this one-shot cycle: %s", exc)
             snapshots = query_devices(
                 config.livestatus_host,
                 config.livestatus_port,
                 columns,
                 DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+                folders=once_folders,
             )
         except LivestatusError as exc:
             _logger.error("One-shot cycle failed: %s", exc)
