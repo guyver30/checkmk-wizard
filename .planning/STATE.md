@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
+status: planning
 stopped_at: Phase 10 context gathered
-last_updated: "2026-09-11T03:36:20.486Z"
+last_updated: "2026-09-11T11:21:31.992Z"
 last_activity: 2026-09-11 -- Phase 10 execution started
 progress:
-  total_phases: 4
-  completed_phases: 2
-  total_plans: 13
-  completed_plans: 7
-  percent: 50
+  total_phases: 5
+  completed_phases: 3
+  total_plans: 16
+  completed_plans: 13
+  percent: 60
 ---
 
 # Project State
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Phase 10 — checkmk-tag-group-onboarding-integration
+**Current focus:** Phase 10.1 — bulk-device-type-tagging-and-deployment-gaps
 
 ## Current Position
 
-Phase: 10 (checkmk-tag-group-onboarding-integration) — EXECUTING
+Phase: 10.1 (bulk-device-type-tagging-and-deployment-gaps) — NOT PLANNED
 Plan: 1 of 6
-Status: Executing Phase 10
+Status: Ready to plan Phase 10.1
 Last activity: 2026-09-11 -- Phase 10 execution started
 
 Progress: [██████████] 100%
@@ -54,6 +54,10 @@ Progress: [██████████] 100%
 *Updated after each plan completion*
 
 ## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 10.1 inserted after Phase 10: Bulk device-type tagging for already-onboarded hosts (10-06-SUMMARY finding 1: 20 live hosts stuck at device_type=other, no wizard retag path) plus deployment/observability gaps (findings 2-5: worker CMK_REST_* env, automation secret never displayed, inconsistent poller failure posture, silent poller startup) (URGENT)
 
 ### Decisions
 

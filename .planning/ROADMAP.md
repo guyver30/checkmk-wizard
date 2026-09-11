@@ -117,14 +117,19 @@ Plans:
   1. A folder-scoped bulk retag flow exists that lists already-onboarded hosts and updates `tag_device_type` and `alias` via `update_host_attributes`, without running promotion or altering the host's monitoring method
   2. The `worker` compose service carries the same `CMK_REST_*` environment block the `poller` service already has, so the wizard re-run and the probe script no longer need a hand-pasted secret
   3. The automation secret the wizard generates on a first run is displayed to the operator at the point it is created, sufficient to populate `deploy/.env` without shelling into the `checkmk` container
-  4. The poller applies one consistent failure posture across its two external dependencies (Livestatus and the Checkmk REST credential) rather than exiting for one and degrading for the other
+  4. The poller survives a transient Livestatus outage at startup (the observed container-restart race) via a bounded retry, instead of exiting immediately; the deliberate asymmetry with the REST credential's always-degrade posture is preserved and recorded in-source, since Livestatus is the sole mandatory data source (Phase 10 decision D-03)
   5. A successful poller start emits a log line identifying the configured site, poll interval, and broker, so a healthy poller is distinguishable from a hung one in `podman logs`
 
 **Plans**: 3 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 10.1-01-PLAN.md — Live-verify whether a partial host-attribute PUT merges or replaces (blocking probe + checkpoint)
 - [ ] 10.1-02-PLAN.md — Deployment/observability gaps: worker CMK_REST_* env, automation secret display, poller startup retry and success log
+
+**Wave 2** *(blocked on Wave 1)*
+
 - [ ] 10.1-03-PLAN.md — Detection-driven folder-scoped bulk retag inside Phase 4, with activation and Phase 4 answer-iterator audit
 
 ### Phase 11: Live Dashboard
