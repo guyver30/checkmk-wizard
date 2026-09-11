@@ -89,7 +89,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 10-01-PLAN.md — device_types.json config list + stdlib REST/Livestatus shape probe script, run live to resolve the tag-group POST body, the per-host folder field, and the Livestatus tags key shape
+- [x] 10-01-PLAN.md — device_types.json config list + stdlib REST/Livestatus shape probe script, run live to resolve the tag-group POST body, the per-host folder field, and the Livestatus tags key shape
 
 **Wave 2** *(blocked on Wave 1)*
 
@@ -130,5 +130,5 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 |-------|-----------------|--------|-----------|
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
-| 10. Checkmk Tag-Group & Onboarding Integration | 0/6 | Planned | - |
+| 10. Checkmk Tag-Group & Onboarding Integration | 1/6 | In Progress|  |
 | 11. Live Dashboard | 0/TBD | Not started | - |
