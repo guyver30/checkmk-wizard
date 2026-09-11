@@ -96,6 +96,10 @@ OPTIONAL_HOST_COLUMNS = (
     "parents",
     "tags",
     "filename",
+    # Added by Phase 10 (D-10). Not covered by the 2026-09-08 column probe
+    # above -- expected present on 2.4.0p35 as a first-class Checkmk host
+    # attribute, but not yet confirmed live; plan 10-06's live run confirms it.
+    "alias",
 )
 
 # Standard Nagios plugin return codes, used unchanged by Checkmk/Livestatus
@@ -209,6 +213,11 @@ class DeviceSnapshot:
     device_type: str
     folder: str
     parents: list[str] = field(default_factory=list)
+    # D-09/D-10: Checkmk's native `alias` host attribute, set by the
+    # wizard's Phase 4 prompt, carried through so Phase 11 can prefer it
+    # over the hostname for display. This phase only makes it available;
+    # it does not decide display preference.
+    alias: str = ""
 
 
 def configure_logging(level: str) -> None:
@@ -264,6 +273,7 @@ def topology_nodes(snapshots: list[DeviceSnapshot]) -> list[dict]:
             "parents": list(snapshot.parents),
             "device_type": snapshot.device_type,
             "folder": snapshot.folder,
+            "alias": snapshot.alias,
         }
         for snapshot in snapshots
     ]
@@ -273,7 +283,13 @@ def topology_signature(nodes: list[dict]) -> tuple:
     """Order-independent signature used to decide whether topology actually changed."""
     return tuple(
         sorted(
-            (node["id"], tuple(sorted(node["parents"])), node["device_type"], node["folder"])
+            (
+                node["id"],
+                tuple(sorted(node["parents"])),
+                node["device_type"],
+                node["folder"],
+                node["alias"],
+            )
             for node in nodes
         )
     )
@@ -454,6 +470,13 @@ def query_devices(host: str, port: int, columns: list[str], timeout: float) -> l
         except (IndexError, TypeError):
             folder = ""
 
+        try:
+            alias = row[index["alias"]] if "alias" in index else ""
+        except (IndexError, TypeError):
+            alias = ""
+        if not isinstance(alias, str):
+            alias = ""
+
         snapshots.append(
             DeviceSnapshot(
                 id=name,
@@ -463,6 +486,7 @@ def query_devices(host: str, port: int, columns: list[str], timeout: float) -> l
                 device_type=extract_device_type(tags),
                 folder=folder,
                 parents=parents,
+                alias=alias,
             )
         )
     return snapshots
@@ -532,6 +556,7 @@ def publish_device_status(client: mqtt.Client, snapshot: DeviceSnapshot, timesta
         "acknowledged": snapshot.acknowledged,
         "device_type": snapshot.device_type,
         "folder": snapshot.folder,
+        "alias": snapshot.alias,
         "timestamp": timestamp,
     }
     _publish_json(client, device_status_topic(snapshot.id), payload, qos=0, retain=True)
