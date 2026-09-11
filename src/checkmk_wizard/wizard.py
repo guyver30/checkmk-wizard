@@ -738,7 +738,7 @@ async def phase2_folders(client: CheckmkClient) -> dict[str, str | None]:
     # run's own newly-scanned hosts would be counted as "pre-existing",
     # making D-08's backfill count meaningless.
     await _ensure_device_type_tag_group(client)
-    use_folders = await questionary.confirm("Set up folders (one per VLAN/site)?", default=False).ask_async()
+    use_folders = await questionary.confirm("Set up folders (one per location/group)?", default=False).ask_async()
     if not use_folders:
         console.print("Skipping — Phase 3 will scan a single subnet into the root folder.")
         return {}
