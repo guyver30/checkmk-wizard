@@ -27,7 +27,50 @@ bare `python3` inside the poller container as well as under `uv run` on
 the host, matching `scripts/mqtt_poller.py`'s "standalone,
 dependency-light" constraint.
 
-Findings: not yet run against a live site -- see 10-01-PLAN.md Task 3
+Live-verified against a real Checkmk 2.4.0p35 CE site on 2026-09-11 (run inside
+the `automation-worker` container, REST base
+`http://checkmk:5000/dmc/check_mk/api/1.0`, site `dmc`, Checkmk 2.4.0-latest
+check-mk-raw):
+
+A1 (tag-group POST body shape) -- CONFIRMED as RESEARCH.md predicted: `id` (not
+`ident`) is the accepted top-level key, both at the group level and inside each
+`tags[]` entry. The `id`-shape attempt succeeded on the first try (no `ident`
+retry needed), HTTP 200. The exact top-level body keys sent and accepted were
+`id`, `title`, `tags` (each tag entry: `id`, `title`, `aux_tags: []`). Note:
+RESEARCH.md's candidate body also listed a `topic` key -- this probe never
+sends one, and it was not required; Checkmk silently defaulted
+`extensions.topic` to `"Tags"` in the P3 readback without it being supplied.
+The P3 readback round-tripped the same `id`/`title`/`tags` shape.
+
+A2 (host_config folder field) -- CONFIRMED `extensions.folder` IS present on
+`host_config` collection entries, closing Pattern 3 Candidate A: observed value
+`'/folder2'` for host `192.168.0.1` (a plain `str`, leading slash, no trailing
+slash). No `folder_config` link href was found anywhere in the entry's `links`
+array (`folder_config link href: none found`) -- Pattern 3 Candidate B is NOT
+available on this site/version. Plan 10-03 must implement Candidate A
+(`extensions.folder`) directly; there is no link-based fallback to consult.
+
+Tag-group default materialization -- a newly created tag group's implicit
+first-tag default does NOT appear as an explicit `extensions.attributes` key.
+After creating `gsd_probe_device_type` with `other` as `tags[0]`, the probed
+host's `extensions.attributes` still listed only `['ipaddress', 'meta_data',
+'tag_agent', 'tag_snmp_ds']` -- no `tag_gsd_probe_device_type` key appeared.
+Consequence for plan 10-02: its backfill count must count hosts LACKING an
+explicit `tag_device_type` attribute (the default stays implicit and writes
+nothing), not hosts whose attribute equals `other`.
+
+A3 (Livestatus tags key shape) -- the three sampled hosts (`test-machine`,
+`checkmk_wizard`, `192.168.0.67`) all returned bare (unprefixed) `tags` keys
+(`agent`, `snmp_ds`, `criticality`, `ip-v4`, `networking`, `piggyback`, `ping`,
+`site`, `address_family`), consistent with a bare-id shape for `device_type`
+too by inference from sibling tag groups. This is NOT a full confirmation for
+the `device_type` key specifically: no host carried a `device_type` or
+`tag_device_type` tag at probe time (Phase 10 has not created the real group
+yet), so it is strong inference, not direct observation. Plan 10-06 re-runs
+this probe after the wizard has set a real device-type tag to close A3 fully.
+
+Cleanup: DELETE returned 204 and the throwaway `gsd_probe_device_type` group
+was removed; the live site was left unchanged.
 """
 
 from __future__ import annotations
