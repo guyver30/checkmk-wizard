@@ -45,6 +45,8 @@ import signal
 import socket
 import sys
 import threading
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 
 import paho.mqtt.client as mqtt
@@ -59,6 +61,11 @@ DEFAULT_RECONCILE_TIMEOUT_SECONDS = 5.0
 # is the per-request socket timeout for the poller's own Livestatus calls,
 # matching src/checkmk_wizard/livestatus.py's existing hardcoded default.
 DEFAULT_LIVESTATUS_TIMEOUT_SECONDS = 10.0
+DEFAULT_REST_PORT = 5000
+# Not env-configurable, same reasoning as DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+# above: this is the per-request timeout for the poller's own REST folder
+# lookup, kept as a named constant rather than inlined.
+DEFAULT_REST_TIMEOUT_SECONDS = 10.0
 
 TOPIC_TOPOLOGY = "lan/devices/topology"
 TOPIC_EVENTS = "lan/events/recent"
@@ -88,6 +95,21 @@ UNKNOWN_DEVICE_TYPE = "unknown"
 # change, and the poller's own heartbeat (`lan/poller/status`) was 38s
 # old at check time -- both consistent with the timeout defaults already
 # shipped below, so no correction was needed.
+#
+# Bug fixed 2026-09-11 (Phase 10, D-04): `filename` was confirmed present
+# by the 2026-09-08 probe above, but Phase 10 stopped consuming it. The
+# old `derive_folder()` located a literal `wato` segment in this
+# Livestatus-reported OMD filesystem path to guess a folder -- that
+# breaks outright when the Checkmk site id is itself named `wato`
+# (`.planning/phases/09-poller-core/09-REVIEW.md` finding WR-07, since a
+# site named `wato` puts a second, unrelated `wato` segment earlier in
+# the same path), and breaks silently on folder rename/restructure
+# (`.planning/research/PITFALLS.md` Pitfall 10), because it parses an
+# on-disk layout with no schema guarantee. The folder now comes from
+# Checkmk's own REST-computed `extensions.folder` association
+# (`fetch_host_folders()` below) -- a semantic value with no filesystem
+# coupling, closing the whole class of bug rather than patching this one
+# instance.
 REQUIRED_HOST_COLUMNS = ("name", "state")
 OPTIONAL_HOST_COLUMNS = (
     "scheduled_downtime_depth",
@@ -95,7 +117,10 @@ OPTIONAL_HOST_COLUMNS = (
     "worst_service_state",
     "parents",
     "tags",
-    "filename",
+    # Added by Phase 10 (D-10). Not covered by the 2026-09-08 column probe
+    # above -- expected present on 2.4.0p35 as a first-class Checkmk host
+    # attribute, but not yet confirmed live; plan 10-06's live run confirms it.
+    "alias",
 )
 
 # Standard Nagios plugin return codes, used unchanged by Checkmk/Livestatus
@@ -111,6 +136,14 @@ _logger = logging.getLogger(__name__)
 
 class LivestatusError(RuntimeError):
     """Raised for any Livestatus network failure or malformed response."""
+
+
+class RestError(RuntimeError):
+    """Raised for any Checkmk REST network failure or malformed response.
+
+    Single normalized failure type for the poller's REST calls, mirroring
+    `LivestatusError`'s role for Livestatus.
+    """
 
 
 def _env_int(name: str, default: int) -> int:
@@ -156,11 +189,19 @@ class PollerConfig:
     events_max_entries: int
     reconcile_timeout_seconds: float
     log_level: str
+    # REST credential fields for the folder-lookup helper (D-03). Appended
+    # after log_level so no positional PollerConfig(...) call site breaks.
+    cmk_rest_host: str = "checkmk"
+    cmk_rest_port: int = DEFAULT_REST_PORT
+    cmk_site_id: str = "dmc"
+    cmk_rest_username: str = ""
+    cmk_rest_secret: str = ""
 
     def __repr__(self) -> str:
         # T-09-02: this object must be safe to log — never render the raw
-        # MQTT password. Defined explicitly so @dataclass does not
-        # generate a repr that would include it.
+        # MQTT password or the REST secret (cmk_rest_secret). Defined
+        # explicitly so @dataclass does not generate a repr that would
+        # include either.
         return (
             "PollerConfig("
             f"livestatus_host={self.livestatus_host!r}, "
@@ -173,7 +214,12 @@ class PollerConfig:
             f"history_max_entries={self.history_max_entries!r}, "
             f"events_max_entries={self.events_max_entries!r}, "
             f"reconcile_timeout_seconds={self.reconcile_timeout_seconds!r}, "
-            f"log_level={self.log_level!r})"
+            f"log_level={self.log_level!r}, "
+            f"cmk_rest_host={self.cmk_rest_host!r}, "
+            f"cmk_rest_port={self.cmk_rest_port!r}, "
+            f"cmk_site_id={self.cmk_site_id!r}, "
+            f"cmk_rest_username={self.cmk_rest_username!r}, "
+            "cmk_rest_secret='***')"
         )
 
     @classmethod
@@ -192,6 +238,14 @@ class PollerConfig:
                 "RECONCILE_TIMEOUT_SECONDS", DEFAULT_RECONCILE_TIMEOUT_SECONDS
             ),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
+            cmk_rest_host=os.environ.get("CMK_REST_HOST", "checkmk"),
+            cmk_rest_port=_env_int("CMK_REST_PORT", DEFAULT_REST_PORT),
+            # Reuses the exact env-var name deploy/compose.yaml's checkmk/
+            # worker services already set, so operators are not asked to
+            # configure the same value under two names.
+            cmk_site_id=os.environ.get("CMK_SITE_ID", "dmc"),
+            cmk_rest_username=os.environ.get("CMK_REST_USERNAME", ""),
+            cmk_rest_secret=os.environ.get("CMK_REST_SECRET", ""),
         )
 
 
@@ -209,6 +263,11 @@ class DeviceSnapshot:
     device_type: str
     folder: str
     parents: list[str] = field(default_factory=list)
+    # D-09/D-10: Checkmk's native `alias` host attribute, set by the
+    # wizard's Phase 4 prompt, carried through so Phase 11 can prefer it
+    # over the hostname for display. This phase only makes it available;
+    # it does not decide display preference.
+    alias: str = ""
 
 
 def configure_logging(level: str) -> None:
@@ -264,6 +323,7 @@ def topology_nodes(snapshots: list[DeviceSnapshot]) -> list[dict]:
             "parents": list(snapshot.parents),
             "device_type": snapshot.device_type,
             "folder": snapshot.folder,
+            "alias": snapshot.alias,
         }
         for snapshot in snapshots
     ]
@@ -273,28 +333,16 @@ def topology_signature(nodes: list[dict]) -> tuple:
     """Order-independent signature used to decide whether topology actually changed."""
     return tuple(
         sorted(
-            (node["id"], tuple(sorted(node["parents"])), node["device_type"], node["folder"])
+            (
+                node["id"],
+                tuple(sorted(node["parents"])),
+                node["device_type"],
+                node["folder"],
+                node["alias"],
+            )
             for node in nodes
         )
     )
-
-
-def derive_folder(filename: str) -> str:
-    """Derive a folder path from a Livestatus `filename` (WATO config path).
-
-    Takes the path segment(s) after the `wato/` segment and drops the
-    trailing `hosts.mk`. Returns "" when there is no `wato/` segment, or
-    the host sits directly in the WATO root.
-    """
-    parts = filename.split("/")
-    try:
-        wato_index = parts.index("wato")
-    except ValueError:
-        return ""
-    segment_parts = parts[wato_index + 1 :]
-    if segment_parts and segment_parts[-1] == "hosts.mk":
-        segment_parts = segment_parts[:-1]
-    return "/".join(segment_parts)
 
 
 def extract_device_type(tags: dict) -> str:
@@ -333,6 +381,69 @@ def _livestatus_request(host: str, port: int, query: str, timeout: float) -> str
     except (TimeoutError, OSError) as exc:
         raise LivestatusError(f"Livestatus request to {host}:{port} failed: {exc}") from exc
     return b"".join(chunks).decode(errors="replace")
+
+
+def cmk_rest_base_url(config: PollerConfig) -> str:
+    """Build the Checkmk REST API base URL, replicating `_site_base()`'s
+    construction (`src/checkmk_wizard/api.py`) without importing that
+    module -- D-01 locks this script as standalone (see module docstring).
+    """
+    return f"http://{config.cmk_rest_host}:{config.cmk_rest_port}/{config.cmk_site_id}/check_mk/api/1.0"
+
+
+def fetch_host_folders(base_url: str, username: str, secret: str, timeout: float) -> dict[str, str]:
+    """Fetch every host's Checkmk-computed folder association via one REST GET.
+
+    Every REST network failure funnels through this one choke point and
+    is normalized into `RestError` exactly once, mirroring
+    `_livestatus_request`'s single-choke-point pattern above. The
+    RestError message names the URL and the underlying error but never
+    the Authorization header, username, or secret (T-10-10).
+
+    Live-verified against a real Checkmk 2.4.0p35 CE site on 2026-09-11
+    (plan 10-01's probe, `scripts/probe_checkmk_rest_shapes.py`):
+    `extensions.folder` is present on every `host_config` collection
+    entry as a plain string (observed `'/folder2'`), and no
+    `folder_config` link href exists anywhere in the entry's `links`
+    array on this site/version -- Pattern 3 Candidate B (link-following)
+    is not available, so this implements Candidate A exclusively.
+    """
+    url = f"{base_url}/domain-types/host_config/collections/all"
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {username} {secret}",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read())
+    except (
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+        OSError,
+        TimeoutError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise RestError(f"REST folder lookup to {url} failed: {exc}") from exc
+
+    folders: dict[str, str] = {}
+    for entry in data.get("value", []) if isinstance(data, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        host_id = entry.get("id")
+        if not host_id:
+            _logger.debug("Skipping host_config entry with no id: %r", entry)
+            continue
+        extensions = entry.get("extensions", {})
+        folder = extensions.get("folder", "") if isinstance(extensions, dict) else ""
+        # `extensions.folder` (A2, live-confirmed) carries a leading slash
+        # and no trailing slash (e.g. '/folder2') -- strip the leading
+        # slash so downstream consumers see the same `a/b` segment shape
+        # `derive_folder()` used to produce, no shape change for callers.
+        folders[host_id] = folder.lstrip("/") if isinstance(folder, str) else ""
+    return folders
 
 
 def available_host_columns(host: str, port: int, timeout: float) -> set[str]:
@@ -384,13 +495,25 @@ def build_hosts_query(columns: list[str]) -> str:
     return f"GET hosts\nColumns: {' '.join(columns)}\nOutputFormat: json\n\n"
 
 
-def query_devices(host: str, port: int, columns: list[str], timeout: float) -> list[DeviceSnapshot]:
+def query_devices(
+    host: str,
+    port: int,
+    columns: list[str],
+    timeout: float,
+    *,
+    folders: dict[str, str] | None = None,
+) -> list[DeviceSnapshot]:
     """Run one `GET hosts` round trip and parse it into typed DeviceSnapshot records.
 
     Defensive by design (T-09-03): a malformed response, a topic-unsafe
     host name, or a non-numeric state field skips that one row (or the
     whole cycle, for a fully malformed response) rather than crashing
     the poll loop.
+
+    `folders` is the REST-sourced host-name -> folder mapping fetched
+    once per cycle by `fetch_host_folders()` (D-04); a host missing from
+    the mapping (or a `None` mapping, e.g. a cycle whose REST fetch never
+    succeeded) degrades to folder `""` rather than raising.
     """
     body = _livestatus_request(host, port, build_hosts_query(columns), timeout)
     if not body.strip():
@@ -449,10 +572,14 @@ def query_devices(host: str, port: int, columns: list[str], timeout: float) -> l
             raw_tags = None
         tags = raw_tags if isinstance(raw_tags, dict) else {}
 
+        folder = folders.get(name, "") if folders else ""
+
         try:
-            folder = derive_folder(row[index["filename"]]) if "filename" in index else ""
+            alias = row[index["alias"]] if "alias" in index else ""
         except (IndexError, TypeError):
-            folder = ""
+            alias = ""
+        if not isinstance(alias, str):
+            alias = ""
 
         snapshots.append(
             DeviceSnapshot(
@@ -463,6 +590,7 @@ def query_devices(host: str, port: int, columns: list[str], timeout: float) -> l
                 device_type=extract_device_type(tags),
                 folder=folder,
                 parents=parents,
+                alias=alias,
             )
         )
     return snapshots
@@ -532,6 +660,7 @@ def publish_device_status(client: mqtt.Client, snapshot: DeviceSnapshot, timesta
         "acknowledged": snapshot.acknowledged,
         "device_type": snapshot.device_type,
         "folder": snapshot.folder,
+        "alias": snapshot.alias,
         "timestamp": timestamp,
     }
     _publish_json(client, device_status_topic(snapshot.id), payload, qos=0, retain=True)
@@ -830,6 +959,15 @@ def run_forever(config: PollerConfig) -> int:
     configure_logging(config.log_level)
     state = reconcile_state(config)
     client = build_mqtt_client(config)
+    rest_base_url = cmk_rest_base_url(config)
+    # Reused (never cleared) on a RestError below rather than falling back
+    # to an empty dict: `folder` participates in `topology_signature`, so
+    # blanking every folder on a transient REST failure would publish a
+    # full spurious topology change and then publish another one when
+    # REST recovered -- violating PLR-04's "republish only when topology
+    # actually changes". Reusing the last known good map keeps the
+    # signature stable across a REST blip (T-10-12).
+    last_folders: dict[str, str] = {}
 
     try:
         available = available_host_columns(
@@ -850,12 +988,27 @@ def run_forever(config: PollerConfig) -> int:
     signal.signal(signal.SIGINT, _handle_signal)
 
     while not stop_event.is_set():
+        # A folder lookup is enrichment, not the poller's core duty
+        # (RESEARCH.md Pitfall 3): unlike the mandatory Livestatus query
+        # below, a RestError here degrades only the folder field for this
+        # cycle -- it never skips the cycle or crashes the loop.
+        try:
+            last_folders = fetch_host_folders(
+                rest_base_url,
+                config.cmk_rest_username,
+                config.cmk_rest_secret,
+                DEFAULT_REST_TIMEOUT_SECONDS,
+            )
+        except RestError as exc:
+            _logger.warning("Reusing last known folder map; REST folder refresh failed: %s", exc)
+
         try:
             snapshots = query_devices(
                 config.livestatus_host,
                 config.livestatus_port,
                 columns,
                 DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+                folders=last_folders,
             )
         except LivestatusError as exc:
             _logger.warning("Skipping cycle: %s", exc)
