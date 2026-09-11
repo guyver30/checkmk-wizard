@@ -111,15 +111,23 @@ def test_topology_signature_differs_on_alias_change():
 # --- extract_device_type --------------------------------------------------------
 
 
-def test_extract_device_type_prefers_device_type_tag():
+def test_extract_device_type_reads_bare_key():
+    # Live-confirmed 2026-09-11 (plan 10-06, Checkmk 2.4.0p36.cre): Livestatus
+    # keys a custom tag group by its bare group id, not the `tag_` prefix the
+    # REST API uses for the same attribute.
     assert poller.extract_device_type({"device_type": "switch"}) == "switch"
 
 
-def test_extract_device_type_falls_back_to_tag_device_type():
-    assert poller.extract_device_type({"tag_device_type": "router"}) == "router"
+def test_extract_device_type_resolves_livestatus_group_default():
+    # Live-confirmed 2026-09-11 (plan 10-06): Livestatus resolves a tag
+    # group's configured default for an untagged host (`other`) rather
+    # than omitting the key, unlike the REST API's `extensions.attributes`.
+    assert poller.extract_device_type({"device_type": "other"}) == "other"
 
 
-def test_extract_device_type_defaults_to_unknown():
+def test_extract_device_type_defaults_to_unknown_when_key_absent():
+    # `UNKNOWN_DEVICE_TYPE` is the exceptional case: the `device_type` tag
+    # group doesn't exist on this site at all, not a normal untagged host.
     assert poller.extract_device_type({}) == "unknown"
 
 
