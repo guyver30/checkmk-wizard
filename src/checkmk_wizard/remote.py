@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import shlex
 from dataclasses import dataclass
 from enum import Enum
@@ -339,13 +340,53 @@ async def check_os_compatibility(host: str, creds: SSHCredentials) -> Compatibil
     return CompatibilityCheck(compatible=family is not None, target=target, package_family=family, message=message)
 
 
+def _server_with_receiver_port(server: str) -> str:
+    """Append the agent receiver port to a `--server` value if it doesn't
+    already carry an explicit port.
+
+    When `--server` has no port, `cmk-agent-ctl register` discovers the
+    agent receiver port itself by querying the Checkmk REST API, first over
+    http then https. On a deployment whose REST/GUI is published on a
+    non-standard port (observed: host port 8080 under Podman) that
+    discovery fails with "Failed to discover agent receiver port from
+    Checkmk REST API, both with http and https". The documented remedy is
+    to specify the port explicitly to bypass discovery
+    (docs.checkmk.com/latest/en/agent_linux.html, "Network environment for
+    registration"). Bug fixed 2026-09-12 (live-reported: registration
+    against a Podman-published Checkmk site on host port 8080 failed with
+    the above error because `--server` carried no port).
+
+    An IPv6 address is checked first via `ipaddress.ip_address` so a bare
+    literal like `::1` isn't misread as "host `::` port `1`" by the
+    `rsplit(":", 1)` logic used for everything else.
+    """
+    try:
+        parsed = ipaddress.ip_address(server)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        if parsed.version == 6:
+            return f"[{server}]:{AGENT_RECEIVER_PORT}"
+        return f"{server}:{AGENT_RECEIVER_PORT}"
+    if server.startswith("["):
+        close_idx = server.index("]")
+        after = server[close_idx + 1 :]
+        if after.startswith(":") and after[1:].isdigit():
+            return server
+        return server[: close_idx + 1] + f":{AGENT_RECEIVER_PORT}"
+    parts = server.rsplit(":", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        return server
+    return f"{server}:{AGENT_RECEIVER_PORT}"
+
+
 def linux_register_command(
     hostname: str, server: str, site: str, user: str, password: str
 ) -> str:
     return (
         "cmk-agent-ctl register "
         f"--hostname {shlex.quote(hostname)} "
-        f"--server {shlex.quote(server)} "
+        f"--server {shlex.quote(_server_with_receiver_port(server))} "
         f"--site {shlex.quote(site)} "
         f"--user {shlex.quote(user)} "
         f"--password {shlex.quote(password)}"
@@ -366,8 +407,8 @@ def windows_register_command(
 ) -> str:
     return (
         '& "C:\\Program Files (x86)\\checkmk\\service\\cmk-agent-ctl.exe" register '
-        f"--hostname {_ps_quote(hostname)} --server {_ps_quote(server)} --site {_ps_quote(site)} "
-        f"--user {_ps_quote(user)} --password {_ps_quote(password)}"
+        f"--hostname {_ps_quote(hostname)} --server {_ps_quote(_server_with_receiver_port(server))} "
+        f"--site {_ps_quote(site)} --user {_ps_quote(user)} --password {_ps_quote(password)}"
     )
 
 
@@ -425,7 +466,9 @@ async def register_agent_linux(host: str, creds: SSHCredentials, register_cmd: s
     instead of re-uploading and reinstalling a package that's already
     there.
     """
-    manual = f"Run on the target host: {register_cmd}"
+    # The automated path below elevates via `_run_sudo()`; the printed
+    # manual fallback needs its own `sudo` since it isn't run through that.
+    manual = f"Run on the target host: sudo {register_cmd}"
     if not await check_ssh_reachable(host, creds):
         return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, "SSH unreachable", manual)
     try:
@@ -451,7 +494,7 @@ async def install_agent_linux(
     manual = (
         f"1. Download the agent package from the Checkmk host and copy it to the target.\n"
         f"2. Install it: sudo dpkg -i {package_filename}  (or: sudo rpm -i {package_filename})\n"
-        f"3. Run on the target host: {register_cmd}"
+        f"3. Run on the target host: sudo {register_cmd}"
     )
     if not await check_ssh_reachable(host, creds):
         return ActionResult(Outcome.FAILED_FALLBACK_MANUAL, "SSH unreachable", manual)

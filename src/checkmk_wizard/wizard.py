@@ -1928,6 +1928,27 @@ def _looks_loopback(host: str) -> bool:
         return False
 
 
+def _unusable_from_remote_target(host: str) -> bool:
+    """Whether `host` is only meaningful inside the wizard's own network
+    context, and therefore cannot be resolved by a remote target trying to
+    reach this Checkmk server for `cmk-agent-ctl register --server`.
+
+    True for anything `_looks_loopback` already covers, plus a bare
+    single-label hostname (no dot, not an IP address). Bug fixed
+    2026-09-12 (live-reported): in container mode, the Checkmk host
+    defaults to the Podman-internal DNS name `checkmk`, which is neither
+    `localhost` nor a loopback IP, so the old loopback-only guard let it
+    through into `--server`, where no LAN target can resolve it.
+    """
+    if _looks_loopback(host):
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        return "." not in host
+
+
 def _local_ipv4_addresses() -> list[str]:
     """Every non-loopback IPv4 address configured on this machine's own
     network interfaces — candidates for how a remote host could reach this
@@ -1973,22 +1994,26 @@ async def _resolve_agent_registration_server(hosts: list[OnboardedHost], checkmk
     itself, so registration silently tries to contact itself and fails
     every time with a confusing "Failed to discover agent receiver port"
     error (live-reported symptom, 2026-08-27) rather than anything
-    mentioning `localhost`. Detects this once, for the whole batch, and
-    offers this machine's own non-loopback addresses (`_local_ipv4_
-    addresses()`) as ready-to-pick options instead of asking the operator
-    to go find and type one themselves.
+    mentioning `localhost`. The same problem applies to a bare hostname
+    like the container-mode default `checkmk`, which only resolves inside
+    the Podman network (`_unusable_from_remote_target`, bug fixed
+    2026-09-12). Detects this once, for the whole batch, and offers this
+    machine's own non-loopback addresses (`_local_ipv4_addresses()`) as
+    ready-to-pick options instead of asking the operator to go find and
+    type one themselves.
     """
-    if not _looks_loopback(checkmk_host):
+    if not _unusable_from_remote_target(checkmk_host):
         return checkmk_host
     if not any(not _looks_loopback(h.ip) for h in hosts):
         # Every target is loopback too (e.g. testing entirely on this same
-        # machine) — `localhost` is actually correct here, nothing to fix.
+        # machine) — `checkmk_host` is actually correct here, nothing to fix.
         return checkmk_host
 
     console.print(
         f"[yellow]This Checkmk site is configured to be reached at '{checkmk_host}', but at least one "
-        "host being onboarded is remote — a remote target can't use 'localhost' to reach this server "
-        "back (cmk-agent-ctl register would try to contact itself and fail).[/yellow]"
+        "host being onboarded is remote — a remote target can't reach this server back through "
+        f"'{checkmk_host}' (it's only meaningful on this machine or inside its own network), and "
+        "cmk-agent-ctl register would try to contact itself and fail.[/yellow]"
     )
 
     candidates = _local_ipv4_addresses()
@@ -2409,7 +2434,7 @@ def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection, regi
         host.hostname, register_server, connection.site, connection.registration_user, connection.registration_secret
     )
     console.print(f"    Firewall (ufw example): ufw allow {remote.AGENT_RECEIVER_PORT}/tcp")
-    console.print(f"    Download agent from the Checkmk site, install it, then run: {register_cmd}")
+    console.print(f"    Download agent from the Checkmk site, install it, then run: sudo {register_cmd}")
 
 
 # ── Phase 6: Discovery & baseline ───────────────────────────────────────
