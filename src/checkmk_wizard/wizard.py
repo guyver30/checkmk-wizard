@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any
 
 import questionary
+from prompt_toolkit.application import Application
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import HSplit, Layout, ScrollOffsets, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.progress import Progress
 from rich.table import Table
@@ -787,9 +793,12 @@ async def _ensure_device_type_tag_group(client: CheckmkClient) -> bool:
 
 @dataclass
 class RetagCandidate:
-    """An already-onboarded host whose device type is absent or the
-    neutral `other` (D-02) — a candidate for the detection-driven retag
-    flow inside Phase 4 (D-01)."""
+    """An already-onboarded host offered for retagging in Phase 4 (D-01).
+
+    `device_type` is None when the host carries no device-type attribute at
+    all, which reads as the neutral first type rather than as a distinct
+    state (see `_retaggable_hosts`).
+    """
 
     name: str
     folder: str
@@ -797,21 +806,28 @@ class RetagCandidate:
     alias: str | None
 
 
-def _untagged_host_candidates(
+def _retaggable_hosts(
     hosts: list[dict[str, Any]], exclude_names: set[str]
 ) -> list[RetagCandidate]:
-    """Pure filter over `list_hosts()`'s raw `value` array, deciding which
-    already-onboarded hosts are retag candidates.
+    """Pure filter over `list_hosts()`'s raw `value` array.
 
-    A host is a candidate when its `tag_<group_id>` attribute is ABSENT or
-    explicitly `"other"` (D-02). Both cases must be caught: the Phase 10
-    live-verified fact recorded on `_ensure_device_type_tag_group` above is
-    that a tag group's implicit first-tag default does NOT materialise as
-    an explicit attribute on a pre-existing host, so an untouched host has
-    the key missing, not set to `"other"`. The distinct sentinel value
-    `scripts/mqtt_poller.py` uses for a site missing the tag group
-    entirely is never checked here — that is a different condition from
-    one host lacking a tag.
+    Every already-onboarded host is retaggable, whatever it is currently
+    tagged as (D-12, superseding D-02's "absent or `other` only"). The
+    original rule assumed a retag only ever corrects an untagged host, but
+    an operator equally needs to fix a host tagged wrongly — a device typed
+    `ACS` that is really a `NetworkDevice` was simply unreachable through
+    the wizard, leaving the Checkmk UI as the only route.
+
+    A host with no `tag_<group_id>` attribute keeps `device_type=None`: a
+    tag group's implicit first-tag default does NOT materialise as an
+    explicit attribute (live-verified in Phase 10, see
+    `_ensure_device_type_tag_group` above), so "absent" and "explicitly the
+    first type" are indistinguishable to the operator and are displayed the
+    same way.
+
+    Only `exclude_names` removes a host — Phase 3 stages every scanned IP as
+    a bare placeholder, and this run's own discoveries must not appear here
+    seconds before the promotion flow tags them properly.
 
     Uses `.get(...)` chains throughout so a malformed `list_hosts()` entry
     (missing `extensions`, missing `id`) is skipped rather than raising.
@@ -824,14 +840,11 @@ def _untagged_host_candidates(
             continue
         extensions = h.get("extensions") or {}
         attributes = extensions.get("attributes") or {}
-        device_type = attributes.get(attribute_key)
-        if device_type is not None and device_type != "other":
-            continue
         candidates.append(
             RetagCandidate(
                 name=name,
                 folder=extensions.get("folder") or "/",
-                device_type=device_type,
+                device_type=attributes.get(attribute_key),
                 alias=attributes.get("alias"),
             )
         )
@@ -861,35 +874,180 @@ def _format_device_type_legend(device_types: list[str], columns: int = 2) -> lis
     return lines
 
 
-async def _prompt_device_type_number(
-    candidate: RetagCandidate, device_types: list[str]
-) -> str:
-    """Ask for a single digit rather than walking a select list (D-10).
+@dataclass
+class RetagSelection:
+    """Pure state behind the full-screen retag list (D-13).
 
-    A bulk retag is normally "a few of each type" across ~20 hosts, where a
-    per-host select costs an arrow-key walk each. One digit with the current
-    value as the default turns that into one keystroke, and bare Enter keeps
-    the host as it is so a folder where most hosts are already correct stays
-    cheap to walk.
+    Split out from the prompt_toolkit application deliberately: the cursor
+    and assignment rules are the part worth testing, and a full-screen app
+    cannot be driven from a unit test. The application below owns only key
+    bindings and rendering; every decision lives here.
     """
-    current = (
-        candidate.device_type if candidate.device_type in device_types else device_types[0]
-    )
-    current_index = device_types.index(current)
-    shown = candidate.device_type or f"{device_types[0]} (implicit)"
-    while True:
-        raw = (
-            await questionary.text(
-                f"{candidate.name}  ({shown})  [{current_index}]:", default=""
-            ).ask_async()
-        ).strip()
-        if not raw:
-            return current
-        if raw.isdigit() and int(raw) < len(device_types):
-            return device_types[int(raw)]
-        console.print(
-            f"[red]Enter 0-{len(device_types) - 1}, or press Enter to keep {current}.[/red]"
+
+    candidates: list[RetagCandidate]
+    device_types: list[str]
+    cursor: int = 0
+    pending: dict[str, str] = field(default_factory=dict)
+
+    def move(self, delta: int) -> None:
+        """Clamped rather than wrapping — at 20+ hosts, wrapping from the
+        last row to the first reads as a glitch, not a feature.
+        """
+        if self.candidates:
+            self.cursor = max(0, min(len(self.candidates) - 1, self.cursor + delta))
+
+    def original_type(self, candidate: RetagCandidate) -> str:
+        # An absent attribute reads as the first type (always "other",
+        # guaranteed by _load_device_types, D-06) rather than as a separate
+        # state — see _retaggable_hosts.
+        return candidate.device_type or self.device_types[0]
+
+    def current_type(self, candidate: RetagCandidate) -> str:
+        return self.pending.get(candidate.name, self.original_type(candidate))
+
+    def assign(self, index: int) -> bool:
+        """Set the type under the cursor. Returns False for an index no
+        device type exists at, so the caller can ignore the keystroke
+        instead of raising on a stray digit.
+        """
+        if not self.candidates or not 0 <= index < len(self.device_types):
+            return False
+        self.pending[self.candidates[self.cursor].name] = self.device_types[index]
+        return True
+
+    def changes(self) -> list[tuple[RetagCandidate, str]]:
+        """Only hosts whose type actually differs from what the site has —
+        assigning a host the type it already carries is a no-op, not a write.
+        """
+        return [
+            (c, self.current_type(c))
+            for c in self.candidates
+            if self.current_type(c) != self.original_type(c)
+        ]
+
+
+async def _run_retag_screen(
+    folder: str, candidates: list[RetagCandidate], device_types: list[str]
+) -> tuple[str, RetagSelection]:
+    """Full-screen scrollable host list for one folder (D-13). Returns
+    ("apply" | "discard", selection).
+
+    Replaces the one-prompt-per-host flow (D-10): with twenty hosts the
+    operator could not see the folder as a whole, revise an earlier answer,
+    or tell how far along they were. Here the whole folder is on screen,
+    every assignment is visible and revisable until "apply", and the two
+    exits are explicit.
+    """
+    selection = RetagSelection(candidates=candidates, device_types=device_types)
+    outcome = "discard"
+
+    def legend_fragments() -> list[tuple[str, str]]:
+        lines = [("class:legend.title", f" Retag {folder} — {len(candidates)} host(s)\n\n")]
+        lines.append(("class:legend", " Device types:\n"))
+        for line in _format_device_type_legend(device_types):
+            lines.append(("class:legend", f" {line}\n"))
+        return lines
+
+    name_width = max((len(c.name) for c in candidates), default=10)
+
+    def row_fragments() -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        for index, candidate in enumerate(candidates):
+            selected = index == selection.cursor
+            original = selection.original_type(candidate)
+            current = selection.current_type(candidate)
+            marker = " > " if selected else "   "
+            style = "class:row.cursor" if selected else "class:row"
+            text = f"{marker}{candidate.name:<{name_width}}  {original:<16}"
+            if current != original:
+                text += f"  ->  {current}"
+            out.append((style, text + "\n"))
+        return out
+
+    def footer_fragments() -> list[tuple[str, str]]:
+        changed = len(selection.changes())
+        text = (
+            f" {changed} change(s) staged    "
+            f"[Up/Down] move   [0-{len(device_types) - 1}] set type   "
+            "[A] apply and exit   [D] discard and exit "
         )
+        return [("class:footer", text)]
+
+    bindings = KeyBindings()
+
+    @bindings.add("up")
+    @bindings.add("k")
+    def _(event):
+        selection.move(-1)
+
+    @bindings.add("down")
+    @bindings.add("j")
+    def _(event):
+        selection.move(1)
+
+    @bindings.add("pageup")
+    def _(event):
+        selection.move(-10)
+
+    @bindings.add("pagedown")
+    def _(event):
+        selection.move(10)
+
+    # Only as many digits as there are types get bound, so a stray key is
+    # simply inert rather than assigning something unexpected.
+    for digit in range(min(10, len(device_types))):
+
+        @bindings.add(str(digit))
+        def _(event, digit=digit):
+            selection.assign(digit)
+
+    @bindings.add("a")
+    @bindings.add("A")
+    def _(event):
+        nonlocal outcome
+        outcome = "apply"
+        event.app.exit()
+
+    @bindings.add("d")
+    @bindings.add("D")
+    @bindings.add("c-c")
+    def _(event):
+        nonlocal outcome
+        outcome = "discard"
+        event.app.exit()
+
+    rows = Window(
+        content=FormattedTextControl(
+            row_fragments, get_cursor_position=lambda: Point(x=0, y=selection.cursor)
+        ),
+        # Keeps a couple of rows visible past the cursor so the list scrolls
+        # before the cursor hits the very edge of the viewport.
+        scroll_offsets=ScrollOffsets(top=2, bottom=2),
+        always_hide_cursor=True,
+    )
+    layout = Layout(
+        HSplit(
+            [
+                Window(FormattedTextControl(legend_fragments), height=len(device_types) // 2 + 4),
+                rows,
+                Window(FormattedTextControl(footer_fragments), height=1, style="class:footer"),
+            ]
+        )
+    )
+    application: Application[None] = Application(
+        layout=layout,
+        key_bindings=bindings,
+        style=Style.from_dict(
+            {
+                "legend.title": "bold",
+                "row.cursor": "reverse",
+                "footer": "reverse",
+            }
+        ),
+        full_screen=True,
+    )
+    await application.run_async()
+    return outcome, selection
 
 
 async def _write_host_attributes(
@@ -988,134 +1146,122 @@ async def _prompt_optional_aliases(
 async def _retag_existing_hosts(
     client: CheckmkClient | None, connection: CheckmkConnection | None, *, exclude_names: set[str]
 ) -> None:
-    """Detection-driven bulk retag of already-onboarded hosts stuck at no
-    device type or the neutral `other` (TAG-04). Locked to run inside
-    Phase 4, not a startup menu or a dedicated command-line switch (D-01)
-    — both were offered to the operator and explicitly rejected.
+    """Bulk retag of already-onboarded hosts (TAG-04). Locked to run inside
+    Phase 4, not a startup menu or a command-line switch (D-01) — both were
+    offered to the operator and explicitly rejected.
+
+    Every onboarded host is offered, whatever it is tagged as (D-12), and
+    one folder at a time is edited in a full-screen list (D-13). "Discard
+    and exit" restarts this whole flow from its first prompt, so the
+    operator can back all the way out of a folder they picked by mistake;
+    "apply and exit" writes that folder and then asks about the next one.
 
     Best-effort like every other provisioning step in this file: a REST
     blip while listing hosts must never abort a wizard run mid-flight
     (the class of bug fixed as CR-02 in Phase 10).
     """
-    try:
-        hosts = await client.list_hosts()
-    except CheckmkAPIError as exc:
-        console.print(f"[yellow]could not check for hosts needing retagging: {exc}[/yellow]")
-        return
-
-    candidates = _untagged_host_candidates(hosts, exclude_names)
-    if not candidates:
-        console.print("[dim]No already-onboarded hosts need retagging.[/dim]")
-        return
-
-    table = Table(title="Hosts with no device type")
-    table.add_column("Host")
-    table.add_column("Folder")
-    table.add_column("Current device type")
-    for c in candidates:
-        table.add_row(c.name, c.folder, c.device_type or "other (implicit)")
-    console.print(table)
-
-    # Declining is a first-class outcome (D-01), not a failure path — no
-    # warning colour, no retry. A run with nothing to fix must not grow a
-    # prompt either (the len(candidates) == 0 branch above returns first).
-    proceed = await questionary.confirm(
-        f"{len(candidates)} already-onboarded host(s) have no device type or are set to "
-        "'other'. Retag them now?",
-        default=False,
-    ).ask_async()
-    if not proceed:
-        console.print(
-            "[dim]Leaving these hosts at their current device type — nothing was written.[/dim]"
-        )
-        return
-
     attribute_key = f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"
     device_types = _load_device_types()
     updated_count = 0
-    remaining = candidates
-    while remaining:
-        folders = sorted({c.folder for c in remaining})
-        folder_choices = [
-            questionary.Choice(
-                f"{folder} ({sum(1 for c in remaining if c.folder == folder)} host(s))",
-                value=folder,
-            )
-            for folder in folders
-        ]
-        # Leaving is a choice on this menu rather than a separate "Retag
-        # another folder?" confirm after each pass. Declining "Apply?" below
-        # returns here with the folder still listed, so "redo the same
-        # folder, pick another, or stop" is one menu instead of three
-        # prompts.
-        folder_choices.append(
-            questionary.Choice("Done — leave the remaining hosts as they are", value=None)
-        )
-        # D-03: the prompt states in plain words that only exact-match
-        # hosts are touched, and the filter below enforces it with `==` —
-        # no startswith/prefix matching — so a single confirmation can
-        # never rewrite tags on a sub-folder host that was never displayed.
-        selected_folder = await questionary.select(
-            "Which folder's hosts do you want to retag? Only hosts whose folder matches "
-            "exactly are touched — sub-folders are not included; select each nested "
-            "folder separately.",
-            choices=folder_choices,
-        ).ask_async()
-        if selected_folder is None:
+
+    while True:
+        try:
+            hosts = await client.list_hosts()
+        except CheckmkAPIError as exc:
+            console.print(f"[yellow]could not list hosts for retagging: {exc}[/yellow]")
             break
 
-        folder_candidates = [c for c in remaining if c.folder == selected_folder]
+        # Re-fetched on every restart rather than cached: a previous pass
+        # may already have written some folders, and the list the operator
+        # sees must reflect that instead of replaying stale device types.
+        candidates = _retaggable_hosts(hosts, exclude_names)
+        if not candidates:
+            console.print("[dim]No already-onboarded hosts to retag.[/dim]")
+            break
 
-        # Printed once per folder, not once per host: the operator needs the
-        # numbers in view while answering, but repeating them 20 times would
-        # bury the prompts themselves (D-10).
-        console.print("[bold]Device types:[/bold]")
-        for line in _format_device_type_legend(device_types):
-            console.print(line)
-        console.print(
-            f"\n[bold]{selected_folder}[/bold] — {len(folder_candidates)} host(s) to retag\n"
-        )
+        table = Table(title="Already-onboarded hosts")
+        table.add_column("Host")
+        table.add_column("Folder")
+        table.add_column("Device type")
+        for c in candidates:
+            table.add_row(c.name, c.folder, c.device_type or f"{device_types[0]} (implicit)")
+        console.print(table)
 
-        assignments: list[tuple[RetagCandidate, str]] = []
-        for candidate in folder_candidates:
-            new_device_type = await _prompt_device_type_number(candidate, device_types)
-            if new_device_type != (candidate.device_type or device_types[0]):
-                assignments.append((candidate, new_device_type))
+        # Declining is a first-class outcome (D-01), not a failure path —
+        # no warning colour, no retry. A run with no onboarded hosts never
+        # reaches here at all (the branch above returns first).
+        proceed = await questionary.confirm(
+            f"{len(candidates)} already-onboarded host(s) can be retagged. Do that now?",
+            default=False,
+        ).ask_async()
+        if not proceed:
+            console.print("[dim]Leaving device types as they are — nothing was written.[/dim]")
+            break
 
-        unchanged = len(folder_candidates) - len(assignments)
-        console.print(
-            f"\n  {len(assignments)} host(s) will be retagged, {unchanged} unchanged."
-        )
+        restart = False
+        remaining = candidates
+        while remaining:
+            folders = sorted({c.folder for c in remaining})
+            folder_choices = [
+                questionary.Choice(
+                    f"{folder} ({sum(1 for c in remaining if c.folder == folder)} host(s))",
+                    value=folder,
+                )
+                for folder in folders
+            ]
+            folder_choices.append(
+                questionary.Choice("Done — leave the remaining hosts as they are", value=None)
+            )
+            # D-03: the prompt states in plain words that only exact-match
+            # hosts are touched, and the filter below enforces it with `==`
+            # — no startswith/prefix matching — so a single confirmation can
+            # never rewrite tags on a sub-folder host that was never shown.
+            selected_folder = await questionary.select(
+                "Which folder's hosts do you want to retag? Only hosts whose folder matches "
+                "exactly are touched — sub-folders are not included; select each nested "
+                "folder separately.",
+                choices=folder_choices,
+            ).ask_async()
+            if selected_folder is None:
+                break
 
-        if not assignments:
-            # The operator walked the folder and changed nothing, so drop it
-            # from the pool — otherwise the menu would keep offering a folder
-            # they have already dismissed.
+            folder_candidates = [c for c in remaining if c.folder == selected_folder]
+            action, selection = await _run_retag_screen(
+                selected_folder, folder_candidates, device_types
+            )
+
+            if action == "discard":
+                # D-13: discard is a full back-out, not "skip this folder" —
+                # it returns to the very first prompt of the flow so the
+                # operator can re-choose everything, including whether to
+                # retag at all.
+                console.print("[dim]Discarded — starting the retag flow over.[/dim]")
+                restart = True
+                break
+
+            changes = selection.changes()
+            if not changes:
+                console.print(f"[dim]No changes staged for {selected_folder}.[/dim]")
+            else:
+                retagged: list[RetagCandidate] = []
+                for candidate, new_device_type in changes:
+                    if await _write_host_attributes(
+                        client, candidate.name, {attribute_key: new_device_type}
+                    ):
+                        retagged.append(candidate)
+                        updated_count += 1
+                console.print(f"  {len(retagged)} host(s) retagged in {selected_folder}.")
+                updated_count += await _prompt_optional_aliases(client, retagged)
+
             remaining = [c for c in remaining if c.folder != selected_folder]
-            continue
+            if not remaining:
+                break
+            if not await questionary.confirm("Retag another folder?", default=False).ask_async():
+                break
 
-        # Nothing is written until the summary above is confirmed (D-10).
-        # With single-digit entry the wrong digit is one keystroke away, and
-        # a bulk retag can rewrite twenty hosts in a row — so the whole
-        # folder is previewed and gated behind one default-No confirm rather
-        # than each PUT firing as its prompt is answered.
-        if not await questionary.confirm("Apply?", default=False).ask_async():
-            # Deliberately leaves the folder in `remaining`: declining is
-            # "let me do that again", not "skip this folder", so the menu
-            # above comes back with it still selectable.
-            console.print("[dim]Nothing was written — back to the folder list.[/dim]")
+        if restart:
             continue
-
-        remaining = [c for c in remaining if c.folder != selected_folder]
-        retagged: list[RetagCandidate] = []
-        for candidate, new_device_type in assignments:
-            if await _write_host_attributes(
-                client, candidate.name, {attribute_key: new_device_type}
-            ):
-                retagged.append(candidate)
-                updated_count += 1
-        console.print(f"  {len(retagged)} host(s) retagged.")
-        updated_count += await _prompt_optional_aliases(client, retagged)
+        break
 
     # Activation is mandatory, not optional: without it the tag change
     # sits as a pending WATO change and never reaches Livestatus, the

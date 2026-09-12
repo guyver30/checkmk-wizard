@@ -143,6 +143,7 @@ dependencies = [
     { name = "asyncssh" },
     { name = "httpx" },
     { name = "paho-mqtt" },
+    { name = "prompt-toolkit" },
     { name = "questionary" },
     { name = "rich" },
 ]
@@ -159,6 +160,7 @@ requires-dist = [
     { name = "asyncssh", specifier = ">=2.24.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "paho-mqtt", specifier = ">=2.1.0" },
+    { name = "prompt-toolkit", specifier = ">=3.0.53" },
     { name = "questionary", specifier = ">=2.1.1" },
     { name = "rich", specifier = ">=15.0.0" },
 ]

@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 10 context gathered
-last_updated: "2026-09-12T03:59:57.387Z"
+last_updated: "2026-09-12T05:32:33.458Z"
 last_activity: 2026-09-12 -- Phase 10.1 execution started
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 16
-  completed_plans: 15
-  percent: 60
+  completed_plans: 16
+  percent: 80
 ---
 
 # Project State
@@ -69,6 +69,8 @@ Recent decisions affecting current work:
 - Milestone: Horizontal Layers build order chosen — broker (persistence + ACL from day one) → poller core → Checkmk tagging → dashboard (built last as a pure consumer)
 - [Phase 10.1]: D-10 (retag UX, operator-chosen 2026-09-12, SUPERSEDES 10.1-03-PLAN Task 1 step f prompts): the per-host device-type questionary.select is replaced by a numbered legend + single-digit entry. Print the device type legend once per folder, numbered by index into _load_device_types() (0=other guaranteed by D-06), then prompt each host as "<host>  (<current>)  [<current index>]: " accepting one digit; bare Enter keeps the current value. Before any PUT, print an "N host(s) will be retagged, M unchanged" summary and require a single Apply? confirm (default No) — this gate is new and protects a 20-host run from a mistyped digit. Rationale: the select-based flow cost 40 interactions for 20 hosts and the "a few of each type" pattern is the normal case. Numbering derives from the tag group source, never hand-maintained.
 - [Phase 10.1]: D-11 (retag alias handling, operator-chosen 2026-09-12, SUPERSEDES 10.1-03-PLAN Task 1 step f alias prompt): alias is NOT prompted per host during retag. After the device types are applied, ask once "Also set aliases on any of these?" (default No); on yes, questionary.checkbox over the just-retagged hosts, then a questionary.text alias prompt only for the checked ones. D-09 still governs the PUT body — a blank alias means the alias key is OMITTED entirely so Checkmk keeps what it has, never an explicit empty value that would clear an operator-set alias.
+- [Phase 10.1]: D-12 (retag scope, operator-chosen 2026-09-12, SUPERSEDES D-02): every already-onboarded host is a retag candidate regardless of its current device type. The old rule ("attribute absent OR == other") assumed a retag only ever corrects an untagged host, but an operator equally needs to fix a host tagged WRONGLY — a device typed ACS that is really a NetworkDevice was unreachable through the wizard, leaving the Checkmk UI as the only route. `_untagged_host_candidates` is renamed `_retaggable_hosts` and now filters only on `exclude_names` (this run's Phase 3 placeholders). A host with no attribute keeps device_type=None and is displayed as "<first type> (implicit)"; the absent-vs-explicit distinction is a display concern, not a filter one.
+- [Phase 10.1]: D-13 (retag UI, operator-chosen 2026-09-12, SUPERSEDES D-10's per-host digit prompt): one folder is edited in a full-screen prompt_toolkit list, not a sequence of per-host prompts. The screen shows the numbered device-type legend, every host in the folder with its current and pending type, and a footer menu. Keys: Up/Down (and j/k, PageUp/PageDown) move a clamped — never wrapping — cursor; a digit assigns that type to the row under the cursor; [A] applies and exits; [D] (or Ctrl-C) discards and exits. Only digits that index an existing type are bound, so a stray key is inert. Rationale: with 20 hosts a per-host prompt gave no view of the folder as a whole, no way to revise an earlier answer, and no sense of progress. "Apply and exit" writes the folder then asks about the next one; "discard and exit" restarts the whole retag flow from its first prompt (a full back-out, not "skip this folder"), which re-fetches the host list so a partially-written earlier pass is reflected rather than replayed stale. State lives in a pure RetagSelection dataclass so the cursor/assignment rules are unit-testable; the key bindings themselves are covered by driving the real Application through prompt_toolkit's create_pipe_input + DummyOutput. prompt_toolkit is now an explicit dependency (it was already transitive via questionary).
 
 ### Pending Todos
 

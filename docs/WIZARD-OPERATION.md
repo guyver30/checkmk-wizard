@@ -606,20 +606,23 @@ folder-subnet scan found it (`/` for the flat-fallback case).
 
 ### Bulk retag of already-onboarded hosts (added 2026-09-12, TAG-04)
 
-Before the promotion flow below, the phase checks whether any
-already-onboarded host has **no device type at all or is set to the neutral
-`other`** and, if so, offers to fix them. Both states count as untagged: a
-tag group's implicit first-tag default never materialises as an explicit
-`tag_device_type` attribute, so hosts predating the group have the key
-absent rather than set to `other`.
+Before the promotion flow below, the phase offers to retag hosts that are
+already onboarded. **Every onboarded host is offered, whatever it is
+currently tagged as** (changed 2026-09-12) — correcting a host tagged
+*wrongly* matters as much as tagging one that was never tagged, and the
+earlier "untagged only" rule left a mistyped host reachable solely through
+the Checkmk UI.
 
 Hosts this run just scanned are excluded — Phase 3 stages every scanned IP
-as a bare placeholder, which would otherwise all appear as retag candidates
-seconds before promotion tags them properly. With nothing to fix, the phase
-prints one dim line and asks nothing.
+as a bare placeholder, which would otherwise all appear here seconds before
+promotion tags them properly. With nothing onboarded, the phase prints one
+dim line and asks nothing.
 
-1. Renders a `rich` table of candidates (Host / Folder / Current device
-   type, showing `other (implicit)` when the attribute was absent).
+1. Renders a `rich` table of every candidate (Host / Folder / Device type),
+   showing `other (implicit)` where the attribute is absent — a tag group's
+   implicit first-tag default never materialises as an explicit attribute,
+   so "absent" and "explicitly the first type" look the same to the
+   operator and are displayed the same way.
 2. One confirm, defaulting to **No**. Declining is a first-class outcome —
    a dim line, no warning colour.
 3. A folder menu listing each folder with its candidate count, plus a
@@ -627,34 +630,66 @@ prints one dim line and asks nothing.
    whose folder matches **exactly** are touched — the filter is `==`, never
    a prefix match — so sub-folders are never swept in by a parent's
    confirmation. Nested folders are handled by selecting each in turn.
-4. The numbered device-type legend is printed once per folder (`0 = other`,
-   `1 = E-link`, ...), the numbers being indices into `device_types.json`,
-   so adding a type there extends the legend with no code change and
-   `other` stays `0`.
-5. Each host is prompted as `<host>  (<current>)  [<current index>]:` and
-   takes a **single digit**; bare Enter keeps the current value. An
-   out-of-range or non-numeric answer re-prompts.
-6. A summary — `N host(s) will be retagged, M unchanged` — then a single
-   **`Apply?`** confirm defaulting to No. Nothing is written before it.
-   **Declining returns to the folder menu with that folder still listed**,
-   so declining means "let me redo that", not "skip this folder".
-7. Each write is a GET of the host's full attribute dict, a client-side
-   override of just the device-type key, and a PUT of the whole dict back
-   with the ETag from that same GET. This is mandatory, not stylistic: a
-   partial PUT to `/objects/host_config/{name}` **replaces** a host's
-   attribute set rather than merging into it (live-verified 2026-09-12,
-   `scripts/probe_host_attribute_merge.py`), so sending only the changed
-   keys would silently strip `ipaddress`/`tag_agent`/`tag_snmp_ds`/
-   `snmp_community`. The ETag is fetched per host immediately before its
-   own PUT — batching them up front yields a 412 partway through a run.
-8. **Alias is an opt-in second pass**, not a per-host prompt: after the
-   types are applied, one confirm, then a checkbox over the just-retagged
-   hosts, then an alias prompt for each checked host. A blank answer omits
-   the `alias` key from the PUT entirely, so Checkmk keeps what it has —
-   an explicit empty value would clear an operator-set alias.
-9. One activation runs after the folder loop if at least one host was
-   updated. Without it the change sits as a pending WATO change and never
-   reaches Livestatus, the poller or the dashboard.
+
+#### The folder screen
+
+Picking a folder opens a **full-screen scrollable list** of its hosts
+(`_run_retag_screen`, a `prompt_toolkit` `Application`):
+
+```
+ Retag /vlan10 — 20 host(s)
+
+ Device types:
+   0 = other            3 = Multimedia
+   1 = E-link           4 = NetworkDevice
+   2 = ACS              5 = GroupController
+
+ > 10.20.0.11    other             ->  E-link
+   10.20.0.12    ACS
+   10.20.0.13    other             ->  Multimedia
+   ...
+ 2 change(s) staged    [Up/Down] move   [0-5] set type   [A] apply and exit   [D] discard and exit
+```
+
+- **Up/Down** (also `j`/`k`, PageUp/PageDown) move the cursor. It clamps at
+  both ends rather than wrapping — across 20+ rows, jumping from the last
+  row back to the first reads as a glitch.
+- **A digit** assigns that device type to the row under the cursor. Only
+  digits that index an existing type are bound, so a stray key is inert
+  rather than raising. Assignments show as `->  <new type>` and stay
+  revisable until you apply.
+- **`A`** applies and exits. **`D`** (or Ctrl-C) discards and exits.
+
+Assigning a host the type it already carries is a no-op, not a write — the
+change set only contains rows whose type actually differs.
+
+**Apply** writes that folder, then asks whether to retag another (if any
+remain). **Discard** restarts the entire retag flow from its first prompt —
+a full back-out, not "skip this folder", so a folder picked by mistake
+costs nothing. The restart re-fetches the host list, so a folder written in
+an earlier pass shows its new types rather than replaying stale ones.
+
+#### Writes
+
+Each write is a GET of the host's full attribute dict, a client-side
+override of just the device-type key, and a PUT of the whole dict back with
+the ETag from that same GET. This is mandatory, not stylistic: a partial PUT
+to `/objects/host_config/{name}` **replaces** a host's attribute set rather
+than merging into it (live-verified 2026-09-12,
+`scripts/probe_host_attribute_merge.py`), so sending only the changed keys
+would silently strip `ipaddress`/`tag_agent`/`tag_snmp_ds`/`snmp_community`.
+The ETag is fetched per host immediately before its own PUT — batching them
+up front yields a 412 partway through a run.
+
+**Alias is an opt-in second pass**, not a per-host prompt: after a folder's
+types are applied, one confirm, then a checkbox over the just-retagged
+hosts, then an alias prompt for each checked host. A blank answer omits the
+`alias` key from the PUT entirely, so Checkmk keeps what it has — an
+explicit empty value would clear an operator-set alias.
+
+One activation runs after the folder loop if at least one host was updated.
+Without it the change sits as a pending WATO change and never reaches
+Livestatus, the poller or the dashboard.
 
 Per-host failures print a yellow warning and continue; a REST failure
 listing hosts warns and returns. Nothing here aborts the wizard run.

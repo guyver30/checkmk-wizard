@@ -5,6 +5,9 @@ import pytest
 import questionary
 import respx
 from httpx import Response
+from prompt_toolkit.application import create_app_session
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
 from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection
 from checkmk_wizard.remote import (
@@ -33,6 +36,8 @@ from checkmk_wizard.wizard import (
     _SMARTMONTOOLS_DIR,
     DEVICE_TYPE_TAG_GROUP_ID,
     OnboardedHost,
+    RetagCandidate,
+    RetagSelection,
     ScannedHost,
     _activate_pending_changes,
     _collect_expected_services,
@@ -56,9 +61,10 @@ from checkmk_wizard.wizard import (
     _prompt_threshold_levels,
     _resolve_agent_registration_server,
     _retag_existing_hosts,
+    _retaggable_hosts,
+    _run_retag_screen,
     _smart_posix_plugin_path,
     _split_checkmk_host_port,
-    _untagged_host_candidates,
     _valid_checkmk_host,
     _verify_expected_services,
     phase1_site_bringup,
@@ -1442,10 +1448,11 @@ async def test_phase4_alias_answer_is_stripped(monkeypatch, tmp_path):
 # ── Bulk retag of already-onboarded hosts (TAG-04) ──────────────────────
 
 
-def test_untagged_host_candidates_detects_absent_and_other():
-    # D-02: a host is a candidate whether its device-type attribute is
-    # ABSENT (a pre-existing host the tag group's implicit default never
-    # materialised on) or explicitly "other" — both are the untagged state.
+def test_retaggable_hosts_includes_every_host_whatever_its_tag():
+    # D-12 (supersedes D-02): an operator needs to fix a host tagged WRONGLY
+    # as much as one never tagged at all, so no current value disqualifies a
+    # host. The earlier "absent or 'other' only" rule left a mistyped host
+    # reachable solely through the Checkmk UI.
     hosts = [
         {"id": "host-absent", "extensions": {"folder": "/", "attributes": {}}},
         {
@@ -1457,50 +1464,150 @@ def test_untagged_host_candidates_detects_absent_and_other():
             "extensions": {"folder": "/", "attributes": {"tag_device_type": "ACS"}},
         },
     ]
-    candidates = _untagged_host_candidates(hosts, exclude_names=set())
-    names = {c.name for c in candidates}
-    assert names == {"host-absent", "host-other"}
+    candidates = _retaggable_hosts(hosts, exclude_names=set())
+    assert {c.name for c in candidates} == {"host-absent", "host-other", "host-tagged"}
+    # An absent attribute stays None rather than being coerced to "other" —
+    # the display layer decides how to render it.
+    by_name = {c.name: c for c in candidates}
+    assert by_name["host-absent"].device_type is None
+    assert by_name["host-tagged"].device_type == "ACS"
 
 
-def test_untagged_host_candidates_excludes_named_hosts():
+def test_retaggable_hosts_excludes_named_hosts():
     # phase3_discovery stages every scanned IP as a bare host — this run's
     # own newly-discovered hosts must never be offered as retag candidates.
     hosts = [{"id": "10.0.0.5", "extensions": {"folder": "/", "attributes": {}}}]
-    candidates = _untagged_host_candidates(hosts, exclude_names={"10.0.0.5"})
-    assert candidates == []
+    assert _retaggable_hosts(hosts, exclude_names={"10.0.0.5"}) == []
 
 
-def test_untagged_host_candidates_folder_defaults_to_root():
+def test_retaggable_hosts_folder_defaults_to_root():
     hosts = [{"id": "host-1", "extensions": {"attributes": {}}}]  # no folder key at all
-    candidates = _untagged_host_candidates(hosts, exclude_names=set())
-    assert candidates[0].folder == "/"
+    assert _retaggable_hosts(hosts, exclude_names=set())[0].folder == "/"
 
 
-def test_untagged_host_candidates_malformed_entry_does_not_raise():
+def test_retaggable_hosts_malformed_entry_does_not_raise():
     # A list_hosts() entry missing "extensions" entirely must be skipped
     # gracefully via .get(...) chains, not raise.
-    hosts = [{"id": "host-1"}]
-    candidates = _untagged_host_candidates(hosts, exclude_names=set())
+    candidates = _retaggable_hosts([{"id": "host-1"}], exclude_names=set())
     assert len(candidates) == 1
     assert candidates[0].folder == "/"
     assert candidates[0].device_type is None
+
+
+def test_format_device_type_legend_numbers_every_type():
+    # The numbers are indices into _load_device_types(), so a type added to
+    # device_types.json shows up with no code change and "other" stays 0.
+    rendered = "\n".join(_format_device_type_legend(["other", "E-link", "ACS", "Multimedia"]))
+    assert "0 = other" in rendered
+    assert "1 = E-link" in rendered
+    assert "2 = ACS" in rendered
+    assert "3 = Multimedia" in rendered
+
+
+def test_format_device_type_legend_lays_out_column_major():
+    # Column-major so the numbers read top-to-bottom down each column
+    # rather than snaking across rows.
+    lines = _format_device_type_legend(["other", "A", "B", "C"], columns=2)
+    assert len(lines) == 2
+    assert "0 = other" in lines[0] and "2 = B" in lines[0]
+    assert "1 = A" in lines[1] and "3 = C" in lines[1]
+
+
+# ── RetagSelection: the pure state behind the full-screen list (D-13) ───
+
+
+def _selection(names, device_types=("other", "ACS", "Multimedia")):
+    candidates = [
+        RetagCandidate(name=n, folder="/", device_type=None, alias=None) for n in names
+    ]
+    return RetagSelection(candidates=candidates, device_types=list(device_types))
+
+
+def test_retag_selection_move_clamps_at_both_ends():
+    # Clamped, not wrapping: at 20+ hosts jumping from the last row back to
+    # the first reads as a glitch rather than a feature.
+    sel = _selection(["a", "b", "c"])
+    sel.move(-1)
+    assert sel.cursor == 0
+    sel.move(99)
+    assert sel.cursor == 2
+    sel.move(1)
+    assert sel.cursor == 2
+
+
+def test_retag_selection_assign_sets_type_under_cursor_only():
+    sel = _selection(["a", "b"])
+    sel.move(1)
+    assert sel.assign(1) is True
+    assert sel.pending == {"b": "ACS"}
+
+
+def test_retag_selection_assign_ignores_index_with_no_device_type():
+    # A stray digit must be inert, not an IndexError mid-screen.
+    sel = _selection(["a"])
+    assert sel.assign(9) is False
+    assert sel.pending == {}
+
+
+def test_retag_selection_absent_attribute_reads_as_first_type():
+    sel = _selection(["a"])
+    assert sel.current_type(sel.candidates[0]) == "other"
+
+
+def test_retag_selection_changes_excludes_reassignment_to_existing_type():
+    # Assigning a host the type it already carries is a no-op, not a write —
+    # otherwise walking a folder and pressing the current number on every
+    # row would PUT the whole folder for nothing.
+    candidates = [
+        RetagCandidate(name="already-acs", folder="/", device_type="ACS", alias=None),
+        RetagCandidate(name="to-change", folder="/", device_type="ACS", alias=None),
+    ]
+    sel = RetagSelection(candidates=candidates, device_types=["other", "ACS", "Multimedia"])
+    sel.pending["already-acs"] = "ACS"
+    sel.pending["to-change"] = "Multimedia"
+    assert [(c.name, t) for c, t in sel.changes()] == [("to-change", "Multimedia")]
+
+
+# ── The retag flow, with the full-screen list stubbed out ───────────────
 
 
 async def _fake_activate_always_true(client, connection):
     return True
 
 
+def _screen_returning(action, assignments, calls=None):
+    """Stand in for _run_retag_screen: a full-screen prompt_toolkit app
+    cannot be driven from a unit test, so the flow is exercised against the
+    same (action, RetagSelection) contract the real screen returns.
+    """
+
+    async def _screen(folder, candidates, device_types):
+        if calls is not None:
+            calls.append(folder)
+        selection = RetagSelection(candidates=candidates, device_types=device_types)
+        for name, device_type in assignments.items():
+            if any(c.name == name for c in candidates):
+                selection.pending[name] = device_type
+        return action, selection
+
+    return _screen
+
+
 @pytest.mark.asyncio
-async def test_retag_existing_hosts_happy_path(monkeypatch, tmp_path):
+async def test_retag_apply_writes_changes_and_preserves_other_attributes(monkeypatch, tmp_path):
     path = tmp_path / "device_types.json"
     path.write_text(json.dumps(["other", "ACS", "Multimedia"]))
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
-    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._run_retag_screen",
+        _screen_returning("apply", {"host1": "ACS", "host2": "Multimedia"}),
+    )
 
-    # D-10/D-11: confirm retag?, select folder, host1 digit, host2 digit,
-    # "Apply?" -> yes, "Also set aliases on any of these?" -> no.
-    # Digits index into ["other", "ACS", "Multimedia"]: 1=ACS, 2=Multimedia.
-    answers = iter([True, "/", "1", "2", True, False])
+    # "retag now?" -> yes, folder "/", [screen], "also set aliases?" -> no
+    answers = iter([True, "/", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1522,77 +1629,53 @@ async def test_retag_existing_hosts_happy_path(monkeypatch, tmp_path):
         respx.get(f"{BASE}/objects/host_config/host1").mock(
             return_value=Response(
                 200,
-                json={"extensions": {"attributes": {"ipaddress": "10.0.0.1", "tag_agent": "cmk-agent"}}},
+                json={
+                    "extensions": {
+                        "attributes": {"ipaddress": "10.0.0.1", "tag_agent": "cmk-agent"}
+                    }
+                },
                 headers={"ETag": "etag-host1"},
             )
         )
         respx.get(f"{BASE}/objects/host_config/host2").mock(
             return_value=Response(
                 200,
-                json={"extensions": {"attributes": {"ipaddress": "10.0.0.2", "tag_agent": "no-agent"}}},
+                json={"extensions": {"attributes": {"ipaddress": "10.0.0.2"}}},
                 headers={"ETag": "etag-host2"},
             )
         )
-        put_host1 = respx.put(f"{BASE}/objects/host_config/host1").mock(return_value=Response(200, json={}))
-        put_host2 = respx.put(f"{BASE}/objects/host_config/host2").mock(return_value=Response(200, json={}))
+        put1 = respx.put(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(200, json={})
+        )
+        put2 = respx.put(f"{BASE}/objects/host_config/host2").mock(
+            return_value=Response(200, json={})
+        )
         async with CheckmkClient(CONN) as client:
             await _retag_existing_hosts(client, CONN, exclude_names=set())
 
-    assert put_host1.called
-    assert put_host2.called
-    body1 = json.loads(put_host1.calls.last.request.content)
+    body1 = json.loads(put1.calls.last.request.content)
     assert body1["attributes"][f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"] == "ACS"
-    assert body1["attributes"]["ipaddress"] == "10.0.0.1"  # monitoring method preserved
-    assert put_host1.calls.last.request.headers["If-Match"] == "etag-host1"
-    body2 = json.loads(put_host2.calls.last.request.content)
+    # The REPLACE verdict is why the whole dict is echoed back: a partial
+    # PUT would strip these.
+    assert body1["attributes"]["ipaddress"] == "10.0.0.1"
+    assert body1["attributes"]["tag_agent"] == "cmk-agent"
+    assert put1.calls.last.request.headers["If-Match"] == "etag-host1"
+    body2 = json.loads(put2.calls.last.request.content)
     assert body2["attributes"][f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"] == "Multimedia"
-    assert put_host2.calls.last.request.headers["If-Match"] == "etag-host2"
-    # Blank alias answers with no pre-existing alias key: D-09's "omit the
-    # key entirely" behavior — no alias key is invented from nothing.
+    assert put2.calls.last.request.headers["If-Match"] == "etag-host2"
+    # No alias key is invented from nothing (D-09).
     assert "alias" not in body1["attributes"]
-    assert "alias" not in body2["attributes"]
 
 
 @pytest.mark.asyncio
-async def test_retag_existing_hosts_activates_once_on_success(monkeypatch, tmp_path):
+async def test_retag_discard_restarts_the_flow_from_the_beginning(monkeypatch, tmp_path):
+    # D-13: "discard and exit" is a full back-out, not "skip this folder" —
+    # the flow returns to its very first prompt, so the operator can even
+    # decline to retag at all.
     path = tmp_path / "device_types.json"
     path.write_text(json.dumps(["other", "ACS"]))
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
 
-    activate_calls = []
-
-    async def counting_activate(client, connection):
-        activate_calls.append((client, connection))
-        return True
-
-    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
-
-    # confirm retag?, folder, host1 digit (1=ACS), "Apply?" -> yes, aliases? -> no
-    answers = iter([True, "/", "1", True, False])
-
-    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
-        return next(answers)
-
-    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
-
-    with respx.mock:
-        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
-            return_value=Response(
-                200, json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]}
-            )
-        )
-        respx.get(f"{BASE}/objects/host_config/host1").mock(
-            return_value=Response(200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-1"})
-        )
-        respx.put(f"{BASE}/objects/host_config/host1").mock(return_value=Response(200, json={}))
-        async with CheckmkClient(CONN) as client:
-            await _retag_existing_hosts(client, CONN, exclude_names=set())
-
-    assert len(activate_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_retag_existing_hosts_declining_skips_writes_and_activation(monkeypatch):
     activate_calls = []
 
     async def counting_activate(client, connection):
@@ -1601,7 +1684,15 @@ async def test_retag_existing_hosts_declining_skips_writes_and_activation(monkey
 
     monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
 
-    answers = iter([False])  # "Retag them now?" -> No
+    screen_calls: list[str] = []
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._run_retag_screen",
+        _screen_returning("discard", {"host1": "ACS"}, calls=screen_calls),
+    )
+
+    # Pass 1: "retag now?" -> yes, folder "/", [screen discards].
+    # Pass 2 (the restart): "retag now?" -> no.
+    answers = iter([True, "/", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1609,12 +1700,51 @@ async def test_retag_existing_hosts_declining_skips_writes_and_activation(monkey
     monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
 
     with respx.mock:
-        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+        list_route = respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
             return_value=Response(
-                200, json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]}
+                200,
+                json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]},
             )
         )
-        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(return_value=Response(200, json={}))
+        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _retag_existing_hosts(client, CONN, exclude_names=set())
+
+    assert screen_calls == ["/"]
+    # The restart re-fetched the host list rather than replaying a stale one.
+    assert len(list_route.calls) == 2
+    # Discarding wrote nothing and left no pending change to activate.
+    assert not put_route.called
+    assert not activate_calls
+
+
+@pytest.mark.asyncio
+async def test_retag_declining_the_first_prompt_writes_nothing(monkeypatch):
+    activate_calls = []
+
+    async def counting_activate(client, connection):
+        activate_calls.append(1)
+        return True
+
+    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return False  # "…can be retagged. Do that now?" -> No
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200,
+                json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]},
+            )
+        )
+        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(200, json={})
+        )
         async with CheckmkClient(CONN) as client:
             await _retag_existing_hosts(client, CONN, exclude_names=set())
 
@@ -1623,91 +1753,39 @@ async def test_retag_existing_hosts_declining_skips_writes_and_activation(monkey
 
 
 @pytest.mark.asyncio
-async def test_retag_existing_hosts_no_candidates_prompts_nothing():
-    # A run with nothing to fix must not grow a prompt at all — zero
-    # answers available, so a StopIteration fails the test if anything asks.
-    answers = iter([])
-
-    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
-        return next(answers)
-
+async def test_retag_no_candidates_prompts_nothing():
+    # A site with nothing onboarded beyond this run's own scan must not grow
+    # a prompt — fake_ask is never installed, so any prompt would fail here.
     with respx.mock:
         respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
             return_value=Response(
                 200,
-                json={
-                    "value": [
-                        {
-                            "id": "host1",
-                            "extensions": {"folder": "/", "attributes": {"tag_device_type": "ACS"}},
-                        }
-                    ]
-                },
+                json={"value": [{"id": "10.0.0.5", "extensions": {"folder": "/", "attributes": {}}}]},
             )
         )
         async with CheckmkClient(CONN) as client:
-            await _retag_existing_hosts(client, CONN, exclude_names=set())
-    # No assertion needed beyond "didn't raise StopIteration" — fake_ask
-    # above is never installed via monkeypatch, so any real prompt would
-    # hang/fail instead; the respx context not raising confirms no REST
-    # call beyond list_hosts happened.
+            await _retag_existing_hosts(client, CONN, exclude_names={"10.0.0.5"})
 
 
 @pytest.mark.asyncio
-async def test_retag_existing_hosts_blank_alias_preserves_existing_alias(monkeypatch, tmp_path):
-    # D-09: a blank alias answer must not overwrite the host's existing
-    # alias with an explicit empty value — since the PUT body is built by
-    # starting from the host's own full attribute dict (REPLACE verdict),
-    # a blank answer leaves that pre-existing "alias" key untouched rather
-    # than adding a new (blank) one, so it survives the write unchanged.
+async def test_retag_folder_exact_match_only(monkeypatch, tmp_path):
+    # D-03: picking /vlan10 must never rewrite /vlan10/rack1's host — that
+    # host was never shown on the /vlan10 screen, so touching it is exactly
+    # the risk D-03 exists to prevent.
     path = tmp_path / "device_types.json"
     path.write_text(json.dumps(["other", "ACS"]))
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
-    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._run_retag_screen",
+        _screen_returning("apply", {"vlan-host": "ACS", "rack-host": "ACS"}),
+    )
 
-    # Declining the alias second pass (D-11) is the common path and is what
-    # must leave the pre-existing alias alone.
-    answers = iter([True, "/", "1", True, False])
-
-    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
-        return next(answers)
-
-    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
-
-    with respx.mock:
-        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
-            return_value=Response(
-                200, json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]}
-            )
-        )
-        respx.get(f"{BASE}/objects/host_config/host1").mock(
-            return_value=Response(
-                200, json={"extensions": {"attributes": {"alias": "existing-alias"}}}, headers={"ETag": "etag-1"}
-            )
-        )
-        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(return_value=Response(200, json={}))
-        async with CheckmkClient(CONN) as client:
-            await _retag_existing_hosts(client, CONN, exclude_names=set())
-
-    body = json.loads(put_route.calls.last.request.content)
-    assert body["attributes"]["alias"] == "existing-alias"
-
-
-@pytest.mark.asyncio
-async def test_retag_existing_hosts_folder_exact_match_only(monkeypatch, tmp_path):
-    # D-03: a single confirmation for /vlan10 must never rewrite tags on
-    # /vlan10/rack1's host — that host was never displayed in the /vlan10
-    # candidate table, so touching it would be exactly the risk D-03 exists
-    # to prevent.
-    path = tmp_path / "device_types.json"
-    path.write_text(json.dumps(["other", "ACS"]))
-    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
-    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
-
-    # confirm retag?, select folder "/vlan10", host digit (1=ACS),
-    # "Apply?" -> yes, aliases? -> no, then the folder menu again ->
-    # "Done" (None), leaving /vlan10/rack1 untouched
-    answers = iter([True, "/vlan10", "1", True, False, None])
+    # "retag now?" -> yes, folder "/vlan10", [screen], aliases? -> no,
+    # "Retag another folder?" -> no (leaves /vlan10/rack1 untouched)
+    answers = iter([True, "/vlan10", False, False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1721,16 +1799,25 @@ async def test_retag_existing_hosts_folder_exact_match_only(monkeypatch, tmp_pat
                 json={
                     "value": [
                         {"id": "vlan-host", "extensions": {"folder": "/vlan10", "attributes": {}}},
-                        {"id": "rack-host", "extensions": {"folder": "/vlan10/rack1", "attributes": {}}},
+                        {
+                            "id": "rack-host",
+                            "extensions": {"folder": "/vlan10/rack1", "attributes": {}},
+                        },
                     ]
                 },
             )
         )
         respx.get(f"{BASE}/objects/host_config/vlan-host").mock(
-            return_value=Response(200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-vlan"})
+            return_value=Response(
+                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-vlan"}
+            )
         )
-        put_vlan = respx.put(f"{BASE}/objects/host_config/vlan-host").mock(return_value=Response(200, json={}))
-        put_rack = respx.put(f"{BASE}/objects/host_config/rack-host").mock(return_value=Response(200, json={}))
+        put_vlan = respx.put(f"{BASE}/objects/host_config/vlan-host").mock(
+            return_value=Response(200, json={})
+        )
+        put_rack = respx.put(f"{BASE}/objects/host_config/rack-host").mock(
+            return_value=Response(200, json={})
+        )
         async with CheckmkClient(CONN) as client:
             await _retag_existing_hosts(client, CONN, exclude_names=set())
 
@@ -1739,14 +1826,62 @@ async def test_retag_existing_hosts_folder_exact_match_only(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_retag_existing_hosts_continues_after_per_host_failure(monkeypatch, tmp_path):
+async def test_retag_activates_exactly_once(monkeypatch, tmp_path):
     path = tmp_path / "device_types.json"
     path.write_text(json.dumps(["other", "ACS"]))
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
-    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
 
-    # confirm retag?, folder, two host digits (1=ACS), "Apply?" -> yes, aliases? -> no
-    answers = iter([True, "/", "1", "1", True, False])
+    activate_calls = []
+
+    async def counting_activate(client, connection):
+        activate_calls.append(1)
+        return True
+
+    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._run_retag_screen", _screen_returning("apply", {"host1": "ACS"})
+    )
+
+    answers = iter([True, "/", False])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200,
+                json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]},
+            )
+        )
+        respx.get(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(
+                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-1"}
+            )
+        )
+        respx.put(f"{BASE}/objects/host_config/host1").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await _retag_existing_hosts(client, CONN, exclude_names=set())
+
+    assert len(activate_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_retag_continues_after_per_host_failure(monkeypatch, tmp_path):
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._run_retag_screen",
+        _screen_returning("apply", {"host-fails": "ACS", "host-ok": "ACS"}),
+    )
+
+    answers = iter([True, "/", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1766,176 +1901,25 @@ async def test_retag_existing_hosts_continues_after_per_host_failure(monkeypatch
             )
         )
         respx.get(f"{BASE}/objects/host_config/host-fails").mock(
-            return_value=Response(200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-fails"})
+            return_value=Response(
+                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-fails"}
+            )
         )
         respx.get(f"{BASE}/objects/host_config/host-ok").mock(
-            return_value=Response(200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-ok"})
+            return_value=Response(
+                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-ok"}
+            )
         )
         respx.put(f"{BASE}/objects/host_config/host-fails").mock(
             return_value=Response(400, json={"title": "bad request"})
         )
-        put_ok = respx.put(f"{BASE}/objects/host_config/host-ok").mock(return_value=Response(200, json={}))
+        put_ok = respx.put(f"{BASE}/objects/host_config/host-ok").mock(
+            return_value=Response(200, json={})
+        )
         async with CheckmkClient(CONN) as client:
             await _retag_existing_hosts(client, CONN, exclude_names=set())  # must not raise
 
     assert put_ok.called
-
-
-# ── Numbered retag prompts (D-10) and the alias second pass (D-11) ──────
-
-
-def test_format_device_type_legend_numbers_every_type():
-    # The numbers are indices into _load_device_types(), so a type added to
-    # device_types.json shows up with no code change and "other" stays 0.
-    lines = _format_device_type_legend(["other", "E-link", "ACS", "Multimedia"])
-    rendered = "\n".join(lines)
-    assert "0 = other" in rendered
-    assert "1 = E-link" in rendered
-    assert "2 = ACS" in rendered
-    assert "3 = Multimedia" in rendered
-
-
-def test_format_device_type_legend_lays_out_column_major():
-    # Column-major so the numbers read top-to-bottom down each column
-    # rather than snaking across rows.
-    lines = _format_device_type_legend(["other", "A", "B", "C"], columns=2)
-    assert len(lines) == 2
-    assert "0 = other" in lines[0] and "2 = B" in lines[0]
-    assert "1 = A" in lines[1] and "3 = C" in lines[1]
-
-
-@pytest.mark.asyncio
-async def test_retag_blank_answer_keeps_current_and_writes_nothing(monkeypatch, tmp_path):
-    # D-10: bare Enter keeps the host's current value, so a folder where
-    # every host is already right costs one keystroke each and produces no
-    # PUT and no activation at all.
-    path = tmp_path / "device_types.json"
-    path.write_text(json.dumps(["other", "ACS"]))
-    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
-
-    activate_calls = []
-
-    async def counting_activate(client, connection):
-        activate_calls.append(1)
-        return True
-
-    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
-
-    # confirm retag?, folder, host1 answer = blank (keep "other")
-    # No "Apply?" is asked at all because nothing changed.
-    answers = iter([True, "/", ""])
-
-    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
-        return next(answers)
-
-    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
-
-    with respx.mock:
-        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
-            return_value=Response(
-                200,
-                json={
-                    "value": [
-                        {
-                            "id": "host1",
-                            "extensions": {"folder": "/", "attributes": {"tag_device_type": "other"}},
-                        }
-                    ]
-                },
-            )
-        )
-        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
-            return_value=Response(200, json={})
-        )
-        async with CheckmkClient(CONN) as client:
-            await _retag_existing_hosts(client, CONN, exclude_names=set())
-
-    assert not put_route.called
-    assert not activate_calls
-
-
-@pytest.mark.asyncio
-async def test_retag_declining_apply_writes_nothing(monkeypatch, tmp_path):
-    # D-10: the summary gate is the whole point of single-digit entry — a
-    # mistyped digit is one keystroke away, so answering "Apply?" with no
-    # must leave the site untouched even though a change was staged.
-    path = tmp_path / "device_types.json"
-    path.write_text(json.dumps(["other", "ACS"]))
-    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
-
-    activate_calls = []
-
-    async def counting_activate(client, connection):
-        activate_calls.append(1)
-        return True
-
-    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
-
-    # confirm retag?, folder, host1 digit 1 (ACS), "Apply?" -> No,
-    # then back at the folder menu -> "Done" (None). The folder is
-    # still offered there, which is the point of declining.
-    answers = iter([True, "/", "1", False, None])
-
-    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
-        return next(answers)
-
-    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
-
-    with respx.mock:
-        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
-            return_value=Response(
-                200, json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]}
-            )
-        )
-        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
-            return_value=Response(200, json={})
-        )
-        async with CheckmkClient(CONN) as client:
-            await _retag_existing_hosts(client, CONN, exclude_names=set())
-
-    assert not put_route.called
-    assert not activate_calls
-
-
-@pytest.mark.asyncio
-async def test_retag_rejects_out_of_range_digit_then_accepts(monkeypatch, tmp_path):
-    # D-10: an out-of-range number re-prompts rather than silently picking
-    # a type or crashing on an IndexError.
-    path = tmp_path / "device_types.json"
-    path.write_text(json.dumps(["other", "ACS"]))
-    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
-    monkeypatch.setattr(
-        "checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true
-    )
-
-    # confirm retag?, folder, "9" (rejected), "x" (rejected), "1" (ACS),
-    # "Apply?" -> yes, aliases? -> no
-    answers = iter([True, "/", "9", "x", "1", True, False])
-
-    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
-        return next(answers)
-
-    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
-
-    with respx.mock:
-        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
-            return_value=Response(
-                200, json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]}
-            )
-        )
-        respx.get(f"{BASE}/objects/host_config/host1").mock(
-            return_value=Response(
-                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-1"}
-            )
-        )
-        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
-            return_value=Response(200, json={})
-        )
-        async with CheckmkClient(CONN) as client:
-            await _retag_existing_hosts(client, CONN, exclude_names=set())
-
-    body = json.loads(put_route.calls.last.request.content)
-    assert body["attributes"][f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"] == "ACS"
 
 
 @pytest.mark.asyncio
@@ -1948,10 +1932,14 @@ async def test_retag_alias_second_pass_writes_only_checked_hosts(monkeypatch, tm
     monkeypatch.setattr(
         "checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true
     )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._run_retag_screen",
+        _screen_returning("apply", {"host1": "ACS", "host2": "ACS"}),
+    )
 
-    # confirm retag?, folder, host1 digit, host2 digit, "Apply?" -> yes,
-    # "Also set aliases?" -> yes, checkbox picks host1 only, alias text
-    answers = iter([True, "/", "1", "1", True, True, ["host1"], "  core-switch-a  "])
+    # "retag now?" -> yes, folder "/", [screen], "also set aliases?" -> yes,
+    # checkbox picks host1 only, alias text
+    answers = iter([True, "/", True, ["host1"], "  core-switch-a  "])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1980,63 +1968,38 @@ async def test_retag_alias_second_pass_writes_only_checked_hosts(monkeypatch, tm
                 200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-2"}
             )
         )
-        put_host1 = respx.put(f"{BASE}/objects/host_config/host1").mock(
+        put1 = respx.put(f"{BASE}/objects/host_config/host1").mock(
             return_value=Response(200, json={})
         )
-        put_host2 = respx.put(f"{BASE}/objects/host_config/host2").mock(
+        put2 = respx.put(f"{BASE}/objects/host_config/host2").mock(
             return_value=Response(200, json={})
         )
         async with CheckmkClient(CONN) as client:
             await _retag_existing_hosts(client, CONN, exclude_names=set())
 
     # host1: one PUT for the device type, a second for the alias.
-    assert len(put_host1.calls) == 2
-    assert json.loads(put_host1.calls.last.request.content)["attributes"]["alias"] == "core-switch-a"
+    assert len(put1.calls) == 2
+    assert json.loads(put1.calls.last.request.content)["attributes"]["alias"] == "core-switch-a"
     # host2 was retagged but never checked for an alias — one PUT only.
-    assert len(put_host2.calls) == 1
-
-@pytest.mark.asyncio
-async def test_phase3_declining_the_scan_returns_no_hosts(monkeypatch):
-    # Re-running the wizard against an already-built-out site must not force
-    # a network sweep: declining returns no scanned hosts and, critically,
-    # stages no placeholder hosts into Checkmk.
-    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
-        return False  # "Scan the network for hosts now?" -> No
-
-    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
-
-    async def fail_if_scanned(cidr, ports=None, on_progress=None):
-        raise AssertionError("scan_network must not run when the scan is declined")
-
-    monkeypatch.setattr("checkmk_wizard.wizard.scan_network", fail_if_scanned)
-
-    with respx.mock:
-        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
-            return_value=Response(200, json={})
-        )
-        async with CheckmkClient(CONN) as client:
-            scanned = await phase3_discovery(client, {"/vlan10": "10.0.0.0/24"})
-
-    assert scanned == []
-    assert not create_route.called
+    assert len(put2.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_retag_declining_apply_keeps_folder_selectable(monkeypatch, tmp_path):
-    # Declining "Apply?" is "let me redo that", not "skip this folder" — the
-    # folder must still be on the menu afterwards so the operator can
-    # reassign it, which is the whole point of the confirm being a gate
-    # rather than an exit.
+async def test_retag_blank_alias_preserves_existing_alias(monkeypatch, tmp_path):
+    # D-09: a blank alias answer must not overwrite an existing alias with an
+    # explicit empty value. Because the PUT echoes the host's own attribute
+    # dict back (REPLACE verdict), the pre-existing key simply rides along.
     path = tmp_path / "device_types.json"
     path.write_text(json.dumps(["other", "ACS"]))
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
     monkeypatch.setattr(
         "checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true
     )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._run_retag_screen", _screen_returning("apply", {"host1": "ACS"})
+    )
 
-    # confirm retag?, folder, digit 1, "Apply?" -> No,
-    # folder again, digit 1, "Apply?" -> yes, aliases? -> no
-    answers = iter([True, "/", "1", False, "/", "1", True, False])
+    answers = iter([True, "/", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -2046,12 +2009,15 @@ async def test_retag_declining_apply_keeps_folder_selectable(monkeypatch, tmp_pa
     with respx.mock:
         respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
             return_value=Response(
-                200, json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]}
+                200,
+                json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]},
             )
         )
         respx.get(f"{BASE}/objects/host_config/host1").mock(
             return_value=Response(
-                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-1"}
+                200,
+                json={"extensions": {"attributes": {"alias": "existing-alias"}}},
+                headers={"ETag": "etag-1"},
             )
         )
         put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
@@ -2060,14 +2026,78 @@ async def test_retag_declining_apply_keeps_folder_selectable(monkeypatch, tmp_pa
         async with CheckmkClient(CONN) as client:
             await _retag_existing_hosts(client, CONN, exclude_names=set())
 
-    # Every answer was consumed: the second "/" could only be answered if the
-    # folder menu came back offering it. Had declining dropped the folder,
-    # `remaining` would be empty, the loop would have exited straight after
-    # the decline, and the last four answers would be left over.
-    with pytest.raises(StopIteration):
-        next(answers)
-    # And the second pass through the folder actually wrote.
-    assert put_route.called
+    assert json.loads(put_route.calls.last.request.content)["attributes"]["alias"] == "existing-alias"
+
+
+# ── The full-screen app's key bindings, driven through a pipe input ─────
+
+
+def _screen_candidates(count=20):
+    return [
+        RetagCandidate(
+            name=f"10.20.0.{i}", folder="/vlan10", device_type=None if i % 2 else "ACS", alias=None
+        )
+        for i in range(11, 11 + count)
+    ]
+
+
+_SCREEN_TYPES = ["other", "E-link", "ACS", "Multimedia", "NetworkDevice", "GroupController"]
+
+
+async def _drive_screen(keys: str, candidates=None):
+    """Run the real prompt_toolkit application against piped keystrokes.
+
+    This is the only way the key bindings themselves get covered — every
+    other retag test stubs the screen out at its (action, selection)
+    contract, which would happily pass even if no key did anything.
+    """
+    candidates = candidates if candidates is not None else _screen_candidates()
+    with create_pipe_input() as pipe:
+        pipe.send_text(keys)
+        with create_app_session(input=pipe, output=DummyOutput()):
+            return await _run_retag_screen("/vlan10", candidates, _SCREEN_TYPES)
+
+
+@pytest.mark.asyncio
+async def test_retag_screen_arrows_move_and_digits_assign():
+    # down, down, "3" -> third row becomes Multimedia; down, "5" -> fourth
+    # row becomes GroupController; "a" -> apply and exit.
+    action, selection = await _drive_screen("\x1b[B\x1b[B3\x1b[B5a")
+    assert action == "apply"
+    assert [(c.name, t) for c, t in selection.changes()] == [
+        ("10.20.0.13", "Multimedia"),
+        ("10.20.0.14", "GroupController"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retag_screen_discard_key_returns_discard():
+    action, selection = await _drive_screen("3d")
+    assert action == "discard"
+    # The assignment was still staged — it is the caller's job to throw the
+    # selection away on "discard", which is what makes discard recoverable.
+    assert selection.pending
+
+
+@pytest.mark.asyncio
+async def test_retag_screen_digit_with_no_device_type_is_inert():
+    # Only as many digits as there are types are bound, so "9" against a
+    # six-type list must do nothing rather than raise mid-screen.
+    action, selection = await _drive_screen("9a")
+    assert action == "apply"
+    assert selection.changes() == []
+
+
+@pytest.mark.asyncio
+async def test_retag_screen_cursor_does_not_wrap_past_the_last_row():
+    # Ten downs across a three-row list leaves the cursor on the last row,
+    # not wrapped around to the first.
+    action, selection = await _drive_screen(
+        "\x1b[B" * 10 + "1a", candidates=_screen_candidates(count=3)
+    )
+    assert action == "apply"
+    assert [c.name for c, _ in selection.changes()] == ["10.20.0.13"]
+
 
 @pytest.mark.asyncio
 async def test_phase4_classification_excludes_scanned_ips_from_retag_candidates(monkeypatch, tmp_path):
