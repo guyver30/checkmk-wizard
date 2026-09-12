@@ -739,8 +739,11 @@ async def test_phase3_stages_hosts_inert(monkeypatch):
     # (tag_agent="no-agent", tag_snmp_ds="no-snmp") rather than Checkmk's
     # implicit default ("API integrations if configured, else Checkmk
     # agent") — nothing is actually configured yet at staging time.
+    # "Scan the network for hosts now?" -> yes, then ports -> default
+    answers = iter([True, ""])
+
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
-        return ""  # ports prompt -> default DEFAULT_PORTS
+        return next(answers)
 
     monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
 
@@ -1702,9 +1705,9 @@ async def test_retag_existing_hosts_folder_exact_match_only(monkeypatch, tmp_pat
     monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
 
     # confirm retag?, select folder "/vlan10", host digit (1=ACS),
-    # "Apply?" -> yes, aliases? -> no,
-    # "Retag another folder?" -> No (leaves /vlan10/rack1 untouched)
-    answers = iter([True, "/vlan10", "1", True, False, False])
+    # "Apply?" -> yes, aliases? -> no, then the folder menu again ->
+    # "Done" (None), leaving /vlan10/rack1 untouched
+    answers = iter([True, "/vlan10", "1", True, False, None])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1868,8 +1871,10 @@ async def test_retag_declining_apply_writes_nothing(monkeypatch, tmp_path):
 
     monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
 
-    # confirm retag?, folder, host1 digit 1 (ACS), "Apply?" -> No
-    answers = iter([True, "/", "1", False])
+    # confirm retag?, folder, host1 digit 1 (ACS), "Apply?" -> No,
+    # then back at the folder menu -> "Done" (None). The folder is
+    # still offered there, which is the point of declining.
+    answers = iter([True, "/", "1", False, None])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1989,6 +1994,80 @@ async def test_retag_alias_second_pass_writes_only_checked_hosts(monkeypatch, tm
     assert json.loads(put_host1.calls.last.request.content)["attributes"]["alias"] == "core-switch-a"
     # host2 was retagged but never checked for an alias — one PUT only.
     assert len(put_host2.calls) == 1
+
+@pytest.mark.asyncio
+async def test_phase3_declining_the_scan_returns_no_hosts(monkeypatch):
+    # Re-running the wizard against an already-built-out site must not force
+    # a network sweep: declining returns no scanned hosts and, critically,
+    # stages no placeholder hosts into Checkmk.
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return False  # "Scan the network for hosts now?" -> No
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    async def fail_if_scanned(cidr, ports=None, on_progress=None):
+        raise AssertionError("scan_network must not run when the scan is declined")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.scan_network", fail_if_scanned)
+
+    with respx.mock:
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            scanned = await phase3_discovery(client, {"/vlan10": "10.0.0.0/24"})
+
+    assert scanned == []
+    assert not create_route.called
+
+
+@pytest.mark.asyncio
+async def test_retag_declining_apply_keeps_folder_selectable(monkeypatch, tmp_path):
+    # Declining "Apply?" is "let me redo that", not "skip this folder" — the
+    # folder must still be on the menu afterwards so the operator can
+    # reassign it, which is the whole point of the confirm being a gate
+    # rather than an exit.
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true
+    )
+
+    # confirm retag?, folder, digit 1, "Apply?" -> No,
+    # folder again, digit 1, "Apply?" -> yes, aliases? -> no
+    answers = iter([True, "/", "1", False, "/", "1", True, False])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200, json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]}
+            )
+        )
+        respx.get(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(
+                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-1"}
+            )
+        )
+        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _retag_existing_hosts(client, CONN, exclude_names=set())
+
+    # Every answer was consumed: the second "/" could only be answered if the
+    # folder menu came back offering it. Had declining dropped the folder,
+    # `remaining` would be empty, the loop would have exited straight after
+    # the decline, and the last four answers would be left over.
+    with pytest.raises(StopIteration):
+        next(answers)
+    # And the second pass through the folder actually wrote.
+    assert put_route.called
 
 @pytest.mark.asyncio
 async def test_phase4_classification_excludes_scanned_ips_from_retag_candidates(monkeypatch, tmp_path):

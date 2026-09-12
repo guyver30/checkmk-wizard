@@ -9,12 +9,32 @@ original design, see [PLAN-CONFORMANCE-AUDIT.md](PLAN-CONFORMANCE-AUDIT.md).
 - **Checkmk Community Edition is already installed** on the host (the `.deb`
   package). The wizard never installs it — see Phase 1 below.
 - The wizard runs **locally on the Checkmk host**, as a user able to run
-  `omd` and read `/omd/sites/<site>/...` (`site.py:30-31`).
+  `omd` and read `/omd/sites/<site>/...` (`site.py:30-31`) — or, in container
+  mode, from the `automation-worker` container (see below).
 - Python 3.11+, `uv`-managed environment (`pyproject.toml`).
 
 ## Entry point and control flow
 
-`uv run checkmk-wizard` → `checkmk_wizard.__main__` → `wizard.main()`
+Host-native:
+
+```bash
+uv run checkmk-wizard
+```
+
+Container mode — the wizard runs inside the worker container, not on the
+host shell. `--interactive --tty` is required, since the whole flow is
+`questionary` prompts:
+
+```bash
+podman exec --interactive --tty automation-worker \
+  bash -c "cd /app/checkmk-wizard && uv sync && uv run checkmk-wizard"
+```
+
+`uv sync` is part of the command because the checkout is bind-mounted: a
+`git pull` on the host updates the code the container runs, but not its
+virtualenv.
+
+Either entry point → `checkmk_wizard.__main__` → `wizard.main()`
 (`wizard.py:1001-1002`) → `asyncio.run(run())` → `run()` (`wizard.py:989-999`),
 which executes all 7 phases **sequentially, in a single process, with no
 resume/checkpoint support**:
@@ -539,6 +559,16 @@ that folder**, instead of a single subnet always staged at root
 regardless of Phase 2. Falls back to exactly the original single-CIDR
 flow when Phase 2 produced no folder/subnet pairs.
 
+**Changed 2026-09-12: the scan is optional.** The phase opens with
+"Scan the network for hosts now? (No = skip to Phase 4, e.g. to retag hosts
+that are already onboarded)", defaulting to yes. Declining returns an empty
+`scan_results` list immediately — no sweep, and no placeholder hosts staged
+into Checkmk. This exists because the wizard is also run against a site that
+is already built out, where re-scanning costs minutes and stages every live
+IP as a duplicate placeholder, when the operator only came back to retag
+existing hosts in Phase 4. Phase 4 already handles an empty list: it runs the
+retag flow and then reports there is nothing to promote.
+
 1. Builds `scans: list[(folder, cidr)]` from the non-empty entries in
    Phase 2's `folder_subnets`; folders with no subnet are listed
    ("Skipping scan for folder(s) with no subnet given: ...") and simply
@@ -570,10 +600,66 @@ flow when Phase 2 produced no folder/subnet pairs.
 
 ## Phase 4 — Host Classification (`wizard.py:564-651`)
 
-Purely interactive — **no API calls, no fingerprinting, and (changed
-2026-08-25) no folder prompt** — each host's folder is already known from
-which Phase 2 folder-subnet scan found it (`/` for the flat-fallback
-case):
+Purely interactive — **no fingerprinting, and (changed 2026-08-25) no
+folder prompt** — each host's folder is already known from which Phase 2
+folder-subnet scan found it (`/` for the flat-fallback case).
+
+### Bulk retag of already-onboarded hosts (added 2026-09-12, TAG-04)
+
+Before the promotion flow below, the phase checks whether any
+already-onboarded host has **no device type at all or is set to the neutral
+`other`** and, if so, offers to fix them. Both states count as untagged: a
+tag group's implicit first-tag default never materialises as an explicit
+`tag_device_type` attribute, so hosts predating the group have the key
+absent rather than set to `other`.
+
+Hosts this run just scanned are excluded — Phase 3 stages every scanned IP
+as a bare placeholder, which would otherwise all appear as retag candidates
+seconds before promotion tags them properly. With nothing to fix, the phase
+prints one dim line and asks nothing.
+
+1. Renders a `rich` table of candidates (Host / Folder / Current device
+   type, showing `other (implicit)` when the attribute was absent).
+2. One confirm, defaulting to **No**. Declining is a first-class outcome —
+   a dim line, no warning colour.
+3. A folder menu listing each folder with its candidate count, plus a
+   **"Done — leave the remaining hosts as they are"** entry. Only hosts
+   whose folder matches **exactly** are touched — the filter is `==`, never
+   a prefix match — so sub-folders are never swept in by a parent's
+   confirmation. Nested folders are handled by selecting each in turn.
+4. The numbered device-type legend is printed once per folder (`0 = other`,
+   `1 = E-link`, ...), the numbers being indices into `device_types.json`,
+   so adding a type there extends the legend with no code change and
+   `other` stays `0`.
+5. Each host is prompted as `<host>  (<current>)  [<current index>]:` and
+   takes a **single digit**; bare Enter keeps the current value. An
+   out-of-range or non-numeric answer re-prompts.
+6. A summary — `N host(s) will be retagged, M unchanged` — then a single
+   **`Apply?`** confirm defaulting to No. Nothing is written before it.
+   **Declining returns to the folder menu with that folder still listed**,
+   so declining means "let me redo that", not "skip this folder".
+7. Each write is a GET of the host's full attribute dict, a client-side
+   override of just the device-type key, and a PUT of the whole dict back
+   with the ETag from that same GET. This is mandatory, not stylistic: a
+   partial PUT to `/objects/host_config/{name}` **replaces** a host's
+   attribute set rather than merging into it (live-verified 2026-09-12,
+   `scripts/probe_host_attribute_merge.py`), so sending only the changed
+   keys would silently strip `ipaddress`/`tag_agent`/`tag_snmp_ds`/
+   `snmp_community`. The ETag is fetched per host immediately before its
+   own PUT — batching them up front yields a 412 partway through a run.
+8. **Alias is an opt-in second pass**, not a per-host prompt: after the
+   types are applied, one confirm, then a checkbox over the just-retagged
+   hosts, then an alias prompt for each checked host. A blank answer omits
+   the `alias` key from the PUT entirely, so Checkmk keeps what it has —
+   an explicit empty value would clear an operator-set alias.
+9. One activation runs after the folder loop if at least one host was
+   updated. Without it the change sits as a pending WATO change and never
+   reaches Livestatus, the poller or the dashboard.
+
+Per-host failures print a yellow warning and continue; a REST failure
+listing hosts warns and returns. Nothing here aborts the wizard run.
+
+### Promotion of scanned hosts
 
 1. Presents a checkbox list of scanned hosts — `<ip> [<folder>] (ports:
    ...)` — via `questionary.checkbox`, `value` set to the whole
