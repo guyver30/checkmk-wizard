@@ -67,3 +67,31 @@
 - 2026-08-27 21:10 — "how to set rules for certain services captured by checkmk agent: like cpu warning and critical level, disk space, etc"
 - 2026-08-27 21:20 — "ok let's add rules for cpu load, cpu utilization (averaged over 1 minute), memory used, disk space used. Suggest typical values for warning and critical" — implemented `_create_threshold_rules()` in Phase 5 (optional, gated on linux/windows hosts), tests, docs
 - 2026-09-05 (time not shown) — "/bm:resume-work" (slash command, no args)
+
+## 2026-09-05 15:46:22
+- /bm:map-codebase (no args)
+
+## 2026-09-05 15:47:04
+- /bm:map-codebase --refresh
+
+## 2026-09-05 (execute-phase invoked)
+- /bm:execute-phase 8
+
+## 2026-09-06 18:03:46
+- /bm:execute-phase 9
+
+## 2026-09-07 (time not shown)
+- /bm:resume-work (slash command, no args)
+
+## 2026-09-11 11:34
+
+- `/bm:resume-work` — restore project context from previous session handoff
+- `/bm:execute-phase 10` — execute all 6 plans of Phase 10 (Checkmk tag-group & onboarding integration) across 4 waves
+
+## 2026-09-11 (time not shown)
+
+- `/bm:insert-phase 10.1` — insert an urgent decimal phase after Phase 10 (description not supplied)
+- "well what task you want to put in 10.1? you told me to insert this phase, but then you didn't give me details" — traced the recommendation to Phase 10's own follow-up findings; scope confirmed as bulk tagging + ops gaps
+- `/bm:plan-phase 10.1` — create PLAN.md files for the inserted Phase 10.1
+- `/bm:resume-work` (2026-09-12) — restore session context; no HANDOFF.json present, routed to progress report for Phase 10.1
+- `/bm:execute-phase 10.1` (2026-09-12) — execute all plans in Phase 10.1 with wave-based parallelization
