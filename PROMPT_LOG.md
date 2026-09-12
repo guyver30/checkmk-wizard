@@ -102,3 +102,4 @@
 - "tagging was fine, but a few notes: (1) real invocation is `podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && uv sync && uv run checkmk-wizard"`, not `uv run checkmk-wizard`; (2) Phase 3 network discovery must be skippable when the site and hosts already exist; (3) declining Apply after retagging must return to the start of the Phase 4 retag flow (same folder / another folder / skip)"
 - "(1) retag must work for hosts with ANY tag, not only 'other'; (2) want a full-screen scrollable host list per folder, cursor up/down, press 1,2,3,4 to tag, bottom menu 'apply and exit' / 'discard and exit'; apply → ask about another folder, discard → restart Phase 4 retag from the beginning"
 - "all good" — approved the retag work; proceeding to close out Phase 10.1
+- "I verified live the new UI and I approve" — live verification gap closed; post-D-10 UI confirmed against the real deployment
