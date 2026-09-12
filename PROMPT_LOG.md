@@ -103,3 +103,10 @@
 - "(1) retag must work for hosts with ANY tag, not only 'other'; (2) want a full-screen scrollable host list per folder, cursor up/down, press 1,2,3,4 to tag, bottom menu 'apply and exit' / 'discard and exit'; apply → ask about another folder, discard → restart Phase 4 retag from the beginning"
 - "all good" — approved the retag work; proceeding to close out Phase 10.1
 - "I verified live the new UI and I approve" — live verification gap closed; post-D-10 UI confirmed against the real deployment
+- [2026-09-12 15:34] `/bm:plan-phase 11` — create executable phase plans for roadmap phase 11
+- [2026-09-12 15:37] `/bm:discuss-phase 11` — gather phase context for Live Dashboard before planning
+- [2026-09-12 16:28] Phase 11 follow-up: (1) agent-based metrics/services on the detail view (gauges, service status, disk health) + event history always visible; (2) network map must be drawable MANUALLY since auto-mapping/parents unavailable; (3) rethink view-switching on host click
+- [2026-09-12 16:39] `/bm:add-phase 12 (agent metrics)` — add Phase 12 for agent-derived metrics and per-service status
+- [2026-09-12 16:41] `/bm:add-phase 13 (parents + map)` — add Phase 13 for wizard parents support and the topology map
+- [2026-09-12 16:49] "go ahead and split DASH-01 and reword criterion 1" — approved the Phase 11 requirements cleanup
+- [2026-09-12 16:55] `/bm:pause-work` — create handoff before pausing
