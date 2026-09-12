@@ -27,14 +27,14 @@
 - [x] **TAG-01**: A new Checkmk host tag group captures device type, with a config-driven, site-specific choice list and a neutral `other` value in first position, so pre-existing hosts aren't silently mis-tagged when the tag group is created
 - [x] **TAG-02**: The wizard's Phase 4 classification flow prompts for the device type per host, and Phase 5 onboarding applies it, using an attribute shape verified against a live Checkmk site's REST API
 - [x] **TAG-03**: A generic location/group label is derived from the host's Checkmk folder association via the REST API's structured folder segments (not raw string splitting), and consumed by the poller
-- [ ] **TAG-04**: An operator can bulk-correct device type and alias on already-onboarded hosts, folder-scoped and independent of the promotion flow, so hosts onboarded before the tag group existed do not stay at the neutral `other` value
+- [x] **TAG-04**: An operator can bulk-correct device type and alias on already-onboarded hosts, folder-scoped and independent of the promotion flow, so hosts onboarded before the tag group existed do not stay at the neutral `other` value
 
 ### Operations
 
-- [ ] **OPS-01**: The `worker` compose service carries the same `CMK_REST_*` environment block as the `poller` service, so wizard re-runs and the probe script read credentials from the environment rather than a hand-pasted secret
-- [ ] **OPS-02**: The automation secret generated on a first wizard run is displayed to the operator when it is created, sufficient to populate `deploy/.env` without shelling into the `checkmk` container
-- [ ] **OPS-03**: The poller survives a transient Livestatus outage at startup via a bounded retry rather than exiting immediately; the REST credential's enrichment-only, always-degrade posture is deliberately retained (Livestatus is the sole mandatory data source per Phase 10 D-03) and the asymmetry is justified in-source
-- [ ] **OPS-04**: A successful poller start emits a log line naming the site, poll interval, and broker, so a healthy poller is distinguishable from a hung one in container logs
+- [x] **OPS-01**: The `worker` compose service carries the same `CMK_REST_*` environment block as the `poller` service, so wizard re-runs and the probe script read credentials from the environment rather than a hand-pasted secret
+- [x] **OPS-02**: The automation secret generated on a first wizard run is displayed to the operator when it is created, sufficient to populate `deploy/.env` without shelling into the `checkmk` container
+- [x] **OPS-03**: The poller survives a transient Livestatus outage at startup via a bounded retry rather than exiting immediately; the REST credential's enrichment-only, always-degrade posture is deliberately retained (Livestatus is the sole mandatory data source per Phase 10 D-03) and the asymmetry is justified in-source
+- [x] **OPS-04**: A successful poller start emits a log line naming the site, poll interval, and broker, so a healthy poller is distinguishable from a hung one in container logs
 
 ### Dashboard
 
@@ -91,11 +91,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TAG-01 | Phase 10 | Complete |
 | TAG-02 | Phase 10 | Complete |
 | TAG-03 | Phase 10 | Complete |
-| TAG-04 | Phase 10.1 | Pending |
-| OPS-01 | Phase 10.1 | Pending |
-| OPS-02 | Phase 10.1 | Pending |
-| OPS-03 | Phase 10.1 | Pending |
-| OPS-04 | Phase 10.1 | Pending |
+| TAG-04 | Phase 10.1 | Complete |
+| OPS-01 | Phase 10.1 | Complete |
+| OPS-02 | Phase 10.1 | Complete |
+| OPS-03 | Phase 10.1 | Complete |
+| OPS-04 | Phase 10.1 | Complete |
 | DASH-01 | Phase 11 | Pending |
 | DASH-02 | Phase 11 | Pending |
 | DASH-03 | Phase 11 | Pending |
