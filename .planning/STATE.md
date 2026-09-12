@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: completed
 stopped_at: Phase 11 context revised — map and metrics moved out
-last_updated: "2026-09-12T08:37:56.271Z"
+last_updated: "2026-09-12T08:40:57.355Z"
 last_activity: 2026-09-12 -- Phase 10.1 marked complete
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 4
   total_plans: 16
   completed_plans: 16
-  percent: 80
+  percent: 67
 ---
 
 # Project State
@@ -58,6 +58,7 @@ Progress: [██████████] 100%
 ### Roadmap Evolution
 
 - Phase 10.1 inserted after Phase 10: Bulk device-type tagging for already-onboarded hosts (10-06-SUMMARY finding 1: 20 live hosts stuck at device_type=other, no wizard retag path) plus deployment/observability gaps (findings 2-5: worker CMK_REST_* env, automation secret never displayed, inconsistent poller failure posture, silent poller startup) (URGENT)
+- Phase 12 added: Agent Metrics and Service Status — per-device CPU/RAM/disk/SMART gauges and per-service status, split out of Phase 11 during its 2026-09-12 scope discussion. Requires a new Livestatus GET services query; the poller issues only GET hosts today. Partially reverses PROJECT.md's per-service-drill-down Out of Scope entry.
 
 ### Decisions
 
