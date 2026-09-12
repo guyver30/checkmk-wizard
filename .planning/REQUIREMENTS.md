@@ -38,12 +38,13 @@
 
 ### Dashboard
 
-- [ ] **DASH-01**: `index.html` shows a live topology map (vis-network) with an at-a-glance stats strip (counts by state), merging incoming updates via `DataSet.update()` rather than re-rendering from scratch
+- [ ] **DASH-01**: `index.html` shows an at-a-glance stats strip (counts by state) above a grouped fleet overview, merging incoming updates in place rather than re-rendering from scratch
 - [ ] **DASH-02**: `devices.html` shows a live sortable device table plus a recent-events panel, updating in place
 - [ ] **DASH-03**: `details.html` shows a per-device drill-down with a bounded status-history strip, linking out to Checkmk's own UI for full service-level detail
 - [ ] **DASH-04**: Dashboard shows a distinct stale/unknown visual state (separate from down) when a device's last-seen timestamp exceeds a threshold, or when the poller's own liveness signal goes stale
 - [ ] **DASH-05**: Dashboard shows a connection-status indicator with jittered exponential-backoff reconnect for the MQTT-over-WebSockets connection
-- [ ] **DASH-06**: Dashboard color-codes/icons nodes by device type and groups/colors by the folder-derived location/group label
+- [ ] **DASH-06**: Dashboard color-codes/icons hosts by device type and groups/colors by the folder-derived location/group label
+- [ ] **DASH-07**: `index.html` renders a live topology map (vis-network) with parent/child links, merging incoming updates via `DataSet.update()` rather than re-rendering from scratch
 
 ## v2 Requirements
 
@@ -102,6 +103,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-04 | Phase 11 | Pending |
 | DASH-05 | Phase 11 | Pending |
 | DASH-06 | Phase 11 | Pending |
+| DASH-07 | Phase 13 | Pending |
 
 **Coverage:**
 - v1 requirements: 20 total
@@ -111,4 +113,6 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 *Requirements defined: 2026-09-05*
 *Last updated: 2026-09-05 after roadmap creation (Phases 8-11)*
+*Split note (2026-09-12): DASH-01 originally conflated two deliverables — "a live topology map (vis-network)" and "an at-a-glance stats strip ... merging incoming updates". Phase 11's `/bm:discuss-phase` session moved the topology map out, because Checkmk's `parents` attribute is unset on the target site so an auto-built map would render as disconnected dots. The map half became **DASH-07**, owned by Phase 13 (Wizard Parents Support and Topology Map), which first teaches the wizard to populate `parents`. DASH-01 keeps the stats-strip half, now paired with the grouped fleet overview that occupies `index.html` until the map lands. DASH-06's "nodes" was reworded to "hosts" in the same pass, since Phase 11 renders a tree and overview tiles rather than graph nodes. See `.planning/phases/11-live-dashboard/11-CONTEXT.md` (Scope Revision) and `11-DISCUSSION-LOG.md` (second session).*
+
 *Terminology note: TAG-01/02/03 and DASH-06 wording was reframed from "VLAN"/"unknown"/"Phase 5" to "location/group label"/"other"/"Phase 4 prompt, Phase 5 apply" during Phase 10's `/bm:discuss-phase` session, per decisions D-01, D-02, D-06 and D-07 (`.planning/phases/10-checkmk-tag-group-onboarding-integration/10-CONTEXT.md`).*
