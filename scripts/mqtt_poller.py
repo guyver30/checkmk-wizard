@@ -45,6 +45,7 @@ import signal
 import socket
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -156,6 +157,12 @@ _SERVICE_STATE_NAMES = {0: "OK", 1: "WARN", 2: "CRIT", 3: "UNKNOWN"}
 # MQTT reserves `+`/`#` as wildcard characters and treats `/` as the
 # topic-level separator (T-09-01 topic-injection guard).
 _TOPIC_UNSAFE_CHARS = ("+", "#", "/")
+
+# Mirrors src/checkmk_wizard/wizard.py's own
+# `_DISCOVERY_RETRY_DELAYS_SECONDS = (10, 20, 30)` convention: a plain
+# tuple of backoff seconds for the poller's one-time startup Livestatus
+# probe (see run_forever), not a retry decorator or backoff library.
+_STARTUP_RETRY_DELAYS_SECONDS = (5, 10, 15)
 
 _logger = logging.getLogger(__name__)
 
@@ -1053,13 +1060,18 @@ def run_forever(config: PollerConfig) -> int:
     """Run the poller until interrupted: reconcile, connect, then poll forever.
 
     Column probing happens once at startup (not per cycle) via
-    `available_host_columns`/`select_host_columns`; a `LivestatusError`
-    here is fatal (the site cannot answer the poller's most basic query)
-    and returns non-zero with a clear message naming the missing
-    columns. Every subsequent per-cycle `LivestatusError` is caught and
-    logged instead -- the poll interval itself is the retry backoff
-    (RESEARCH.md's "Don't Hand-Roll"), so no separate retry state
-    machine is added.
+    `available_host_columns`/`select_host_columns`, retried on a bounded
+    schedule (`_STARTUP_RETRY_DELAYS_SECONDS`) before being treated as
+    fatal: a Checkmk container restart racing the poller's own start is a
+    known-transient condition, observed live during Phase 10's
+    verification run (10-06-SUMMARY.md finding 4), where only
+    `restart: unless-stopped` recovered the poller. Only once every retry
+    is exhausted does a `LivestatusError` here become fatal (the site
+    still cannot answer the poller's most basic query) and return
+    non-zero with a clear message naming the missing columns. Every
+    subsequent per-cycle `LivestatusError` is caught and logged instead --
+    the poll interval itself is the retry backoff (RESEARCH.md's "Don't
+    Hand-Roll"), so no separate retry state machine is added there.
     """
     configure_logging(config.log_level)
     state = reconcile_state(config)
@@ -1074,13 +1086,47 @@ def run_forever(config: PollerConfig) -> int:
     # signature stable across a REST blip (T-10-12).
     last_folders: dict[str, str] = {}
 
-    try:
-        available = available_host_columns(
-            config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+    # OPS-03 posture decision, dated 2026-09-12: the requirement asks for
+    # "one consistent failure posture" across the startup Livestatus probe
+    # and the REST credential. Literal symmetry -- making this probe
+    # non-fatal like the REST folder lookup below -- was considered and
+    # REJECTED: Livestatus is the poller's sole mandatory data source (no
+    # Livestatus means no snapshots at all, so nothing to publish), while
+    # REST only enriches the `folder` field, which is why Phase 10
+    # decision D-03 and the `fetch_host_folders` comment further down made
+    # REST non-fatal on purpose. Making Livestatus non-fatal too would let
+    # a permanently-unreachable site hang silently with no operator
+    # signal. The real defect finding 4 described was the ABSENCE of any
+    # retry tolerance for a known-transient race, not the fatal-on-failure
+    # posture itself -- this loop fixes that absence, and exhaustion still
+    # logs at error level and returns 1 below.
+    columns: list[str] | None = None
+    last_exc: LivestatusError | None = None
+    max_attempts = len(_STARTUP_RETRY_DELAYS_SECONDS) + 1
+    for attempt in range(1, max_attempts + 1):
+        try:
+            available = available_host_columns(
+                config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+            )
+            columns = select_host_columns(available)
+            break
+        except LivestatusError as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                delay = _STARTUP_RETRY_DELAYS_SECONDS[attempt - 1]
+                _logger.warning(
+                    "Startup Livestatus probe failed (attempt %d/%d): %s -- retrying in %ds",
+                    attempt,
+                    max_attempts,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+
+    if columns is None:
+        _logger.error(
+            "Cannot start: Livestatus probe failed after %d attempts: %s", max_attempts, last_exc
         )
-        columns = select_host_columns(available)
-    except LivestatusError as exc:
-        _logger.error("Cannot start: %s", exc)
         shutdown_mqtt_client(client)
         return 1
 
