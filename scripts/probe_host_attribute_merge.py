@@ -47,7 +47,42 @@ at all, the header is rendered as `Bearer <username> ***`, following
 `scripts/probe_checkmk_rest_shapes.py` and `PollerConfig`'s existing
 redaction precedent.
 
-Findings: not yet run against a live site
+Live-verified against a real Checkmk 2.4.0p36 CE site on 2026-09-12 (site id
+`dmc`, automation user):
+
+VERDICT: REPLACE. P3 found the `device_type` tag group already exists on this
+site, so P4's partial PUT sent `{"tag_device_type": "other", "alias":
+"gsd-probe-after"}` -- the strongest available body shape, exercising the real
+tag key rather than falling back to the weaker alias-only case. P5's diff
+showed `ipaddress`, `tag_agent` and `tag_snmp_ds` were all REMOVED from the
+host's attributes by a PUT that named only two keys; `alias` and `meta_data`
+changed as expected, and `tag_device_type` was added. None of the three
+survival keys made it through, so this is an unambiguous REPLACE, not a
+partial or inconsistent result.
+
+Consequence for plan 10.1-03: the retag flow must GET each host's full
+`extensions.attributes` before writing, merge `tag_device_type` and `alias`
+into that full dict client-side, and PUT the whole dict back with the
+matching ETag. Sending only the two changed keys, as RESEARCH.md's Pitfall 1
+warned, would silently strip `ipaddress`, `tag_agent`, `tag_snmp_ds` and (by
+the same mechanism, though untested directly) `snmp_community` from every
+retagged host.
+
+ECHO-PUT: ACCEPTED. P6 echoed the post-P4 host's full `extensions.attributes`
+dict back in a PUT, with `alias` overridden and *without* stripping
+`meta_data` first -- and Checkmk still returned 200. This is a useful nuance:
+on this site/version, the replace-safe fallback did not require stripping
+`meta_data` (or any other key) to be accepted. This probe therefore did NOT
+establish that any key must be stripped before an echo-PUT; plan 10.1-03
+should not assume `meta_data` needs removal on this basis, though leaving it
+in was also not proven necessary -- no key was rejected, so no strip list
+exists from this evidence.
+
+Not confirmed: this run used one throwaway host in the root folder with four
+attributes (`ipaddress`, `tag_agent`, `tag_snmp_ds`, `alias`). It did not
+exercise a host carrying `snmp_community`, a host in a nested folder, or a
+folder-inherited attribute -- REPLACE semantics for those specific keys and
+placements remain inferred from this result, not separately observed.
 """
 
 from __future__ import annotations
