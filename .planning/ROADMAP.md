@@ -9,7 +9,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 **Phase Numbering:**
 
 - Continues from the existing wizard's Phase 1–7 (Validated, out of scope for this milestone) — new work starts at Phase 8.
-- Integer phases (8, 9, 10, 11, 12): Planned milestone work.
+- Integer phases (8, 9, 10, 11, 12, 13): Planned milestone work.
 - Decimal phases (8.1, 8.2): Urgent insertions (marked with INSERTED).
 
 - [x] **Phase 8: Broker Infrastructure Hardening** - Mosquitto gains a durable, access-controlled WebSockets listener alongside its existing internal TCP listener
@@ -18,6 +18,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps** (INSERTED) - Urgent insertion after Phase 10 (completed 2026-09-12)
 - [ ] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract
 - [ ] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query
+- [ ] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map
 
 ## Phase Details
 
@@ -167,10 +168,27 @@ Plans:
 
 **Plans**: TBD
 
+### Phase 13: Wizard Parents Support and Topology Map
+
+**Goal**: Checkmk's `parents` host attribute is populated by the wizard, so the dashboard can render a real, auto-derived topology map instead of a hand-maintained diagram
+**Depends on**: Phase 11 (the dashboard shell the map drops into — independent of Phase 12)
+**Requirements**: TBD — to be defined in REQUIREMENTS.md before planning. Must include the vis-network topology-map half split out of DASH-01.
+**Scope** (from `.planning/phases/11-live-dashboard/11-CONTEXT.md` deferred section):
+
+  1. Teach the wizard to set Checkmk's `parents` host attribute over the REST API, the same way Phase 10 sets `tag_device_type`. This makes topology real monitoring data, benefits Checkmk's own views, and removes the need for any dashboard-side layout persistence
+  2. Build the vis-network topology map into `index.html`, replacing the Phase 11 grouped-overview panel (D-24 reserves that slot for exactly this)
+  3. Vendor `vis-network` 10.1.2 standalone UMD into `dashboard/js/vendor/` — Phase 11 vendors only mqtt.js
+  4. Apply Phase 11's already-reasoned map decisions rather than re-deriving them: **D-08** (parentless hosts attach to a synthetic, distinctly-styled group-root node) and **D-09** (physics stabilizes once on load then freezes, so `DataSet.update()` recolors in place without disturbing pan/zoom). Both are fully argued in `11-DISCUSSION-LOG.md`
+  5. The map inherits Phase 11's grouping toggle (D-05), worst-of roll-up with count badge (D-06), Checkmk palette (D-11), and staleness treatment (D-12/D-15) — these were deliberately kept in Phase 11 so they drive the tree and overview too
+
+**Open question for this phase's discussion**: if a hand-drawn map is still wanted after `parents` support lands, layout persistence with no backend is unsolved. Candidates considered and recorded: `localStorage` (per-browser, lost on other devices), an exported `layout.json` committed to the repo (read-only, clunky), or a retained `lan/dashboard/layout` topic (shared and backend-free, but requires a writable mosquitto user and gives up the read-only posture Phase 11's D-01 safety argument rests on).
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 8 → 9 → 10 → 11 → 12
+Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 
 | Phase | Plans Complete | Status | Completed |
 |-------|-----------------|--------|-----------|
@@ -179,3 +197,4 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 0/TBD | Not started | - |
 | 12. Agent Metrics and Service Status | 0/TBD | Not started | - |
+| 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |

@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: completed
 stopped_at: Phase 11 context revised — map and metrics moved out
-last_updated: "2026-09-12T08:40:57.355Z"
+last_updated: "2026-09-12T08:42:01.120Z"
 last_activity: 2026-09-12 -- Phase 10.1 marked complete
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 4
   total_plans: 16
   completed_plans: 16
-  percent: 67
+  percent: 57
 ---
 
 # Project State
@@ -59,6 +59,7 @@ Progress: [██████████] 100%
 
 - Phase 10.1 inserted after Phase 10: Bulk device-type tagging for already-onboarded hosts (10-06-SUMMARY finding 1: 20 live hosts stuck at device_type=other, no wizard retag path) plus deployment/observability gaps (findings 2-5: worker CMK_REST_* env, automation secret never displayed, inconsistent poller failure posture, silent poller startup) (URGENT)
 - Phase 12 added: Agent Metrics and Service Status — per-device CPU/RAM/disk/SMART gauges and per-service status, split out of Phase 11 during its 2026-09-12 scope discussion. Requires a new Livestatus GET services query; the poller issues only GET hosts today. Partially reverses PROJECT.md's per-service-drill-down Out of Scope entry.
+- Phase 13 added: Wizard Parents Support and Topology Map — teach the wizard to set Checkmk's parents attribute over REST (as Phase 10 does for tag_device_type), then build the vis-network map on real data. Split out of Phase 11 during its 2026-09-12 scope discussion because parents is unset on the target site, so an auto-built map would render as disconnected dots. Depends on Phase 11, not Phase 12.
 
 ### Decisions
 
