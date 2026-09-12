@@ -97,3 +97,5 @@
 - `/bm:execute-phase 10.1` (2026-09-12) — execute all plans in Phase 10.1 with wave-based parallelization
 - "you need to push this repo, otherwise I cannot pull it from my host" — pushed 28 commits to origin/main (78ff087..55561e5)
 - Pasted live probe output from the Checkmk site: VERDICT REPLACE, ECHO-PUT ACCEPTED, cleanup 204
+- "what is the user interface like to tag/retag hosts?" — described the designed Phase 4 detection-driven retag flow
+- "how to assign tag1 to some, tag2 to others... can we use numbers... with a legend?" — agreed numbered legend + single-digit per-host entry (D-10) and opt-in alias second pass (D-11); recorded both as decisions superseding 10.1-03-PLAN Task 1 step f

@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 10 context gathered
-last_updated: "2026-09-12T03:33:06.740Z"
+last_updated: "2026-09-12T03:59:57.387Z"
 last_activity: 2026-09-12 -- Phase 10.1 execution started
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 16
-  completed_plans: 13
+  completed_plans: 15
   percent: 60
 ---
 
@@ -67,6 +67,8 @@ Recent decisions affecting current work:
 - Milestone: Poll Livestatus over TCP instead of Checkmk notification rules, to preserve the worker/checkmk filesystem boundary
 - Milestone: Redesign MQTT contract around per-device topics (`lan/devices/{id}/...`) rather than full-blob republishes
 - Milestone: Horizontal Layers build order chosen — broker (persistence + ACL from day one) → poller core → Checkmk tagging → dashboard (built last as a pure consumer)
+- [Phase 10.1]: D-10 (retag UX, operator-chosen 2026-09-12, SUPERSEDES 10.1-03-PLAN Task 1 step f prompts): the per-host device-type questionary.select is replaced by a numbered legend + single-digit entry. Print the device type legend once per folder, numbered by index into _load_device_types() (0=other guaranteed by D-06), then prompt each host as "<host>  (<current>)  [<current index>]: " accepting one digit; bare Enter keeps the current value. Before any PUT, print an "N host(s) will be retagged, M unchanged" summary and require a single Apply? confirm (default No) — this gate is new and protects a 20-host run from a mistyped digit. Rationale: the select-based flow cost 40 interactions for 20 hosts and the "a few of each type" pattern is the normal case. Numbering derives from the tag group source, never hand-maintained.
+- [Phase 10.1]: D-11 (retag alias handling, operator-chosen 2026-09-12, SUPERSEDES 10.1-03-PLAN Task 1 step f alias prompt): alias is NOT prompted per host during retag. After the device types are applied, ask once "Also set aliases on any of these?" (default No); on yes, questionary.checkbox over the just-retagged hosts, then a questionary.text alias prompt only for the checked ones. D-09 still governs the PUT body — a blank alias means the alias key is OMITTED entirely so Checkmk keeps what it has, never an explicit empty value that would clear an operator-set alias.
 
 ### Pending Todos
 
