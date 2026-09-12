@@ -508,17 +508,23 @@ function rollUpGroup(deviceIds, store, nowMs = Date.now()) {
 
 **If this table is empty:** N/A — see above.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+Both questions below are operationally closed by the Phase 11 plan set — see the
+"Resolved by" line under each. Left in place because the reasoning behind each
+resolution is the useful part, not the question itself.
 
 1. **Exact spelling/availability of the `staleness` Livestatus column on the target site**
    - What we know: community sources consistently document `staleness` as a real column computable for both `hosts` and `services` tables in MK Livestatus implementations generally; this project's own docs-URL fetch confirms Checkmk provides no static column reference and directs live verification instead.
    - What's unclear: whether the exact string `"staleness"` (vs., e.g., a Checkmk-specific rename) is what this site's 2.4.0p36.cre Livestatus actually exposes.
    - Recommendation: the plan's first D-17 task should be a live `--check-columns`-style probe (extending the existing `available_host_columns()` call) before any code assumes the column exists, exactly as D-17's own text already instructs.
+   - **Resolved by:** plan `11-01` — a standalone wave-1 plan whose only job is that live probe, recording the result as a dated comment. It gates `11-04` (wave 2) and `11-06` (wave 3), each of which carries the stated timestamp-age fallback if the column turns out to be absent.
 
 2. **Whether `mqtt.js`'s browser build differs from its Node build in unhandled-`'error'`-event behavior**
    - What we know: the README documents the `error` event identically for both environments; the library is a single isomorphic codebase.
    - What's unclear: this research pass did not execute the browser bundle in an actual browser console to directly observe the unhandled-exception behavior (only read documentation/source-adjacent community discussion).
    - Recommendation: attach the listener regardless (Pattern 3 already does) — this makes the open question moot for implementation purposes; only relevant if someone is tempted to skip it as "probably fine."
+   - **Resolved by:** plan `11-05` — the connection module attaches the `error` listener unconditionally, so the browser-vs-Node difference cannot be reached.
 
 ## Environment Availability
 
