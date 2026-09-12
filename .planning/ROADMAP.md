@@ -15,7 +15,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 8: Broker Infrastructure Hardening** - Mosquitto gains a durable, access-controlled WebSockets listener alongside its existing internal TCP listener
 - [x] **Phase 9: Poller Core** - A resilient Livestatus-to-MQTT poller publishes the per-device topic contract and self-heals across restarts (completed 2026-09-09)
 - [x] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and a folder-derived location/group label are wired into the wizard's onboarding flow (completed 2026-09-11)
-- [ ] **Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps** (INSERTED) - Urgent insertion after Phase 10
+- [x] **Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps** (INSERTED) - Urgent insertion after Phase 10 (completed 2026-09-12)
 - [ ] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract
 
 ## Phase Details
@@ -130,7 +130,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 10.1-03-PLAN.md — Detection-driven folder-scoped bulk retag inside Phase 4, with activation and Phase 4 answer-iterator audit
+- [x] 10.1-03-PLAN.md — Detection-driven folder-scoped bulk retag inside Phase 4, with activation and Phase 4 answer-iterator audit
 
 ### Phase 11: Live Dashboard
 
