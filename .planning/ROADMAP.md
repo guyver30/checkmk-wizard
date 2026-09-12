@@ -147,7 +147,20 @@ Plans:
   4. A device whose last-seen timestamp exceeds a staleness threshold, or whose poller liveness signal (`lan/poller/status`) is stale, is shown in a distinct stale/unknown visual state separate from "down"
   5. The dashboard shows a connection-status indicator and reconnects with jittered exponential backoff when the MQTT-over-WebSockets connection drops
 
-**Plans**: TBD
+**Plans**: 10 plans in 6 waves
+
+Plans:
+- [ ] 11-01-PLAN.md — Probe the live site for the Livestatus `staleness` column and record the dated result (wave 1)
+- [ ] 11-02-PLAN.md — Vendor mqtt.js 5.15.2, create `dashboard/js/config.js`, add the `dashboard` nginx service on port 8090 (wave 1)
+- [ ] 11-03-PLAN.md — Dark dense stylesheet from UI-SPEC plus the three shared-shell HTML pages (wave 1)
+- [ ] 11-04-PLAN.md — D-17 poller extension: additive `staleness` and `host_state_raw` payload keys, tests, topic-contract doc (wave 2)
+- [ ] 11-05-PLAN.md — MQTT-over-WS connection with hand-rolled jittered backoff, and the wholesale-replace state store (wave 2)
+- [ ] 11-06-PLAN.md — Pure helpers: staleness derivation, classification, display naming, worst-of roll-up (wave 3)
+- [ ] 11-07-PLAN.md — Persistent shell (indicator, banners, grouped tree, event panel) and the pushState router with its ViewModule contract (wave 4)
+- [ ] 11-08-PLAN.md — index stats strip and grouped fleet overview, plus the sortable device table (wave 5)
+- [ ] 11-09-PLAN.md — Per-device detail panel, bounded history strip, Checkmk deep link (wave 5)
+- [ ] 11-10-PLAN.md — Deployment and README documentation, plus live verification of all five success criteria (wave 6)
+
 **UI hint**: yes
 
 ### Phase 12: Agent Metrics and Service Status
