@@ -9,7 +9,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 **Phase Numbering:**
 
 - Continues from the existing wizard's Phase 1–7 (Validated, out of scope for this milestone) — new work starts at Phase 8.
-- Integer phases (8, 9, 10, 11): Planned milestone work.
+- Integer phases (8, 9, 10, 11, 12): Planned milestone work.
 - Decimal phases (8.1, 8.2): Urgent insertions (marked with INSERTED).
 
 - [x] **Phase 8: Broker Infrastructure Hardening** - Mosquitto gains a durable, access-controlled WebSockets listener alongside its existing internal TCP listener
@@ -17,6 +17,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and a folder-derived location/group label are wired into the wizard's onboarding flow (completed 2026-09-11)
 - [x] **Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps** (INSERTED) - Urgent insertion after Phase 10 (completed 2026-09-12)
 - [ ] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract
+- [ ] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query
 
 ## Phase Details
 
@@ -148,10 +149,28 @@ Plans:
 **Plans**: TBD
 **UI hint**: yes
 
+### Phase 12: Agent Metrics and Service Status
+
+**Goal**: The dashboard's per-device drill-down shows live agent-derived metrics and per-service status, sourced from a new Livestatus `services` query published on its own MQTT topic
+**Depends on**: Phase 11
+**Requirements**: TBD — to be defined in REQUIREMENTS.md before planning
+**Scope** (from `.planning/phases/11-live-dashboard/11-CONTEXT.md` deferred section):
+
+  1. Extend `scripts/mqtt_poller.py` with a `GET services` Livestatus query — it currently issues only `GET hosts`, so per-service state, `plugin_output` and `perf_data` do not exist anywhere in the contract today
+  2. Parse Nagios-format `perf_data` in the poller (Python), not in browser JS, and publish structured values on a new retained per-device services topic
+  3. Render CPU / RAM / disk-space gauges and disk-health (SMART) readouts on the detail panel — `docs/DMC-server.png` is the visual reference
+  4. Render a per-host service status list that explains *why* a host is red
+  5. Settle the publish cadence: ~21 hosts × ~20 services is ~420 rows per cycle, so change-only publishing is likely required rather than every-cycle retention
+  6. Amend PROJECT.md's "Duplicating Checkmk's own per-service drill-down UI" Out of Scope entry, which this phase partially reverses
+
+**Note**: host color is *already* influenced by service state — the poller folds `worst_service_state` in via worst-of aggregation (Phase 9 D-08). This phase adds visibility into which service is failing, not the influence itself.
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 8 → 9 → 10 → 11
+Phases execute in numeric order: 8 → 9 → 10 → 11 → 12
 
 | Phase | Plans Complete | Status | Completed |
 |-------|-----------------|--------|-----------|
@@ -159,3 +178,4 @@ Phases execute in numeric order: 8 → 9 → 10 → 11
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 0/TBD | Not started | - |
+| 12. Agent Metrics and Service Status | 0/TBD | Not started | - |
