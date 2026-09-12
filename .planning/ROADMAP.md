@@ -141,7 +141,7 @@ Plans:
 **Requirements**: DASH-01, DASH-02, DASH-03, DASH-04, DASH-05, DASH-06
 **Success Criteria** (what must be TRUE):
 
-  1. `index.html` renders a live topology map (vis-network) with parent/child links, an at-a-glance stats-by-state strip, and nodes color-coded/icon-coded by device type and grouped/colored by the folder-derived location/group label; incoming updates merge via `DataSet.update()` without a full re-render
+  1. `index.html` renders an at-a-glance stats-by-state strip above a grouped fleet overview, with hosts icon-coded by device type and grouped/colored by either the folder-derived location/group label or the device type (runtime toggle); incoming updates merge in place without a full re-render
   2. `devices.html` shows a live sortable device table and a recent-events panel that update in place as MQTT messages arrive
   3. `details.html` shows a per-device drill-down with a bounded status-history strip and a link out to Checkmk's own UI for that host
   4. A device whose last-seen timestamp exceeds a staleness threshold, or whose poller liveness signal (`lan/poller/status`) is stale, is shown in a distinct stale/unknown visual state separate from "down"
@@ -172,7 +172,8 @@ Plans:
 
 **Goal**: Checkmk's `parents` host attribute is populated by the wizard, so the dashboard can render a real, auto-derived topology map instead of a hand-maintained diagram
 **Depends on**: Phase 11 (the dashboard shell the map drops into — independent of Phase 12)
-**Requirements**: TBD — to be defined in REQUIREMENTS.md before planning. Must include the vis-network topology-map half split out of DASH-01.
+**Requirements**: DASH-07
+**Requirements note**: DASH-07 is the vis-network topology-map half split out of DASH-01 on 2026-09-12. Additional requirement IDs covering the wizard's `parents` support still need defining in REQUIREMENTS.md before this phase is planned.
 **Scope** (from `.planning/phases/11-live-dashboard/11-CONTEXT.md` deferred section):
 
   1. Teach the wizard to set Checkmk's `parents` host attribute over the REST API, the same way Phase 10 sets `tag_device_type`. This makes topology real monitoring data, benefits Checkmk's own views, and removes the need for any dashboard-side layout persistence
