@@ -4,11 +4,15 @@ import pytest
 
 from checkmk_wizard.remote import (
     AGENT_PLUGINS_DIR,
+    AGENT_RECEIVER_PORT,
     OSRelease,
+    SSHCredentials,
     agent_status_shows_connection,
+    install_agent_linux,
     linux_register_command,
     package_family,
     probe_port,
+    register_agent_linux,
     smartmontools_deb_filename,
     windows_firewall_instructions,
     windows_register_command,
@@ -146,11 +150,14 @@ def test_linux_register_command_quotes_args():
 
 
 def test_windows_register_command_contains_flags():
+    # Bug 1: --server must carry the agent receiver port, or cmk-agent-ctl
+    # falls back to REST API port discovery, which fails when the REST/GUI
+    # port isn't the default (observed: Podman-published host port 8080).
     cmd = windows_register_command("winhost", "cmk.example", "mysite", "automation", "secret")
     assert "cmk-agent-ctl.exe" in cmd
     assert "register" in cmd
     assert "--hostname 'winhost'" in cmd
-    assert "--server 'cmk.example'" in cmd
+    assert f"--server 'cmk.example:{AGENT_RECEIVER_PORT}'" in cmd
 
 
 def test_windows_register_command_quotes_embedded_single_quote():
@@ -163,3 +170,71 @@ def test_windows_firewall_instructions_uses_given_port():
     text = windows_firewall_instructions(8000)
     assert "New-NetFirewallRule" in text
     assert "8000" in text
+
+
+def test_linux_register_command_appends_receiver_port_when_absent():
+    # Bug 1: a --server value with no port made cmk-agent-ctl try REST API
+    # port discovery on 80/443, which fails against a non-default REST/GUI
+    # port (observed: Podman-published host port 8080).
+    cmd = linux_register_command("h", "cmk.example", "mysite", "automation", "secret")
+    assert f"--server cmk.example:{AGENT_RECEIVER_PORT}" in cmd
+
+
+def test_linux_register_command_leaves_explicit_port_alone():
+    # Bug 1 regression: an already-ported --server value must not get a
+    # second port appended (e.g. "cmk.example:9000:8000").
+    cmd = linux_register_command("h", "cmk.example:9000", "mysite", "automation", "secret")
+    assert "cmk.example:9000" in cmd
+    assert ":9000:8000" not in cmd
+
+
+def test_linux_register_command_ipv4_gets_receiver_port():
+    cmd = linux_register_command("h", "192.168.97.129", "mysite", "automation", "secret")
+    assert f"--server 192.168.97.129:{AGENT_RECEIVER_PORT}" in cmd
+
+
+def test_linux_register_command_bare_ipv6_is_not_mistaken_for_hostport():
+    # Bug 1 regression: a bare IPv6 literal like "::1" must not be parsed
+    # by the naive rsplit(":", 1) as host "::" port "1" — it needs bracket
+    # notation before the port can be appended.
+    cmd = linux_register_command("h", "::1", "mysite", "automation", "secret")
+    assert f"--server '[::1]:{AGENT_RECEIVER_PORT}'" in cmd
+
+
+def test_linux_register_command_bracketed_ipv6_with_port_passed_through():
+    cmd = linux_register_command("h", "[fe80::1]:8000", "mysite", "automation", "secret")
+    assert "--server '[fe80::1]:8000'" in cmd
+
+
+@pytest.mark.asyncio
+async def test_register_agent_linux_manual_instruction_includes_sudo(monkeypatch):
+    # Bug 3: the automated path elevates via _run_sudo(), but the printed
+    # manual fallback omitted sudo, so a copy-paste of it failed.
+    async def fake_check_ssh_reachable(host, creds, timeout=5.0):
+        return False
+
+    monkeypatch.setattr("checkmk_wizard.remote.check_ssh_reachable", fake_check_ssh_reachable)
+    result = await register_agent_linux(
+        "10.0.0.5", SSHCredentials(username="root"), "cmk-agent-ctl register --hostname h"
+    )
+    assert result.manual_instructions is not None
+    assert "sudo cmk-agent-ctl register" in result.manual_instructions
+
+
+@pytest.mark.asyncio
+async def test_install_agent_linux_manual_instruction_includes_sudo(monkeypatch):
+    # Bug 3: same fallback-text gap as register_agent_linux, for the
+    # fresh-install path's step 3.
+    async def fake_check_ssh_reachable(host, creds, timeout=5.0):
+        return False
+
+    monkeypatch.setattr("checkmk_wizard.remote.check_ssh_reachable", fake_check_ssh_reachable)
+    result = await install_agent_linux(
+        "10.0.0.5",
+        SSHCredentials(username="root"),
+        b"package-bytes",
+        "check-mk-agent.deb",
+        "cmk-agent-ctl register --hostname h",
+    )
+    assert result.manual_instructions is not None
+    assert "sudo cmk-agent-ctl register" in result.manual_instructions
