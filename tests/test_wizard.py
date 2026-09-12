@@ -55,6 +55,7 @@ from checkmk_wizard.wizard import (
     _network_scan_attributes,
     _password_problems,
     _ping_only_hostnames,
+    _print_linux_manual,
     _probe_livestatus_tcp,
     _prompt_change_cmkadmin_password,
     _prompt_new_site_name,
@@ -65,6 +66,7 @@ from checkmk_wizard.wizard import (
     _run_retag_screen,
     _smart_posix_plugin_path,
     _split_checkmk_host_port,
+    _unusable_from_remote_target,
     _valid_checkmk_host,
     _verify_expected_services,
     phase1_site_bringup,
@@ -2527,10 +2529,33 @@ def test_looks_loopback(host, expected):
     assert _looks_loopback(host) is expected
 
 
+@pytest.mark.parametrize(
+    "host,expected",
+    [
+        ("localhost", True),
+        ("127.0.0.1", True),
+        # Bug 2 regression: a bare single-label hostname (no dot, not an
+        # IP) is only meaningful inside the wizard's own network — the
+        # container-mode default Checkmk host `checkmk` is exactly this.
+        ("checkmk", True),
+        ("cmk.example.com", False),
+        ("192.168.1.10", False),
+    ],
+)
+def test_unusable_from_remote_target(host, expected):
+    assert _unusable_from_remote_target(host) is expected
+
+
 @pytest.mark.asyncio
 async def test_resolve_agent_registration_server_unchanged_when_not_loopback():
     hosts = [OnboardedHost(ip="10.0.0.5", hostname="10.0.0.5", folder="/", os_family="linux")]
     assert await _resolve_agent_registration_server(hosts, "cmk.example.com") == "cmk.example.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_unchanged_when_ip_literal():
+    hosts = [OnboardedHost(ip="10.0.0.5", hostname="10.0.0.5", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "192.168.97.129") == "192.168.97.129"
 
 
 @pytest.mark.asyncio
@@ -2540,6 +2565,43 @@ async def test_resolve_agent_registration_server_unchanged_when_every_target_is_
     # without a monkeypatched Question.ask_async).
     hosts = [OnboardedHost(ip="127.0.0.1", hostname="127.0.0.1", folder="/", os_family="linux")]
     assert await _resolve_agent_registration_server(hosts, "localhost") == "localhost"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_unchanged_bare_hostname_when_every_target_is_loopback_too():
+    # Same all-loopback early-out as above, but for the container-mode
+    # bare-hostname case ("checkmk") the widened guard (Bug 2) now also
+    # matches.
+    hosts = [OnboardedHost(ip="127.0.0.1", hostname="127.0.0.1", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "checkmk") == "checkmk"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_bare_hostname_triggers_prompt(monkeypatch):
+    # Bug 2: in container mode the Checkmk host defaults to the Podman-
+    # internal DNS name `checkmk`, which the old loopback-only guard let
+    # through into --server, where no LAN target can resolve it.
+    monkeypatch.setattr("checkmk_wizard.wizard._local_ipv4_addresses", lambda: ["192.168.1.10"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return "192.168.1.10"
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    hosts = [OnboardedHost(ip="10.0.0.5", hostname="test-linux", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "checkmk") == "192.168.1.10"
+
+
+def test_print_linux_manual_includes_sudo(capsys, monkeypatch):
+    # Bug 3: the printed manual registration command must match what the
+    # automated path actually runs (elevated via sudo), or a copy-paste
+    # of it fails. Widen the console so the assertion isn't broken by
+    # line-wrapping at the default 80-column width.
+    monkeypatch.setattr("checkmk_wizard.wizard.console.width", 200)
+    host = OnboardedHost(ip="10.0.0.9", hostname="test-linux", folder="/", os_family="linux")
+    _print_linux_manual(host, CONN, "cmk.example")
+    out = capsys.readouterr().out
+    assert "sudo cmk-agent-ctl register" in out
 
 
 @pytest.mark.asyncio
