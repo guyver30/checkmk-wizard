@@ -1,0 +1,86 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-12T13:14:39.549Z",
+  "phase": "11",
+  "phase_name": "live-dashboard",
+  "phase_dir": ".planning/phases/11-live-dashboard",
+  "plan": 1,
+  "task": 1,
+  "total_tasks": 23,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": 1, "name": "Research Phase 11 (11-RESEARCH.md)", "status": "done", "commit": "aa549fb"},
+    {"id": 2, "name": "UI design contract (11-UI-SPEC.md), auto mode", "status": "done", "commit": "12830c1"},
+    {"id": 3, "name": "UI checker verification — APPROVED (5 PASS, 1 non-blocking FLAG)", "status": "done", "commit": "12830c1"},
+    {"id": 4, "name": "Pattern map (11-PATTERNS.md)", "status": "done", "commit": "1feb42e"},
+    {"id": 5, "name": "Plan Phase 11 — 10 plans in 6 waves", "status": "done", "commit": "2de890c"},
+    {"id": 6, "name": "Plan-checker verification — VERIFICATION PASSED, no blockers", "status": "done", "commit": "2de890c"},
+    {"id": 7, "name": "Coverage gates (DASH-01..06 6/6, decisions 18/18), STATE.md + ROADMAP wave annotation", "status": "done", "commit": "1feb42e"},
+    {"id": 8, "name": "Mark RESEARCH.md open questions (RESOLVED) with resolving plans", "status": "done", "commit": "1feb42e"}
+  ],
+  "remaining_tasks": [
+    {"id": 9, "name": "Execute Phase 11 — 23 tasks across 10 plans, 6 waves (/bm:execute-phase 11)", "status": "not_started"},
+    {"id": 10, "name": "Define requirement IDs for Phase 13's wizard `parents` work (DASH-07 covers only the map that consumes it, not the wizard change that populates it)", "status": "not_started"},
+    {"id": 11, "name": "Define requirement IDs for Phase 12 — currently `Requirements: TBD`, which makes plan-phase skip its coverage gate", "status": "not_started"},
+    {"id": 12, "name": "Reconcile the stale Phase 8 progress row (0/3 Not started despite 3/3 SUMMARYs and live artifacts) via /bm:health", "status": "not_started"}
+  ],
+  "blockers": [
+    {
+      "description": "The Livestatus `staleness` column is MEDIUM confidence — community-documented but never probed against the live `dmc` site (2.4.0p36.cre). D-17's staleness field cannot be trusted until it is.",
+      "type": "external",
+      "workaround": "Plan 11-01 is a standalone wave-1 plan whose only job is that live `--check-columns` probe; it gates 11-04 (wave 2) and 11-06 (wave 3), and both dependents carry a stated timestamp-age fallback if the column is absent. Not a blocker for starting execution — it IS the first thing execution does."
+    },
+    {
+      "description": "Plans 11-01 (task 2) and 11-10 (task 3) are non-autonomous checkpoints requiring the live deploy host.",
+      "type": "human_action",
+      "workaround": "Expected; execute-phase will stop and prompt at each. 11-10's checkpoint is the five-success-criteria live verification, including two concurrent browser tabs to prove backoff growth and inter-tab divergence."
+    }
+  ],
+  "human_actions_pending": [
+    {
+      "action": "Run the 11-01 `--check-columns` staleness probe against the real `dmc` Checkmk site (not a sandbox)",
+      "context": "Hard prerequisite for D-17's `staleness` payload key ever populating. RESEARCH.md Open Question 1.",
+      "blocking": true
+    },
+    {
+      "action": "Live-verify all five ROADMAP success criteria in a browser against the deployed nginx `dashboard` service on port 8090",
+      "context": "Plan 11-10 task 3 checkpoint — the phase cannot close without it.",
+      "blocking": true
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Auto-generated the UI-SPEC rather than running an interactive /bm:ui-phase session",
+      "rationale": "plan-phase's UI gate fired (phase has frontend indicators, no UI-SPEC.md) and auto_advance was active. All discretionary items were resolved by the researcher and recorded in an 'Auto-Mode Design Decisions' table with rationale, so the calls are reviewable rather than invisible.",
+      "phase": "11"
+    },
+    {
+      "decision": "Accepted the UI checker's single FLAG (the 12px `--space-sm2` token) without revision",
+      "rationale": "It sits off the reference spacing set but stays on the 4px grid and is justified by D-22's dense-panel requirement. Non-blocking by the dimension's own FLAG-vs-BLOCK rule. Watch at build time that it stays scoped to card/row padding.",
+      "phase": "11"
+    },
+    {
+      "decision": "Isolated the `staleness` probe as its own wave-1 plan instead of folding it into the poller-extension plan",
+      "rationale": "MEDIUM-confidence external dependency. Isolating it means its result gates two downstream plans explicitly and each can carry a fallback, rather than the risk being buried inside a larger plan's task list.",
+      "phase": "11"
+    },
+    {
+      "decision": "Paused for /clear before execution rather than auto-advancing",
+      "rationale": "plan-phase's own context-hygiene rule: 10 plans (> 2) means execute-phase wants a clean context window and live wave checkpoints, which a nested auto dispatch cannot provide.",
+      "phase": "11"
+    },
+    {
+      "decision": "Marked RESEARCH.md's two Open Questions (RESOLVED) rather than deleting them",
+      "rationale": "Plan-checker warning 1. The reasoning behind each resolution is the useful part; each now names the plan that closes it (11-01, 11-05).",
+      "phase": "11"
+    }
+  ],
+  "uncommitted_files": [
+    "PROMPT_LOG.md (modified — this session's prompt entries)",
+    ".planning/phases/12-agent-metrics-and-service-status/ (untracked — pre-existing, Phase 12 scaffolding)",
+    ".planning/phases/13-wizard-parents-support-and-topology-map/ (untracked — pre-existing, Phase 13 scaffolding)",
+    "screen1.png (untracked — pre-existing, unrelated)"
+  ],
+  "next_action": "/clear, then /bm:execute-phase 11. Wave 1 is plans 11-01 (live staleness probe — checkpoint, needs the real dmc site), 11-02 (vendor mqtt.js 5.15.2 + config.js + dashboard nginx service on 8090), 11-03 (UI-SPEC stylesheet + three shared-shell HTML pages).",
+  "context_notes": "Planning is fully finished and committed — nothing half-written. The phase is the repo's first frontend code, so 13 of 19 files have no in-repo analog and PATTERNS.md deliberately points them at UI-SPEC/RESEARCH contract sections instead of forcing a Python analog onto them; do not 'find' an analog for those during execution. Three upstream risks are handled structurally rather than by good intentions: the staleness probe gates its dependents, DASH-05's jittered backoff is hand-rolled because mqtt.js's reconnectPeriod is a fixed interval (asserted by `grep -Ec 'reconnectPeriod: *[1-9]'` returning 0), and textContent-only is a grep-checkable acceptance criterion on all four DOM-writing modules. The one thing to resist during execution is scope creep back toward the vis-network map, CPU/RAM/disk gauges, or per-service status — all three were deliberately moved out to Phases 12/13 and 11-09/11-10 carry acceptance criteria that assert their absence."
+}
