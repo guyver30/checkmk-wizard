@@ -1043,6 +1043,14 @@ async def _retag_existing_hosts(
             )
             for folder in folders
         ]
+        # Leaving is a choice on this menu rather than a separate "Retag
+        # another folder?" confirm after each pass. Declining "Apply?" below
+        # returns here with the folder still listed, so "redo the same
+        # folder, pick another, or stop" is one menu instead of three
+        # prompts.
+        folder_choices.append(
+            questionary.Choice("Done — leave the remaining hosts as they are", value=None)
+        )
         # D-03: the prompt states in plain words that only exact-match
         # hosts are touched, and the filter below enforces it with `==` —
         # no startswith/prefix matching — so a single confirmation can
@@ -1053,9 +1061,10 @@ async def _retag_existing_hosts(
             "folder separately.",
             choices=folder_choices,
         ).ask_async()
+        if selected_folder is None:
+            break
 
         folder_candidates = [c for c in remaining if c.folder == selected_folder]
-        remaining = [c for c in remaining if c.folder != selected_folder]
 
         # Printed once per folder, not once per host: the operator needs the
         # numbers in view while answering, but repeating them 20 times would
@@ -1078,29 +1087,35 @@ async def _retag_existing_hosts(
             f"\n  {len(assignments)} host(s) will be retagged, {unchanged} unchanged."
         )
 
-        if assignments:
-            # Nothing is written until the summary above is confirmed (D-10).
-            # With single-digit entry the wrong digit is one keystroke away,
-            # and a bulk retag can rewrite twenty hosts in a row — so the
-            # whole folder is previewed and gated behind one default-No
-            # confirm rather than each PUT firing as its prompt is answered.
-            if await questionary.confirm("Apply?", default=False).ask_async():
-                retagged: list[RetagCandidate] = []
-                for candidate, new_device_type in assignments:
-                    if await _write_host_attributes(
-                        client, candidate.name, {attribute_key: new_device_type}
-                    ):
-                        retagged.append(candidate)
-                        updated_count += 1
-                console.print(f"  {len(retagged)} host(s) retagged.")
-                updated_count += await _prompt_optional_aliases(client, retagged)
-            else:
-                console.print("[dim]Nothing was written for this folder.[/dim]")
+        if not assignments:
+            # The operator walked the folder and changed nothing, so drop it
+            # from the pool — otherwise the menu would keep offering a folder
+            # they have already dismissed.
+            remaining = [c for c in remaining if c.folder != selected_folder]
+            continue
 
-        if remaining:
-            again = await questionary.confirm("Retag another folder?", default=False).ask_async()
-            if not again:
-                break
+        # Nothing is written until the summary above is confirmed (D-10).
+        # With single-digit entry the wrong digit is one keystroke away, and
+        # a bulk retag can rewrite twenty hosts in a row — so the whole
+        # folder is previewed and gated behind one default-No confirm rather
+        # than each PUT firing as its prompt is answered.
+        if not await questionary.confirm("Apply?", default=False).ask_async():
+            # Deliberately leaves the folder in `remaining`: declining is
+            # "let me do that again", not "skip this folder", so the menu
+            # above comes back with it still selectable.
+            console.print("[dim]Nothing was written — back to the folder list.[/dim]")
+            continue
+
+        remaining = [c for c in remaining if c.folder != selected_folder]
+        retagged: list[RetagCandidate] = []
+        for candidate, new_device_type in assignments:
+            if await _write_host_attributes(
+                client, candidate.name, {attribute_key: new_device_type}
+            ):
+                retagged.append(candidate)
+                updated_count += 1
+        console.print(f"  {len(retagged)} host(s) retagged.")
+        updated_count += await _prompt_optional_aliases(client, retagged)
 
     # Activation is mandatory, not optional: without it the tag change
     # sits as a pending WATO change and never reaches Livestatus, the
@@ -1235,6 +1250,21 @@ async def phase3_discovery(client: CheckmkClient, folder_subnets: dict[str, str 
     matches the wizard's original single-CIDR-prompt behavior.
     """
     console.rule("[bold]Phase 3 — Network Discovery (custom async scanner)")
+
+    # Scanning is optional because the wizard is also run against a site
+    # that is already built out: re-scanning a network whose hosts are
+    # already onboarded costs minutes and stages every live IP as a
+    # duplicate placeholder host, when the operator only came back to
+    # retag existing hosts in Phase 4 (TAG-04). Declining returns no
+    # scanned hosts, which Phase 4 already handles — it runs the retag
+    # flow and then reports there is nothing to promote.
+    if not await questionary.confirm(
+        "Scan the network for hosts now? (No = skip to Phase 4, e.g. to retag hosts "
+        "that are already onboarded)",
+        default=True,
+    ).ask_async():
+        console.print("[dim]Skipping the network scan — no new hosts will be discovered.[/dim]")
+        return []
 
     scans: list[tuple[str, str]] = [(folder, cidr) for folder, cidr in folder_subnets.items() if cidr]
     skipped_folders = [folder for folder, cidr in folder_subnets.items() if not cidr]

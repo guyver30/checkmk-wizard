@@ -99,3 +99,4 @@
 - Pasted live probe output from the Checkmk site: VERDICT REPLACE, ECHO-PUT ACCEPTED, cleanup 204
 - "what is the user interface like to tag/retag hosts?" — described the designed Phase 4 detection-driven retag flow
 - "how to assign tag1 to some, tag2 to others... can we use numbers... with a legend?" — agreed numbered legend + single-digit per-host entry (D-10) and opt-in alias second pass (D-11); recorded both as decisions superseding 10.1-03-PLAN Task 1 step f
+- "tagging was fine, but a few notes: (1) real invocation is `podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && uv sync && uv run checkmk-wizard"`, not `uv run checkmk-wizard`; (2) Phase 3 network discovery must be skippable when the site and hosts already exist; (3) declining Apply after retagging must return to the start of the Phase 4 retag flow (same folder / another folder / skip)"

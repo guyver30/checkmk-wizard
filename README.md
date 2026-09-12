@@ -124,6 +124,8 @@ uv sync
 
 ## Run
 
+### Host-native mode (the wizard runs on the Checkmk host itself)
+
 As root (see [Prerequisites](#prerequisites) for why):
 
 ```bash
@@ -137,6 +139,22 @@ explicit `PATH=`) so `sudo` doesn't lose `uv` off your regular user's
 ```bash
 sudo -E uv run checkmk-wizard
 ```
+
+### Container mode (the wizard runs in the worker container)
+
+When Checkmk is deployed as a container, the wizard runs from the
+`automation-worker` container alongside it — not on your host shell, which
+has no route to the site. `--interactive --tty` is required: the wizard is
+a `questionary` prompt flow and will not work without a TTY.
+
+```bash
+podman exec --interactive --tty automation-worker \
+  bash -c "cd /app/checkmk-wizard && uv sync && uv run checkmk-wizard"
+```
+
+The `uv sync` is deliberate — the checkout is bind-mounted into the
+container, so a `git pull` on the host changes the code the container runs
+but not its virtualenv.
 
 ## Test
 
