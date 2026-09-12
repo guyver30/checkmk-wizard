@@ -1130,6 +1130,20 @@ def run_forever(config: PollerConfig) -> int:
         shutdown_mqtt_client(client)
         return 1
 
+    # OPS-04: a greppable line in `podman logs` distinguishing a healthy
+    # poller from a hung one on the first line after startup. Only the
+    # four non-secret fields named by the requirement are logged --
+    # `cmk_rest_secret`/`cmk_rest_username` and the whole `config` object
+    # (PollerConfig.__repr__ already redacts the secret, Phase 10-03) are
+    # deliberately excluded.
+    _logger.info(
+        "Poller started: site=%s poll_interval=%ss broker=%s:%s",
+        config.cmk_site_id,
+        config.poll_interval_seconds,
+        config.mqtt_host,
+        config.mqtt_port,
+    )
+
     stop_event = threading.Event()
 
     def _handle_signal(signum, frame):
