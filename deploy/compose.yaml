@@ -110,6 +110,17 @@ services:
       - S3_ENDPOINT=http://minio:9000
       - S3_ACCESS_KEY=minioadmin
       - S3_SECRET_KEY=minioadmin
+      # Phase 10.1 (OPS-01): same four CMK_REST_* variable names as the
+      # poller service's own block below -- see its comment there for the
+      # full explanation of the `${CMK_REST_SECRET:-}` empty-default
+      # indirection. The worker needs these too: the wizard's own re-run
+      # and scripts/probe_host_attribute_merge.py both execute inside this
+      # container and would otherwise need a hand-pasted secret
+      # (10-06-SUMMARY.md finding 2).
+      - CMK_REST_HOST=checkmk
+      - CMK_REST_PORT=5000
+      - CMK_REST_USERNAME=automation
+      - CMK_REST_SECRET=${CMK_REST_SECRET:-}
     command: >
       bash -c "pip install --no-cache-dir uv &&
                tail -f /dev/null"

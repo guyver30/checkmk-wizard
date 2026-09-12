@@ -286,7 +286,27 @@ async def _prompt_change_cmkadmin_password(
         return new_password
 
 
-async def _create_fresh_site(site_name: str, checkmk_host: str, checkmk_port: int | None = None) -> None:
+def _print_automation_secret_created(secret: str) -> None:
+    """Print the freshly-generated 'automation' user secret to the console.
+
+    Printing a secret is intentional and bounded here, not a leak: the
+    terminal is already this codebase's trusted operator channel (the
+    CMK_PASSWORD pre-fill, `questionary.password` prompts), and this value
+    cannot be obtained any other way without shelling into the `checkmk`
+    container (10-06-SUMMARY.md finding 3). It goes to interactive console
+    output only — never route it into a persisted log or the
+    `config_snapshot_*.json` the wizard writes.
+    """
+    console.print(
+        "[green]Automation user 'automation' created automatically.[/green] "
+        f"Secret: [bold yellow]{secret}[/bold yellow] — save this to deploy/.env as "
+        "CMK_REST_SECRET so the worker and poller containers can authenticate."
+    )
+
+
+async def _create_fresh_site(
+    site_name: str, checkmk_host: str, checkmk_port: int | None = None
+) -> str | None:
     admin_password = secrets.token_urlsafe(16)
     console.print(site.create_site(site_name, admin_password), style="dim", end="")
     site.enable_livestatus_tcp(site_name)
@@ -298,13 +318,17 @@ async def _create_fresh_site(site_name: str, checkmk_host: str, checkmk_port: in
         checkmk_host, site_name, admin_password, checkmk_port
     )
     try:
-        await bootstrap_automation_user(checkmk_host, site_name, admin_password, port=checkmk_port)
-        console.print("[green]Automation user 'automation' created automatically.[/green]")
+        secret = await bootstrap_automation_user(
+            checkmk_host, site_name, admin_password, port=checkmk_port
+        )
+        _print_automation_secret_created(secret)
+        return secret
     except CheckmkAPIError as exc:
         console.print(
             f"[yellow]Could not auto-create the 'automation' user ({exc}) — "
             "you'll be prompted to create one manually below.[/yellow]"
         )
+        return None
 
 
 async def _prompt_new_site_name(
@@ -495,7 +519,7 @@ async def phase1_site_bringup() -> CheckmkConnection:
                     checkmk_host, site_name, cmkadmin_password, port=checkmk_port
                 )
                 creds = site.SiteCredentials(site=site_name, automation_user="automation", automation_secret=secret)
-                console.print("[green]Automation user 'automation' created automatically.[/green]")
+                _print_automation_secret_created(secret)
             except CheckmkAPIError as exc:
                 console.print(
                     f"[yellow]Could not auto-create the 'automation' user ({exc}) — likely "
@@ -511,7 +535,11 @@ async def phase1_site_bringup() -> CheckmkConnection:
         console.print(site.start_site(site_name), style="dim", end="")
     else:
         console.print(f"Creating new site [bold]{site_name}[/bold].")
-        await _create_fresh_site(site_name, checkmk_host, checkmk_port)
+        secret = await _create_fresh_site(site_name, checkmk_host, checkmk_port)
+        if secret is not None:
+            creds = site.SiteCredentials(
+                site=site_name, automation_user="automation", automation_secret=secret
+            )
 
     if creds is None:
         creds = site.get_site_credentials(site_name)
