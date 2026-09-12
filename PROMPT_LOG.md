@@ -110,3 +110,35 @@
 - [2026-09-12 16:41] `/bm:add-phase 13 (parents + map)` — add Phase 13 for wizard parents support and the topology map
 - [2026-09-12 16:49] "go ahead and split DASH-01 and reword criterion 1" — approved the Phase 11 requirements cleanup
 - [2026-09-12 16:55] `/bm:pause-work` — create handoff before pausing
+
+## 2026-09-12 17:03
+
+**Prompt:** `/bm:resume-work`
+
+## 2026-09-12 17:05
+
+**Prompt:** what you need to access the deployed host?
+
+## 2026-09-12 17:10
+
+**Prompt:** (pasted output of --check-columns, GET hosts parents, GET services)
+
+## 2026-09-12 17:11
+
+**Prompt:** I will install an agent into a host, so we can check better?
+
+## 2026-09-12 17:23
+
+**Prompt:** reported 3 agent-registration bugs — (1) receiver-port discovery fails, (2) --server uses container-internal DNS name instead of LAN IP, (3) manual instructions omit sudo. [registration secret REDACTED from this log]
+
+## 2026-09-12 17:25
+
+**Prompt:** run /bm:quick to fix all three, prompt with detected IPs
+
+## 2026-09-12 17:28
+
+**Prompt:** now we have a host called agent-test with linux agent installed, some services are monitored. What's next?
+
+## 2026-09-12 17:37
+
+**Prompt:** kernel performance is irrelevant. What I really care is: cpu load, cpu utilization, memory, filesystem /, systemd services that we monitor, smart info (but I cannot test smart in this host, so we will do for another host later)
