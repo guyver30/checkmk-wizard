@@ -785,6 +785,205 @@ async def _ensure_device_type_tag_group(client: CheckmkClient) -> bool:
         return False
 
 
+@dataclass
+class RetagCandidate:
+    """An already-onboarded host whose device type is absent or the
+    neutral `other` (D-02) — a candidate for the detection-driven retag
+    flow inside Phase 4 (D-01)."""
+
+    name: str
+    folder: str
+    device_type: str | None
+    alias: str | None
+
+
+def _untagged_host_candidates(
+    hosts: list[dict[str, Any]], exclude_names: set[str]
+) -> list[RetagCandidate]:
+    """Pure filter over `list_hosts()`'s raw `value` array, deciding which
+    already-onboarded hosts are retag candidates.
+
+    A host is a candidate when its `tag_<group_id>` attribute is ABSENT or
+    explicitly `"other"` (D-02). Both cases must be caught: the Phase 10
+    live-verified fact recorded on `_ensure_device_type_tag_group` above is
+    that a tag group's implicit first-tag default does NOT materialise as
+    an explicit attribute on a pre-existing host, so an untouched host has
+    the key missing, not set to `"other"`. The distinct sentinel value
+    `scripts/mqtt_poller.py` uses for a site missing the tag group
+    entirely is never checked here — that is a different condition from
+    one host lacking a tag.
+
+    Uses `.get(...)` chains throughout so a malformed `list_hosts()` entry
+    (missing `extensions`, missing `id`) is skipped rather than raising.
+    """
+    attribute_key = f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"
+    candidates: list[RetagCandidate] = []
+    for h in hosts:
+        name = h.get("id")
+        if not name or name in exclude_names:
+            continue
+        extensions = h.get("extensions") or {}
+        attributes = extensions.get("attributes") or {}
+        device_type = attributes.get(attribute_key)
+        if device_type is not None and device_type != "other":
+            continue
+        candidates.append(
+            RetagCandidate(
+                name=name,
+                folder=extensions.get("folder") or "/",
+                device_type=device_type,
+                alias=attributes.get("alias"),
+            )
+        )
+    return candidates
+
+
+async def _retag_existing_hosts(
+    client: CheckmkClient | None, connection: CheckmkConnection | None, *, exclude_names: set[str]
+) -> None:
+    """Detection-driven bulk retag of already-onboarded hosts stuck at no
+    device type or the neutral `other` (TAG-04). Locked to run inside
+    Phase 4, not a startup menu or a dedicated command-line switch (D-01)
+    — both were offered to the operator and explicitly rejected.
+
+    Best-effort like every other provisioning step in this file: a REST
+    blip while listing hosts must never abort a wizard run mid-flight
+    (the class of bug fixed as CR-02 in Phase 10).
+    """
+    try:
+        hosts = await client.list_hosts()
+    except CheckmkAPIError as exc:
+        console.print(f"[yellow]could not check for hosts needing retagging: {exc}[/yellow]")
+        return
+
+    candidates = _untagged_host_candidates(hosts, exclude_names)
+    if not candidates:
+        console.print("[dim]No already-onboarded hosts need retagging.[/dim]")
+        return
+
+    table = Table(title="Hosts with no device type")
+    table.add_column("Host")
+    table.add_column("Folder")
+    table.add_column("Current device type")
+    for c in candidates:
+        table.add_row(c.name, c.folder, c.device_type or "other (implicit)")
+    console.print(table)
+
+    # Declining is a first-class outcome (D-01), not a failure path — no
+    # warning colour, no retry. A run with nothing to fix must not grow a
+    # prompt either (the len(candidates) == 0 branch above returns first).
+    proceed = await questionary.confirm(
+        f"{len(candidates)} already-onboarded host(s) have no device type or are set to "
+        "'other'. Retag them now?",
+        default=False,
+    ).ask_async()
+    if not proceed:
+        console.print(
+            "[dim]Leaving these hosts at their current device type — nothing was written.[/dim]"
+        )
+        return
+
+    attribute_key = f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"
+    device_types = _load_device_types()
+    updated_count = 0
+    remaining = candidates
+    while remaining:
+        folders = sorted({c.folder for c in remaining})
+        folder_choices = [
+            questionary.Choice(
+                f"{folder} ({sum(1 for c in remaining if c.folder == folder)} host(s))",
+                value=folder,
+            )
+            for folder in folders
+        ]
+        # D-03: the prompt states in plain words that only exact-match
+        # hosts are touched, and the filter below enforces it with `==` —
+        # no startswith/prefix matching — so a single confirmation can
+        # never rewrite tags on a sub-folder host that was never displayed.
+        selected_folder = await questionary.select(
+            "Which folder's hosts do you want to retag? Only hosts whose folder matches "
+            "exactly are touched — sub-folders are not included; select each nested "
+            "folder separately.",
+            choices=folder_choices,
+        ).ask_async()
+
+        folder_candidates = [c for c in remaining if c.folder == selected_folder]
+        remaining = [c for c in remaining if c.folder != selected_folder]
+
+        for candidate in folder_candidates:
+            default_device_type = candidate.device_type if candidate.device_type in device_types else None
+            new_device_type = await questionary.select(
+                f"Device type for {candidate.name} (currently "
+                f"{candidate.device_type or 'other (implicit)'}):",
+                choices=[questionary.Choice(dt, value=dt) for dt in device_types],
+                default=default_device_type,
+            ).ask_async()
+
+            # Blank means omit the `alias` key entirely — an absent key
+            # means Checkmk keeps whatever it has, while an explicit empty
+            # value would clear an alias the operator may have set
+            # directly in the UI (D-09, same rule as
+            # _device_type_and_alias_attributes above).
+            alias_hint = f" (current: {candidate.alias})" if candidate.alias else ""
+            raw_alias = (
+                await questionary.text(
+                    f"Alias for {candidate.name} (blank keeps current alias{alias_hint}):",
+                    default="",
+                ).ask_async()
+            ).strip()
+
+            # Fetched immediately before this host's PUT, inside this
+            # iteration — never batched up front. An ETag is a
+            # precondition on the object's state at fetch time; a stale
+            # one (e.g. reused from an earlier listing) yields a 412.
+            resp = await client.get_host(candidate.name)
+            etag = resp.headers.get("ETag")
+            if not etag:
+                console.print(f"[yellow]no ETag for {candidate.name} — skipping[/yellow]")
+                continue
+
+            # VERDICT: REPLACE (scripts/probe_host_attribute_merge.py,
+            # live-verified 2026-09-12 against a real Checkmk 2.4.0p36 CE
+            # site). A partial PUT to /objects/host_config/{name} replaces
+            # the host's whole attribute set rather than merging, so this
+            # starts from the host's own full attribute dict (the same GET
+            # that produced the ETag above) and overrides only the two
+            # changed keys, instead of sending a two-key partial body that
+            # would silently strip ipaddress/tag_agent/tag_snmp_ds/
+            # snmp_community — the exact failure TAG-04 exists to prevent.
+            # Had the verdict been MERGE, this would instead PUT only
+            # {attribute_key: new_device_type, "alias": raw_alias (if set)}.
+            attributes = dict(resp.json().get("extensions", {}).get("attributes", {}))
+            # meta_data is Checkmk-computed, not operator-writable — the
+            # probe's echo-PUT test found Checkmk accepts it unstripped too,
+            # but this drops it anyway per the findings block's "at minimum
+            # meta_data" guidance rather than relying on that leniency.
+            attributes.pop("meta_data", None)
+            attributes[attribute_key] = new_device_type
+            if raw_alias:
+                attributes["alias"] = raw_alias
+
+            try:
+                await client.update_host_attributes(candidate.name, attributes, etag)
+                updated_count += 1
+            except CheckmkAPIError as exc:
+                # One host's failure must never abort the folder's retag.
+                console.print(f"[yellow]could not retag {candidate.name}: {exc}[/yellow]")
+                continue
+
+        if remaining:
+            again = await questionary.confirm("Retag another folder?", default=False).ask_async()
+            if not again:
+                break
+
+    # Activation is mandatory, not optional: without it the tag change
+    # sits as a pending WATO change and never reaches Livestatus, the
+    # poller or Phase 11's dashboard — reporting REST 200s while silently
+    # failing TAG-04's actual purpose.
+    if updated_count > 0 and not await _activate_pending_changes(client, connection):
+        console.print("[yellow]Retag succeeded but is not yet live — activation failed.[/yellow]")
+
+
 async def phase2_folders(client: CheckmkClient) -> tuple[dict[str, str | None], bool]:
     """Optionally create folders, each with its own subnet to scan in
     Phase 3. Returns ({folder_name: cidr_or_None}, device_type_tag_group_available).
@@ -980,11 +1179,36 @@ async def phase3_discovery(client: CheckmkClient, folder_subnets: dict[str, str 
 # ── Phase 4: Host classification (manual, by design — no fingerprinting) ──
 
 
-async def phase4_classification(scan_results: list[ScannedHost]) -> list[OnboardedHost]:
+async def phase4_classification(
+    scan_results: list[ScannedHost],
+    client: CheckmkClient | None = None,
+    connection: CheckmkConnection | None = None,
+    *,
+    tag_group_available: bool = True,
+) -> list[OnboardedHost]:
     """Purely interactive — no fingerprinting, no folder prompt: each host's
     folder is already known from which Phase 2 folder-subnet scan found it.
+
+    `client`/`connection` default to None deliberately: every `phaseN_*`
+    function in this module is independently callable and independently
+    tested, and a caller that threads in no REST client simply gets the
+    pre-existing pure-prompt behaviour below, with no detection and no
+    extra prompt. `tag_group_available` gates the detection-driven retag
+    flow (TAG-04) because `_ensure_device_type_tag_group` is best-effort —
+    on a site where provisioning failed, PUTting `tag_device_type` 400s on
+    every host (the CR-03 failure class), so retagging must not run there
+    either.
     """
     console.rule("[bold]Phase 4 — Host Classification")
+
+    if client is not None and connection is not None and tag_group_available:
+        # phase3_discovery stages every scanned IP as a bare host named
+        # after the IP, so without this exclusion every host this run just
+        # discovered would appear as a retag candidate and be offered for
+        # retagging seconds before the promotion flow below tags it
+        # properly.
+        await _retag_existing_hosts(client, connection, exclude_names={r.ip for r in scan_results})
+
     console.print("No automatic fingerprinting — pick which IPs to promote to named hosts.")
 
     choices = [
@@ -2095,7 +2319,9 @@ async def run() -> None:
     async with CheckmkClient(connection) as client:
         folder_subnets, tag_group_available = await phase2_folders(client)
         scan_results = await phase3_discovery(client, folder_subnets)
-        onboarded = await phase4_classification(scan_results)
+        onboarded = await phase4_classification(
+            scan_results, client, connection, tag_group_available=tag_group_available
+        )
         await phase5_onboarding(
             client, connection, onboarded, scan_results, tag_group_available=tag_group_available
         )
