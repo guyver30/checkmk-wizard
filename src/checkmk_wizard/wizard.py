@@ -838,6 +838,153 @@ def _untagged_host_candidates(
     return candidates
 
 
+def _format_device_type_legend(device_types: list[str], columns: int = 2) -> list[str]:
+    """Render the numbered device-type legend printed once per folder
+    before the retag prompts (D-10).
+
+    The numbers are plain indices into `_load_device_types()`, so adding an
+    entry to device_types.json extends the legend with no code change and
+    `other` stays 0 (that helper guarantees it, D-06). The operator never
+    maintains a separate number-to-type mapping.
+    """
+    entries = [f"{index} = {name}" for index, name in enumerate(device_types)]
+    width = max(len(entry) for entry in entries) + 4
+    rows = -(-len(entries) // columns)  # ceil, laid out column-major
+    lines: list[str] = []
+    for row in range(rows):
+        cells = [
+            entries[row + column * rows]
+            for column in range(columns)
+            if row + column * rows < len(entries)
+        ]
+        lines.append("  " + "".join(cell.ljust(width) for cell in cells).rstrip())
+    return lines
+
+
+async def _prompt_device_type_number(
+    candidate: RetagCandidate, device_types: list[str]
+) -> str:
+    """Ask for a single digit rather than walking a select list (D-10).
+
+    A bulk retag is normally "a few of each type" across ~20 hosts, where a
+    per-host select costs an arrow-key walk each. One digit with the current
+    value as the default turns that into one keystroke, and bare Enter keeps
+    the host as it is so a folder where most hosts are already correct stays
+    cheap to walk.
+    """
+    current = (
+        candidate.device_type if candidate.device_type in device_types else device_types[0]
+    )
+    current_index = device_types.index(current)
+    shown = candidate.device_type or f"{device_types[0]} (implicit)"
+    while True:
+        raw = (
+            await questionary.text(
+                f"{candidate.name}  ({shown})  [{current_index}]:", default=""
+            ).ask_async()
+        ).strip()
+        if not raw:
+            return current
+        if raw.isdigit() and int(raw) < len(device_types):
+            return device_types[int(raw)]
+        console.print(
+            f"[red]Enter 0-{len(device_types) - 1}, or press Enter to keep {current}.[/red]"
+        )
+
+
+async def _write_host_attributes(
+    client: CheckmkClient, host_name: str, overrides: dict[str, str]
+) -> bool:
+    """GET a host's full attribute dict, apply `overrides`, and PUT the whole
+    dict back with the ETag from that same GET. Returns True on success.
+
+    VERDICT: REPLACE (scripts/probe_host_attribute_merge.py, live-verified
+    2026-09-12 against a real Checkmk 2.4.0p36 CE site). A partial PUT to
+    /objects/host_config/{name} replaces a host's whole attribute set rather
+    than merging into it, so sending only the changed keys would silently
+    strip ipaddress/tag_agent/tag_snmp_ds/snmp_community — the exact failure
+    TAG-04 exists to prevent. Had the verdict been MERGE, this would PUT
+    `overrides` on its own.
+
+    The ETag is fetched immediately before this host's PUT and never batched
+    up front: it is a precondition on the object's state at fetch time, so a
+    stale one yields a 412 partway through a multi-host run.
+
+    Best-effort per host, like every other provisioning step in this file —
+    one host's failure must never abort the rest of the folder.
+    """
+    try:
+        resp = await client.get_host(host_name)
+    except CheckmkAPIError as exc:
+        console.print(f"[yellow]could not read {host_name}: {exc}[/yellow]")
+        return False
+
+    etag = resp.headers.get("ETag")
+    if not etag:
+        console.print(f"[yellow]no ETag for {host_name} — skipping[/yellow]")
+        return False
+
+    attributes = dict(resp.json().get("extensions", {}).get("attributes", {}))
+    # meta_data is Checkmk-computed, not operator-writable. The probe's
+    # echo-PUT test found Checkmk accepts it unstripped too, but this drops
+    # it anyway per the findings block's "at minimum meta_data" guidance
+    # rather than relying on that leniency.
+    attributes.pop("meta_data", None)
+    attributes.update(overrides)
+
+    try:
+        await client.update_host_attributes(host_name, attributes, etag)
+    except CheckmkAPIError as exc:
+        console.print(f"[yellow]could not update {host_name}: {exc}[/yellow]")
+        return False
+    return True
+
+
+async def _prompt_optional_aliases(
+    client: CheckmkClient, retagged: list[RetagCandidate]
+) -> int:
+    """Collect aliases as a second, opt-in pass instead of prompting every
+    host (D-11). During a bulk retag the alias is almost always blank-Entered,
+    so asking per host doubles the interaction count for no gain.
+
+    Returns how many aliases were actually written, so the caller can count
+    them when deciding whether an activation is needed.
+    """
+    if not retagged:
+        return 0
+    if not await questionary.confirm(
+        "Also set aliases on any of these?", default=False
+    ).ask_async():
+        return 0
+
+    chosen = await questionary.checkbox(
+        "Select hosts to alias:",
+        choices=[questionary.Choice(c.name, value=c.name) for c in retagged],
+    ).ask_async()
+    if not chosen:
+        return 0
+
+    by_name = {c.name: c for c in retagged}
+    written = 0
+    for host_name in chosen:
+        current_alias = by_name[host_name].alias
+        hint = f" (current: {current_alias})" if current_alias else ""
+        raw_alias = (
+            await questionary.text(
+                f"Alias for {host_name} (blank keeps current alias{hint}):", default=""
+            ).ask_async()
+        ).strip()
+        # Blank means omit the `alias` key entirely — an absent key means
+        # Checkmk keeps whatever it has, while an explicit empty value would
+        # clear an alias the operator may have set directly in the UI (D-09,
+        # the same rule as _device_type_and_alias_attributes above).
+        if not raw_alias:
+            continue
+        if await _write_host_attributes(client, host_name, {"alias": raw_alias}):
+            written += 1
+    return written
+
+
 async def _retag_existing_hosts(
     client: CheckmkClient | None, connection: CheckmkConnection | None, *, exclude_names: set[str]
 ) -> None:
@@ -910,66 +1057,45 @@ async def _retag_existing_hosts(
         folder_candidates = [c for c in remaining if c.folder == selected_folder]
         remaining = [c for c in remaining if c.folder != selected_folder]
 
+        # Printed once per folder, not once per host: the operator needs the
+        # numbers in view while answering, but repeating them 20 times would
+        # bury the prompts themselves (D-10).
+        console.print("[bold]Device types:[/bold]")
+        for line in _format_device_type_legend(device_types):
+            console.print(line)
+        console.print(
+            f"\n[bold]{selected_folder}[/bold] — {len(folder_candidates)} host(s) to retag\n"
+        )
+
+        assignments: list[tuple[RetagCandidate, str]] = []
         for candidate in folder_candidates:
-            default_device_type = candidate.device_type if candidate.device_type in device_types else None
-            new_device_type = await questionary.select(
-                f"Device type for {candidate.name} (currently "
-                f"{candidate.device_type or 'other (implicit)'}):",
-                choices=[questionary.Choice(dt, value=dt) for dt in device_types],
-                default=default_device_type,
-            ).ask_async()
+            new_device_type = await _prompt_device_type_number(candidate, device_types)
+            if new_device_type != (candidate.device_type or device_types[0]):
+                assignments.append((candidate, new_device_type))
 
-            # Blank means omit the `alias` key entirely — an absent key
-            # means Checkmk keeps whatever it has, while an explicit empty
-            # value would clear an alias the operator may have set
-            # directly in the UI (D-09, same rule as
-            # _device_type_and_alias_attributes above).
-            alias_hint = f" (current: {candidate.alias})" if candidate.alias else ""
-            raw_alias = (
-                await questionary.text(
-                    f"Alias for {candidate.name} (blank keeps current alias{alias_hint}):",
-                    default="",
-                ).ask_async()
-            ).strip()
+        unchanged = len(folder_candidates) - len(assignments)
+        console.print(
+            f"\n  {len(assignments)} host(s) will be retagged, {unchanged} unchanged."
+        )
 
-            # Fetched immediately before this host's PUT, inside this
-            # iteration — never batched up front. An ETag is a
-            # precondition on the object's state at fetch time; a stale
-            # one (e.g. reused from an earlier listing) yields a 412.
-            resp = await client.get_host(candidate.name)
-            etag = resp.headers.get("ETag")
-            if not etag:
-                console.print(f"[yellow]no ETag for {candidate.name} — skipping[/yellow]")
-                continue
-
-            # VERDICT: REPLACE (scripts/probe_host_attribute_merge.py,
-            # live-verified 2026-09-12 against a real Checkmk 2.4.0p36 CE
-            # site). A partial PUT to /objects/host_config/{name} replaces
-            # the host's whole attribute set rather than merging, so this
-            # starts from the host's own full attribute dict (the same GET
-            # that produced the ETag above) and overrides only the two
-            # changed keys, instead of sending a two-key partial body that
-            # would silently strip ipaddress/tag_agent/tag_snmp_ds/
-            # snmp_community — the exact failure TAG-04 exists to prevent.
-            # Had the verdict been MERGE, this would instead PUT only
-            # {attribute_key: new_device_type, "alias": raw_alias (if set)}.
-            attributes = dict(resp.json().get("extensions", {}).get("attributes", {}))
-            # meta_data is Checkmk-computed, not operator-writable — the
-            # probe's echo-PUT test found Checkmk accepts it unstripped too,
-            # but this drops it anyway per the findings block's "at minimum
-            # meta_data" guidance rather than relying on that leniency.
-            attributes.pop("meta_data", None)
-            attributes[attribute_key] = new_device_type
-            if raw_alias:
-                attributes["alias"] = raw_alias
-
-            try:
-                await client.update_host_attributes(candidate.name, attributes, etag)
-                updated_count += 1
-            except CheckmkAPIError as exc:
-                # One host's failure must never abort the folder's retag.
-                console.print(f"[yellow]could not retag {candidate.name}: {exc}[/yellow]")
-                continue
+        if assignments:
+            # Nothing is written until the summary above is confirmed (D-10).
+            # With single-digit entry the wrong digit is one keystroke away,
+            # and a bulk retag can rewrite twenty hosts in a row — so the
+            # whole folder is previewed and gated behind one default-No
+            # confirm rather than each PUT firing as its prompt is answered.
+            if await questionary.confirm("Apply?", default=False).ask_async():
+                retagged: list[RetagCandidate] = []
+                for candidate, new_device_type in assignments:
+                    if await _write_host_attributes(
+                        client, candidate.name, {attribute_key: new_device_type}
+                    ):
+                        retagged.append(candidate)
+                        updated_count += 1
+                console.print(f"  {len(retagged)} host(s) retagged.")
+                updated_count += await _prompt_optional_aliases(client, retagged)
+            else:
+                console.print("[dim]Nothing was written for this folder.[/dim]")
 
         if remaining:
             again = await questionary.confirm("Retag another folder?", default=False).ask_async()

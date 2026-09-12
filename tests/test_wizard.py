@@ -43,6 +43,7 @@ from checkmk_wizard.wizard import (
     _ensure_device_type_tag_group,
     _establish_ssh_access,
     _expected_open_ports_by_hostname,
+    _format_device_type_legend,
     _load_device_types,
     _looks_loopback,
     _missing_expected_services,
@@ -1493,8 +1494,10 @@ async def test_retag_existing_hosts_happy_path(monkeypatch, tmp_path):
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
     monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
 
-    # confirm retag?, select folder, [host1: device type, alias], [host2: device type, alias]
-    answers = iter([True, "/", "ACS", "", "Multimedia", ""])
+    # D-10/D-11: confirm retag?, select folder, host1 digit, host2 digit,
+    # "Apply?" -> yes, "Also set aliases on any of these?" -> no.
+    # Digits index into ["other", "ACS", "Multimedia"]: 1=ACS, 2=Multimedia.
+    answers = iter([True, "/", "1", "2", True, False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1561,7 +1564,8 @@ async def test_retag_existing_hosts_activates_once_on_success(monkeypatch, tmp_p
 
     monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
 
-    answers = iter([True, "/", "ACS", ""])
+    # confirm retag?, folder, host1 digit (1=ACS), "Apply?" -> yes, aliases? -> no
+    answers = iter([True, "/", "1", True, False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1658,7 +1662,9 @@ async def test_retag_existing_hosts_blank_alias_preserves_existing_alias(monkeyp
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
     monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
 
-    answers = iter([True, "/", "ACS", ""])
+    # Declining the alias second pass (D-11) is the common path and is what
+    # must leave the pre-existing alias alone.
+    answers = iter([True, "/", "1", True, False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1695,9 +1701,10 @@ async def test_retag_existing_hosts_folder_exact_match_only(monkeypatch, tmp_pat
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
     monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
 
-    # confirm retag?, select folder "/vlan10", device type, alias,
+    # confirm retag?, select folder "/vlan10", host digit (1=ACS),
+    # "Apply?" -> yes, aliases? -> no,
     # "Retag another folder?" -> No (leaves /vlan10/rack1 untouched)
-    answers = iter([True, "/vlan10", "ACS", "", False])
+    answers = iter([True, "/vlan10", "1", True, False, False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1735,7 +1742,8 @@ async def test_retag_existing_hosts_continues_after_per_host_failure(monkeypatch
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
     monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
 
-    answers = iter([True, "/", "ACS", "", "ACS", ""])
+    # confirm retag?, folder, two host digits (1=ACS), "Apply?" -> yes, aliases? -> no
+    answers = iter([True, "/", "1", "1", True, False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1769,6 +1777,218 @@ async def test_retag_existing_hosts_continues_after_per_host_failure(monkeypatch
 
     assert put_ok.called
 
+
+# ── Numbered retag prompts (D-10) and the alias second pass (D-11) ──────
+
+
+def test_format_device_type_legend_numbers_every_type():
+    # The numbers are indices into _load_device_types(), so a type added to
+    # device_types.json shows up with no code change and "other" stays 0.
+    lines = _format_device_type_legend(["other", "E-link", "ACS", "Multimedia"])
+    rendered = "\n".join(lines)
+    assert "0 = other" in rendered
+    assert "1 = E-link" in rendered
+    assert "2 = ACS" in rendered
+    assert "3 = Multimedia" in rendered
+
+
+def test_format_device_type_legend_lays_out_column_major():
+    # Column-major so the numbers read top-to-bottom down each column
+    # rather than snaking across rows.
+    lines = _format_device_type_legend(["other", "A", "B", "C"], columns=2)
+    assert len(lines) == 2
+    assert "0 = other" in lines[0] and "2 = B" in lines[0]
+    assert "1 = A" in lines[1] and "3 = C" in lines[1]
+
+
+@pytest.mark.asyncio
+async def test_retag_blank_answer_keeps_current_and_writes_nothing(monkeypatch, tmp_path):
+    # D-10: bare Enter keeps the host's current value, so a folder where
+    # every host is already right costs one keystroke each and produces no
+    # PUT and no activation at all.
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+
+    activate_calls = []
+
+    async def counting_activate(client, connection):
+        activate_calls.append(1)
+        return True
+
+    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
+
+    # confirm retag?, folder, host1 answer = blank (keep "other")
+    # No "Apply?" is asked at all because nothing changed.
+    answers = iter([True, "/", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "host1",
+                            "extensions": {"folder": "/", "attributes": {"tag_device_type": "other"}},
+                        }
+                    ]
+                },
+            )
+        )
+        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _retag_existing_hosts(client, CONN, exclude_names=set())
+
+    assert not put_route.called
+    assert not activate_calls
+
+
+@pytest.mark.asyncio
+async def test_retag_declining_apply_writes_nothing(monkeypatch, tmp_path):
+    # D-10: the summary gate is the whole point of single-digit entry — a
+    # mistyped digit is one keystroke away, so answering "Apply?" with no
+    # must leave the site untouched even though a change was staged.
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+
+    activate_calls = []
+
+    async def counting_activate(client, connection):
+        activate_calls.append(1)
+        return True
+
+    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", counting_activate)
+
+    # confirm retag?, folder, host1 digit 1 (ACS), "Apply?" -> No
+    answers = iter([True, "/", "1", False])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200, json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]}
+            )
+        )
+        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _retag_existing_hosts(client, CONN, exclude_names=set())
+
+    assert not put_route.called
+    assert not activate_calls
+
+
+@pytest.mark.asyncio
+async def test_retag_rejects_out_of_range_digit_then_accepts(monkeypatch, tmp_path):
+    # D-10: an out-of-range number re-prompts rather than silently picking
+    # a type or crashing on an IndexError.
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true
+    )
+
+    # confirm retag?, folder, "9" (rejected), "x" (rejected), "1" (ACS),
+    # "Apply?" -> yes, aliases? -> no
+    answers = iter([True, "/", "9", "x", "1", True, False])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200, json={"value": [{"id": "host1", "extensions": {"folder": "/", "attributes": {}}}]}
+            )
+        )
+        respx.get(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(
+                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-1"}
+            )
+        )
+        put_route = respx.put(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _retag_existing_hosts(client, CONN, exclude_names=set())
+
+    body = json.loads(put_route.calls.last.request.content)
+    assert body["attributes"][f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"] == "ACS"
+
+
+@pytest.mark.asyncio
+async def test_retag_alias_second_pass_writes_only_checked_hosts(monkeypatch, tmp_path):
+    # D-11: alias is an opt-in second pass over the just-retagged hosts, and
+    # only the hosts actually checked get a second write.
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true
+    )
+
+    # confirm retag?, folder, host1 digit, host2 digit, "Apply?" -> yes,
+    # "Also set aliases?" -> yes, checkbox picks host1 only, alias text
+    answers = iter([True, "/", "1", "1", True, True, ["host1"], "  core-switch-a  "])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "host1", "extensions": {"folder": "/", "attributes": {}}},
+                        {"id": "host2", "extensions": {"folder": "/", "attributes": {}}},
+                    ]
+                },
+            )
+        )
+        respx.get(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(
+                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-1"}
+            )
+        )
+        respx.get(f"{BASE}/objects/host_config/host2").mock(
+            return_value=Response(
+                200, json={"extensions": {"attributes": {}}}, headers={"ETag": "etag-2"}
+            )
+        )
+        put_host1 = respx.put(f"{BASE}/objects/host_config/host1").mock(
+            return_value=Response(200, json={})
+        )
+        put_host2 = respx.put(f"{BASE}/objects/host_config/host2").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _retag_existing_hosts(client, CONN, exclude_names=set())
+
+    # host1: one PUT for the device type, a second for the alias.
+    assert len(put_host1.calls) == 2
+    assert json.loads(put_host1.calls.last.request.content)["attributes"]["alias"] == "core-switch-a"
+    # host2 was retagged but never checked for an alias — one PUT only.
+    assert len(put_host2.calls) == 1
 
 @pytest.mark.asyncio
 async def test_phase4_classification_excludes_scanned_ips_from_retag_candidates(monkeypatch, tmp_path):
