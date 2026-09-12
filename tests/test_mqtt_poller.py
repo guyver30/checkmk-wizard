@@ -1112,7 +1112,10 @@ def test_run_forever_publishes_offline_status_on_fatal_startup_failure():
     # Regression test for CR-02: the one-time startup column probe failing
     # must still leave the retained poller status as "offline" -- a bare
     # client.disconnect() here previously left it stuck at "online" forever
-    # since a graceful disconnect suppresses the LWT.
+    # since a graceful disconnect suppresses the LWT. OPS-03's bounded
+    # startup retry means this now exercises every retry attempt before
+    # the probe is treated as fatal -- poller.time.sleep is patched so the
+    # retry backoff doesn't slow the test down.
     fake_client = MagicMock()
 
     with (
@@ -1121,10 +1124,69 @@ def test_run_forever_publishes_offline_status_on_fatal_startup_failure():
         patch.object(
             poller, "available_host_columns", side_effect=poller.LivestatusError("no columns")
         ),
+        patch.object(poller.time, "sleep"),
     ):
         result = poller.run_forever(_make_config())
 
     assert result == 1
+    status_calls = _published(fake_client, poller.TOPIC_POLLER_STATUS)
+    assert len(status_calls) == 1
+    assert json.loads(status_calls[0].args[1]) == {"status": "offline"}
+    fake_client.disconnect.assert_called_once()
+
+
+def test_run_forever_startup_probe_retries_then_recovers(caplog):
+    # OPS-03: a transient startup Livestatus failure (e.g. a Checkmk
+    # container restart racing the poller's own start) must not be fatal
+    # -- the probe is retried, and a warning (not an error) is logged for
+    # the failed attempt.
+    fake_client = MagicMock()
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(
+            poller,
+            "available_host_columns",
+            side_effect=[poller.LivestatusError("boom"), {"name", "state"}],
+        ),
+        patch.object(poller, "fetch_host_folders", return_value={}),
+        patch.object(poller, "query_devices", return_value=[]),
+        patch.object(poller, "run_cycle"),
+        patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
+        patch.object(poller.signal, "signal"),
+        patch.object(poller.time, "sleep") as mock_sleep,
+        caplog.at_level("WARNING", logger=poller._logger.name),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result != 1
+    mock_sleep.assert_called_once_with(poller._STARTUP_RETRY_DELAYS_SECONDS[0])
+    assert not any(record.levelname == "ERROR" for record in caplog.records)
+    assert any(
+        record.levelname == "WARNING" and "attempt" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_run_forever_startup_probe_retry_exhausted_is_fatal():
+    # OPS-03: a permanently unreachable Livestatus site must still fail
+    # loudly after every retry is exhausted, preserving the pre-existing
+    # offline-status/disconnect contract.
+    fake_client = MagicMock()
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(
+            poller, "available_host_columns", side_effect=poller.LivestatusError("still down")
+        ) as mock_probe,
+        patch.object(poller.time, "sleep"),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result == 1
+    assert mock_probe.call_count == len(poller._STARTUP_RETRY_DELAYS_SECONDS) + 1
     status_calls = _published(fake_client, poller.TOPIC_POLLER_STATUS)
     assert len(status_calls) == 1
     assert json.loads(status_calls[0].args[1]) == {"status": "offline"}
