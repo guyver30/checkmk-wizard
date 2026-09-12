@@ -5,7 +5,7 @@ milestone_name: milestone
 status: completed
 stopped_at: Phase 11 context revised — map and metrics moved out
 last_updated: "2026-09-12T08:42:01.120Z"
-last_activity: 2026-09-12 -- Phase 10.1 marked complete
+last_activity: 2026-09-12 -- Completed quick task 260912-o7n: agent-registration fixes
 progress:
   total_phases: 7
   completed_phases: 4
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 Phase: 10.1 — COMPLETE
 Plan: 1 of 3
 Status: Phase 10.1 complete
-Last activity: 2026-09-12 -- Phase 10.1 marked complete
+Last activity: 2026-09-12 -- Completed quick task 260912-o7n: agent-registration fixes
 
 Progress: [██████████] 100%
 
@@ -97,6 +97,7 @@ None yet.
 | 260907-mp2 | Fix Phase 6/7 activation failing with 401 'foreign changes not allowed' — force_foreign_changes=True at the wizard's activation call site (cmkadmin bootstrap vs automation user changes) | 2026-09-07 | 1c5e375 | [260907-mp2-fix-phase-6-7-activation-failing-with-40](./quick/260907-mp2-fix-phase-6-7-activation-failing-with-40/) |
 | (no id) | Grant checkmk container NET_RAW for check_icmp (PING service RC 126 fix) | 2026-09-07 | ba45197 | [deploy/compose.yaml fix, no quick-task dir] |
 | 260907-nde | Document the PING/check_icmp two-part fix (cap_add NET_RAW + host net.ipv4.ping_group_range) in the Podman setup doc | 2026-09-07 | 599efcb | [260907-nde-document-the-ping-check-icmp-fix-in-the-](./quick/260907-nde-document-the-ping-check-icmp-fix-in-the-/) |
+| 260912-o7n | Fix three agent-registration bugs: receiver port omitted from --server, container-internal DNS name passed to remote targets, sudo missing from Linux manual instructions | 2026-09-12 | e7ea293 | [260912-o7n-fix-three-agent-registration-bugs-receiv](./quick/260912-o7n-fix-three-agent-registration-bugs-receiv/) |
 
 ## Deferred Items
 
