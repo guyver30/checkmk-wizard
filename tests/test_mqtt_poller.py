@@ -1193,6 +1193,38 @@ def test_run_forever_startup_probe_retry_exhausted_is_fatal():
     fake_client.disconnect.assert_called_once()
 
 
+def test_run_forever_logs_startup_success(caplog):
+    # OPS-04: a healthy poller announces itself in `podman logs` -- site,
+    # poll interval and broker -- so it's distinguishable from a hung one.
+    fake_client = MagicMock()
+    config = _make_config()
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_folders", return_value={}),
+        patch.object(poller, "query_devices", return_value=[]),
+        patch.object(poller, "run_cycle"),
+        patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
+        patch.object(poller.signal, "signal"),
+        caplog.at_level("INFO", logger=poller._logger.name),
+    ):
+        result = poller.run_forever(config)
+
+    assert result == 0
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "Poller started" in message
+        and str(config.cmk_site_id) in message
+        and str(config.poll_interval_seconds) in message
+        and str(config.mqtt_host) in message
+        and str(config.mqtt_port) in message
+        for message in messages
+    )
+
+
 def test_run_forever_rest_failure_reuses_last_known_good_folder_map():
     # A REST hiccup must degrade only the folder field for that cycle
     # (T-10-11/T-10-12): the cycle still runs, and query_devices still
