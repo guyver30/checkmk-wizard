@@ -130,3 +130,58 @@ connection across in-app navigation.
 Color hex values, device_type→glyph mapping, table columns and default sort, event-row
 formatting, minimap inclusion, nginx config shape, `js/vendor/` file naming, `shell.js` internal
 layout, and the payload field names for the two D-17 additions.
+
+---
+
+# Second session — scope revision (2026-09-12)
+
+Operator raised three items after CONTEXT.md was first committed.
+
+## Raised
+
+1. Agent-installed Linux/Windows workstations expose CPU, disk space, OS services and disk
+   health; clicking a host should show those as gauges (per `docs/DMC-server.png`) plus service
+   status. Service status should influence host color. Event history must be always visible.
+2. The network map would have to be drawn manually, since automatic mapping is unavailable.
+3. Rethink how views switch when clicking a host.
+
+## Findings presented before asking anything
+
+- **Already satisfied:** service state already drives host color. The poller pulls
+  `worst_service_state` and folds it in via worst-of (Phase 9 D-08). Nothing to build.
+- **Does not exist:** verified by reading `scripts/mqtt_poller.py` — `build_hosts_query()` issues
+  only `GET hosts`; the `services` table is never queried. No per-service state, no
+  `plugin_output`, no `perf_data` anywhere in the contract.
+- **Conflict:** PROJECT.md Out of Scope contains "Duplicating Checkmk's own per-service
+  drill-down UI in the new dashboard — link out to Checkmk's UI for full service-level detail
+  instead". The request is that item. Raised explicitly rather than folded in silently.
+- **Compounding:** this would be the third thing growing a phase originally sized as a pure
+  consumer (after D-17).
+
+## Decisions
+
+| Question | Options presented | Selected |
+|---|---|---|
+| Sizing for agent metrics | Split: 11 ships, 12 adds metrics (rec.) / expand 11 / trim to service list only | **Split into Phase 12** |
+| What is manual about the map | Positions+links in dashboard / positions only / teach wizard to set `parents` (rec.) | **Other — "postpone the map to another phase"** |
+
+The map answer was a larger cut than the question anticipated — the map is DASH-01 and ROADMAP
+success criterion #1. Flagged back to the operator, then followed up:
+
+| Question | Options presented | Selected |
+|---|---|---|
+| What is index.html without a map | Stats strip + grouped overview (rec.) / fold into devices.html / placeholder panel | **Stats strip + grouped overview** |
+| Do grouping toggle and roll-up survive | Survive, drive tree+overview (rec.) / move out with the map | **Survive** |
+| Order of the new phases | 12 metrics, 13 parents+map (rec.) / reverse / park in backlog | **12 metrics, 13 parents+map** |
+| Detail-view switching | In-place panel, shell mounted (rec.) / split view / full page swap | **In-place panel** |
+| Event-history placement | Bottom-left under tree (rec.) / full-width strip / right rail | **Bottom-left under tree** |
+| DASH-01 bookkeeping | Split it, strip stays / move wholesale / leave alone | **Split DASH-01** |
+
+## Effect on decisions
+
+- **Revised:** D-03 (vis-network no longer vendored here, mqtt.js only), D-22 (shell layout now
+  specifies the split left column with always-visible event history)
+- **Added:** D-23 (in-place detail panel), D-24 (index.html = stats strip + grouped overview)
+- **Moved to the map phase:** D-08 (synthetic group-roots), D-09 (stabilize-then-freeze physics).
+  Rationale preserved here so the map phase need not re-derive it.
+- **Unchanged:** D-01, D-02, D-04, D-05, D-06, D-07, D-10 through D-21
