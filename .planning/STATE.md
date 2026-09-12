@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 11 context gathered
-last_updated: "2026-09-12T08:21:43.829Z"
+stopped_at: Phase 11 context revised — map and metrics moved out
+last_updated: "2026-09-12T08:37:56.271Z"
 last_activity: 2026-09-12 -- Phase 10.1 marked complete
 progress:
   total_phases: 5
@@ -107,6 +107,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-09-12T08:21:43.809Z
-Stopped at: Phase 11 context gathered
+Last session: 2026-09-12T08:37:56.251Z
+Stopped at: Phase 11 context revised — map and metrics moved out
 Resume file: .planning/phases/11-live-dashboard/11-CONTEXT.md
