@@ -142,3 +142,7 @@
 ## 2026-09-12 17:37
 
 **Prompt:** kernel performance is irrelevant. What I really care is: cpu load, cpu utilization, memory, filesystem /, systemd services that we monitor, smart info (but I cannot test smart in this host, so we will do for another host later)
+
+## 2026-09-12 17:42
+
+**Prompt:** Ok for 2 / as the headline + worst-of-other-mounts as a badge. I don't want systemd summary, but only the chosen services during wizard
