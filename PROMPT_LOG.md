@@ -95,3 +95,5 @@
 - `/bm:plan-phase 10.1` — create PLAN.md files for the inserted Phase 10.1
 - `/bm:resume-work` (2026-09-12) — restore session context; no HANDOFF.json present, routed to progress report for Phase 10.1
 - `/bm:execute-phase 10.1` (2026-09-12) — execute all plans in Phase 10.1 with wave-based parallelization
+- "you need to push this repo, otherwise I cannot pull it from my host" — pushed 28 commits to origin/main (78ff087..55561e5)
+- Pasted live probe output from the Checkmk site: VERDICT REPLACE, ECHO-PUT ACCEPTED, cleanup 204
