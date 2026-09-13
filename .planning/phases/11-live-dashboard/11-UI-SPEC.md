@@ -124,7 +124,10 @@ plan 11-03 as executed; see "Plans Invalidated or Amended by This Revision"):
 }
 .brand-title {
   font-family: 'KONE Information', var(--font-sans);
-  font-size: 16px;              /* matches KONE token "kone info / ki 2" preset exactly */
+  font-size: 14px;              /* Body size (see Typography's 4-size table) — the ki 2 token's
+                                    own 16px is not one of this spec's four declared sizes, and a
+                                    5th size is a hard block; 14px reads fine for a top-bar
+                                    wordmark at this masthead height (32px) */
   font-weight: 400;             /* KONE Information ships one weight only — see Typography */
   letter-spacing: 0.8px;        /* ki 2 token value, transcribed exactly */
   text-transform: uppercase;    /* ki 2 token's own textCase: uppercase, applied via CSS to
@@ -248,13 +251,14 @@ Only 4 sizes (12/14/18/24), only 2 weights (400/600) — same rule as the origin
 by Inter's own two shipped weight files (Regular 400, SemiBold 600) rather than an arbitrary system
 stack's approximated weights.
 
-**Supplementary token (not a 5th size, not a 3rd weight) — Wordmark role:** `'KONE Information'`
-at 16px/400, `letter-spacing: 0.8px`, `text-transform: uppercase` (the KONE token file's own "kone
-info / ki 2" preset, transcribed exactly) — used **only** for `.brand-title` in the top-bar
-masthead (see Brand Masthead). This follows the exact precedent the original spec set for
-`--font-mono` ("a font-family swap, not a new size or weight") and extends it to a second
-supplementary role, now also covering weight: KONE Information ships a single weight file, so it
-is never asked to render at 600 (which would force a browser fake-bold — explicitly avoided).
+**Wordmark role:** `.brand-title` uses `'KONE Information'` at the existing **Body size (14px)**
+and **weight 400** — both already declared in the table above, not new values. Only
+`font-family`, `letter-spacing: 0.8px`, and `text-transform: uppercase` are added on top of that
+existing size/weight pair (the KONE token file's own "kone info / ki 2" preset, transcribed
+exactly for those three properties). This is the same font-family-swap-only precedent
+`--font-mono` already set — no new size, no new weight. KONE Information ships a single weight
+file, so it is never asked to render at 600 (which would force a browser fake-bold — avoided
+because the wordmark uses 400, matching the font file that exists).
 
 `--font-mono` is unchanged from the original spec, applied at the same size/weight tokens above
 (hostnames, IPs, timestamps).
@@ -372,8 +376,9 @@ only the literal hex per hue changes, to a real KONE token.
   --state-ok: #1ed273;       /* color.green.base (= color.accent.accent - green) */
   --state-warn: #ffe141;     /* color.secondary.yellow */
   --state-crit: #ff5f28;     /* color.red.base (= color.accent.accent - red) */
-  --state-down: #f51414;     /* color.accent."destructive text" — same red family as CRIT
-                                 (D-10), one shade more saturated/severe; the icon (see
+  --state-down: #f51414;     /* color.accent."destructive text" — red family, same as CRIT per
+                                 D-11's locked hue meaning, but NOT the identical hex CRIT uses
+                                 (see "Noted deviation: D-11 red split" below); the icon (see
                                  Device-Type/State Iconography) still carries the primary
                                  DOWN-vs-CRIT distinction, not the hue alone */
   --state-unknown: #ffa023;  /* color.orange.base (= color.accent.accent - orange) */
@@ -409,9 +414,22 @@ never be misread as a status color.
 | PEND | `--state-pend` (light grey, `#959595`) | `color.grayscale."300 disabled"` | `.icon-clock` mask + text label "PEND" |
 | Stale / no-data (dashboard's own) | `--state-stale` (dark slate, `#727272`) + diagonal hatch texture | `color.grayscale."200 inactive"` | hatch pattern (below) + "(stale)" text suffix on the state label + tooltip with age |
 
-**Note on D-10 (superseded literally, preserved in meaning):** the original spec used the Unicode
-character `⛔` prepended to a DOWN host's label, and its rationale was explicitly "needs no icon
-font or sprite sheet to vendor." This phase now vendors an icon set for the operator's hard
+**Noted deviation: D-11 red split.** The baseline (pre-revision) spec pointed both CRIT and DOWN
+at a single hex, `#ef4444` — one red, two meanings, distinguished only by the non-color marker.
+This revision's KONE-token mapping lands CRIT on `color.red.base` (`#ff5f28`, an orange-leaning
+red) and DOWN on `color.accent."destructive text"` (`#f51414`, a purer red) — two *different* reds
+within the same red family. Both hexes come straight from KONE's own token set (no invented
+value), and D-11's locked hue-*meaning* ("DOWN and CRIT both read as red-family") still holds. The
+practical effect is a real, visible hue delta between the two states rather than DOWN's red
+reading as literally identical to CRIT's red — arguably an accessibility/differentiation
+improvement, since the icon is no longer the *only* thing separating them. Recording this
+explicitly here so the operator sees the split before build time rather than discovering two
+different DOWN/CRIT reds in the shipped CSS unannounced.
+
+**Note on D-10 (superseded literally, preserved in meaning) — PENDING OPERATOR CONFIRMATION,
+blocks execution of `render-details.js` and `render-shell.js`:** the original spec used the
+Unicode character `⛔` prepended to a DOWN host's label, and its rationale was explicitly "needs no
+icon font or sprite sheet to vendor." This phase now vendors an icon set for the operator's hard
 branding requirement regardless, so that rationale no longer holds, and mixing one emoji glyph
 into an otherwise fully-KONE-iconography interface would itself look like an inconsistency, not a
 brand choice. D-10's actual *decision* — a DOWN host must carry a non-color marker, in addition to
@@ -421,6 +439,13 @@ is unchanged and still binding. Only the literal glyph changes: `⛔` → `.icon
 original spec already required for the emoji). This is the same class of narrow supersession
 CONTEXT.md's own "REVISED" tags already apply to D-03 and D-22 — the requirement survives, the
 implementation detail catches up to a constraint that changed after the original decision was made.
+**Unlike D-03 and D-22, though, this supersession was inferred by Claude during this revision, not
+decided by the operator in a CONTEXT.md session.** It reads as sound and narrowly scoped, but it
+has not been operator-confirmed. Treat this as a blocking checkpoint: whichever plan implements
+`dashboard/js/render-details.js` (DOWN glyph in the detail panel) and `dashboard/js/render-shell.js`
+(DOWN glyph anywhere in the topbar/sidebar tree, if applicable) must get an explicit operator
+yes/no on the `⛔` → `.icon-close-circle-filled` swap before that code is written — do not silently
+absorb this inference into execution.
 
 **Stale hatch pattern** (D-14/D-15 — unchanged mechanic, still composes over any state fill):
 
@@ -586,6 +611,18 @@ No further breakpoints are in scope this phase (DASH2-01 owns anything beyond "n
   treats as the primary, most-legible expression of each hue. Verify with a contrast checker at
   implementation time exactly as the original spec already instructed — this revision changes the
   hex values under an unchanged verification obligation, it does not remove the obligation.
+  **Also re-verify `--state-down` (`#f51414`) and `--state-stale` (`#727272`)** against
+  `--color-surface` (`#142041`): measured this session at approximately 3.8:1 (`#f51414`) and
+  3.3:1 (`#727272`) — both **below** the 4.5:1 AA threshold for normal text, though both clear the
+  3:1 bar for large text and for graphical UI components (icons, badges, dots). **Contract rule
+  (checkable acceptance criterion, not a suggestion):** DOWN and STALE state *labels* (the text
+  strings "DOWN", "(stale)", and any other text run naming these states) must render in
+  `--color-text` or `--color-text-muted`, never in `--state-down`/`--state-stale` directly. The
+  state hue is reserved for the icon (`.icon-close-circle-filled`, hatch overlay), the status dot,
+  or a badge/chip background — never for the text glyph color itself. Acceptance check: `grep` any
+  rendered DOWN/stale label markup and confirm the text node's computed color resolves to
+  `--color-text`/`--color-text-muted`, with `--state-down`/`--state-stale` appearing only in
+  `background-color`, `border-color`, or `mask`/icon-fill contexts.
 - **Focus visibility:** unchanged — `2px solid var(--color-accent)` (`#1450f5`, still a strong
   blue against the dark surfaces) on every interactive element's `:focus-visible`.
 - **Icons need text alternatives — same rule the original spec applied to emoji, now applied to
@@ -859,22 +896,26 @@ KONE-brand revision itself makes, indexed here for the checker and planner to au
 | How to carry the KONE logo without an alpha channel (new, this revision) | Trim once, frame in a small white rounded chip | The source file's baked-in white background is a fact about the asset, not something to invent around — a bounded, intentional chip is the standard real-world answer, not a redesign of the logo itself |
 | Why `mask-image` instead of `<img>` or inlined SVG for icons (new, this revision) | CSS `mask-image` + `background-color` | The vendored SVGs hardcode `fill="#141414"`; masking is the only recolor path that needs neither inlining (which would violate the textContent-only DOM rule) nor per-color duplicate files |
 | Whether to also vendor the 477-glyph `Kone-icons` webfont (new, this revision) | No — 25 individual SVGs instead | Matches the operator's own example list of individual filenames; far lighter for 25 actually-used icons |
-| KONE Information's role given it ships one weight only (new, this revision) | Wordmark-only, 16px/400, uppercase via CSS `text-transform` | Avoids browser fake-bold; keeps the 4-size/2-weight rule intact for all functional UI text by treating this as a supplementary role, the same precedent `--font-mono` already set |
-| D-10's `⛔` literal glyph (narrow supersession, new this revision) | `.icon-close-circle-filled` at `--state-down` | The decision (non-color DOWN marker) survives; only the asset the operator's new hard requirement makes obsolete (an icon-free choice) is swapped, exactly as CONTEXT.md's own D-03/D-22 "REVISED" tags already did for other decisions once their preconditions changed |
+| KONE Information's role given it ships one weight only (new, this revision) | Wordmark-only, existing Body size (14px)/weight 400, uppercase via CSS `text-transform` | Avoids browser fake-bold; keeps the 4-size/2-weight rule intact — no new size is introduced, only `font-family`/`letter-spacing`/`text-transform` swap on top of the existing Body pair, same precedent `--font-mono` already set |
+| D-10's `⛔` literal glyph (narrow supersession, new this revision, **PENDING OPERATOR CONFIRMATION**) | `.icon-close-circle-filled` at `--state-down` | The decision (non-color DOWN marker) survives; only the asset the operator's new hard requirement makes obsolete (an icon-free choice) is swapped, exactly as CONTEXT.md's own D-03/D-22 "REVISED" tags already did for other decisions once their preconditions changed — but unlike D-03/D-22 this swap was Claude's inference, not an operator decision, so it blocks `render-details.js`/`render-shell.js` execution until confirmed (see D-10 note under Color) |
 | Device-table columns / default sort, event-panel row format, overview tile shape, nginx config, `dashboard/js/vendor/` naming, `shell.js` internal layout, D-17 field naming, sidebar split ratio, responsive breakpoint, connection-indicator hue reuse | **Unchanged from the original spec** | None of these are color/font/icon/logo concerns this revision's scope covers; re-litigating them was explicitly out of scope |
 
 ---
 
 ## Checker Sign-Off
 
-Reset to pending — this revision changes enough of the checker's Color/Typography/Registry-adjacent
-surface area that a fresh pass is required rather than carrying forward the original approval.
+First checker pass (2026-09-13) returned BLOCKED on Dimension 4 only (`.brand-title` introduced a
+5th font size at 16px), with 5/6 dimensions passing and three non-blocking follow-ups. This
+revision fixes Dimension 4 (`.brand-title` now uses the existing 14px Body size) and folds in all
+three non-blocking items (DOWN/STALE contrast re-verify + text-color contract rule, the D-11 red
+split documented as a noted deviation, D-10's supersession flagged PENDING OPERATOR CONFIRMATION).
+Awaiting the next checker pass to confirm Dimension 4 and re-affirm the other five.
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
+- [ ] Dimension 1 Copywriting: PASS (passed prior pass, unchanged this edit)
+- [ ] Dimension 2 Visuals: PASS (passed prior pass, unchanged this edit)
+- [ ] Dimension 3 Color: PASS (passed prior pass; contrast re-verify list extended, no hex changed)
+- [ ] Dimension 4 Typography: PASS (BLOCKED in prior pass — fixed this edit, `.brand-title` now 14px)
+- [ ] Dimension 5 Spacing: PASS (passed prior pass, unchanged this edit)
+- [ ] Dimension 6 Registry Safety: PASS (passed prior pass, unchanged this edit)
 
-**Approval:** pending (re-verification required after KONE-brand revision, 2026-09-13)
+**Approval:** pending (awaiting re-verification of Dimension 4 fix, 2026-09-13)
