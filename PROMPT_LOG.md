@@ -167,3 +167,7 @@
 ## 2026-09-13 16:20
 
 **Prompt:** /bm:plan-phase 11
+
+## 2026-09-13 16:52
+
+**Prompt:** /bm:pause-work
