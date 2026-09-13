@@ -227,6 +227,13 @@ page is never unstyled while fonts load or if a font file 404s.
 --font-mono: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
 ```
 
+**Inter as the body face — OPERATOR-CONFIRMED 2026-09-13.** Both Inter and KONE Information ship
+in `kone-ds-fonts`, so either is in-system. Inter was chosen for running text (tables, device
+names, panel copy at 12/14px) because it is a UI-optimised face built for dense screen text, with
+KONE Information reserved for the masthead wordmark as the brand voice — the same split the design
+system itself makes. The operator was offered KONE Information throughout and confirmed this split.
+Do not relitigate.
+
 **Why Inter ships only as `.ttf` here, not `.woff2`:** the KONE fonts package
 (`kone-ds-fonts/src/fonts/`) only bundles `Inter-Regular.ttf` and `Inter-SemiBold.ttf` — no
 woff2/woff build of Inter exists in this design system's own source. Vendoring exactly what the
@@ -427,8 +434,8 @@ improvement, since the icon is no longer the *only* thing separating them. Recor
 explicitly here so the operator sees the split before build time rather than discovering two
 different DOWN/CRIT reds in the shipped CSS unannounced.
 
-**Note on D-10 (superseded literally, preserved in meaning) — PENDING OPERATOR CONFIRMATION,
-blocks execution of `render-details.js` and `render-shell.js`:** the original spec used the
+**Note on D-10 (superseded literally, preserved in meaning) — OPERATOR-CONFIRMED 2026-09-13,
+no longer blocks execution:** the original spec used the
 Unicode character `⛔` prepended to a DOWN host's label, and its rationale was explicitly "needs no
 icon font or sprite sheet to vendor." This phase now vendors an icon set for the operator's hard
 branding requirement regardless, so that rationale no longer holds, and mixing one emoji glyph
@@ -440,13 +447,10 @@ is unchanged and still binding. Only the literal glyph changes: `⛔` → `.icon
 original spec already required for the emoji). This is the same class of narrow supersession
 CONTEXT.md's own "REVISED" tags already apply to D-03 and D-22 — the requirement survives, the
 implementation detail catches up to a constraint that changed after the original decision was made.
-**Unlike D-03 and D-22, though, this supersession was inferred by Claude during this revision, not
-decided by the operator in a CONTEXT.md session.** It reads as sound and narrowly scoped, but it
-has not been operator-confirmed. Treat this as a blocking checkpoint: whichever plan implements
-`dashboard/js/render-details.js` (DOWN glyph in the detail panel) and `dashboard/js/render-shell.js`
-(DOWN glyph anywhere in the topbar/sidebar tree, if applicable) must get an explicit operator
-yes/no on the `⛔` → `.icon-close-circle-filled` swap before that code is written — do not silently
-absorb this inference into execution.
+This supersession was inferred by Claude during this revision rather than decided in a CONTEXT.md
+session, so it was put to the operator directly. **Confirmed 2026-09-13: use the KONE icon.**
+`dashboard/js/render-details.js` and `dashboard/js/render-shell.js` are unblocked; implement the
+DOWN marker as `.icon-close-circle-filled`, not `⛔`.
 
 **Stale hatch pattern** (D-14/D-15 — unchanged mechanic, still composes over any state fill):
 
@@ -898,7 +902,7 @@ KONE-brand revision itself makes, indexed here for the checker and planner to au
 | Why `mask-image` instead of `<img>` or inlined SVG for icons (new, this revision) | CSS `mask-image` + `background-color` | The vendored SVGs hardcode `fill="#141414"`; masking is the only recolor path that needs neither inlining (which would violate the textContent-only DOM rule) nor per-color duplicate files |
 | Whether to also vendor the 477-glyph `Kone-icons` webfont (new, this revision) | No — 25 individual SVGs instead | Matches the operator's own example list of individual filenames; far lighter for 25 actually-used icons |
 | KONE Information's role given it ships one weight only (new, this revision) | Wordmark-only, existing Body size (14px)/weight 400, uppercase via CSS `text-transform` | Avoids browser fake-bold; keeps the 4-size/2-weight rule intact — no new size is introduced, only `font-family`/`letter-spacing`/`text-transform` swap on top of the existing Body pair, same precedent `--font-mono` already set |
-| D-10's `⛔` literal glyph (narrow supersession, new this revision, **PENDING OPERATOR CONFIRMATION**) | `.icon-close-circle-filled` at `--state-down` | The decision (non-color DOWN marker) survives; only the asset the operator's new hard requirement makes obsolete (an icon-free choice) is swapped, exactly as CONTEXT.md's own D-03/D-22 "REVISED" tags already did for other decisions once their preconditions changed — but unlike D-03/D-22 this swap was Claude's inference, not an operator decision, so it blocks `render-details.js`/`render-shell.js` execution until confirmed (see D-10 note under Color) |
+| D-10's `⛔` literal glyph (narrow supersession, new this revision, **OPERATOR-CONFIRMED 2026-09-13**) | `.icon-close-circle-filled` at `--state-down` | The decision (non-color DOWN marker) survives; only the asset the operator's new hard requirement makes obsolete (an icon-free choice) is swapped, exactly as CONTEXT.md's own D-03/D-22 "REVISED" tags already did for other decisions once their preconditions changed — but unlike D-03/D-22 this swap was Claude's inference, not an operator decision, confirmed by the operator on 2026-09-13, so `render-details.js`/`render-shell.js` are unblocked (see D-10 note under Color) |
 | Device-table columns / default sort, event-panel row format, overview tile shape, nginx config, `dashboard/js/vendor/` naming, `shell.js` internal layout, D-17 field naming, sidebar split ratio, responsive breakpoint, connection-indicator hue reuse | **Unchanged from the original spec** | None of these are color/font/icon/logo concerns this revision's scope covers; re-litigating them was explicitly out of scope |
 
 ---
@@ -909,7 +913,7 @@ First checker pass (2026-09-13) returned BLOCKED on Dimension 4 only (`.brand-ti
 5th font size at 16px), with 5/6 dimensions passing and three non-blocking follow-ups. This
 revision fixes Dimension 4 (`.brand-title` now uses the existing 14px Body size) and folds in all
 three non-blocking items (DOWN/STALE contrast re-verify + text-color contract rule, the D-11 red
-split documented as a noted deviation, D-10's supersession flagged PENDING OPERATOR CONFIRMATION).
+split documented as a noted deviation, D-10's supersession operator-confirmed 2026-09-13).
 Awaiting the next checker pass to confirm Dimension 4 and re-affirm the other five.
 
 - [ ] Dimension 1 Copywriting: PASS (passed prior pass, unchanged this edit)
