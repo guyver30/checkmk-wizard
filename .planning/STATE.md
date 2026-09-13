@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 11 UI-SPEC approved
-last_updated: "2026-09-12T10:35:09.736Z"
-last_activity: "2026-09-12 -- Completed quick task 260912-o7n: agent-registration fixes"
+stopped_at: Phase 11 replanned (9 plans, checker passed, ready to execute)
+last_updated: "2026-09-13T08:39:04.928Z"
+last_activity: "2026-09-13 -- Replanned Phase 11 from scratch against the KONE-branded UI-SPEC (9 plans, checker passed)"
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 26
+  total_plans: 25
   completed_plans: 16
   percent: 57
 ---
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Phase 10.1 — bulk-device-type-tagging-and-deployment-gaps
+**Current focus:** Phase 11 — live-dashboard
 
 ## Current Position
 
-Phase: 10.1 — COMPLETE
-Plan: 1 of 3
-Status: Phase 10.1 complete
-Last activity: 2026-09-12 -- Completed quick task 260912-o7n: agent-registration fixes
+Phase: 11 — live-dashboard (PLANNED, ready to execute)
+Plan: 0 of 9
+Status: Ready to execute
+Last activity: 2026-09-13 -- Replanned Phase 11 from scratch against the KONE-branded UI-SPEC: 9 plans / 20 tasks / 5 waves, plan-checker PASSED
 
-Progress: [██████████] 100%
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [██████████] 100%
 
 - Phase 10.1 inserted after Phase 10: Bulk device-type tagging for already-onboarded hosts (10-06-SUMMARY finding 1: 20 live hosts stuck at device_type=other, no wizard retag path) plus deployment/observability gaps (findings 2-5: worker CMK_REST_* env, automation secret never displayed, inconsistent poller failure posture, silent poller startup) (URGENT)
 - Phase 12 added: Agent Metrics and Service Status — per-device CPU/RAM/disk/SMART gauges and per-service status, split out of Phase 11 during its 2026-09-12 scope discussion. Requires a new Livestatus GET services query; the poller issues only GET hosts today. Partially reverses PROJECT.md's per-service-drill-down Out of Scope entry.
+- Phase 11 replanned from scratch 2026-09-13: the original 10-plan set (2026-09-12) was written against the pre-KONE-branding UI-SPEC and was deleted (recoverable at commit 2de890c) before any of its 23 tasks ran. The replacement is 9 plans / 20 tasks / 5 waves built against the current KONE Design System UI-SPEC; plan-checker PASSED with no blockers.
 - Phase 13 added: Wizard Parents Support and Topology Map — teach the wizard to set Checkmk's parents attribute over REST (as Phase 10 does for tag_device_type), then build the vis-network map on real data. Split out of Phase 11 during its 2026-09-12 scope discussion because parents is unset on the target site, so an auto-built map would render as disconnected dots. Depends on Phase 11, not Phase 12.
 
 ### Decisions
@@ -112,6 +113,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-09-12T10:01:42.125Z
-Stopped at: Phase 11 UI-SPEC approved
-Resume file: .planning/phases/11-live-dashboard/11-UI-SPEC.md
+Last session: 2026-09-13T08:39:04.928Z
+Stopped at: Phase 11 replanned (9 plans, checker passed, ready to execute)
+Resume file: .planning/phases/11-live-dashboard/11-01-PLAN.md

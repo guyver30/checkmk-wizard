@@ -146,3 +146,24 @@
 ## 2026-09-12 17:42
 
 **Prompt:** Ok for 2 / as the headline + worst-of-other-mounts as a badge. I don't want systemd summary, but only the chosen services during wizard
+
+## 2026-09-12 17:52
+
+**Prompt:** /bm:plan-phase 11
+
+## 2026-09-12 18:35
+
+**Prompt:** /bm:pause-work
+
+## 2026-09-13 15:31
+
+**Prompt:** /bm:resume-work
+
+## 2026-09-13 15:40
+
+**Prompt:** /bm:ui-phase for phase 11 — follow guidelines and assets in web_assets/ (KONE logo top-left, colors/fonts/icons per kone-design-system-main); visit www.kone.com if more detail needed
+2026-09-13 15:53:16 - Read ~/.claude/agents/gsd-ui-checker.md for instructions. Validate the REVISED UI design contract for Phase 11: live-dashboard. Check all 6 dimensions. Return APPROVED or BLOCKED.
+
+## 2026-09-13 16:20
+
+**Prompt:** /bm:plan-phase 11

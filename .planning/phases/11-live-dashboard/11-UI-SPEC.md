@@ -99,8 +99,8 @@ im.getbbox() and im.crop(im.getbbox()).save('dashboard/images/kone-logo.png')
 Commit only the trimmed `dashboard/images/kone-logo.png`. Do not commit the untrimmed source a
 second time under a different name — one vendored file, one purpose.
 
-**Masthead markup and styling** (new DOM contract — not present in the pre-revision spec or in
-plan 11-03 as executed; see "Plans Invalidated or Amended by This Revision"):
+**Masthead markup and styling** (new DOM contract — not present in the pre-revision spec; carried into
+the current 11-03-PLAN.md by the 2026-09-13 replan):
 ```html
 <div class="brand-masthead">
   <img src="images/kone-logo.png" alt="KONE" class="brand-logo">
@@ -793,101 +793,19 @@ that top-level layout beyond these additions.
 
 ## Plans Invalidated or Amended by This Revision
 
-This revision lands after `11-01`/`11-02` were planned and before most of wave 1+ executed (per
-`STATE.md`, Phase 11 shows 0/10 plans complete as of this session — none of the invalidated content
-below has actually been built yet, so this is a plan-content correction, not a rework of shipped
-code).
-
-### 11-03-PLAN.md — Wave 1, stylesheet + page shells — **materially invalidated, needs rewrite before execution**
-
-- **Task 1 (`dashboard/css/dashboard.css`):**
-  - Every hex value its action/acceptance-criteria text hardcodes is now wrong: `#0b0d10`,
-    `#16191d`, `#1c2025`, `#2ecc71`, `#f4c430`, `#ef4444` (×2, CRIT and DOWN both pointed at it),
-    `#f97316` (×2, UNKNOWN and UNREACH), `#a1a1aa`, `#52525b`, `#3b82f6` must all be replaced with
-    this revision's KONE-sourced hexes: `#141414`, `#142041`, `#142c6e`, `#1ed273`, `#ffe141`,
-    `#ff5f28` (CRIT), `#f51414` (DOWN — now a *different* hex from CRIT, not the same one), `#ffa023`
-    (UNKNOWN/UNREACH), `#959595` (PEND), `#727272` (STALE), `#1450f5` (accent).
-  - Its acceptance criterion **"No web font loaded: `grep -Ec '@import|@font-face|fonts.googleapis'`
-    returns 0" must be inverted.** This revision requires exactly three `@font-face` blocks
-    (KONE Information + Inter ×2 weights), zero `@import`, zero `fonts.googleapis`. The new
-    criterion should assert `@font-face` count == 3 and the two forbidden patterns still == 0.
-  - "Only the four declared font sizes appear" — **unchanged, still true** (12/14/18/24) — keep
-    this criterion as-is.
-  - New content this task must add that the original never mentioned: the `.icon` base rule and
-    all 25 `.icon-*` mask selectors (see Iconography), the `--radius-sm/md/pill` tokens (see Radius
-    Scale), and the `.brand-masthead`/`.brand-logo`/`.brand-title` rules (see Brand Masthead).
-  - Its font-family rule must become `'Inter', -apple-system, ...` (primary + fallback), not the
-    original system-only stack.
-- **Task 2 (the three HTML pages):** the shared shell markup section never mentions a logo at all
-  — this is a genuine gap, not a value to correct. Add the `.brand-masthead` markup (logo `<img>` +
-  `.brand-title`) to the `#topbar` region, identically on all three pages, per Brand Masthead
-  above. This adds one new shared DOM element to the "interfaces" contract (`brand-masthead` or
-  equivalent id/class) that plans 11-07 onward should be able to rely on existing verbatim on all
-  three pages, the same way `topbar`/`connection-indicator`/etc. already do.
-  - Its acceptance criteria's `grep -Ec 'onclick|style="|<script>[^<]'` and no-inline-anything
-    checks are unaffected and remain correct.
-  - Its "No web font loaded" adjacent checks (in Task 1) affect this task only insofar as the
-    `<head>` must now also link nothing extra — no `<link>` to a Google Fonts URL, no `@import` in
-    an inline `<style>` — the page continues to load only `css/dashboard.css`, unchanged.
-
-### 11-06-PLAN.md — **likely affected, not read this session; flag for planner verification**
-
-Per `11-09-PLAN.md`'s own interfaces block, `effectiveState`, `stateClass`, `displayName` and
-`deviceTypeGlyph` are pure helpers this plan defines. If `deviceTypeGlyph()` returns the original
-spec's emoji characters (🔗🔐📺🌐🎛️⬡❔), its return values must change to the `.icon-*` class
-names in the Device-Type Iconography table above. This spec's author did not have 11-06-PLAN.md in
-this session's required reading and cannot confirm its exact current content — the planner should
-open it directly and check for emoji literals before treating 11-03/11-09 as the only affected
-plans.
-
-### 11-07-PLAN.md — **likely affected, not read this session; flag for planner verification**
-
-Per `11-PATTERNS.md`'s role description, `render-shell.js` (this plan's presumed output) owns the
-topbar, connection indicator, and both banners — every one of which this revision touches (the
-masthead lives in the topbar; the connection indicator gains the spinning `.icon-refresh` state;
-both banners gain leading icons and the tag-group banner's dismiss control changes from a bare "×"
-to `.icon-close-cross`). This spec's author did not have 11-07-PLAN.md in this session's required
-reading and cannot confirm its exact current content — flagged for the same reason as 11-06.
-
-### 11-09-PLAN.md — Per-device detail panel — **one specific criterion invalidated, rest unaffected**
-
-- Acceptance criterion **"The DOWN glyph is applied: `grep -c '⛔' dashboard/js/render-details.js`
-  returns at least 1"** is now wrong under this revision — the DOWN marker is
-  `.icon-close-circle-filled` (a class name applied to a `<span>`, not a literal Unicode character
-  grep-able in the JS source). Replace with something like `grep -c 'icon-close-circle-filled'
-  dashboard/js/render-details.js` returns at least 1.
-- Everything else in this plan (the history-strip logic, the Checkmk deep-link construction, the
-  `<HOST_IP>` unconfigured-CTA handling, the stale marking, the flags-as-labelled-badges rule) is
-  **unaffected** — none of it asserts a specific color/font/icon value this revision changes.
-  Consider pairing the "View in Checkmk →" text with `.icon-pop-out` per the Copywriting Contract
-  addition, but this is optional, not a correctness gap.
-
-### 11-10-PLAN.md — Documentation and live verification — **needs one added task, not a rewrite**
-
-- Task 1's directory-structure and vendored-dependency documentation currently only covers
-  `dashboard/js/vendor/mqtt.min.js`. It must be extended to also list `dashboard/fonts/`,
-  `dashboard/icons/` and `dashboard/images/` in the directory-structure edit, and to document the
-  KONE font/icon/logo vendoring the same way it already documents mqtt.js's pin (source, and the
-  one-time trim step for the logo).
-- Its acceptance criteria checking for absent deferred features (`vis-network`, `CPU gauge`,
-  etc.) and the uv-only rule are unaffected.
-- The blocking human-verify checkpoint (Task 3) should add one visual confirmation line: the KONE
-  logo renders top-left on all three pages, and no page shows a flash-of-invisible-text or a
-  fallback-font mismatch once the vendored fonts load (a `font-display: swap` visual check, cheap
-  to eyeball during the same live pass that already checks the five ROADMAP criteria).
-
-### Not affected
-
-`11-01-PLAN.md` (Livestatus staleness probe), `11-02-PLAN.md` (mqtt.js vendoring + `config.js` +
-the `dashboard` nginx service), `11-04-PLAN.md` (poller D-17 fields), `11-05-PLAN.md` (MQTT
-connection + state store), `11-08-PLAN.md` (stats strip + overview + sortable table — **should be
-spot-checked by the planner for any hardcoded state hex or emoji it might duplicate from the
-pre-revision spec, since this spec's author did not read it this session**) — assessed as
-out-of-scope for this revision's color/font/icon/logo changes based on their stated roles in
-`11-PATTERNS.md` and `ROADMAP.md`, but not directly read this session, so "not affected" here means
-"no evidence found," not "confirmed clean."
-
----
+> **SUPERSEDED 2026-09-13 — historical record only, no open action items.**
+>
+> This section catalogued corrections needed in the 10-plan set written 2026-09-12 against the
+> pre-KONE-branding UI-SPEC. That plan set has since been **deleted and replanned from scratch**
+> against this revision (9 plans / 20 tasks / 5 waves, `11-01-PLAN.md` … `11-09-PLAN.md`), so every
+> correction it listed is already folded into the current plans — the old `11-10-PLAN.md`
+> numbering it references no longer exists. The two items it flagged as "not read this session,
+> flag for planner verification" (11-06, 11-07) were confirmed by the plan-checker on 2026-09-13 as
+> correctly carrying the KONE branding forward. Zero plan tasks had been executed at any point, so
+> nothing it described was ever shipped code.
+>
+> Kept for provenance: it records *why* the plan set was rewritten. The original text is in git at
+> commit `366d6f4`.
 
 ## Auto-Mode Design Decisions
 
