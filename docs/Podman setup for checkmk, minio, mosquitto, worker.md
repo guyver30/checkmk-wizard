@@ -265,7 +265,7 @@ The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these t
 
 | Topic | Publish Trigger | QoS | Retain | Payload keys |
 | --- | --- | --- | --- | --- |
-| `lan/devices/{id}/status` | Every poll cycle, for every known device | 0 | true | `id`, `state` (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`), `in_downtime`, `acknowledged`, `device_type`, `folder`, `alias`, `timestamp` |
+| `lan/devices/{id}/status` | Every poll cycle, for every known device | 0 | true | `id`, `state` (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`), `in_downtime`, `acknowledged`, `device_type`, `folder`, `alias`, `staleness`, `host_state_raw`, `timestamp` |
 | `lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle | 1 | true | `devices` (list of `{id, parents, device_type, folder, alias}`), `timestamp` |
 | `lan/devices/{id}/history` | Only on an actual state transition for that device | 1 | true | Full bounded array (max `HISTORY_MAX_ENTRIES`) of `{timestamp, from, to}` |
 | `lan/events/recent` | Only on any device's state transition, or a device add/remove | 1 | true | Full bounded array (max `EVENTS_MAX_ENTRIES`) of `{timestamp, device_id, event, from, to}` |
@@ -274,6 +274,8 @@ The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these t
 A removed device is tombstoned by publishing an empty retained payload to its `status` and `history` topics.
 
 `folder` is a generic location/group label derived from the host's Checkmk folder — whatever grouping the operator chose in the wizard's Phase 2 (a VLAN, a physical location, a site, etc.). It is read from Checkmk's REST folder association (`fetch_host_folders()` in `scripts/mqtt_poller.py`), not parsed from a filesystem path — see §3's "First-time credential setup" for the credential this requires. `alias` is Checkmk's native host alias, set optionally through the wizard's Phase 4 prompt; it is empty for any host without one.
+
+`staleness` (Phase 11, D-17) is Checkmk's own authoritative Livestatus `staleness` value (a float), additive to the payload above. It is `null` when the live site's `hosts` table does not expose the column — a graceful degradation, not an error; a consumer should then fall back to a timestamp-age check against `timestamp` above. `host_state_raw` (Phase 11, D-17) is also additive: one of `UP`/`DOWN`/`UNREACH`, derived from Checkmk's raw host-state integer. **`state` never contains `"UNREACH"`** — it keeps its collapsed `OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN` meaning, folding both DOWN and UNREACHABLE raw states into `"DOWN"`; a consumer that needs to tell them apart must read `host_state_raw` instead. Both fields are additive — a subscriber written before Phase 11 sees a payload it already understands, just without these two keys.
 
 ---
 

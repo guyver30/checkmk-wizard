@@ -48,6 +48,24 @@ def test_compute_overall_state_unmapped_service_state_degrades_to_unknown():
     assert poller.compute_overall_state(0, 99) == "UNKNOWN"
 
 
+def test_compute_overall_state_down_and_unreachable_both_still_collapse_to_down():
+    # Regression guard for Pitfall 6 (D-17): the new host_state_raw field
+    # must not leak into compute_overall_state()'s existing collapse --
+    # raw states 1 (DOWN) and 2 (UNREACHABLE) both still return "DOWN".
+    assert poller.compute_overall_state(1, 0) == "DOWN"
+    assert poller.compute_overall_state(2, 0) == "DOWN"
+
+
+# --- host_state_label ---------------------------------------------------------
+
+
+def test_host_state_label_maps_0_1_2_to_up_down_unreach():
+    assert poller.host_state_label(0) == "UP"
+    assert poller.host_state_label(1) == "DOWN"
+    assert poller.host_state_label(2) == "UNREACH"
+    assert poller.host_state_label(7) == "UP"
+
+
 # --- is_publishable_device_id -----------------------------------------------
 
 
@@ -439,6 +457,51 @@ def test_query_devices_alias_coerces_non_string_value_to_empty_string():
     assert snapshots[0].alias == ""
 
 
+def test_query_devices_staleness_defaults_to_none_when_column_absent():
+    columns = ["name", "state", "tags"]
+    sock = _fake_connection(json.dumps([["web1", 0, {}]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].staleness is None
+
+
+def test_query_devices_staleness_defaults_to_none_when_row_truncated():
+    columns = ["name", "state", "tags", "staleness"]
+    # Row ends before the staleness column's position.
+    truncated_row = ["web1", 0, {}]
+    sock = _fake_connection(json.dumps([truncated_row]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].staleness is None
+
+
+def test_query_devices_staleness_defaults_to_none_when_value_non_numeric():
+    columns = ["name", "state", "staleness"]
+    sock = _fake_connection(json.dumps([["web1", 0, "not-a-number"]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].staleness is None
+
+
+def test_query_devices_staleness_carries_through_numeric_value_as_float():
+    columns = ["name", "state", "staleness"]
+    sock = _fake_connection(json.dumps([["web1", 0, 4.5]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].staleness == 4.5
+
+
+def test_query_devices_host_state_raw_is_unreach_while_state_stays_down():
+    # D-17's entire point: state keeps its collapsed "DOWN" meaning while
+    # host_state_raw separately distinguishes UNREACHABLE (raw state 2).
+    columns = ["name", "state"]
+    sock = _fake_connection(json.dumps([["web1", 2]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].state == "DOWN"
+    assert snapshots[0].host_state_raw == "UNREACH"
+
+
 def test_query_devices_skips_topic_unsafe_host_name():
     columns = ["name", "state"]
     sock = _fake_connection(b'[["lan/rogue", 0], ["web1", 0]]')
@@ -634,6 +697,8 @@ def test_publish_device_status_uses_qos0_and_exact_payload_keys():
         "device_type",
         "folder",
         "alias",
+        "staleness",
+        "host_state_raw",
         "timestamp",
     }
     assert payload["alias"] == "Web Server 1"
