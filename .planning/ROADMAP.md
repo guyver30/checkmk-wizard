@@ -248,7 +248,37 @@ Summary:
 
 **Explicitly out of scope**: everything in Phase 14, plus the Phase 12 and 13 mockups present in the working preview. Those are illustrative only.
 
-**Plans**: TBD
+**Plans**: 9 plans
+Plans:
+**Wave 1**
+
+- [ ] 11.1-01-PLAN.md — Supersede Phase 11's D-22/D-24 in `11-CONTEXT.md`; confirm DASH-01's re-wording (D-36)
+- [ ] 11.1-02-PLAN.md — Verify newest-first event ordering against the live poller; pin it with two pytest regression tests (D-33)
+- [ ] 11.1-03-PLAN.md — KONE light palette: three state-token tiers (`--state-*` / `-fill` / `-ink`) plus four palette defects and the connection-dot ring (D-28, D-29, D-38, D-39)
+
+**Wave 2** *(blocked on 11.1-03)*
+
+- [ ] 11.1-04-PLAN.md — `scripts/contrast_audit.py`: committed, runnable WCAG audit over 20+ pairs, exit 0 against the shipped CSS (D-30)
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 11.1-05-PLAN.md — Three-pane layout: wrap `#main` in `#centre`, move the event panel to centre-bottom, ship the sized map placeholder, delete the grouped fleet overview (D-25, D-27, D-31)
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 11.1-06-PLAN.md — `panes.js`: pointer-drag and arrow-key splitters with the full ARIA separator contract, real collapse buttons, guarded-storage persistence (D-26)
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 11.1-07-PLAN.md — Extensible grouping `<select>` plus "Order by severity" checkbox, group- and host-level comparators built from `grouping.js`'s existing primitives (D-32)
+
+**Wave 6** *(blocked on Wave 5)*
+
+- [ ] 11.1-08-PLAN.md — Stale flips toggle classes instead of rebuilding; `CLOCK_TICK_MS` re-measured; event rows identify their device (D-34, D-35)
+
+**Wave 7** *(blocked on Wave 6)*
+
+- [ ] 11.1-09-PLAN.md — `dashboard/README.md` and deployment doc updated, `CHECKMK_BASE_URL` surfaced (D-37), live-verification checkpoint
 
 ### Phase 14: Fleet Intelligence
 
