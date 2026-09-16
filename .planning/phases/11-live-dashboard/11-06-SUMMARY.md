@@ -99,7 +99,43 @@ Each task was committed atomically:
 **Impact on plan:** None on behavior. No scope creep.
 
 ## Issues Encountered
-None.
+None at the time this summary was written. See "Post-Mortem" below for a real defect found
+after the fact.
+
+## Post-Mortem (added 2026-09-16, plan 11-09)
+
+This plan's own verification missed a page-breaking defect in the file it created:
+`dashboard/js/shell.js` line 15 originally read `var ViewModules = {};`. Hoisting only creates
+the binding — the `= {}` initializer still re-executes when the line runs — and because
+`shell.js` loads LAST on all three HTML pages (after `render-index.js`, `render-devices.js`,
+`render-details.js` have each already registered themselves into `ViewModules`), this statement
+silently wiped every registration moments before `shell.js`'s own `DOMContentLoaded` handler
+called `mountView()`. Real impact: `render-details.js` registers at top level, so
+`ViewModules.details` was destroyed and `details.html` rendered chrome around an empty main area
+(DASH-03 dead). `render-index.js`/`render-devices.js` happened to survive only because plan
+11-07 independently deferred their own registration into `DOMContentLoaded`, not because of
+anything in this plan's code.
+
+The bug was found independently by the 11-07 and 11-08 executors, each proving it with a
+two-script `vm.runInContext` simulation, then confirmed by loading all 11 scripts in real page
+order and diffing the registry with and without the guard. Fixed 2026-09-16 (commit `6191395`):
+`var ViewModules = ViewModules || {};`, the guarded form every render module already used.
+
+**Why this plan's verification did not catch it:** every file involved was individually valid —
+`node --check` passed on all of them, and this plan had no browser available to exercise a real
+multi-`<script>`-tag page load in order (see "Next Phase Readiness" above, which already flagged
+this exact gap). Only the *composition* of independently-correct files was broken; no static
+check or single-file grep could see that, because the defect only exists in the interaction
+between files loaded in a specific order. The lesson: a shared global registry populated by
+scripts loaded in a fixed order needs either an explicit composition test (load the real page
+order, even without a full browser — a `vm.runInContext` harness over the concatenated scripts
+is enough) or a guard defensive enough that load order can't matter, not just per-file syntax
+checks.
+
+**Residual inconsistency, left as-is:** 11-07's `DOMContentLoaded` deferral for
+`render-index.js`/`render-devices.js` is now redundant (the guard alone would have been enough)
+but harmless, so two registration styles coexist in the codebase. Not worth a churn-only cleanup
+commit.
 
 ## User Setup Required
 None - no external service configuration required.

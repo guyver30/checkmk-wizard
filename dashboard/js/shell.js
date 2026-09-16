@@ -102,12 +102,15 @@ var ViewModules = ViewModules || {};
     mountView(view, params);
   }
 
+  function navigateToHost(hostname) {
+    navigateTo("details", { id: hostname }, urlForHost(hostname));
+  }
+
   function handleClick(event) {
     var hostEl = event.target.closest ? event.target.closest("[data-host]") : null;
     if (hostEl) {
       event.preventDefault();
-      var hostname = hostEl.dataset.host;
-      navigateTo("details", { id: hostname }, urlForHost(hostname));
+      navigateToHost(hostEl.dataset.host);
       return;
     }
 
@@ -122,6 +125,26 @@ var ViewModules = ViewModules || {};
     event.preventDefault();
     var resolved = resolveView(sameOriginUrl.pathname, sameOriginUrl.search);
     navigateTo(resolved.view, resolved.params, sameOriginUrl.pathname + sameOriginUrl.search);
+  }
+
+  // Keyboard activation for focusable [data-host] elements (WCAG 2.1.1).
+  // render-shell.js's .tree-host-row is the only dashboard element with
+  // tabIndex set -- it is a plain <div>, which (unlike a native <button> or
+  // <a>) never synthesizes a click event when Enter/Space is pressed. Without
+  // this handler a keyboard or screen-reader user can Tab to a tree row, hear
+  // it announced as interactive via its aria-label, and have Enter/Space do
+  // nothing. Routes through the same navigateTo() the mouse path already
+  // uses above, never a raw location.href assignment.
+  function handleKeydown(event) {
+    if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") {
+      return;
+    }
+    var hostEl = event.target.closest ? event.target.closest("[data-host]") : null;
+    if (!hostEl) {
+      return;
+    }
+    event.preventDefault();
+    navigateToHost(hostEl.dataset.host);
   }
 
   function handlePopState() {
@@ -171,6 +194,7 @@ var ViewModules = ViewModules || {};
     connection.onStatus(renderShell.renderConnection);
 
     document.body.addEventListener("click", handleClick);
+    document.body.addEventListener("keydown", handleKeydown);
     window.addEventListener("popstate", handlePopState);
 
     var initial = resolveView(location.pathname, location.search);
