@@ -1,76 +1,124 @@
 {
   "version": "1.0",
-  "timestamp": "2026-09-13T08:50:21.715Z",
+  "timestamp": "2026-09-16T01:31:37.544Z",
+  "source": "auto-postool",
+  "partial": true,
   "phase": "11",
-  "phase_name": "live-dashboard",
+  "phase_name": "live-dashboard (PLANNED, ready to execute)",
   "phase_dir": ".planning/phases/11-live-dashboard",
-  "plan": 1,
-  "task": 0,
-  "total_tasks": 20,
-  "status": "paused",
+  "plan": "0",
+  "task": null,
+  "total_tasks": 9,
+  "status": "auto-checkpoint",
   "completed_tasks": [],
   "remaining_tasks": [
-    {"id": 1, "plan": "11-01", "wave": 1, "name": "D-17 poller extension: additive staleness + host_state_raw, tests, live Livestatus column probe (3 tasks, last is a blocking human-verify checkpoint)", "status": "not_started"},
-    {"id": 2, "plan": "11-02", "wave": 1, "name": "Vendor mqtt.js 5.15.2 + KONE fonts/icons/logo, write config.js, add the dashboard nginx service on port 8090 (3 tasks)", "status": "not_started"},
-    {"id": 3, "plan": "11-03", "wave": 1, "name": "KONE-branded stylesheet plus the three shared-shell HTML pages (2 tasks)", "status": "not_started"},
-    {"id": 4, "plan": "11-04", "wave": 2, "name": "Pure helpers: staleness derivation, display/classification, worst-of group roll-up (2 tasks)", "status": "not_started"},
-    {"id": 5, "plan": "11-05", "wave": 2, "name": "Wholesale-replace state store and MQTT-over-WS connection with hand-rolled jittered backoff (2 tasks)", "status": "not_started"},
-    {"id": 6, "plan": "11-06", "wave": 3, "name": "Persistent shell (indicator, banners, grouped tree, event panel) and pushState router with ViewModule contract (2 tasks)", "status": "not_started"},
-    {"id": 7, "plan": "11-07", "wave": 4, "name": "index stats strip + grouped fleet overview, and the sortable device table (2 tasks)", "status": "not_started"},
-    {"id": 8, "plan": "11-08", "wave": 4, "name": "Per-device detail panel, bounded history strip, Checkmk deep link (2 tasks)", "status": "not_started"},
-    {"id": 9, "plan": "11-09", "wave": 5, "name": "Deployment/README docs plus live verification of all five success criteria (2 tasks, last is a blocking human-verify checkpoint)", "status": "not_started"}
-  ],
-  "blockers": [],
-  "human_actions_pending": [
     {
-      "action": "git add web_assets/ (or decide deliberately to leave it untracked)",
-      "context": "Wave 1's 11-02 vendors KONE fonts, the 25 icons and the logo OUT of web_assets/ into dashboard/. The plan-checker verified all 4 fonts, all 25 icons and the logo are present there. But web_assets/ is untracked in git, so execution succeeds on this machine and fails anywhere else. Not blocking wave 1 locally; blocking for anyone else running it.",
-      "blocking": false
+      "id": "01",
+      "name": "Task 1: Add staleness and host_state_raw to the poller",
+      "status": "not_started"
     },
     {
-      "action": "Resolve 11-UI-SPEC.md's sign-off block, which still reads 'Approval: pending'",
-      "context": "STATE.md records the UI-SPEC as approved and commit 366d6f4 captured the operator's confirmations on the D-10 glyph and the Inter body face, but the spec's own sign-off block was never flipped. Deliberately left alone during the replan -- an approval status is the operator's to set, not the agent's. One-line fix whenever you want it consistent.",
-      "blocking": false
+      "id": "02",
+      "name": "Task 1: Vendor mqtt.js 5.15.2 browser UMD",
+      "status": "not_started"
     },
     {
-      "action": "Two operator checkpoints are built into execution: 11-01 Task 3 (live Livestatus column probe) and 11-09 Task 2 (live verification of all five ROADMAP success criteria)",
-      "context": "Both plans carry autonomous: false. Execution will stop and wait at each. Everything between them (11-02 through 11-08) is autonomous.",
-      "blocking": false
+      "id": "03",
+      "name": "Task 1: Write dashboard/css/dashboard.css from the KONE UI contract",
+      "status": "not_started"
+    },
+    {
+      "id": "04",
+      "name": "Task 1: dashboard/js/staleness.js and dashboard/js/display.js",
+      "status": "not_started"
+    },
+    {
+      "id": "05",
+      "name": "Task 1: dashboard/js/state-store.js",
+      "status": "not_started"
+    },
+    {
+      "id": "06",
+      "name": "Task 1: dashboard/js/render-shell.js",
+      "status": "not_started"
+    },
+    {
+      "id": "07",
+      "name": "Task 1: dashboard/js/render-index.js — stats strip and grouped fleet overview",
+      "status": "not_started"
+    },
+    {
+      "id": "08",
+      "name": "Task 1: Detail panel header, flags and the Checkmk deep link",
+      "status": "not_started"
+    },
+    {
+      "id": "09",
+      "name": "Task 1: Document the dashboard in the deployment doc and the repo READMEs",
+      "status": "not_started"
     }
   ],
+  "blockers": [
+    {
+      "description": "Phase 9 (Poller Core) and Phase 10 (Tag-Group Integration) flagged by research as needing a live-verification research pass during planning (Livestatus diff/QoS strategy; Checkmk REST API `tag_<group_id>` attribute shape) — see .planning/research/SUMMARY.md Research Flags.",
+      "type": "technical",
+      "workaround": ""
+    },
+    {
+      "description": "Phase 8's read-only WS ACL was flagged by research as a critical, easy-to-retrofit-wrong risk if deferred — kept as v1 scope in this phase rather than pushed to v1.x.",
+      "type": "technical",
+      "workaround": ""
+    }
+  ],
+  "human_actions_pending": [],
   "decisions": [
     {
-      "decision": "Replan Phase 11 from scratch rather than patching the existing 10 plans or appending a branding-delta plan",
-      "rationale": "The 10-plan set (2de890c) was written against the original UI-SPEC, which was then rewritten twice for KONE Design System branding (93b5897 -> eb57ae8 -> 366d6f4). Eight of the ten plans cited the spec. Zero of their 23 tasks had run, so there was no shipped code to protect -- replanning cost nothing and patching would have left the old visual contract encoded in the plan text. Operator chose this at the plan gate.",
+      "decision": "Milestone: Poll Livestatus over TCP instead of Checkmk notification rules, to preserve the worker/checkmk filesystem boundary",
+      "rationale": "",
       "phase": "11"
     },
     {
-      "decision": "Deleted the old 11-01..11-10-PLAN.md from the working tree before spawning the planner",
-      "rationale": "The new set has 9 plans, not 10. Letting the planner overwrite in place would have left a stale 11-10-PLAN.md on disk that execute-phase would then try to run. They remain recoverable at commit 2de890c.",
+      "decision": "Milestone: Redesign MQTT contract around per-device topics (`lan/devices/{id}/...`) rather than full-blob republishes",
+      "rationale": "",
       "phase": "11"
     },
     {
-      "decision": "Embedded the UI-SPEC's orphaned concrete values directly into 11-03/11-07/11-08 instead of leaving a pointer",
-      "rationale": "The current UI-SPEC's 'Page-specific main-area contracts' section defers to 'the original sections' surviving text' for device-table columns, default sort, history-strip segment sizing and overview grid values -- but that text does not survive on disk; it only exists at git 12830c1. The planner recovered it and inlined the values; the plan-checker independently confirmed they are present concretely. No executor has to go spelunking in git history.",
+      "decision": "Milestone: Horizontal Layers build order chosen — broker (persistence + ACL from day one) → poller core → Checkmk tagging → dashboard (built last as a pure consumer)",
+      "rationale": "",
       "phase": "11"
     },
     {
-      "decision": "Added 11-01 to 11-04's depends_on, and backfilled literal D-06/D-07/D-16 citations into must_haves.truths",
-      "rationale": "Both were plan-checker WARNINGs, not blockers. 11-04 consumes D-17's staleness/host_state_raw payload keys, so the edge makes the dependency graph honest even though wave order already guaranteed the ordering. The three decisions were already fully implemented -- the coverage gate was flagging missing D-NN traceability tags, not missing work. Gate went 15/18 -> 18/18.",
+      "decision": "[Phase 10.1]: D-10 (retag UX, operator-chosen 2026-09-12, SUPERSEDES 10.1-03-PLAN Task 1 step f prompts): the per-host device-type questionary.select is replaced by a numbered legend + single-digit entry. Print the device type legend once per folder, numbered by index into _load_device_types() (0=other guaranteed by D-06), then prompt each host as \"<host>  (<current>)  [<current index>]: \" accepting one digit; bare Enter keeps the current value. Before any PUT, print an \"N host(s) will be retagged, M unchanged\" summary and require a single Apply? confirm (default No) — this gate is new and protects a 20-host run from a mistyped digit. Rationale: the select-based flow cost 40 interactions for 20 hosts and the \"a few of each type\" pattern is the normal case. Numbering derives from the tag group source, never hand-maintained.",
+      "rationale": "",
       "phase": "11"
     },
     {
-      "decision": "Replaced 11-UI-SPEC.md's 'Plans Invalidated or Amended by This Revision' section with a superseded note rather than deleting it",
-      "rationale": "It catalogued corrections against the deleted 10-plan numbering (including an 11-10-PLAN.md that no longer exists) and would read to a future agent as open action items against the current 9-plan set. Kept as a note because it records WHY the replan happened; original text preserved at commit 366d6f4.",
+      "decision": "[Phase 10.1]: D-11 (retag alias handling, operator-chosen 2026-09-12, SUPERSEDES 10.1-03-PLAN Task 1 step f alias prompt): alias is NOT prompted per host during retag. After the device types are applied, ask once \"Also set aliases on any of these?\" (default No); on yes, questionary.checkbox over the just-retagged hosts, then a questionary.text alias prompt only for the checked ones. D-09 still governs the PUT body — a blank alias means the alias key is OMITTED entirely so Checkmk keeps what it has, never an explicit empty value that would clear an operator-set alias.",
+      "rationale": "",
+      "phase": "11"
+    },
+    {
+      "decision": "[Phase 10.1]: D-12 (retag scope, operator-chosen 2026-09-12, SUPERSEDES D-02): every already-onboarded host is a retag candidate regardless of its current device type. The old rule (\"attribute absent OR == other\") assumed a retag only ever corrects an untagged host, but an operator equally needs to fix a host tagged WRONGLY — a device typed ACS that is really a NetworkDevice was unreachable through the wizard, leaving the Checkmk UI as the only route. `_untagged_host_candidates` is renamed `_retaggable_hosts` and now filters only on `exclude_names` (this run's Phase 3 placeholders). A host with no attribute keeps device_type=None and is displayed as \"<first type> (implicit)\"; the absent-vs-explicit distinction is a display concern, not a filter one.",
+      "rationale": "",
+      "phase": "11"
+    },
+    {
+      "decision": "[Phase 10.1]: D-13 (retag UI, operator-chosen 2026-09-12, SUPERSEDES D-10's per-host digit prompt): one folder is edited in a full-screen prompt_toolkit list, not a sequence of per-host prompts. The screen shows the numbered device-type legend, every host in the folder with its current and pending type, and a footer menu. Keys: Up/Down (and j/k, PageUp/PageDown) move a clamped — never wrapping — cursor; a digit assigns that type to the row under the cursor; [A] applies and exits; [D] (or Ctrl-C) discards and exits. Only digits that index an existing type are bound, so a stray key is inert. Rationale: with 20 hosts a per-host prompt gave no view of the folder as a whole, no way to revise an earlier answer, and no sense of progress. \"Apply and exit\" writes the folder then asks about the next one; \"discard and exit\" restarts the whole retag flow from its first prompt (a full back-out, not \"skip this folder\"), which re-fetches the host list so a partially-written earlier pass is reflected rather than replayed stale. State lives in a pure RetagSelection dataclass so the cursor/assignment rules are unit-testable; the key bindings themselves are covered by driving the real Application through prompt_toolkit's create_pipe_input + DummyOutput. prompt_toolkit is now an explicit dependency (it was already transitive via questionary).",
+      "rationale": "",
+      "phase": "11"
+    },
+    {
+      "decision": "[Phase 12]: D-01 (Phase 12 disk scope, operator-chosen 2026-09-12): the device view shows `Filesystem /` as the headline gauge (`fs_used_percent`, warn/crit 80;90 read from perf_data), plus a badge carrying the worst `fs_used_percent` across all OTHER mount points on that host. Rationale: `/` alone was the first instinct, but Checkmk emits one `Filesystem <mount>` service per mount (live-verified on agent-test 2026-09-12: `Filesystem /` and `Filesystem /boot` are separate services), so a `/`-only gauge would render green while `/var` or `/data` sat at 98%. The badge closes that blind spot for one extra number and no layout change. Consequence: the poller's services query must return every `Filesystem *` service, not just `/`.",
+      "rationale": "",
+      "phase": "11"
+    },
+    {
+      "decision": "[Phase 12]: D-02 (Phase 12 systemd scope, operator-chosen 2026-09-12): show ONLY the individual systemd services the operator selected during the wizard's Phase 5 \"Which running services should be actively monitored?\" prompt. The `Systemd Service Summary` roll-up (`Total: 163, Disabled: 5, Failed: 0`) is explicitly NOT wanted. Key implementation consequence: the poller has no access to wizard state (separate container; wizard state is only a local JSON snapshot), but it does not need it — Checkmk only creates a `Systemd Service <name>` service for services the wizard chose, so the chosen set is derivable from Livestatus alone by filtering `description ~ ^Systemd Service ` and excluding the literal `Systemd Service Summary`. Live-verified on agent-test 2026-09-12: the operator picked cron, ModemManager and open-vm-tools, and exactly those three appeared alongside the Summary. Per-service data available: state plus `cpu_time`, `mem_used`, `active_since`, `number_of_tasks`.",
+      "rationale": "",
       "phase": "11"
     }
   ],
-  "uncommitted_files": [
-    "web_assets/ (untracked -- source assets that 11-02 vendors from)",
-    "screen1.png (untracked, unrelated)",
-    ".planning/phases/12-agent-metrics-and-service-status/ (untracked, future phase)",
-    ".planning/phases/13-wizard-parents-support-and-topology-map/ (untracked, future phase)"
-  ],
-  "next_action": "Run /bm:execute-phase 11 with a clean context. It starts at wave 1 (11-01, 11-02, 11-03 in parallel); 11-01 Task 3 is a blocking human-verify checkpoint on the live Livestatus column probe.",
-  "context_notes": "Phase 11 is fully planned, gated and committed (861bbcb) -- nothing is half-written. All planning artifacts are on disk: 11-CONTEXT.md, 11-DISCUSSION-LOG.md, 11-RESEARCH.md, 11-UI-SPEC.md, 11-PATTERNS.md, 11-01..11-09-PLAN.md. Zero execution tasks have started: no dashboard/ directory exists and scripts/mqtt_poller.py is untouched. The plan-checker returned VERIFICATION PASSED with no blockers, and independently grounded its review against the real source (byte-checked 11-01's line citations against scripts/mqtt_poller.py, confirmed all 4 fonts / 25 icons / logo exist under web_assets/, confirmed port 8090 is free in deploy/compose.yaml, confirmed node v24.20.0 is installed for the JS verify harnesses). Requirements 6/6, decisions 18/18. The next session should go straight to execution."
+  "uncommitted_files": [],
+  "next_action": "Ready to execute",
+  "context_notes": "Status: Ready to execute\n\nStopped at: Phase 11 replanned (9 plans, checker passed, ready to execute)"
 }

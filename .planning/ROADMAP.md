@@ -16,7 +16,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 9: Poller Core** - A resilient Livestatus-to-MQTT poller publishes the per-device topic contract and self-heals across restarts (completed 2026-09-09)
 - [x] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and a folder-derived location/group label are wired into the wizard's onboarding flow (completed 2026-09-11)
 - [x] **Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps** (INSERTED) - Urgent insertion after Phase 10 (completed 2026-09-12)
-- [ ] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract
+- [x] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract (completed 2026-09-16)
 - [ ] **Phase 11.1: Dashboard Layout and Light Palette** - The dashboard moves to KONE's light palette and a resizable three-pane layout (tree / map-or-details / event history), with a grouping combo and severity ordering
 - [ ] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query
 - [ ] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map
@@ -174,7 +174,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 11-09-PLAN.md — Deployment/README documentation plus live verification of all five success criteria (wave 5)
+- [x] 11-09-PLAN.md — Deployment/README documentation plus live verification of all five success criteria (wave 5)
 
 **UI hint**: yes
 
@@ -224,7 +224,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
-| 11. Live Dashboard | 8/9 | In Progress|  |
+| 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
 | 12. Agent Metrics and Service Status | 0/TBD | Not started | - |
 | 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |
 

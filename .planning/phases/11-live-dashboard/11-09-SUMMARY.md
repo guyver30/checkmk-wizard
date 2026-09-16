@@ -1,7 +1,7 @@
 ---
 phase: 11-live-dashboard
 plan: 09
-status: paused
+status: complete
 subsystem: ui
 tags: [documentation, dashboard, accessibility, podman, deployment]
 
@@ -229,3 +229,62 @@ commands and the five ROADMAP Phase 11 success criteria (plus brand/no-egress ch
 - Verified: `uv run pytest -q` → 409 passed (unchanged from orchestrator baseline)
 - Verified: `node --check` passes on all 11 `dashboard/js/*.js` files
 - Verified: script-order (`<script src>`) across all three HTML pages unchanged, `shell.js` still loads last on all three pages
+
+---
+
+## Task 2 checkpoint — resolved 2026-09-16
+
+Live verification ran against the real Checkmk site (`2.4.0p36.cre`) with the
+dashboard served by the `dashboard` nginx service on host port 8090, opened from a
+separate LAN device.
+
+### Verified PASS on the live stack
+
+| # | Criterion | Result |
+|---|---|---|
+| — | Deployment: `podman compose up -d`, dashboard reachable on 8090 | PASS |
+| — | MQTT-over-WebSockets against the real broker | PASS — indicator reads Connected |
+| — | Real Checkmk data end to end | PASS — 17/18 OK, 3-4 DOWN across real hosts |
+| — | Phase 10's device_type tag group, live | PASS — ACS, E-link, GroupController, Multimedia, NetworkDevice, other |
+| — | Worst-of roll-up badges | PASS — e.g. `1 / 5`, `0 / 2` |
+| — | Event ordering newest-first | PASS — observed 20:38 → 20:07 descending |
+| 4 | Staleness: stop poller → banner + hatch; start → clears | PASS after the defect fixes below |
+| 5 | Connection: stop broker → jittered backoff; start → repopulates | PASS, operator-confirmed |
+| 8 | No external requests | PASS — verified statically: zero external URLs in shipped HTML/CSS/JS, all 54 CSS `url()` references relative |
+
+### Superseded rather than verified
+
+Criteria **1 and 2** (stats strip above a grouped fleet overview; devices table
+with the event panel in the sidebar) were **not** signed off. The operator rejected
+that layout on sight and it is being replaced by Phase 11.1, so verifying it would
+have signed off a design already withdrawn. DASH-01 is re-worded under 11.1's D-25,
+which preserves its stats-strip and merge-in-place clauses.
+
+Criterion **3** (click a device → detail opens in place) was broken on the live
+build and is fixed (`a016202`), proven by a node harness that mounts the detail
+view into a `#main` containing no panel markup. **Not yet re-confirmed in a
+browser** — one click when convenient. It is routing, which 11.1 keeps, so it stays
+worth confirming.
+
+### Defects the live run found — all fixed in this phase
+
+Live verification earned its keep: it surfaced defects that 409 passing tests and
+every grep in this phase's plans passed straight over. All were composition
+failures, not broken files.
+
+| Defect | Root cause | Fix |
+|---|---|---|
+| Detail view never rendered outside `details.html` | `render-details.js` only queried `#detail-panel`, never built it; its two siblings use `ensureContainer()` | `a016202` |
+| Poller banner overlaid the sidebar and its grouping control | `position: fixed`, outside grid flow | `e72cf6b` |
+| No stale hatch, frozen "Last Update", "0 minutes old" | **Nothing re-rendered when messages stopped.** Every time-derived value was computed at render time and rendering was driven solely by incoming MQTT | `ffba3f8` |
+| "Poller offline since unknown" | The MQTT will carries no timestamp (it is fixed at connect time); the last good `last_poll` was discarded | `9218e84` |
+| Tree scroll/focus lost every 12s | The clock turned three full rebuilds into a periodic event, invalidating three modules' "infrequent event" assumption | `7707bbf` |
+
+Four earlier defects found the same way — the dead `.topbar` selector, `[hidden]`
+losing to ID specificity, the wiped `ViewModules` registry, and a nav with no CSS
+rule — were confirmed fixed and working in production in the same run.
+
+**The lesson worth carrying:** every one of these nine defects was invisible to
+static verification. Each file parsed, each test passed, every class referenced by
+JS existed. What was wrong was how the pieces composed at runtime. Phase plans in
+this project should include at least one check that exercises composition, not text.
