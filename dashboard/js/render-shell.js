@@ -45,6 +45,13 @@ var renderShell = (function () {
   // itself never touches it.
   var collapsedGroupKeys = new Set();
 
+  // Set whenever the operator toggles grouping, and the source of truth for
+  // the rest of the session; storage is only how the choice SURVIVES a reload.
+  // Without this, a browser that refuses the write would leave groupingMode()
+  // re-reading the old stored value on the very next renderTree(), so the
+  // toggle would flip its aria-pressed state and then silently not regroup.
+  var groupingModeOverride = null;
+
   // Storage access is wrapped because reading it can THROW, not just return
   // null: a browser with site data blocked, a private window, or an embedded
   // frame with restricted storage all raise on access. groupingMode() runs
@@ -52,12 +59,6 @@ var renderShell = (function () {
   // took down the whole shell -- the sidebar, banners and event panel never
   // rendered -- over a remembered toggle position. D-07's device_type default
   // is the correct fallback when the preference cannot be read.
-  // Set whenever the operator toggles grouping. It is the source of truth for
-  // the rest of the session; storage is only how the choice SURVIVES a reload.
-  // Without this, a browser that refuses the write would re-read the old value
-  // on the very next renderTree() and the toggle would appear not to work.
-  var groupingModeOverride = null;
-
   function groupingMode() {
     if (groupingModeOverride !== null) {
       return groupingModeOverride;
