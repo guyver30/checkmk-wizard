@@ -148,6 +148,12 @@ OPTIONAL_HOST_COLUMNS = (
     # above; live-verified present and populated on a real 2.4.0p36.cre
     # site on 2026-09-11 (plan 10-06, see the dated follow-up note above).
     "alias",
+    # Added by Phase 11 (D-17): Checkmk's own staleness value, preferred by
+    # DASH-04 over a timestamp-age fallback. Optional, never required --
+    # PLACEHOLDER: live-verification result pending Task 3's
+    # `--check-columns` probe against the real site; this comment will be
+    # replaced with a dated present/missing note in that style once run.
+    "staleness",
 )
 
 # Standard Nagios plugin return codes, used unchanged by Checkmk/Livestatus
@@ -301,6 +307,17 @@ class DeviceSnapshot:
     # over the hostname for display. This phase only makes it available;
     # it does not decide display preference.
     alias: str = ""
+    # D-17: Checkmk's own authoritative staleness value (Livestatus
+    # `staleness` column), preferred by DASH-04 over a timestamp-age
+    # fallback. `None` when the column is absent from the live site --
+    # graceful degradation, not an error (Pitfall 4).
+    staleness: float | None = None
+    # D-17: the real host state, so a subscriber can tell DOWN and
+    # UNREACHABLE apart. `compute_overall_state()` below collapses both
+    # into the single `state` value `"DOWN"` by design (D-08's worst-of
+    # aggregation keeps `state` an OK/WARN/CRIT/UNKNOWN/DOWN enum); this
+    # field is additive, not a replacement.
+    host_state_raw: str = "UP"
 
 
 def configure_logging(level: str) -> None:
@@ -342,6 +359,20 @@ def compute_overall_state(host_state: int, worst_service_state: int) -> str:
     if host_state != 0:  # 1=DOWN, 2=UNREACHABLE (src/checkmk_wizard/livestatus.py convention)
         return "DOWN"
     return _SERVICE_STATE_NAMES.get(worst_service_state, "UNKNOWN")
+
+
+def host_state_label(host_state: int) -> str:
+    """Map a raw Livestatus host-state int to "UP"/"DOWN"/"UNREACH" (D-17).
+
+    This deliberately does NOT replace `compute_overall_state()` above --
+    that function's collapse of 1=DOWN/2=UNREACHABLE into a single `"DOWN"`
+    `state` value is unchanged and still the aggregation D-08 requires.
+    This function feeds the separate, additive `host_state_raw` field so a
+    subscriber can tell DOWN and UNREACHABLE apart when it needs to
+    (D-11/Pitfall 6), using the same 1=DOWN/2=UNREACHABLE mapping asserted
+    in `compute_overall_state()`'s own inline comment.
+    """
+    return {0: "UP", 1: "DOWN", 2: "UNREACH"}.get(host_state, "UP")
 
 
 def append_bounded(entries: list[dict], entry: dict, max_entries: int) -> list[dict]:
@@ -626,6 +657,15 @@ def query_devices(
         if not isinstance(alias, str):
             alias = ""
 
+        try:
+            staleness = float(row[index["staleness"]]) if "staleness" in index else None
+        except (IndexError, TypeError, ValueError):
+            staleness = None
+
+        # Not a new column -- derived from the `host_state` int already
+        # parsed above, following the same 1=DOWN/2=UNREACHABLE mapping.
+        host_state_raw = host_state_label(host_state)
+
         snapshots.append(
             DeviceSnapshot(
                 id=name,
@@ -636,6 +676,8 @@ def query_devices(
                 folder=folder,
                 parents=parents,
                 alias=alias,
+                staleness=staleness,
+                host_state_raw=host_state_raw,
             )
         )
     return snapshots
@@ -706,6 +748,10 @@ def publish_device_status(client: mqtt.Client, snapshot: DeviceSnapshot, timesta
         "device_type": snapshot.device_type,
         "folder": snapshot.folder,
         "alias": snapshot.alias,
+        # D-17: additive keys. An older subscriber reading a payload from
+        # before this plan is unaffected -- it simply never sees these.
+        "staleness": snapshot.staleness,
+        "host_state_raw": snapshot.host_state_raw,
         "timestamp": timestamp,
     }
     _publish_json(client, device_status_topic(snapshot.id), payload, qos=0, retain=True)
