@@ -588,6 +588,45 @@ body {
   border-left: 4px solid var(--color-border);
   padding: var(--space-sm2);
 }
+.overview-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+.overview-card-name {
+  color: var(--color-text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Chip grid of member hosts inside the card (D-22, dense layout). */
+.overview-card-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+/* `.overview-chip` receives a `.state-*` class directly from render-index.js for its
+   worst-of/own-state fill, plus `.is-stale` when hatched (D-15) -- this rule only adds
+   the chip's shape/layout, never background-color, so it never fights that composed
+   fill/hatch. */
+.overview-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  border-radius: var(--radius-pill);
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 12px;
+  font-weight: 600;
+}
+.overview-chip-name {
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ---------------------------------------------------------------------- */
 /* Page-specific: devices.html — sortable device table (DASH-02)          */
@@ -652,6 +691,20 @@ body {
 #checkmk-link:hover {
   color: var(--color-accent);
 }
+/* D-20: the deep link is disabled when config.js's Checkmk base URL is still the
+   unconfigured placeholder -- a visibly de-emphasized, unclickable link beats a dead
+   link that silently 404s. */
+#checkmk-link.is-disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.detail-panel-flags {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
 
 /* ---------------------------------------------------------------------- */
 /* Badges — count badge (D-06) and state badge, both pill-shaped          */
@@ -668,6 +721,12 @@ body {
 }
 .count-badge {
   background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+/* `.detail-flag-badge` composes with `.state-badge` for its pill shape; render-details.js
+   sets its background-color inline (var(--color-surface-raised)), so this rule only adds
+   the text color, never a background, to avoid fighting that inline fill. */
+.detail-flag-badge {
   color: var(--color-text);
 }
 
