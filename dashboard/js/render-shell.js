@@ -36,8 +36,29 @@ var renderShell = (function () {
   var reconnectIconEl = null;
   var reconnectCountdownTimer = null;
 
+  // Storage access is wrapped because reading it can THROW, not just return
+  // null: a browser with site data blocked, a private window, or an embedded
+  // frame with restricted storage all raise on access. groupingMode() runs
+  // during init() and again on every renderTree(), so an unguarded throw here
+  // took down the whole shell -- the sidebar, banners and event panel never
+  // rendered -- over a remembered toggle position. D-07's device_type default
+  // is the correct fallback when the preference cannot be read.
+  // Set whenever the operator toggles grouping. It is the source of truth for
+  // the rest of the session; storage is only how the choice SURVIVES a reload.
+  // Without this, a browser that refuses the write would re-read the old value
+  // on the very next renderTree() and the toggle would appear not to work.
+  var groupingModeOverride = null;
+
   function groupingMode() {
-    var stored = localStorage.getItem(GROUPING_MODE_KEY);
+    if (groupingModeOverride !== null) {
+      return groupingModeOverride;
+    }
+    var stored = null;
+    try {
+      stored = localStorage.getItem(GROUPING_MODE_KEY);
+    } catch (err) {
+      stored = null;
+    }
     return stored === "folder" ? "folder" : "device_type";
   }
 
@@ -470,7 +491,15 @@ var renderShell = (function () {
       groupingToggle.setAttribute("aria-pressed", groupingMode() === "folder" ? "true" : "false");
       groupingToggle.addEventListener("click", function () {
         var next = groupingMode() === "device_type" ? "folder" : "device_type";
-        localStorage.setItem(GROUPING_MODE_KEY, next);
+        // In-memory first, so the regroup below happens whether or not the
+        // write lands. The preference is a convenience; losing it across a
+        // reload is acceptable, losing the interaction is not.
+        groupingModeOverride = next;
+        try {
+          localStorage.setItem(GROUPING_MODE_KEY, next);
+        } catch (err) {
+          /* preference not persisted -- the toggle still applies this session */
+        }
         groupingToggle.setAttribute("aria-pressed", next === "folder" ? "true" : "false");
         renderTree();
       });
