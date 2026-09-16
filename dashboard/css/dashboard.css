@@ -413,7 +413,18 @@ body {
 /* Banners — poller-offline (D-13/D-14) and tag-group-missing (D-16)      */
 /* ---------------------------------------------------------------------- */
 
+/* Shell-level overlay, not a grid track: these two banners are direct
+   siblings of #topbar/.sidebar/#main in the DOM (per the interfaces
+   contract) but the .shell grid above is copied verbatim from UI-SPEC
+   Layout with exactly two rows. Fixed positioning lets them sit as a
+   full-width strip directly beneath the topbar without adding a third
+   grid row that UI-SPEC's rule does not define. */
 #poller-banner, #tag-group-banner {
+  position: fixed;
+  top: var(--layout-topbar-height);
+  left: 0;
+  right: 0;
+  z-index: 15;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
