@@ -581,12 +581,64 @@ var renderShell = (function () {
   // A device's OWN staleness (D-12's timestamp-age fallback) can cross the threshold purely
   // from elapsed time while the poller stays healthy, so the tree needs an unconditional
   // rebuild here too, not just the conditional one renderPollerBanner already does on change.
+  // Scrollable containers that a tick can rebuild underneath the operator.
+  var SCROLL_CONTAINERS = ["sidebar-tree", "sidebar-events", "main"];
+
+  // The clock turned three full rebuilds into a every-12s event. renderTree()
+  // does container.replaceChildren() on #sidebar-tree, and both view modules
+  // rebuild on changeKind "poller" -- each carrying a comment justifying the
+  // rebuild because a poller-stale flip is "an infrequent event". That premise
+  // was true before the clock and is false after it: left alone, a scrolled
+  // tree jumped back to the top every 12 seconds, and any keyboard focus
+  // inside it was destroyed on the same cadence (the focused node is replaced,
+  // so focus falls back to <body> -- a WCAG 2.4.3 focus-order failure that
+  // would make the keyboard navigation added earlier this phase unusable).
+  //
+  // Preserving here rather than in each module keeps it at the single choke
+  // point the clock actually drives, and deliberately leaves genuinely
+  // event-driven rebuilds untouched.
+  //
+  // The real fix is for a stale flip to toggle classes instead of rebuilding
+  // structure -- recorded for Phase 11.1 rather than reworked here, because
+  // that touches all three modules' render paths.
   function tick() {
+    var scrollTops = {};
+    SCROLL_CONTAINERS.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) {
+        scrollTops[id] = el.scrollTop;
+      }
+    });
+
+    // Focus is restored by data-host rather than by node identity, because the
+    // node the operator was on will not survive the rebuild.
+    var active = document.activeElement;
+    var focusedHost =
+      active && active.closest && active.closest("[data-host]")
+        ? active.closest("[data-host]").dataset.host
+        : null;
+
     renderBanners();
     renderTree();
     tickListeners.forEach(function (fn) {
       fn();
     });
+
+    SCROLL_CONTAINERS.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el && typeof scrollTops[id] === "number") {
+        el.scrollTop = scrollTops[id];
+      }
+    });
+
+    if (focusedHost) {
+      var restored = document.querySelector(
+        '[data-host="' + CSS.escape(focusedHost) + '"]'
+      );
+      if (restored && restored.focus) {
+        restored.focus();
+      }
+    }
   }
 
   // Started once, from init(), never per view-mount -- the shell (and this clock) persists
