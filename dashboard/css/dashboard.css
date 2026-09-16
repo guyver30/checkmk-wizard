@@ -368,12 +368,18 @@ body {
 .shell {
   display: grid;
   grid-template-columns: var(--layout-sidebar-width) 1fr;
-  grid-template-rows: var(--layout-topbar-height) 1fr;
+  /* Two `auto` rows for the banners, between the topbar and the sidebar+main row (D-13/D-14,
+     D-16). `auto` collapses to zero height when the row's only child is `display: none` --
+     `[hidden] { display: none !important }` above already guarantees that, so a hidden banner
+     costs no space and both banners can show at once, each in its own row. */
+  grid-template-rows: var(--layout-topbar-height) auto auto 1fr;
   height: 100vh;
 }
 .sidebar {
   display: grid;
   grid-template-rows: var(--layout-sidebar-tree-fraction) 1fr;
+  grid-row: 4;
+  grid-column: 1;
   overflow: hidden;
   background: var(--color-surface);
   border-right: 1px solid var(--color-border);
@@ -402,6 +408,7 @@ body {
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
   grid-column: 1 / -1;
+  grid-row: 1;
 }
 
 /* Added 2026-09-16: the top nav had NO rule of any kind, so its links fell
@@ -430,6 +437,8 @@ body {
   color: var(--color-text);
 }
 #main {
+  grid-row: 4;
+  grid-column: 2;
   overflow-y: auto;
   padding: var(--space-lg);
 }
@@ -587,18 +596,20 @@ body {
 /* Banners — poller-offline (D-13/D-14) and tag-group-missing (D-16)      */
 /* ---------------------------------------------------------------------- */
 
-/* Shell-level overlay, not a grid track: these two banners are direct
-   siblings of #topbar/.sidebar/#main in the DOM (per the interfaces
-   contract) but the .shell grid above is copied verbatim from UI-SPEC
-   Layout with exactly two rows. Fixed positioning lets them sit as a
-   full-width strip directly beneath the topbar without adding a third
-   grid row that UI-SPEC's rule does not define. */
+/* Bug fixed 2026-09-16: these two banners were `position: fixed` siblings of
+   #topbar/.sidebar/#main, pinned to `top: var(--layout-topbar-height)` because the .shell
+   grid (copied verbatim from UI-SPEC Layout) only defined two rows and fixed positioning
+   was used to avoid adding a third row "UI-SPEC's rule does not define" (11-03's documented
+   `[Rule 3]` deviation). Fixed positioning takes an element out of flow entirely, so both
+   banners floated on top of the grid instead of pushing it down -- overlaying the sidebar's
+   "Devices" header and "Group by type" control, and visually crossing between panes. This
+   supersedes that deviation: the banners now get real rows in `.shell`'s
+   `grid-template-rows` (see above) and span both columns via `grid-column: 1 / -1`, so a
+   visible banner pushes the sidebar+main row down instead of covering it, and a hidden one
+   collapses its row to zero height. Phase 11.1 will revise the UI-SPEC Layout rule itself to
+   document the extra rows (.planning/phases/11-live-dashboard/11.1-SCOPE.md). */
 #poller-banner, #tag-group-banner {
-  position: fixed;
-  top: var(--layout-topbar-height);
-  left: 0;
-  right: 0;
-  z-index: 15;
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
@@ -607,9 +618,11 @@ body {
   color: var(--color-text);
 }
 #poller-banner {
+  grid-row: 2;
   background-color: rgba(114, 114, 114, 0.2); /* --state-stale at 20% opacity over --color-bg */
 }
 #tag-group-banner {
+  grid-row: 3;
   background-color: var(--color-surface-raised);
   justify-content: space-between;
 }
