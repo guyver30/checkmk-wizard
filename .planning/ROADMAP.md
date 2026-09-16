@@ -17,8 +17,10 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and a folder-derived location/group label are wired into the wizard's onboarding flow (completed 2026-09-11)
 - [x] **Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps** (INSERTED) - Urgent insertion after Phase 10 (completed 2026-09-12)
 - [ ] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract
+- [ ] **Phase 11.1: Dashboard Layout and Light Palette** - The dashboard moves to KONE's light palette and a resizable three-pane layout (tree / map-or-details / event history), with a grouping combo and severity ordering
 - [ ] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query
 - [ ] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map
+- [ ] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, availability reporting on MinIO, a time-series store with Grafana, and failure prediction from SMART/disk/memory trends
 
 ## Phase Details
 
@@ -225,3 +227,52 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 11. Live Dashboard | 8/9 | In Progress|  |
 | 12. Agent Metrics and Service Status | 0/TBD | Not started | - |
 | 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |
+
+### Phase 11.1: Dashboard Layout and Light Palette
+
+**Goal**: The dashboard adopts KONE's light palette and the operator's three-pane layout, so the product looks and behaves the way it is meant to before any further capability is built on it
+**Depends on**: Phase 11
+**Requirements**: DASH-01 (must be re-scoped — see below), DASH-06
+**Scope**: see `.planning/phases/11-live-dashboard/11.1-SCOPE.md` for the full brief.
+
+Summary:
+  1. KONE light palette, lifted from the contrast-audited preview override. Sourced from KONE's own `design-tokens.json`; every text pair >= 4.5:1 and every non-text mark >= 3.0:1, demonstrated by a computed audit
+  2. Three panes — tree (left, full height), map-or-details (centre top), event history (centre bottom). `#sidebar-events` leaves the sidebar
+  3. All three panes resizable and collapsible (not yet designed — see the scope doc's open questions on persistence and keyboard operability)
+  4. The "Group by type" toggle becomes a select (`type` / `folder`, extensible) plus an "Order by severity" checkbox
+  5. Verify newest-first event ordering against the live poller and add a regression test. The shipped code is already correct; the reported fault was in the preview harness
+
+**Revises**: D-22 (dark, split sidebar) and D-24 (index = stats strip + grouped overview) must be formally superseded in `11-CONTEXT.md`, not silently ignored. D-11's colour *meanings* stand; only the values are re-derived.
+
+**Requirements note**: DASH-01 currently requires `index.html` to show a stats strip above a grouped fleet overview. Moving the event history into the centre and making the map the default overview changes that. DASH-01 must be re-scoped or re-worded before this phase is planned.
+
+**Explicitly out of scope**: everything in Phase 14, plus the Phase 12 and 13 mockups present in the working preview. Those are illustrative only.
+
+**Plans**: TBD
+
+### Phase 14: Fleet Intelligence
+
+**Goal**: The dashboard stops reporting device status and starts reporting service impact, cause, and forecast
+**Depends on**: Phase 11.1; root-cause collapse additionally depends on Phase 13; prediction additionally depends on Phase 12
+**Requirements**: TBD — to be defined in REQUIREMENTS.md before planning
+**Scope** (from the 2026-09-16 feature discussion; see the shared proposal for the full argument):
+
+  1. **Service-impact framing** — the unit of measurement changes from devices to services. "sw-edge-tower-b is DOWN" becomes "Tower B: six lift systems unreachable, 12 minutes". Presentation work over data that already exists
+  2. **Root-cause collapse** — one switch failure renders as ONE incident with its downstream devices shown as consequences, not seven independent alarms. Uses the DOWN-vs-UNREACHABLE distinction already captured in `host_state_raw` (D-17). Needs Phase 13's `parents`
+  3. **Kiosk / wall mode** — full-screen, chrome-free, auto-rotating. Cheap; high value for a lobby or boardroom screen
+  4. **Availability reporting on MinIO** — the poller writes one small daily rollup object per day (availability, incident count, mean recovery, per device and per location). A few hundred small objects a year. No new database and no new container, and it answers the quarterly-availability question on its own
+  5. **Time-series store + Grafana** — when per-metric history is wanted, add a TSDB that uses the already-deployed MinIO as its long-term tier, and point Grafana at it. Grafana sits ALONGSIDE the dashboard (analyst tool vs at-a-glance operational view), not instead of it
+  6. **Failure prediction** — fit a trend to a monotonic metric, extrapolate to threshold, report a date. Filesystem growth, SSD/NVMe wear, reallocated sectors, memory creep. No ML in v1; simple regression keeps the answer explainable, which matters when it justifies dispatching an engineer
+  7. **AI incident narration** — the system writes the incident summary a human would, published to a retained MQTT topic by the poller so the dashboard stays a pure consumer and no backend is added
+
+**Critical edition finding (verified against Checkmk docs 2026-09-16)**: Checkmk's own export to external metric databases (InfluxDB, Graphite) is a **commercial-edition** feature; **Grafana integration is available in all editions**. This site runs 2.4.0p36.**cre** (Raw). Therefore Checkmk cannot push metrics into a TSDB here — **our own poller must write them**. It already reads Livestatus and begins parsing `perf_data` in Phase 12, so this is a small addition to a component that exists. A second reason to own the history: Checkmk's built-in RRD storage downsamples as data ages by design, which is fine for "was it busy last Tuesday" and useless for "what is the slope of this drive's wear over three years".
+
+**Open decisions blocking planning**:
+  - May monitoring data leave the network? Blocks any external-model narration. If no, a local model or template-based narration gets most of the effect and never invents a fact
+  - Is the Checkmk edition fixed at Raw? Confirms our-own-pipeline as the only path
+  - Retention target for history — sizes the store and sets how far predictions can reach
+  - Who is Grafana for? Decides whether it sits alongside the dashboard or replaces it
+
+**Honest caveat to carry**: a projection is only as good as its history. Disk-fill dates are credible almost immediately; a drive-failure date is not credible until the drive has been watched for months. Promising it sooner is the one thing that would undermine the rest.
+
+**Plans**: TBD
