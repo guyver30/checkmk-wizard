@@ -113,6 +113,13 @@ None - no external service configuration required. `dashboard/js/config.js`'s `C
 - `deploy/compose.yaml` has the `dashboard` service ready; `podman compose up -d` would bring it up on host port 8090 with no build step, though this was not run live in this plan (no server/container lifecycle command was part of any task's verify step).
 - No blockers for the next plan in wave 1.
 
+## Self-Check: PASSED
+
+All created files verified present on disk (dashboard/js/vendor/mqtt.min.js and README.md,
+all 4 fonts and README.md, 25 icon SVGs and README.md, dashboard/images/kone-logo.png,
+dashboard/js/config.js, this SUMMARY.md). All 4 commit hashes (363fede, 01b96f6, dc8ae3c,
+e2561e1) confirmed present in `git log`.
+
 ---
 *Phase: 11-live-dashboard*
 *Completed: 2026-09-16*
