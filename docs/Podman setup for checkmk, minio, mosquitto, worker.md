@@ -104,12 +104,22 @@ The canonical `compose.yaml`, `mosquitto.conf`, `mosquitto.acl`, `mosquitto.pass
 checkmk-stack/
 └── app/
     └── checkmk-wizard/     # checkout of the checkmk-wizard repo — see §8.1
-        └── deploy/         # this repo's own deploy/ directory; `podman
-            ├── compose.yaml           # compose` is run from here (§4),
-            ├── mosquitto.conf         # not from a separate copy
-            ├── mosquitto.acl
-            ├── mosquitto.passwd
-            └── gen-mosquitto-passwd.sh
+        ├── deploy/         # this repo's own deploy/ directory; `podman
+        │   ├── compose.yaml           # compose` is run from here (§4),
+        │   ├── mosquitto.conf         # not from a separate copy
+        │   ├── mosquitto.acl
+        │   ├── mosquitto.passwd
+        │   └── gen-mosquitto-passwd.sh
+        └── dashboard/      # Phase 11 — static live dashboard, bind-mounted
+            ├── index.html          # read-only into the `dashboard` service
+            ├── devices.html        # (§4/§6); see dashboard/README.md for
+            ├── details.html        # the module list and vendored-asset
+            ├── css/                # provenance
+            ├── js/
+            │   └── vendor/         # third-party scripts, vendored verbatim
+            ├── fonts/
+            ├── icons/
+            └── images/
 
 ```
 
@@ -140,6 +150,28 @@ A few things worth knowing that aren't obvious just from reading those files:
 `deploy/mosquitto.passwd` is checked in with disposable default credentials (see §6). To rotate them, re-run [`deploy/gen-mosquitto-passwd.sh`](../deploy/gen-mosquitto-passwd.sh) — optionally with `WS_PASSWORD=` / `POLLER_PASSWORD=` environment overrides — and commit (or otherwise redeploy) the resulting file. This script is the supported way to regenerate the password file; it invokes the broker's own `mosquitto_passwd` via `podman run`/`docker run`, so no local Mosquitto install is required.
 
 **Note on `CMK_PASSWORD`:** this is the `cmkadmin` login password checkmk-wizard's container mode will ask you to re-enter at Phase 1, so it can bootstrap the site's `automation`/`agent_registration` REST users itself (see §8.3). `cmkadmin` is fine for a disposable local/test stack; change it to something you'd actually want to type before running this against anything you care about.
+
+**Note on `dashboard/js/config.js` (dashboard, Phase 11):** the `dashboard` service (§6) has no
+server-side process and no `environment:` block of its own — every per-deployment setting a
+browser-served static site needs instead lives in this one classic script, loaded before every
+other dashboard script (see `dashboard/README.md`). Edit it once, before first use:
+
+- `CHECKMK_BASE_URL` — must be changed from its checked-in `http://<HOST_IP>:8080` placeholder to
+  a URL a LAN browser can actually resolve. The poller reaches Checkmk over the container-internal
+  name `checkmk:5000`, which no browser outside `cmk_net` can resolve — this constant is what the
+  detail page's "View in Checkmk →" link is built from (D-20).
+- `CHECKMK_SITE` — the same site name used everywhere else in this doc (`dmc` by default).
+- `WS_USERNAME`/`WS_PASSWORD` (`wsreader`/`wsreader` by default) — disposable read-only Mosquitto
+  WebSockets credentials, checked in deliberately, same convention as `cmkadmin`/`cmkadmin` and
+  `minioadmin`/`minioadmin` above: rotate them (see §6's Mosquitto credential row, and
+  `deploy/gen-mosquitto-passwd.sh`) before exposing this stack beyond a trusted LAN. The grant
+  behind them is read-only (`topic read lan/#` in `deploy/mosquitto.acl`), so the exposure is
+  bounded to reading the device list, never writing to the broker.
+
+The dashboard has no build step: there is no `npm install`, no bundler, and no `package.json` —
+every asset under `dashboard/` (HTML, CSS, JS, the vendored `mqtt.js`, fonts and icons) is
+committed as-is, and deployment is nothing more than the `dashboard` service's read-only bind
+mount (§4/§6).
 
 **Note on `CMK_REST_SECRET` (poller):** the `poller` service now makes an authenticated Checkmk REST call every poll cycle to read each host's folder, alongside its unauthenticated Livestatus query. `deploy/compose.yaml` ships `CMK_REST_USERNAME=automation` and interpolates `CMK_REST_SECRET` from `deploy/.env`, which is gitignored so the real secret never lands in a tracked file. The real secret comes from the Checkmk UI (Setup -> Users -> the `automation` user -> Automation secret), or by reading `/omd/sites/dmc/var/check_mk/web/automation/automation.secret` inside the `checkmk` container — and it only exists once checkmk-wizard's Phase 1 bootstrap has created that user (see §8.3), so this step happens after a first wizard run. Copy `deploy/.env.example` to `deploy/.env`, put the real value in it, and run `podman compose up -d poller` to pick it up. `CMK_REST_SECRET` defaults to empty rather than refusing to start compose: a forgotten or missing secret leaves folder enrichment degraded (empty `folder` on every device) rather than blocking the stack, because a hard `:?` guard would also block `checkmk` and `mosquitto` from starting on a first-time deployment — before the automation secret this variable demands can even exist. A *wrong* secret degrades the same way (empty `folder` on every device) — see §7. This copy is manual because the `poller` container deliberately has no filesystem access to `checkmk` — the same container boundary the whole stack is built around. Like `CMK_PASSWORD` above, rotate it before exposing this stack beyond a trusted LAN.
 
@@ -249,6 +281,11 @@ If you skip this step, there are two distinct failure signatures depending on wh
 | **Mosquitto (WebSockets)** | `ws://<HOST_IP>:9002` | `ws://mosquitto:9001` |
 | **MinIO S3** | `http://<HOST_IP>:9000` | `http://minio:9000` |
 | **MinIO Console** | `http://<HOST_IP>:9001` | *N/A (Browser only)* |
+| **Live Dashboard** (Phase 11) | `http://<HOST_IP>:8090/` | *N/A (Browser only — served by the `dashboard` nginx service)* |
+
+The dashboard's browser JavaScript talks to Mosquitto's WebSockets listener (`ws://<HOST_IP>:9002`
+above) directly from the LAN client — the `dashboard` nginx service on 8090 serves static files
+only and proxies nothing, so 9002 must stay reachable from wherever the dashboard is opened.
 
 Default credentials:
 
@@ -373,6 +410,22 @@ mosquitto_sub -h <host> -p 1883 -u poller -P poller -t 'lan/devices/<host>/statu
 ```
 
 Live-verified 2026-09-08 (deleting `192.168.0.215`): a zero-length retained publish is a *clear*, not a delivered empty message, so `mosquitto_sub` without `-C`/`-W` would simply hang with no output. `-C 1 -W 5` makes that observable: the subscribe times out ("Timed out", RC 27) with no message received, which is what confirms the retained status was cleared. Also confirm the host is gone from `lan/devices/topology` and that a `removed` event appears in `lan/events/recent`.
+
+### Dashboard check (Phase 11)
+
+With the stack up (§4) and at least one poll cycle elapsed, open `http://<HOST_IP>:8090/` from any
+LAN browser. Confirm:
+
+- The connection indicator (top-right of the top bar) reads "Connected", not "Connecting…" or
+  "Disconnected — retrying".
+- The device list populates from the broker's own retained messages — this should happen without
+  restarting the `poller` service, since every topic in §6's MQTT topic contract is published with
+  `retain: true` specifically so a freshly-opened browser tab gets the current fleet state
+  immediately, not just future updates.
+
+If the indicator never leaves "Connecting…", check that `config.js`'s `WS_PORT`/credentials match
+this doc's §6 defaults (or your rotated ones) and that port 9002 is reachable from the browser's
+own network, not just from the deployment host.
 
 ---
 
