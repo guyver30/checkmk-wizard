@@ -167,6 +167,15 @@ scanner, and the remote (SSH/firewall/OS-compatibility) helpers in
 isolation. They don't exercise a live Checkmk site, real network targets,
 or actual SSH connections — that requires a real lab environment.
 
+## Live dashboard
+
+A static, backend-less web dashboard visualizes the resulting Checkmk-monitored network topology
+and device status in real time over MQTT, served on port 8090 alongside the rest of the stack —
+see [`dashboard/README.md`](dashboard/README.md) for the directory layout, the one file an
+operator edits per deployment (`dashboard/js/config.js`), and the vendored-asset inventory, and
+[`docs/Podman setup for checkmk, minio, mosquitto, worker.md`](<docs/Podman setup for checkmk, minio, mosquitto, worker.md>)
+for how it fits into the wider deployment.
+
 ## Project layout
 
 - `src/checkmk_wizard/api.py` — Checkmk REST API client (Phase 1, 2, 5-7)
