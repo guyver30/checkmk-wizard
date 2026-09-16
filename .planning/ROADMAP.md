@@ -167,8 +167,8 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 11-07-PLAN.md — index stats strip + grouped fleet overview, and the sortable device table (wave 4)
-- [ ] 11-08-PLAN.md — Per-device detail panel, bounded history strip, Checkmk deep link (wave 4)
+- [x] 11-07-PLAN.md — index stats strip + grouped fleet overview, and the sortable device table (wave 4)
+- [x] 11-08-PLAN.md — Per-device detail panel, bounded history strip, Checkmk deep link (wave 4)
 
 **Wave 5** *(blocked on Wave 4)*
 
@@ -222,6 +222,6 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
-| 11. Live Dashboard | 6/9 | In Progress|  |
+| 11. Live Dashboard | 8/9 | In Progress|  |
 | 12. Agent Metrics and Service Status | 0/TBD | Not started | - |
 | 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |
