@@ -152,14 +152,14 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 11-01-PLAN.md — D-17 poller extension: additive `staleness` + `host_state_raw`, tests, live column probe (wave 1)
+- [x] 11-01-PLAN.md — D-17 poller extension: additive `staleness` + `host_state_raw`, tests, live column probe (wave 1)
 - [x] 11-02-PLAN.md — Vendor mqtt.js 5.15.2 + KONE fonts/icons/logo, write `config.js`, add the `dashboard` nginx service on 8090 (wave 1)
 - [x] 11-03-PLAN.md — KONE-branded stylesheet plus the three shared-shell HTML pages (wave 1)
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 11-04-PLAN.md — Pure helpers: staleness derivation, display/classification, worst-of roll-up (wave 2)
-- [ ] 11-05-PLAN.md — Wholesale-replace state store and the MQTT-over-WS connection with hand-rolled jittered backoff (wave 2)
+- [x] 11-04-PLAN.md — Pure helpers: staleness derivation, display/classification, worst-of roll-up (wave 2)
+- [x] 11-05-PLAN.md — Wholesale-replace state store and the MQTT-over-WS connection with hand-rolled jittered backoff (wave 2)
 
 **Wave 3** *(blocked on Wave 2)*
 
@@ -222,6 +222,6 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
-| 11. Live Dashboard | 2/9 | In Progress|  |
+| 11. Live Dashboard | 5/9 | In Progress|  |
 | 12. Agent Metrics and Service Status | 0/TBD | Not started | - |
 | 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |
