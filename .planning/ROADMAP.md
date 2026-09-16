@@ -163,7 +163,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 11-06-PLAN.md — Persistent shell (indicator, banners, grouped tree, event panel) and the pushState router with its ViewModule contract (wave 3)
+- [x] 11-06-PLAN.md — Persistent shell (indicator, banners, grouped tree, event panel) and the pushState router with its ViewModule contract (wave 3)
 
 **Wave 4** *(blocked on Wave 3)*
 
@@ -222,6 +222,6 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 8. Broker Infrastructure Hardening | 0/3 | Not started | - |
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
-| 11. Live Dashboard | 5/9 | In Progress|  |
+| 11. Live Dashboard | 6/9 | In Progress|  |
 | 12. Agent Metrics and Service Status | 0/TBD | Not started | - |
 | 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |
