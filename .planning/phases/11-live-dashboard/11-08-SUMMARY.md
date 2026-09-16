@@ -130,3 +130,12 @@ None - no external service configuration required. Operators deploying this dash
 ---
 *Phase: 11-live-dashboard*
 *Completed: 2026-09-16*
+
+## Self-Check: PASSED
+
+- FOUND: dashboard/js/render-details.js
+- FOUND: .planning/phases/11-live-dashboard/11-08-SUMMARY.md
+- FOUND: .planning/phases/11-live-dashboard/deferred-items.md
+- FOUND commit: 8748a6d
+- FOUND commit: 1d9e366
+- FOUND commit: a58ce43
