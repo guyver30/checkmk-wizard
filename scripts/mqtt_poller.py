@@ -150,9 +150,11 @@ OPTIONAL_HOST_COLUMNS = (
     "alias",
     # Added by Phase 11 (D-17): Checkmk's own staleness value, preferred by
     # DASH-04 over a timestamp-age fallback. Optional, never required --
-    # PLACEHOLDER: live-verification result pending Task 3's
-    # `--check-columns` probe against the real site; this comment will be
-    # replaced with a dated present/missing note in that style once run.
+    # live-verified present on a real 2.4.0p36.cre site on 2026-09-16 via
+    # the poller-container `--check-columns` probe (plan 11-01 Task 3).
+    # `--check-columns` only confirms the column exists, not that it is
+    # populated on every host, so the timestamp-age fallback (D-12) stays
+    # in place: a present column can still return null per-host.
     "staleness",
 )
 
