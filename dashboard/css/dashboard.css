@@ -671,6 +671,33 @@ body {
   line-height: 1.2;
 }
 
+/* Detail header row: display name + hostname + state badge on one line.
+   details.html ships these as three bare inline spans, so without these
+   rules the UI-SPEC's "display name (Heading, 18px) + hostname in
+   --font-mono 12px beside it" renders flat at ambient body size in the
+   body font. .detail-state-badge also carries .state-badge, which already
+   supplies the pill shape and the composed .state-* fill -- nothing here
+   sets a background, so that composition is left intact (D-15). */
+.detail-panel-header {
+  align-items: baseline;
+  display: flex;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+.detail-device-name {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detail-hostname {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 #history-strip {
   display: flex;
   gap: 2px;
