@@ -533,10 +533,41 @@ differences this revision makes to these contracts are: (a) state chips/badges r
 non-color signal via `.icon-*` mask classes instead of emoji, (b) device-type icons render the
 same way (see Device-Type Iconography below), and (c) the sortable table's active-sort indicator
 may use `.icon-caret-up-small`/`.icon-caret-down-small` instead of a bare CSS triangle, colored
-`var(--color-accent)`. All spacing, grid values (`repeat(auto-fill, minmax(240px, 1fr))`), segment
-sizing (history strip: 12px × 24px, 2px gap), and column sets from the original spec are unchanged
-and are not reproduced again here — see the original sections' surviving text, which this revision
-does not touch beyond the icon substitution just described.
+`var(--color-accent)`.
+
+> **Note (added 2026-09-16):** this section previously said "see the original sections'
+> surviving text, which this revision does not touch" — that text does not exist on disk; it
+> was deleted along with the pre-revision spec and survives only at git commit `12830c1`. The
+> values below are transcribed from that commit and from the plans that implemented against it
+> (`11-07-PLAN.md`, `11-08-PLAN.md`), so a reader does not have to dig through git history to
+> find them.
+
+**`index.html` (DASH-01, D-24):** stats strip (`#stats-strip`) — one compact stat per state (OK,
+WARN, CRIT, UNKNOWN, UNREACH, DOWN), each a 24px/600 count over a 12px label, laid out as a
+horizontal row about 72px tall. Grouped overview (`#overview-grid`) — a card per group, grid
+`repeat(auto-fill, minmax(240px, 1fr))`, each card a header (group name + `--radius-pill` count
+badge reading non-OK over total) plus a body chip grid of member hosts.
+
+**`devices.html` (DASH-02):** sortable table, exactly these columns — State, Host, Type, Location
+(hidden entirely, header included, while the grouping mode is `device_type` per D-07), Last
+Update, Flags (not sortable). Default sort: state severity worst-first, secondary key Host
+ascending — problems surface at the top of a live ops table rather than alphabetical noise.
+
+**`details.html` (DASH-03, D-19):** header (device-type icon, display name, hostname, current
+state), `in_downtime`/`acknowledged` flag badges, a bounded 20-segment status-history strip (fixed
+width regardless of how much history has accumulated — segment sizing 12px × 24px with a 2px gap),
+and the "View in Checkmk →" deep link.
+
+**Event panel (shell-level, on all three pages, D-22):** one row per entry, newest-first, bounded
+to `EVENTS_MAX_ENTRIES` (50, Phase 9 D-06), format:
+
+```
+[icon] HH:MM:SS  <host>  <old> → <new>
+```
+
+All spacing and grid/segment values above are unchanged from the pre-revision spec — this
+revision's only edit to any of these contracts is the icon substitution described at the top of
+this section.
 
 ---
 
