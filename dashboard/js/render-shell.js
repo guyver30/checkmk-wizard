@@ -36,6 +36,28 @@ var renderShell = (function () {
   var reconnectIconEl = null;
   var reconnectCountdownTimer = null;
 
+  // Bug fixed 2026-09-16: every time-derived value in the UI (staleness, the `.is-stale`
+  // hatch, relative "Nm ago" timestamps, the banner's age text) was computed only at render
+  // time, and rendering was driven solely by `store.subscribe(...)` -- i.e. by incoming MQTT
+  // messages (grep -n 'setInterval' dashboard/js/*.js found exactly one hit before this fix:
+  // the reconnect countdown below). When the poller itself stops publishing, messages stop,
+  // so nothing re-renders -- the one moment staleness matters most is also the one moment
+  // guaranteed not to produce a new message. One page-wide clock, owned here because this
+  // module already owns the cross-cutting chrome (banners, tree) shared by all three pages,
+  // fixes the whole class rather than patching each frozen surface individually.
+  //
+  // POLL_INTERVAL_SECONDS (60s, config.js) would leave up to a minute of visibly wrong "ago"
+  // text between ticks. These renders (a banner, ~20 tree rows) are small and purely local, so
+  // a much shorter interval costs little; 12s keeps every time-derived surface within 12s of
+  // correct without noticeably increasing CPU/DOM churn on a long-lived kiosk tab.
+  var CLOCK_TICK_MS = 12000;
+  var clockTimer = null;
+  // Listeners registered by shell.js so the active per-page ViewModule (overview cards,
+  // device table, detail panel) also re-renders its own time-derived surfaces on every tick,
+  // without this module needing to know ViewModules exists (11-06's script-order contract
+  // keeps this module ignorant of the per-page modules, on purpose).
+  var tickListeners = [];
+
   // Which tree groups are collapsed, keyed by group key (folder path or
   // device_type value). renderTree() rebuilds the whole tree on every store
   // change (device state, topology, poller status, grouping-mode toggle) --
@@ -547,6 +569,39 @@ var renderShell = (function () {
   }
 
   // ---------------------------------------------------------------------
+  // Clock -- the single periodic re-render for time-derived rendering
+  // ---------------------------------------------------------------------
+
+  function onTick(fn) {
+    tickListeners.push(fn);
+  }
+
+  // renderBanners() always recomputes the banner's age text and the stale flag when called
+  // (see renderPollerBanner above); it only rebuilds the tree itself when pollerStale flips.
+  // A device's OWN staleness (D-12's timestamp-age fallback) can cross the threshold purely
+  // from elapsed time while the poller stays healthy, so the tree needs an unconditional
+  // rebuild here too, not just the conditional one renderPollerBanner already does on change.
+  function tick() {
+    renderBanners();
+    renderTree();
+    tickListeners.forEach(function (fn) {
+      fn();
+    });
+  }
+
+  // Started once, from init(), never per view-mount -- the shell (and this clock) persists
+  // across the pushState navigation between pages (D-21/D-23), so there is exactly one timer
+  // for the lifetime of the page and nothing for mountView()/unmountView() to leak on
+  // navigation. The clockTimer guard makes a second call a no-op even if init() ever ran
+  // twice.
+  function startClock() {
+    if (clockTimer) {
+      return;
+    }
+    clockTimer = setInterval(tick, CLOCK_TICK_MS);
+  }
+
+  // ---------------------------------------------------------------------
   // Init -- wires the controls this module owns
   // ---------------------------------------------------------------------
 
@@ -592,6 +647,10 @@ var renderShell = (function () {
     renderBanners();
     renderTree();
     renderEvents();
+    // Must not start before the rest of init() above has run at least once -- tick() calls
+    // renderBanners()/renderTree(), which assume the DOM they touch already reflects an
+    // initial render, not a still-uninitialised page.
+    startClock();
   }
 
   return {
@@ -602,6 +661,8 @@ var renderShell = (function () {
     renderTreeDevice: renderTreeDevice,
     renderEvents: renderEvents,
     groupingMode: groupingMode,
+    tick: tick,
+    onTick: onTick,
     get pollerStale() {
       return pollerStale;
     },
