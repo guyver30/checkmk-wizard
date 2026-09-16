@@ -36,6 +36,15 @@ var renderShell = (function () {
   var reconnectIconEl = null;
   var reconnectCountdownTimer = null;
 
+  // Which tree groups are collapsed, keyed by group key (folder path or
+  // device_type value). renderTree() rebuilds the whole tree on every store
+  // change (device state, topology, poller status, grouping-mode toggle) --
+  // if collapse state lived only in the DOM it would be destroyed and reset
+  // to "expanded" on the very next poll cycle. This Set is the durable
+  // source of truth that groupElement() reads on every rebuild; renderTree()
+  // itself never touches it.
+  var collapsedGroupKeys = new Set();
+
   // Storage access is wrapped because reading it can THROW, not just return
   // null: a browser with site data blocked, a private window, or an embedded
   // frame with restricted storage all raise on access. groupingMode() runs
@@ -326,19 +335,66 @@ var renderShell = (function () {
     );
   }
 
+  // Toggles collapse state in module state (see collapsedGroupKeys above),
+  // then rebuilds the tree so groupElement() picks up the new state --
+  // the same "mutate module state, then renderTree()" pattern the grouping
+  // toggle already uses in init() below.
+  function toggleGroupCollapsed(key) {
+    if (collapsedGroupKeys.has(key)) {
+      collapsedGroupKeys.delete(key);
+    } else {
+      collapsedGroupKeys.add(key);
+    }
+    renderTree();
+  }
+
+  // Purely decorative: the group header itself (role="button", aria-expanded)
+  // is what assistive tech announces, so this icon carries no independent
+  // text alternative. Its direction is flipped in CSS via .is-collapsed.
+  function groupToggleIcon() {
+    var el = document.createElement("span");
+    el.className = "icon icon-caret-down-small tree-group-toggle-icon";
+    el.setAttribute("aria-hidden", "true");
+    return el;
+  }
+
+  // A <div> (unlike a native <button>) never synthesizes a click from
+  // Enter/Space -- same reasoning as shell.js's handleKeydown for
+  // .tree-host-row, kept local to this module since it toggles a group
+  // rather than navigating. The header is never inside a [data-host] row
+  // (groups and rows are siblings under .tree-group), so this can never
+  // fire host navigation, and shell.js's own [data-host] keydown handler
+  // can never fire from here either.
+  function handleGroupHeaderKeydown(event) {
+    if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") {
+      return;
+    }
+    event.preventDefault();
+    toggleGroupCollapsed(event.currentTarget.dataset.groupName);
+  }
+
   function groupElement(key, idsSet, mode) {
     var ids = Array.from(idsSet).sort(function (a, b) {
       return displayName(store.devices.get(a)).localeCompare(displayName(store.devices.get(b)));
     });
     var rollup = rollUpGroup(ids, store.devices);
+    var collapsed = collapsedGroupKeys.has(key);
 
     var groupEl = document.createElement("div");
-    groupEl.className = "tree-group";
+    groupEl.className = "tree-group" + (collapsed ? " is-collapsed" : "");
     groupEl.dataset.groupKey = key;
 
     var header = document.createElement("div");
     header.className = "tree-group-header";
     header.dataset.groupName = key;
+    header.tabIndex = 0;
+    header.setAttribute("role", "button");
+    header.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    header.addEventListener("click", function () {
+      toggleGroupCollapsed(key);
+    });
+    header.addEventListener("keydown", handleGroupHeaderKeydown);
+    header.appendChild(groupToggleIcon());
 
     var nameEl = document.createElement("span");
     nameEl.className = "tree-group-name";
@@ -349,6 +405,11 @@ var renderShell = (function () {
     badge.className = "count-badge";
     header.appendChild(badge);
 
+    // updateGroupHeader() below only touches the state/stale classes, the
+    // badge text and the aria-label -- it never touches aria-expanded or
+    // .is-collapsed, so renderTreeDevice()'s patch-in-place call to it
+    // (a single device changing state) can never re-expand a collapsed
+    // group or collapse an expanded one.
     updateGroupHeader(header, rollup);
     groupEl.appendChild(header);
 
