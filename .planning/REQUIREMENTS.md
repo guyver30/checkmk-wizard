@@ -38,7 +38,7 @@
 
 ### Dashboard
 
-- [ ] **DASH-01**: `index.html` shows an at-a-glance stats strip (counts by state) above a grouped fleet overview, merging incoming updates in place rather than re-rendering from scratch
+- [ ] **DASH-01**: `index.html` shows an at-a-glance stats strip (counts by state) above the centre's primary view, merging incoming updates in place rather than re-rendering from scratch. The primary view is the topology map (DASH-07, Phase 13); until that lands it is a sized, labelled placeholder pane
 - [ ] **DASH-02**: `devices.html` shows a live sortable device table plus a recent-events panel, updating in place
 - [ ] **DASH-03**: `details.html` shows a per-device drill-down with a bounded status-history strip, linking out to Checkmk's own UI for full service-level detail
 - [ ] **DASH-04**: Dashboard shows a distinct stale/unknown visual state (separate from down) when a device's last-seen timestamp exceeds a threshold, or when the poller's own liveness signal goes stale
@@ -114,5 +114,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Requirements defined: 2026-09-05*
 *Last updated: 2026-09-05 after roadmap creation (Phases 8-11)*
 *Split note (2026-09-12): DASH-01 originally conflated two deliverables — "a live topology map (vis-network)" and "an at-a-glance stats strip ... merging incoming updates". Phase 11's `/bm:discuss-phase` session moved the topology map out, because Checkmk's `parents` attribute is unset on the target site so an auto-built map would render as disconnected dots. The map half became **DASH-07**, owned by Phase 13 (Wizard Parents Support and Topology Map), which first teaches the wizard to populate `parents`. DASH-01 keeps the stats-strip half, now paired with the grouped fleet overview that occupies `index.html` until the map lands. DASH-06's "nodes" was reworded to "hosts" in the same pass, since Phase 11 renders a tree and overview tiles rather than graph nodes. See `.planning/phases/11-live-dashboard/11-CONTEXT.md` (Scope Revision) and `11-DISCUSSION-LOG.md` (second session).*
+
+*Re-wording note (2026-09-16): DASH-01's "a grouped fleet overview" became "the centre's primary view" when Phase 11.1 moved the event history into the centre and reserved the centre's main area for the topology map (decisions D-25 and D-27, `.planning/phases/11.1-dashboard-layout-and-light-palette/11.1-CONTEXT.md`). The stats strip, the "above", and the merge-in-place clause are unchanged, so the requirement is **re-worded, not re-scoped** — and stays verifiable in Phase 11.1 against the placeholder. `render-index.js`'s grouped fleet overview is superseded and deleted by D-27; Phase 13 (DASH-07) drops the real map into the placeholder's geometry.*
 
 *Terminology note: TAG-01/02/03 and DASH-06 wording was reframed from "VLAN"/"unknown"/"Phase 5" to "location/group label"/"other"/"Phase 4 prompt, Phase 5 apply" during Phase 10's `/bm:discuss-phase` session, per decisions D-01, D-02, D-06 and D-07 (`.planning/phases/10-checkmk-tag-group-onboarding-integration/10-CONTEXT.md`).*
