@@ -1,7 +1,7 @@
 ---
 phase: 11-live-dashboard
 plan: 01
-status: paused
+status: complete
 subsystem: poller
 tags: [mqtt, livestatus, poller-contract, dashboard-prerequisite]
 dependency-graph:
@@ -22,7 +22,7 @@ key-files:
 decisions: []
 metrics:
   duration_minutes: null
-  completed: null
+  completed: 2026-09-16
 ---
 
 # Phase 11 Plan 01: Poller staleness + host_state_raw contract extension Summary
@@ -32,10 +32,11 @@ own `staleness` value and a `host_state_raw` (`UP`/`DOWN`/`UNREACH`) field — s
 consumer can prefer Checkmk's authoritative staleness signal and separately render UNREACHABLE
 hosts, without touching the existing `state` enum's meaning.
 
-**Status: PAUSED at the Task 3 checkpoint.** Tasks 1 and 2 are complete, committed, and verified.
-Task 3 is a blocking live-verification checkpoint (`gate="blocking"`) that the operator has
-explicitly overridden auto-approval for — this executor did not, and must not, run the live probe
-or fabricate its result. See "Checkpoint: Task 3" below for exactly what remains.
+**Status: COMPLETE — all 3 tasks done.** Tasks 1 and 2 were completed, committed, and verified in
+a prior session. Task 3's blocking live-verification checkpoint (`gate="blocking"`) has now been
+resolved: the operator ran the `--check-columns` probe on the deploy host against a real
+Checkmk 2.4.0p36.cre site on 2026-09-16, confirming `staleness` is present, and this executor
+recorded that dated result in the source. See "Checkpoint: Task 3" below for the full detail.
 
 ## Completed Tasks
 
@@ -43,6 +44,7 @@ or fabricate its result. See "Checkpoint: Task 3" below for exactly what remains
 |------|------|--------|-------|
 | 1 | Add staleness and host_state_raw to the poller | a436302 | `scripts/mqtt_poller.py` |
 | 2 | Tests for the two new fields, plus the topic-contract doc update | a58abe2 | `tests/test_mqtt_poller.py`, `docs/Podman setup for checkmk, minio, mosquitto, worker.md` |
+| 3 | Live `--check-columns` probe for the staleness column | ae5baa5 | `scripts/mqtt_poller.py` |
 
 ## What Was Built (Tasks 1-2)
 
@@ -104,62 +106,59 @@ or fabricate its result. See "Checkpoint: Task 3" below for exactly what remains
 
 All of the above was actually executed and observed, not inferred from code inspection.
 
-## Checkpoint: Task 3 (BLOCKING — not run by this executor)
+## Checkpoint: Task 3 (RESOLVED)
 
-**Why this executor did not run it:** Task 3 is `type="checkpoint:human-verify" gate="blocking"`.
-This plan's `checkpoint_policy` explicitly states the operator has overridden auto-approval for
-this checkpoint (this overrides the repo's `auto_advance: true` config default), and that the
-executor must not self-approve it, fabricate a probe result, or mark it verified on its own
-judgment. This sandbox also has no network route to the live `dmc` Checkmk site, so the probe
-could not be run here even without the override.
+Task 3 was `type="checkpoint:human-verify" gate="blocking"` and required the operator to run the
+live `--check-columns` probe on the deploy host, since this sandbox has no network route to the
+live Checkmk site and the executor must not fabricate a probe result.
 
-**What remains:** confirm whether the live Checkmk site's Livestatus `hosts` table exposes a
-`staleness` column, following the 2026-09-08/2026-09-11 dated column-probe precedent already in
-`scripts/mqtt_poller.py`'s `OPTIONAL_HOST_COLUMNS` comment block.
-
-**Exact command for the operator to run**, on the deploy host, from the repo checkout:
+**Command run by the operator**, from the poller container:
 ```bash
-uv run python scripts/mqtt_poller.py --check-columns
+podman exec mqtt-poller python -u /scripts/mqtt_poller.py --check-columns
 ```
-(Set `LIVESTATUS_HOST`/`LIVESTATUS_PORT` env vars first if they differ from the defaults, per
-the deploy doc's §7 poller smoke test.)
 
-**What to paste back:** the full command output, plus the site's Checkmk version string (e.g.
-from the Checkmk UI's "About Checkmk" page or `omd version`).
+**Full output:**
+```
+present: name (required)
+present: state (required)
+present: scheduled_downtime_depth (optional)
+present: acknowledged (optional)
+present: worst_service_state (optional)
+present: parents (optional)
+present: tags (optional)
+present: alias (optional)
+present: staleness (optional)
+```
 
-**Pass criterion:** the `staleness` line in the output reads `present: staleness (optional)`.
-**Fail criterion:** it reads `missing: staleness (optional)`.
+**Site version:** `omd version` reported `2.4.0p36.cre`.
+**Date of probe:** 2026-09-16.
+**Verdict:** PRESENT — every column the poller queries, including `staleness`, exists on the
+live site.
 
-**What happens with each outcome** (to be done by whichever agent resumes this plan):
-- **PRESENT:** replace the placeholder comment above the `"staleness"` entry in
-  `OPTIONAL_HOST_COLUMNS` (`scripts/mqtt_poller.py`) with a dated live-verification note in the
-  file's existing style — "live-verified present and populated on a real `<version>` site on
-  `<date>`" — matching the 2026-09-08 and 2026-09-11 precedents already in that comment block.
-  No code change is needed beyond the comment; the extraction logic already handles a present
-  column correctly.
-- **MISSING:** record that outcome, also dated, in the same comment block, and note that
-  `staleness` stays permanently `null` on this site — a documented graceful degradation, not a
-  bug. The dashboard's timestamp-age fallback (plan 11-04) then carries DASH-04 alone; no code
-  change is required either way.
-- **"skip" (operator declines to run it now):** record that the field is unverified and that the
-  fallback path (timestamp-age against the 3× factor, D-12) carries DASH-04 until a future probe
-  confirms or denies the column.
-
-Task 3 has no code files of its own to modify beyond the one placeholder comment described
-above — resuming this plan is a documentation-only edit once the probe result is known.
+**Resolution:** the placeholder comment above the `"staleness"` entry in `OPTIONAL_HOST_COLUMNS`
+(`scripts/mqtt_poller.py`) was replaced with a dated live-verification note (commit `ae5baa5`).
+The note deliberately says "present" only, not "present and populated" — `--check-columns` only
+confirms the column exists in the Livestatus schema, it does not report whether the column
+carries a non-null value on any given host. The timestamp-age fallback (D-12) therefore stays in
+place unchanged: a present column can still return `null` per-host, so the dashboard consumer
+(plan 11-04) still needs the fallback path. No extraction logic changed — `query_devices()`
+already handled a present column correctly before this commit.
 
 ## Deviations from Plan
 
-None — plan executed exactly as written for Tasks 1-2. Task 3 was correctly identified as a
-blocking checkpoint per the plan's own `gate="blocking"` attribute and this execution's
-`checkpoint_policy` override, and was not auto-approved.
+None — plan executed exactly as written for all three tasks. Task 3's checkpoint was correctly
+held open (not auto-approved, not fabricated) until the operator supplied the real probe output,
+then closed out with a documentation-only edit as the plan specified.
 
 ## Self-Check
 
-- `scripts/mqtt_poller.py` — FOUND (modified, commit a436302)
+- `scripts/mqtt_poller.py` — FOUND (modified, commits a436302, ae5baa5)
 - `tests/test_mqtt_poller.py` — FOUND (modified, commit a58abe2)
 - `docs/Podman setup for checkmk, minio, mosquitto, worker.md` — FOUND (modified, commit a58abe2)
 - Commit `a436302` — FOUND in `git log --oneline --all`
 - Commit `a58abe2` — FOUND in `git log --oneline --all`
+- Commit `ae5baa5` — FOUND in `git log --oneline --all`
+- `uv run pytest -q` after the Task 3 edit — 409 passed, 0 failures (comment-only change did not
+  alter the suite)
 
 ## Self-Check: PASSED
