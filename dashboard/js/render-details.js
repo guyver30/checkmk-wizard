@@ -243,6 +243,63 @@ ViewModules.details = (function () {
     renderCheckmkLink(mainEl, hostname);
   }
 
+  // The UI-SPEC's per-segment tooltip wants HH:MM:SS, one level more precise than
+  // formatClock() (display.js) provides -- built locally rather than widening that shared
+  // helper's contract for every other caller.
+  function formatClockWithSeconds(isoString) {
+    var parsed = Date.parse(isoString);
+    if (Number.isNaN(parsed)) {
+      return "unknown";
+    }
+    var date = new Date(parsed);
+    var hh = String(date.getHours()).padStart(2, "0");
+    var mm = String(date.getMinutes()).padStart(2, "0");
+    var ss = String(date.getSeconds()).padStart(2, "0");
+    return hh + ":" + mm + ":" + ss;
+  }
+
+  function historySegment(entry) {
+    var segment = document.createElement("div");
+    segment.className = "history-segment";
+    if (entry) {
+      segment.classList.add(stateClass(entry.to));
+      segment.title = formatClockWithSeconds(entry.timestamp) + " — " + entry.to;
+    } else {
+      // Unfilled slot: no transition recorded yet at this position. A plain
+      // --color-surface fill (rather than omitting the segment) keeps the strip's total
+      // width fixed at HISTORY_MAX_ENTRIES segments regardless of how much history exists.
+      segment.style.backgroundColor = "var(--color-surface)";
+    }
+    return segment;
+  }
+
+  // Entries arrive oldest-first, already bounded to at most HISTORY_MAX_ENTRIES by the
+  // poller (scripts/mqtt_poller.py) and republished wholesale on every change -- never
+  // appended to here (11-RESEARCH.md Pattern 1), which is also why unmount() below drops
+  // mountedHostname rather than leaving stale entries to be added onto.
+  function renderHistoryStrip(mainEl, hostname) {
+    var container = mainEl.querySelector("#history-strip");
+    if (!container) {
+      return;
+    }
+    var entries = store.history.get(hostname) || [];
+    var boundedEntries = entries.slice(-HISTORY_MAX_ENTRIES);
+    var placeholderCount = HISTORY_MAX_ENTRIES - boundedEntries.length;
+
+    // Fixed-length, index-assigned rather than grown incrementally -- placeholders occupy
+    // the oldest (leftmost) positions, then each known entry lands at its own fixed index,
+    // so the strip is always exactly HISTORY_MAX_ENTRIES segments wide.
+    var segments = new Array(HISTORY_MAX_ENTRIES);
+    for (var i = 0; i < placeholderCount; i++) {
+      segments[i] = historySegment(null);
+    }
+    boundedEntries.forEach(function (entry, index) {
+      segments[placeholderCount + index] = historySegment(entry);
+    });
+
+    container.replaceChildren.apply(container, segments);
+  }
+
   function mount(mainEl, params) {
     mountedMainEl = mainEl;
     mountedHostname = params && params.id;
@@ -256,6 +313,7 @@ ViewModules.details = (function () {
     }
     showPanel(mainEl);
     renderHeader(mainEl, mountedHostname, payload);
+    renderHistoryStrip(mainEl, mountedHostname);
   }
 
   function update(changeKind, arg) {
@@ -279,10 +337,22 @@ ViewModules.details = (function () {
       if (current) {
         renderHeader(mountedMainEl, mountedHostname, current);
       }
+    } else if (changeKind === "history" && arg === mountedHostname) {
+      // The strip is 20 small nodes -- rebuilding it wholesale here is cheap and is not the
+      // "re-render from scratch" DASH-01/02 prohibit (those govern the fleet-wide views).
+      renderHistoryStrip(mountedMainEl, mountedHostname);
     }
   }
 
   function unmount() {
+    if (mountedMainEl) {
+      var container = mountedMainEl.querySelector("#history-strip");
+      if (container) {
+        // Drops every segment so a subsequent mount for a different host cannot render the
+        // previous host's history before its own renderHistoryStrip() call lands.
+        container.replaceChildren();
+      }
+    }
     mountedMainEl = null;
     mountedHostname = null;
   }
