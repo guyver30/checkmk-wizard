@@ -389,6 +389,109 @@ body {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Grouped sidebar tree — groups + host rows (UI-SPEC Layout;             */
+/* D-05/D-06/D-07/D-15). Rows/headers receive a `.state-*` class directly */
+/* from render-shell.js for their worst-of/own-state fill, plus `.is-stale`*/
+/* when hatched — these rules only add layout, never background-color or */
+/* background-image, so they never fight that composed fill/hatch.       */
+/* ---------------------------------------------------------------------- */
+
+.sidebar-tree-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.tree-group {
+  display: flex;
+  flex-direction: column;
+}
+.tree-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+}
+.tree-group-name {
+  /* D-07: the group key (folder path or device_type value) has no other
+     token assigned to it — render it in the base text color. */
+  color: var(--color-text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-group-list {
+  display: flex;
+  flex-direction: column;
+}
+.tree-host-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.tree-host-name {
+  color: var(--color-text);
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Event panel — always-mounted event history rows (UI-SPEC's original    */
+/* Event-panel row format: "[icon] HH:MM:SS  <host>  <old> → <new>",      */
+/* newest-first; D-22/D-23). `.event-state-chip` receives a `.state-*`    */
+/* class directly from render-shell.js for its fill — this rule only adds */
+/* the pill shape/padding, never background-color, so it never fights it.*/
+/* ---------------------------------------------------------------------- */
+
+.event-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--color-border);
+}
+.event-row:last-child {
+  border-bottom: none;
+}
+.event-time {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+.event-device-name {
+  color: var(--color-text);
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.event-transition {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+.event-arrow {
+  color: var(--color-text-muted);
+}
+.event-state-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  border-radius: var(--radius-pill);
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+/* ---------------------------------------------------------------------- */
 /* Connection indicator (DASH-05, UI-SPEC Connection Indicator)           */
 /* ---------------------------------------------------------------------- */
 
