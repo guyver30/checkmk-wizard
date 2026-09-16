@@ -67,7 +67,24 @@ var ViewModules = ViewModules || {};
     return { view: view, params: paramsForView(view, search) };
   }
 
+  // Marks the current view's nav link with aria-current="page". That is both
+  // the accessible current-page signal and the hook dashboard.css uses to draw
+  // UI-SPEC's reserved accent underline. Matching is by the link's own href so
+  // no view-name-to-filename table has to be kept in sync here.
+  function markActiveNav(view) {
+    var links = document.querySelectorAll("#topbar nav a");
+    for (var i = 0; i < links.length; i++) {
+      var linkView = viewForPathname(links[i].getAttribute("href") || "");
+      if (linkView === view) {
+        links[i].setAttribute("aria-current", "page");
+      } else {
+        links[i].removeAttribute("aria-current");
+      }
+    }
+  }
+
   function mountView(view, params) {
+    markActiveNav(view);
     if (currentModule && currentModule.unmount) {
       currentModule.unmount();
     }

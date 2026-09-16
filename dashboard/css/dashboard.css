@@ -403,6 +403,32 @@ body {
   border-bottom: 1px solid var(--color-border);
   grid-column: 1 / -1;
 }
+
+/* Added 2026-09-16: the top nav had NO rule of any kind, so its links fell
+   back to the user agent's default link colors -- #0000EE unvisited and
+   #551A8B visited -- against --color-surface (#142041). Both are close to
+   unreadable on that navy, and the visited state was worse than the
+   unvisited one. UI-SPEC's Color section reserves the accent for the
+   "active nav/tab underline", which was never implemented either; the
+   aria-current rule below completes that contract. shell.js marks the
+   current view (see markActiveNav). */
+#topbar nav {
+  display: flex;
+  gap: var(--space-md);
+}
+#topbar nav a {
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-muted);
+  padding: 4px 2px;
+  text-decoration: none;
+}
+#topbar nav a:hover {
+  color: var(--color-text);
+}
+#topbar nav a[aria-current="page"] {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text);
+}
 #main {
   overflow-y: auto;
   padding: var(--space-lg);
