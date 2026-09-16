@@ -346,7 +346,25 @@ What each check proves:
 - `check_ghost_tombstone` — Success Criterion 4 (PLR-06): a host that disappeared while the poller was down gets tombstoned (skipped by `--skip-restart-checks`)
 - `check_lwt_offline` — the LWT half of Success Criterion 5 (PLR-07) (skipped by `--skip-restart-checks`)
 
-`uv run python scripts/mqtt_poller.py --check-columns` is the standalone way to confirm which Livestatus `hosts` columns a given site actually exposes, without running the full smoke test.
+To confirm which Livestatus `hosts` columns a given site actually exposes, without running
+the full smoke test:
+
+```bash
+podman exec mqtt-poller python -u /scripts/mqtt_poller.py --check-columns
+```
+
+Run it against the `mqtt-poller` container, not from a shell on the deployment host. Livestatus
+TCP (6557) is deliberately never published to the host — the `checkmk` service publishes only
+8080/8000/6556 — so it is reachable only from inside `cmk_net`. The poller container already has
+`LIVESTATUS_HOST=checkmk` in its `environment:`, already has `paho-mqtt` installed, and already
+mounts the script at `/scripts/mqtt_poller.py`, so the command needs no further setup.
+
+Corrected 2026-09-16: this line previously read `uv run python scripts/mqtt_poller.py
+--check-columns`, which is an `automation-worker` command (that container installs `uv`; the
+poller container does not) written as if it were a host command. Run from a host shell it fails
+on DNS or connect, which reads like a site problem rather than a wrong-command problem. Every
+bare `uv run` elsewhere in this section is likewise a command for inside `automation-worker` at
+`/app/checkmk-wizard`, never for the deployment host itself.
 
 **Manual tombstone test:** the fifth Phase 9 success criterion (a real Checkmk host deletion) needs a live Checkmk site to delete a host from, so it isn't automated. Delete a host in the Checkmk UI, activate changes, wait one poll interval, then confirm with:
 
