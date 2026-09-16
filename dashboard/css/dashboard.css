@@ -1,0 +1,608 @@
+/*
+ * KONE-branded stylesheet for the live network dashboard (index.html,
+ * devices.html, details.html). Implements the visual/interaction contract
+ * in .planning/phases/11-live-dashboard/11-UI-SPEC.md verbatim: every token
+ * value below is copied from that document, not re-derived. See UI-SPEC's
+ * Color/Typography/Iconography/Layout sections for the sourcing rationale
+ * (KONE's own design-tokens.json, verified against a real KONE brand asset
+ * export under web_assets/).
+ *
+ * No CDN, no remote stylesheet import, no external URL anywhere in this
+ * file — every font and icon is vendored same-origin under ../fonts/ and
+ * ../icons/ (D-03's precedent, extended to brand assets by the
+ * 2026-09-13 KONE-brand revision).
+ */
+
+/* ---------------------------------------------------------------------- */
+/* Typography — self-hosted KONE Information + Inter (UI-SPEC Typography) */
+/* ---------------------------------------------------------------------- */
+
+@font-face {
+  font-family: 'KONE Information';
+  src: url('../fonts/kone-information.woff2') format('woff2'),
+       url('../fonts/kone-information.woff') format('woff');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('../fonts/inter-regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('../fonts/inter-semibold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Tokens — Color, Typography, Spacing, Radius, Layout (UI-SPEC, verbatim) */
+/* ---------------------------------------------------------------------- */
+
+:root {
+  /* Color — sourced from KONE design-tokens.json (UI-SPEC Color) */
+  --color-bg: #141414;
+  --color-surface: #142041;
+  --color-surface-raised: #142c6e;
+  --color-border: rgba(20, 56, 155, 0.35);
+  --color-accent: #1450f5;
+  --color-accent-text: #7296f9;
+  --color-text: #ffffff;
+  --color-text-muted: #a1b9fb;
+
+  /* State palette — D-11 hue meanings, KONE token hexes.
+     Note D-11 red split: --state-down is deliberately NOT the same hex as
+     --state-crit (UI-SPEC "Noted deviation: D-11 red split"). */
+  --state-ok: #1ed273;
+  --state-warn: #ffe141;
+  --state-crit: #ff5f28;
+  --state-down: #f51414;
+  --state-unknown: #ffa023;
+  --state-unreach: #ffa023;
+  --state-pend: #959595;
+  --state-stale: #727272;
+
+  /* Spacing scale (UI-SPEC Spacing Scale) */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-sm2: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+
+  /* Radius scale (UI-SPEC Radius Scale) */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-pill: 100px;
+
+  /* Font stacks (UI-SPEC Typography) */
+  --font-sans: 'Inter', -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+
+  /* Layout (UI-SPEC Layout) */
+  --layout-sidebar-width: 280px;
+  --layout-topbar-height: 48px;
+  --layout-sidebar-tree-fraction: 58%;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Base                                                                   */
+/* ---------------------------------------------------------------------- */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+/* Focus visibility (UI-SPEC Accessibility) — unchanged across all pages */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Brand Masthead (UI-SPEC Brand Masthead, verbatim)                      */
+/* ---------------------------------------------------------------------- */
+
+.brand-masthead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  height: 32px;
+}
+.brand-logo {
+  height: 24px;
+  width: auto;
+  background: #ffffff;
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  box-sizing: content-box;
+  display: block;
+}
+.brand-title {
+  font-family: 'KONE Information', var(--font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--color-text);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Iconography — 25 vendored KONE SVGs via mask-image (UI-SPEC, verbatim) */
+/* ---------------------------------------------------------------------- */
+
+.icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  background-color: currentColor;
+}
+.icon-good-filled {
+  -webkit-mask-image: url('../icons/good-filled.svg');
+  mask-image: url('../icons/good-filled.svg');
+}
+.icon-warning-triangle-filled {
+  -webkit-mask-image: url('../icons/warning-triangle-filled.svg');
+  mask-image: url('../icons/warning-triangle-filled.svg');
+}
+.icon-bad-filled {
+  -webkit-mask-image: url('../icons/bad-filled.svg');
+  mask-image: url('../icons/bad-filled.svg');
+}
+.icon-close-circle-filled {
+  -webkit-mask-image: url('../icons/close-circle-filled.svg');
+  mask-image: url('../icons/close-circle-filled.svg');
+}
+.icon-question-circle-filled {
+  -webkit-mask-image: url('../icons/question-circle-filled.svg');
+  mask-image: url('../icons/question-circle-filled.svg');
+}
+.icon-question-circle {
+  -webkit-mask-image: url('../icons/question-circle.svg');
+  mask-image: url('../icons/question-circle.svg');
+}
+.icon-status-unavailable {
+  -webkit-mask-image: url('../icons/status-unavailable.svg');
+  mask-image: url('../icons/status-unavailable.svg');
+}
+.icon-clock {
+  -webkit-mask-image: url('../icons/clock.svg');
+  mask-image: url('../icons/clock.svg');
+}
+.icon-pause-filled {
+  -webkit-mask-image: url('../icons/pause-filled.svg');
+  mask-image: url('../icons/pause-filled.svg');
+}
+.icon-check-circle-filled {
+  -webkit-mask-image: url('../icons/check-circle-filled.svg');
+  mask-image: url('../icons/check-circle-filled.svg');
+}
+.icon-warning-circle-filled {
+  -webkit-mask-image: url('../icons/warning-circle-filled.svg');
+  mask-image: url('../icons/warning-circle-filled.svg');
+}
+.icon-info-filled {
+  -webkit-mask-image: url('../icons/info-filled.svg');
+  mask-image: url('../icons/info-filled.svg');
+}
+.icon-close-cross {
+  -webkit-mask-image: url('../icons/close-cross.svg');
+  mask-image: url('../icons/close-cross.svg');
+}
+.icon-refresh {
+  -webkit-mask-image: url('../icons/refresh.svg');
+  mask-image: url('../icons/refresh.svg');
+}
+.icon-filter {
+  -webkit-mask-image: url('../icons/filter.svg');
+  mask-image: url('../icons/filter.svg');
+}
+.icon-list {
+  -webkit-mask-image: url('../icons/list.svg');
+  mask-image: url('../icons/list.svg');
+}
+.icon-pop-out {
+  -webkit-mask-image: url('../icons/pop-out.svg');
+  mask-image: url('../icons/pop-out.svg');
+}
+.icon-caret-up-small {
+  -webkit-mask-image: url('../icons/caret-up-small.svg');
+  mask-image: url('../icons/caret-up-small.svg');
+}
+.icon-caret-down-small {
+  -webkit-mask-image: url('../icons/caret-down-small.svg');
+  mask-image: url('../icons/caret-down-small.svg');
+}
+.icon-internet {
+  -webkit-mask-image: url('../icons/internet.svg');
+  mask-image: url('../icons/internet.svg');
+}
+.icon-api {
+  -webkit-mask-image: url('../icons/api.svg');
+  mask-image: url('../icons/api.svg');
+}
+.icon-secured {
+  -webkit-mask-image: url('../icons/secured.svg');
+  mask-image: url('../icons/secured.svg');
+}
+.icon-videocam {
+  -webkit-mask-image: url('../icons/videocam.svg');
+  mask-image: url('../icons/videocam.svg');
+}
+.icon-controls {
+  -webkit-mask-image: url('../icons/controls.svg');
+  mask-image: url('../icons/controls.svg');
+}
+.icon-circle {
+  -webkit-mask-image: url('../icons/circle.svg');
+  mask-image: url('../icons/circle.svg');
+}
+
+/* Animation for the connection indicator's "Reconnecting" spinner
+   (UI-SPEC Connection Indicator) */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.icon-refresh.is-spinning {
+  animation: spin 1s linear infinite;
+}
+
+/* ---------------------------------------------------------------------- */
+/* State-color family — one class per Checkmk/dashboard state.           */
+/* Systematic naming: render modules compute the class name from the      */
+/* state string (e.g. "state-" + state.toLowerCase()).                   */
+/* ---------------------------------------------------------------------- */
+
+.state-ok      { background-color: var(--state-ok); }
+.state-warn    { background-color: var(--state-warn); }
+.state-crit    { background-color: var(--state-crit); }
+.state-down    { background-color: var(--state-down); }
+.state-unknown { background-color: var(--state-unknown); }
+.state-unreach { background-color: var(--state-unreach); }
+.state-pend    { background-color: var(--state-pend); }
+
+/* Icon-recoloring pairing rule: an icon inside a state context takes that
+   state's color instead of inheriting currentColor. */
+.icon.state-ok      { background-color: var(--state-ok); }
+.icon.state-warn    { background-color: var(--state-warn); }
+.icon.state-crit    { background-color: var(--state-crit); }
+.icon.state-down    { background-color: var(--state-down); }
+.icon.state-unknown { background-color: var(--state-unknown); }
+.icon.state-unreach { background-color: var(--state-unreach); }
+.icon.state-pend    { background-color: var(--state-pend); }
+
+/* Border-only state indicator, for contexts where the whole element must
+   keep its surface fill and only a border strip carries the state color
+   (e.g. the overview card's 4px left border). Kept as a separate
+   [data-state] attribute selector, distinct from the .state-* family
+   above, precisely so the two never collide on the same element. */
+.overview-card[data-state="ok"]      { border-left-color: var(--state-ok); }
+.overview-card[data-state="warn"]    { border-left-color: var(--state-warn); }
+.overview-card[data-state="crit"]    { border-left-color: var(--state-crit); }
+.overview-card[data-state="down"]    { border-left-color: var(--state-down); }
+.overview-card[data-state="unknown"] { border-left-color: var(--state-unknown); }
+.overview-card[data-state="unreach"] { border-left-color: var(--state-unreach); }
+.overview-card[data-state="pend"]    { border-left-color: var(--state-pend); }
+
+/* ---------------------------------------------------------------------- */
+/* Stale hatch (D-14/D-15) — composes over an existing state fill, never  */
+/* replaces it. background-image ONLY — never background-color.          */
+/* ---------------------------------------------------------------------- */
+
+.is-stale {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255,255,255,0.06) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Accessibility contract (UI-SPEC Accessibility)                        */
+/*                                                                        */
+/* DOWN and stale text LABELS must never render in --state-down/          */
+/* --state-stale directly: measured contrast against --color-surface is   */
+/* approximately 3.8:1 (#f51414) and 3.3:1 (#727272), both below the      */
+/* 4.5:1 AA threshold for normal text. Those two tokens may only appear   */
+/* in background-color, border-color, or icon-mask contexts — never as a  */
+/* text glyph color. Do not "fix" this by recoloring the text run;        */
+/* recolor the surrounding chip/badge/icon instead.                      */
+/* ---------------------------------------------------------------------- */
+
+.state-label {
+  color: var(--color-text);
+}
+.state-label.is-muted {
+  color: var(--color-text-muted);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout — persistent shell with a swappable main area (UI-SPEC Layout, */
+/* verbatim; D-21/D-22/D-23)                                             */
+/* ---------------------------------------------------------------------- */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--layout-sidebar-width) 1fr;
+  grid-template-rows: var(--layout-topbar-height) 1fr;
+  height: 100vh;
+}
+.sidebar {
+  display: grid;
+  grid-template-rows: var(--layout-sidebar-tree-fraction) 1fr;
+  overflow: hidden;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+}
+.sidebar-tree, .sidebar-events {
+  overflow-y: auto;
+  padding: var(--space-sm2);
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-md);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  grid-column: 1 / -1;
+}
+#main {
+  overflow-y: auto;
+  padding: var(--space-lg);
+}
+
+/* Sidebar tree header (grouping toggle) */
+.sidebar-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-sm);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Connection indicator (DASH-05, UI-SPEC Connection Indicator)           */
+/* ---------------------------------------------------------------------- */
+
+#connection-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  border-radius: var(--radius-pill);
+  padding: var(--space-xs) var(--space-sm2);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.connection-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background-color: var(--color-text-muted);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Banners — poller-offline (D-13/D-14) and tag-group-missing (D-16)      */
+/* ---------------------------------------------------------------------- */
+
+#poller-banner, #tag-group-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 14px;
+  color: var(--color-text);
+}
+#poller-banner {
+  background-color: rgba(114, 114, 114, 0.2); /* --state-stale at 20% opacity over --color-bg */
+}
+#tag-group-banner {
+  background-color: var(--color-surface-raised);
+  justify-content: space-between;
+}
+#tag-group-banner .dismiss-button {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Page-specific: index.html — stats strip + grouped fleet overview       */
+/* (D-24, DASH-01)                                                        */
+/* ---------------------------------------------------------------------- */
+
+#stats-strip {
+  display: flex;
+  gap: var(--space-lg);
+  min-height: 72px;
+  align-items: center;
+  padding: var(--space-md) 0;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.stat-value {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.stat-label {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+#overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-md);
+}
+.overview-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border-left: 4px solid var(--color-border);
+  padding: var(--space-sm2);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Page-specific: devices.html — sortable device table (DASH-02)          */
+/* ---------------------------------------------------------------------- */
+
+#device-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+#device-table th {
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  padding: var(--space-sm);
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+}
+#device-table th[data-key] {
+  cursor: pointer;
+}
+#device-table td {
+  padding: var(--space-sm);
+  border-bottom: 1px solid var(--color-border);
+}
+#device-table tr:hover {
+  background: var(--color-surface-raised);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Page-specific: details.html — detail panel + history strip (DASH-03)   */
+/* ---------------------------------------------------------------------- */
+
+#detail-panel {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+}
+#detail-panel h1 {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+#history-strip {
+  display: flex;
+  gap: 2px;
+}
+.history-segment {
+  width: 12px;
+  height: 24px;
+  background-color: var(--state-pend);
+  border-radius: var(--radius-sm);
+}
+
+#checkmk-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--color-accent-text);
+}
+#checkmk-link:hover {
+  color: var(--color-accent);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Badges — count badge (D-06) and state badge, both pill-shaped          */
+/* ---------------------------------------------------------------------- */
+
+.count-badge, .state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  border-radius: var(--radius-pill);
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 12px;
+  font-weight: 600;
+}
+.count-badge {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Empty states — a cold page with no broker must look deliberate         */
+/* ---------------------------------------------------------------------- */
+
+.empty-state {
+  padding: var(--space-xl);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+.empty-state h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 var(--space-sm) 0;
+}
+.empty-state p {
+  font-size: 14px;
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Sidebar toggle (hamburger) — hidden above the 900px breakpoint         */
+/* ---------------------------------------------------------------------- */
+
+#sidebar-toggle {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Responsive Behavior — single 900px breakpoint (UI-SPEC, verbatim)      */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar {
+    position: fixed; inset: var(--layout-topbar-height) 0 0 0;
+    transform: translateX(-100%);
+    transition: transform 150ms ease;
+    z-index: 20;
+  }
+  .sidebar.is-open { transform: translateX(0); }
+  #sidebar-toggle {
+    display: inline-flex;
+  }
+}
