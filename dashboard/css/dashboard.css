@@ -412,11 +412,28 @@ body {
   gap: var(--space-sm);
   padding: var(--space-xs) var(--space-sm);
   border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+/* Expand/collapse indicator (render-shell.js's groupToggleIcon). Flips
+   direction via transform, never a second mask-image, so no new icon
+   asset or hex color is introduced for the collapsed state. */
+.tree-group-toggle-icon {
+  transition: transform 150ms ease;
+}
+.tree-group.is-collapsed .tree-group-toggle-icon {
+  transform: rotate(-90deg);
+}
+.tree-group.is-collapsed .tree-group-list {
+  display: none;
 }
 .tree-group-name {
   /* D-07: the group key (folder path or device_type value) has no other
-     token assigned to it — render it in the base text color. */
+     token assigned to it — render it in the base text color. flex/min-width
+     let the name share the header row with the toggle icon added ahead of
+     it while still ellipsizing instead of pushing the count badge out. */
   color: var(--color-text);
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
