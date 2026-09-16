@@ -366,7 +366,19 @@ body {
   overflow-y: auto;
   padding: var(--space-sm2);
 }
-.topbar {
+/* Bug fixed 2026-09-16: this selector read `.topbar`, a class no page has --
+   all three ship `<header id="topbar">`, and the banner comment further down
+   this file already refers to it as #topbar. The rule therefore matched
+   nothing and the whole block was dead, which broke the shell layout rather
+   than merely losing the header's own styling: without `grid-column: 1 / -1`
+   the header stopped spanning both columns, so the .shell grid packed the
+   header into (row 1, col 1), the sidebar into (row 1, col 2) and #main into
+   (row 2, col 1) -- the main area rendered inside the sidebar's track while
+   the tree was displaced. No static check could see it: the CSS parses, the
+   HTML is valid, and every class referenced by JS exists. It is the CSS
+   analogue of the shell.js ViewModules defect -- each file correct alone,
+   the composition wrong -- and it was caught by an operator screenshot. */
+#topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
