@@ -232,7 +232,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 
 **Goal**: The dashboard adopts KONE's light palette and the operator's three-pane layout, so the product looks and behaves the way it is meant to before any further capability is built on it
 **Depends on**: Phase 11
-**Requirements**: DASH-01 (must be re-scoped — see below), DASH-06
+**Requirements**: DASH-01 (re-worded 2026-09-16 per D-25/D-27 — see REQUIREMENTS.md), DASH-06
 **Scope**: see `.planning/phases/11-live-dashboard/11.1-SCOPE.md` for the full brief.
 
 Summary:
@@ -244,7 +244,7 @@ Summary:
 
 **Revises**: D-22 (dark, split sidebar) and D-24 (index = stats strip + grouped overview) must be formally superseded in `11-CONTEXT.md`, not silently ignored. D-11's colour *meanings* stand; only the values are re-derived.
 
-**Requirements note**: DASH-01 currently requires `index.html` to show a stats strip above a grouped fleet overview. Moving the event history into the centre and making the map the default overview changes that. DASH-01 must be re-scoped or re-worded before this phase is planned.
+**Requirements note (RESOLVED 2026-09-16)**: DASH-01 has been re-worded — "a grouped fleet overview" became "the centre's primary view", with the topology map named as that view and a sized placeholder standing in until Phase 13 (DASH-07) lands. The stats strip, the "above", and the merge-in-place clause survive verbatim, so this was a re-wording, not a re-scope. See `.planning/REQUIREMENTS.md` (re-wording note) and D-27 in `.planning/phases/11.1-dashboard-layout-and-light-palette/11.1-CONTEXT.md`.
 
 **Explicitly out of scope**: everything in Phase 14, plus the Phase 12 and 13 mockups present in the working preview. Those are illustrative only.
 
