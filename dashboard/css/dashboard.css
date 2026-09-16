@@ -119,6 +119,22 @@ body {
   outline: 2px solid var(--color-accent);
 }
 
+/* Bug fixed 2026-09-16: the `hidden` attribute must beat every display rule
+   in this file. Both banners ship as `<div id="..." hidden>` and render-shell
+   toggles them with `banner.hidden = true/false`, but the browser's built-in
+   `[hidden] { display: none }` is an attribute selector (0,0,1,0) and LOSES
+   to the `#poller-banner, #tag-group-banner { display: flex }` rule below
+   (1,0,0). Without this override both banners were permanently visible no
+   matter what the JS set: they share `top: var(--layout-topbar-height)` so
+   they overlapped exactly and only the later one in DOM order (tag-group)
+   was seen, falsely warning that the device_type tag group was missing on a
+   correctly-configured site. Worse, being `position: fixed` they overlaid the
+   top of the sidebar, hiding the tree's own "Group by type" control
+   entirely. Caught by an operator screenshot. */
+[hidden] {
+  display: none !important;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Brand Masthead (UI-SPEC Brand Masthead, verbatim)                      */
 /* ---------------------------------------------------------------------- */
