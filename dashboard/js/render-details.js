@@ -85,9 +85,69 @@ ViewModules.details = (function () {
     );
   }
 
-  function showPanel(mainEl) {
-    var panel = mainEl.querySelector("#detail-panel");
+  // Bug fixed 2026-09-16: this page's markup only ships #detail-panel/.empty-state on a
+  // cold load of details.html -- index.html and devices.html never contain that markup at
+  // all (grep -c 'detail-panel' returns 0 for both). showPanel()/showEmptyState() below only
+  // ever queried for that markup, never built it, so navigating here in-place (D-23) from
+  // either of those two pages left mainEl.querySelector() returning null and the mount
+  // silently did nothing -- the URL changed to details.html?id=<host> but nothing rendered.
+  // render-index.js's ensureContainer() and render-devices.js's ensureTable() already solve
+  // this for their own markup; ensurePanel()/ensureEmptyState() follow that exact idiom here:
+  // reuse the static element from a cold load when present, build one that matches
+  // details.html's shipped structure otherwise. Do not change details.html's markup itself
+  // (D-21 requires a cold load to keep rendering correctly).
+  function ensurePanel(mainEl) {
+    var panel = document.getElementById("detail-panel");
+    if (panel && mainEl.contains(panel)) {
+      return panel;
+    }
+    panel = document.createElement("div");
+    panel.id = "detail-panel";
+
+    var header = document.createElement("div");
+    header.className = "detail-panel-header";
+    var nameEl = document.createElement("span");
+    nameEl.className = "detail-device-name";
+    header.appendChild(nameEl);
+    var hostEl = document.createElement("span");
+    hostEl.className = "detail-hostname";
+    header.appendChild(hostEl);
+    var badgeEl = document.createElement("span");
+    badgeEl.className = "detail-state-badge state-badge";
+    header.appendChild(badgeEl);
+    panel.appendChild(header);
+
+    var history = document.createElement("div");
+    history.id = "history-strip";
+    panel.appendChild(history);
+
+    var link = document.createElement("a");
+    link.id = "checkmk-link";
+    link.href = "#";
+    link.appendChild(document.createTextNode(CTA_TEXT + " "));
+    link.appendChild(iconElement("icon-pop-out", "Opens in Checkmk"));
+    panel.appendChild(link);
+
+    mainEl.appendChild(panel);
+    return panel;
+  }
+
+  function ensureEmptyState(mainEl) {
     var empty = mainEl.querySelector(".empty-state");
+    if (empty) {
+      return empty;
+    }
+    empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.appendChild(document.createElement("h2"));
+    empty.appendChild(document.createElement("p"));
+    mainEl.appendChild(empty);
+    return empty;
+  }
+
+  function showPanel(mainEl) {
+    var panel = ensurePanel(mainEl);
+    var empty = ensureEmptyState(mainEl);
     if (panel) {
       panel.hidden = false;
     }
@@ -97,8 +157,8 @@ ViewModules.details = (function () {
   }
 
   function showEmptyState(mainEl) {
-    var panel = mainEl.querySelector("#detail-panel");
-    var empty = mainEl.querySelector(".empty-state");
+    var panel = ensurePanel(mainEl);
+    var empty = ensureEmptyState(mainEl);
     if (panel) {
       panel.hidden = true;
     }
