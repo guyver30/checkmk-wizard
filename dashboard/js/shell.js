@@ -9,10 +9,23 @@
 
 // Populated by each render-*.js module as it loads: ViewModules.index,
 // ViewModules.devices, ViewModules.details. Script order in
-// index.html/devices.html/details.html guarantees every render-*.js runs
-// before this file (11-03's script block), so every entry is already
-// present by the time DOMContentLoaded fires below.
-var ViewModules = {};
+// index.html/devices.html/details.html runs every render-*.js BEFORE this
+// file (11-03's script block), so the registry is already populated when
+// this line is reached.
+//
+// Bug fixed 2026-09-16: this read `var ViewModules = {};`, which wiped every
+// registration the render modules had just made. Hoisting only creates the
+// binding -- the `= {}` initializer still re-executes when the line runs, and
+// because this file loads LAST it replaced the populated object moments before
+// the DOMContentLoaded handler below called mountView(). Net effect in a real
+// browser: ViewModules[view] was undefined on first load of all three pages,
+// so no view ever mounted and every page rendered its chrome around an empty
+// main area. Static verification could not see it -- each file is individually
+// valid and `node --check` passes; only the composition was broken. Found
+// independently by plans 11-07 and 11-08, each proving it with a two-script
+// vm.runInContext simulation. The guarded form below is what every render-*.js
+// module already uses; keep all four in agreement.
+var ViewModules = ViewModules || {};
 
 (function () {
   var connectionStarted = false;
