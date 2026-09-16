@@ -193,6 +193,23 @@ services:
     networks:
       - cmk_net
 
+  # 6. Live Dashboard — static nginx, no build step, no server-side process.
+  # Serves dashboard/ read-only; every runtime setting an operator might need
+  # to change per deployment lives in dashboard/js/config.js instead of an
+  # environment: block here (D-01/D-02/D-20).
+  dashboard:
+    image: nginx:alpine
+    container_name: dashboard
+    restart: unless-stopped
+    volumes:
+      - ../dashboard:/usr/share/nginx/html:ro,z
+    ports:
+      - "8090:80"       # dashboard UI — host 8090 is clear of 8080/8000/6556
+                          # checkmk, 1883 mqtt, 9000/9001 minio and 9002
+                          # mosquitto-WS, so 8090 was free to claim (D-04)
+    networks:
+      - cmk_net
+
 volumes:
   checkmk_data:
   mosquitto_data:
