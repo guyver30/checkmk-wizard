@@ -187,7 +187,10 @@ var renderShell = (function () {
   // ---------------------------------------------------------------------
 
   function pollerBannerText(pollerStatus) {
-    var offlineSince = pollerOfflineSince(pollerStatus);
+    // store.lastKnownPollerTimestamp (state-store.js) covers the bare `{"status":"offline"}`
+    // will payload, which carries neither `last_poll` nor `since` of its own (Bug fixed
+    // 2026-09-16 -- see state-store.js and staleness.js for the full reasoning).
+    var offlineSince = pollerOfflineSince(pollerStatus, store.lastKnownPollerTimestamp);
     var clock = offlineSince ? formatClock(offlineSince.toISOString()) : "unknown";
     var minutes = offlineSince
       ? Math.max(0, Math.floor((Date.now() - offlineSince.getTime()) / 60000))

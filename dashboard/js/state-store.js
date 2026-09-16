@@ -30,6 +30,17 @@ var store = (function () {
   var topology = null; // { devices: [...], timestamp } or null
   var pollerStatus = null; // { status, since, last_poll, device_count } or null
 
+  // Bug fixed 2026-09-16: the poller's MQTT will (scripts/mqtt_poller.py's `will_set()`) is
+  // fixed to `{"status": "offline"}` with no timestamp -- an MQTT will is captured at connect
+  // time, so any timestamp baked into it would be the time the poller STARTED, not the time
+  // it died, which would look authoritative while being wrong. That means the retained
+  // "offline" payload that replaces a dead poller's last heartbeat carries neither `last_poll`
+  // nor `since`, so reading only the CURRENT payload (as pollerOfflineSince() in staleness.js
+  // does) discarded the last good timestamp the moment the will fired, printing "unknown"
+  // instead of a real time. Remembered here, on the dashboard side, the same last-known-good
+  // posture this module already applies to malformed payloads (see the header comment above).
+  var lastKnownPollerTimestamp = null; // ISO string from the last payload that had one, or null
+
   var subscribers = {
     device: [],
     topology: [],
@@ -140,6 +151,10 @@ var store = (function () {
       return;
     }
     pollerStatus = parsed.value;
+    var raw = pollerStatus.last_poll || pollerStatus.since;
+    if (raw) {
+      lastKnownPollerTimestamp = raw;
+    }
     notify("poller");
   }
 
@@ -174,6 +189,7 @@ var store = (function () {
     events = [];
     topology = null;
     pollerStatus = null;
+    lastKnownPollerTimestamp = null;
     subscribers = { device: [], topology: [], history: [], events: [], poller: [] };
   }
 
@@ -188,6 +204,9 @@ var store = (function () {
     },
     get pollerStatus() {
       return pollerStatus;
+    },
+    get lastKnownPollerTimestamp() {
+      return lastKnownPollerTimestamp;
     },
     subscribe: subscribe,
     handleMessage: handleMessage,
