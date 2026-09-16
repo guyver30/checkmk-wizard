@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<!--
+  Live network dashboard — device list page.
+  Renders the sortable device table (DASH-02). One of three bookmarkable
+  pages (index.html, devices.html, details.html) that share an identical
+  shell and each render correctly when opened cold, with no broker
+  reachable (D-21).
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Network Dashboard</title>
+  <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+  <div class="shell">
+    <header id="topbar">
+      <div class="brand-masthead">
+        <img src="images/kone-logo.png" alt="KONE" class="brand-logo">
+        <span class="brand-title">Live Network Dashboard</span>
+      </div>
+      <nav>
+        <a href="index.html">Overview</a>
+        <a href="devices.html">Devices</a>
+        <a href="details.html">Details</a>
+      </nav>
+      <button id="sidebar-toggle" title="Toggle menu" aria-label="Toggle menu">
+        <span class="icon icon-list"></span>
+      </button>
+      <div id="connection-indicator">
+        <span class="connection-dot"></span>
+        <span class="connection-text">Connecting&hellip;</span>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div id="sidebar-tree" class="sidebar-tree">
+        <div class="sidebar-tree-header">
+          <span>Devices</span>
+          <button id="grouping-toggle" aria-pressed="false">
+            <span class="icon icon-filter"></span>
+            Group by type
+          </button>
+        </div>
+        <div class="empty-state">
+          <p>No devices have reported yet.</p>
+        </div>
+      </div>
+      <div id="sidebar-events" class="sidebar-events">
+        <div class="empty-state">
+          <p>No events yet — state changes will appear here as they happen.</p>
+        </div>
+      </div>
+    </aside>
+
+    <div id="poller-banner" hidden>
+      <span class="icon icon-warning-circle-filled" role="img" title="Poller offline" aria-label="Poller offline"></span>
+      <span class="poller-banner-text"></span>
+    </div>
+    <div id="tag-group-banner" hidden>
+      <span class="icon icon-info-filled" role="img" title="Configuration notice" aria-label="Configuration notice"></span>
+      <span class="tag-group-banner-text">No device_type tag group on this site — run the wizard's tagging phase.</span>
+      <button class="dismiss-button" aria-label="Dismiss">
+        <span class="icon icon-close-cross" role="img" title="Dismiss" aria-label="Dismiss"></span>
+      </button>
+    </div>
+
+    <main id="main">
+      <table id="device-table">
+        <thead>
+          <tr>
+            <th data-key="state">State</th>
+            <th data-key="host">Host</th>
+            <th data-key="type">Type</th>
+            <th data-key="location">Location</th>
+            <th data-key="lastUpdate">Last Update</th>
+            <th>Flags</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty-state">
+        <h2>Waiting for device data&hellip;</h2>
+        <p>No devices have reported yet. Once the poller publishes topology, hosts will appear here automatically.</p>
+      </div>
+    </main>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/vendor/mqtt.min.js"></script>
+  <script src="js/staleness.js"></script>
+  <script src="js/display.js"></script>
+  <script src="js/grouping.js"></script>
+  <script src="js/state-store.js"></script>
+  <script src="js/mqtt-connection.js"></script>
+  <script src="js/render-shell.js"></script>
+  <script src="js/render-index.js"></script>
+  <script src="js/render-devices.js"></script>
+  <script src="js/render-details.js"></script>
+  <script src="js/shell.js"></script>
+</body>
+</html>
