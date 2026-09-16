@@ -1,0 +1,143 @@
+/* PREVIEW ONLY -- Phase 12 placeholder styling. Not shipped.
+   Borrows the KONE tokens from dashboard.css so the placeholder sits in the
+   same visual world, but is namespaced .p12-* so it can never collide with
+   the real stylesheet. */
+
+.p12-root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg, 20px);
+  margin-top: var(--space-lg, 20px);
+}
+
+.p12-banner {
+  background: var(--color-surface-raised, #1c1c1c);
+  border: 1px dashed var(--color-border, #333);
+  border-radius: var(--radius-md, 8px);
+  color: var(--color-text-muted, #9a9a9a);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 10px 12px;
+}
+
+.p12-section {
+  background: var(--color-surface-raised, #1c1c1c);
+  border-radius: var(--radius-md, 8px);
+  padding: var(--space-md, 16px);
+}
+.p12-section-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: var(--space-md, 16px);
+}
+.p12-section-head h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+.p12-section-note {
+  color: var(--color-text-muted, #9a9a9a);
+  font-size: 12px;
+}
+
+/* Gauges ---------------------------------------------------------------- */
+.p12-gauge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-lg, 20px);
+}
+.p12-gauge {
+  flex: 1 1 140px;
+  max-width: 200px;
+  position: relative;
+  text-align: center;
+}
+.p12-gauge svg { display: block; width: 100%; height: auto; }
+.p12-arc-track {
+  fill: none;
+  stroke: var(--color-border, #333);
+  stroke-linecap: round;
+  stroke-width: 10;
+}
+.p12-arc-fill {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 10;
+}
+.p12-arc-fill.p12-OK   { stroke: var(--state-ok, #2ecc71); }
+.p12-arc-fill.p12-WARN { stroke: var(--state-warn, #ffe141); }
+.p12-arc-fill.p12-CRIT { stroke: var(--state-crit, #e0333c); }
+
+.p12-gauge-value {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: -26px;
+}
+.p12-gauge-label {
+  color: var(--color-text-muted, #9a9a9a);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.p12-other-mounts,
+.p12-smart {
+  align-items: center;
+  color: var(--color-text-muted, #9a9a9a);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 8px;
+  margin-top: var(--space-md, 16px);
+}
+.p12-mount-list {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+}
+
+.p12-chip {
+  border-radius: var(--radius-pill, 100px);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+.p12-chip.p12-OK   { background: var(--state-ok, #2ecc71);   color: #08240f; }
+.p12-chip.p12-WARN { background: var(--state-warn, #ffe141); color: #3a3000; }
+.p12-chip.p12-CRIT { background: var(--state-crit, #e0333c); color: #fff; }
+
+/* Services table -------------------------------------------------------- */
+.p12-table {
+  border-collapse: collapse;
+  font-size: 14px;
+  width: 100%;
+}
+.p12-table th {
+  border-bottom: 1px solid var(--color-border, #333);
+  color: var(--color-text-muted, #9a9a9a);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 6px 10px 6px 0;
+  text-align: left;
+  text-transform: uppercase;
+}
+.p12-table td {
+  border-bottom: 1px solid var(--color-border, #333);
+  padding: 8px 10px 8px 0;
+  vertical-align: middle;
+}
+.p12-table tbody tr:last-child td { border-bottom: 0; }
+.p12-table td:nth-child(3),
+.p12-table td:nth-child(4),
+.p12-table td:nth-child(5) {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .p12-gauge { max-width: none; }
+  .p12-table { display: block; overflow-x: auto; }
+}

@@ -1,0 +1,148 @@
+/* PREVIEW ONLY -- proposed Phase 11.1 LIGHT palette.
+ *
+ * Every value is a real token from KONE's own design-tokens.json
+ * (web_assets/kone-design-system-main/packages/kone-ds-tokens/input/), not an
+ * invented light theme. That file ships an explicit light set with semantic
+ * names -- "bg primary", "bg secondary", "bg tertiary", "text", "border",
+ * "inactive", "disabled" -- plus an l80..base..d80 ramp per hue. The dark
+ * palette in dashboard.css came from the same file; this is its counterpart.
+ *
+ * KONE marks `bg green/orange/red` as "(don't use)", so those pale status
+ * backgrounds are deliberately avoided; the per-hue l-shades carry no such
+ * warning and are used instead.
+ *
+ * CONTRAST -- measured with the WCAG relative-luminance formula, not judged
+ * by eye. Two measurements drove the whole design:
+ *   1. KONE's BASE greens/oranges/yellow are unusable as text on white:
+ *      green.base 2.00:1, orange.base 2.04:1, yellow 1.30:1.
+ *   2. On a solid state fill, ink (#141414) beats white on every KONE hue:
+ *      green 9.23 vs 2.00, yellow 14.12 vs 1.30, orange 9.04 vs 2.04. The
+ *      dark theme's "white text on every fill" rule therefore INVERTS.
+ *
+ * STRUCTURE -- the key decision. --state-* keeps the SATURATED value in both
+ * palettes, because three places read it directly as a MARK and would
+ * otherwise need code changes: render-shell.js sets the connection dot with
+ * an inline `var(--state-ok)`, the Phase 12 gauge arcs stroke with it, and
+ * the topology map colours its nodes from it. The pale behind-text tint goes
+ * into a NEW --state-*-fill token, and only the seven .state-* background
+ * rules are re-pointed at it. Net effect: a light theme with zero JavaScript
+ * changes. Marks stay saturated (WCAG 1.4.11 wants 3:1 for non-text),
+ * backgrounds go pale, and text pairs with whichever it sits on.
+ */
+
+:root {
+  /* ---- Surfaces ----------------------------------------------------- *
+   * KONE grayscale plus the blue-tinted secondary background, which gives
+   * the neutrals a slight bias toward the accent instead of a flat grey. */
+  --color-bg: #ffffff;              /* grayscale.800 "bg primary"     */
+  --color-surface: #f3f6fe;         /* background "bg blue secondary" */
+  --color-surface-raised: #ffffff;  /* grayscale.800, lifted by border */
+  --color-border: #d0d0d0;          /* grayscale.400 "border"         */
+
+  /* ---- Text --------------------------------------------------------- */
+  --color-text: #141414;            /* grayscale.100 "text"   15.8:1  */
+  /* grayscale.150, NOT .200 "inactive". #727272 clears 4.5 on white (4.81)
+     but only reaches 4.45 on the tinted --color-surface, where most muted
+     text actually lives (event times, gauge captions, the scope label).
+     #4f4f4f gives 7.7 there and still reads as clearly secondary to ink. */
+  --color-text-muted: #4f4f4f;      /* grayscale.150 "hovor"          */
+
+  /* ---- Accent ------------------------------------------------------- *
+   * base for fills/underlines (6.01:1 on white), d20 for text (7.80:1). */
+  --color-accent: #1450f5;          /* primary "kone blue"            */
+  --color-accent-text: #1444c8;     /* blue.d20                       */
+
+  /* ---- State: SATURATED marks (dots, arcs, map nodes) --------------- *
+   * Non-text, so the bar is 3:1 on white. Yellow cannot reach 3:1 on white
+   * at any saturation (1.30:1), so WARN's MARK is an orange d-shade while
+   * its FILL stays KONE yellow behind ink. orange.d20 and grayscale.300
+   * both land on exactly 3.00 -- right on the line, so the d40 / .200
+   * shades are used instead for real margin. */
+  --state-ok: #18a85c;              /* green.d20     3.09:1 */
+  --state-warn: #a1681d;            /* orange.d40    4.65:1 */
+  --state-crit: #ff5f28;            /* red.base      3.03:1 */
+  --state-down: #f51414;            /* destructive   4.21:1 */
+  --state-unknown: #a1681d;         /* orange.d40    4.65:1 */
+  --state-unreach: #a1681d;         /* orange.d40    4.65:1 */
+  --state-pend: #727272;            /* grayscale.200 4.81:1 */
+  --state-stale: #727272;           /* grayscale.200 4.81:1 */
+
+  /* ---- State: PALE fills, sat behind text --------------------------- */
+  --state-ok-fill: #d2f6e3;         /* green.l80   */
+  --state-warn-fill: #ffe141;       /* secondary.yellow */
+  --state-crit-fill: #ffdfd4;       /* red.l80     */
+  --state-down-fill: #a14120;       /* red.d40 -- solid, so a real alarm
+                                       still shouts on a white page */
+  --state-unknown-fill: #ffd9a7;    /* orange.l60  */
+  --state-unreach-fill: #ffd9a7;    /* orange.l60  */
+  --state-pend-fill: #f1f1f1;       /* grayscale.600 */
+  --state-stale-fill: #e7e7e7;      /* grayscale.500 */
+
+  /* ---- State: text ON each fill ------------------------------------- */
+  --state-ok-on: #087827;           /* green.d40   → 4.84:1 */
+  --state-warn-on: #141414;         /* ink         → 14.12:1 */
+  --state-crit-on: #a14120;         /* red.d40     → 5.09:1 */
+  --state-down-on: #ffffff;         /* white       → 6.38:1 */
+  --state-unknown-on: #724c1a;      /* orange.d60  → 5.69:1 */
+  --state-unreach-on: #724c1a;      /* orange.d60  → 5.69:1 */
+  --state-pend-on: #4f4f4f;         /* grayscale.150 → 7.25:1 */
+  --state-stale-on: #4f4f4f;        /* grayscale.150 → 6.62:1 */
+}
+
+/* Re-point the seven fill rules at the tint, and pair each with its text
+   colour. dashboard.css's .state-* set background-color only and let text
+   inherit -- which is why a pure token swap would leave the dark theme's
+   white text sitting on a pale tint. */
+.state-ok      { background-color: var(--state-ok-fill);      color: var(--state-ok-on); }
+.state-warn    { background-color: var(--state-warn-fill);    color: var(--state-warn-on); }
+.state-crit    { background-color: var(--state-crit-fill);    color: var(--state-crit-on); }
+.state-down    { background-color: var(--state-down-fill);    color: var(--state-down-on); }
+.state-unknown { background-color: var(--state-unknown-fill); color: var(--state-unknown-on); }
+.state-unreach { background-color: var(--state-unreach-fill); color: var(--state-unreach-on); }
+.state-pend    { background-color: var(--state-pend-fill);    color: var(--state-pend-on); }
+
+/* Descendants must not re-assert the page text colour over a paired fill:
+   .tree-host-name and .overview-chip-name both set color: var(--color-text)
+   for the dark theme's white-on-fill rule. */
+.state-ok .tree-host-name,      .state-ok .overview-chip-name      { color: var(--state-ok-on); }
+.state-warn .tree-host-name,    .state-warn .overview-chip-name    { color: var(--state-warn-on); }
+.state-crit .tree-host-name,    .state-crit .overview-chip-name    { color: var(--state-crit-on); }
+.state-down .tree-host-name,    .state-down .overview-chip-name    { color: var(--state-down-on); }
+.state-unknown .tree-host-name, .state-unknown .overview-chip-name { color: var(--state-unknown-on); }
+.state-unreach .tree-host-name, .state-unreach .overview-chip-name { color: var(--state-unreach-on); }
+.state-pend .tree-host-name,    .state-pend .overview-chip-name    { color: var(--state-pend-on); }
+
+/* The stale hatch is a WHITE 6%-alpha diagonal built for dark fills, and is
+   invisible on pale ones. Same geometry, dark ink, a little stronger so it
+   survives on a light ground. D-15 is preserved: background-image only,
+   never background-color, so it stays composable over any state fill. */
+.is-stale {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(20, 20, 20, 0.14) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+/* The logo ships on a white chip so it reads against dark navy; on a white
+   page that chip is just invisible padding. */
+.brand-logo {
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+}
+
+/* Panels: --color-surface-raised is now white on a white page, so lift with
+   the tinted surface and a border instead of relying on luminance alone. */
+.p12-section,
+.p12-banner,
+#events-region,
+#network-map {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+/* p12 chips hardcoded dark-theme text colours; re-pair them. */
+.p12-chip.p12-OK   { background: var(--state-ok-fill);   color: var(--state-ok-on); }
+.p12-chip.p12-WARN { background: var(--state-warn-fill); color: var(--state-warn-on); }
+.p12-chip.p12-CRIT { background: var(--state-crit-fill); color: var(--state-crit-on); }

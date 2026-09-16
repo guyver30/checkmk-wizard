@@ -1,0 +1,166 @@
+<meta charset="utf-8">
+<title>KONE Live Network Dashboard</title>
+
+<link rel="stylesheet" href="css/dashboard.css">
+<link rel="stylesheet" href="css/preview-phase12.css">
+<link rel="stylesheet" href="css/preview-layout.css">
+<!-- Loaded LAST so its :root token overrides beat dashboard.css's dark set. -->
+<link rel="stylesheet" href="css/preview-light.css">
+
+<style>
+  /* ---------------------------------------------------------------
+     PREVIEW CHROME ONLY. Nothing here styles the dashboard itself --
+     dashboard/css/dashboard.css is loaded above, verbatim and unmodified,
+     and owns every pixel below the bar. These rules only add the harness
+     band and give .shell back the height the band takes.
+     The bar borrows the KONE tokens so it can never clash, but stays
+     deliberately monospaced and flat so it never reads as part of the
+     product it is framing.
+     --------------------------------------------------------------- */
+  :root { --preview-bar-h: 52px; }
+
+  #preview-bar {
+    align-items: center;
+    background: var(--color-surface-raised, #1c1c1c);
+    border-bottom: 1px solid var(--color-border, #333);
+    box-sizing: border-box;
+    color: var(--color-text-muted, #9a9a9a);
+    display: flex;
+    flex-wrap: wrap;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 12px;
+    gap: 8px 16px;
+    min-height: var(--preview-bar-h);
+    padding: 8px 16px;
+  }
+  #preview-bar .preview-label {
+    color: var(--color-text, #f2f2f2);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  #preview-bar .preview-note { flex: 1 1 260px; min-width: 0; }
+  #preview-bar .preview-group { display: flex; gap: 6px; }
+  #preview-bar button {
+    background: transparent;
+    border: 1px solid var(--color-border, #333);
+    border-radius: var(--radius-sm, 4px);
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    padding: 4px 10px;
+  }
+  #preview-bar button:hover { color: var(--color-text, #f2f2f2); }
+  #preview-bar button[aria-pressed="true"] {
+    background: var(--color-accent, #1450f5);
+    border-color: var(--color-accent, #1450f5);
+    color: #fff;
+  }
+  #preview-bar button:focus-visible { outline: 2px solid var(--color-accent, #1450f5); outline-offset: 2px; }
+
+  /* .shell ships as height:100vh; give back what the bar occupies. */
+  .shell { height: calc(100vh - var(--preview-bar-h)); }
+
+  @media (max-width: 900px) {
+    :root { --preview-bar-h: 96px; }
+  }
+</style>
+
+<div id="preview-bar">
+  <span class="preview-label">Preview</span>
+  <span class="preview-note">Real stylesheet and real view modules, fed synthetic data. No broker, no Checkmk site.</span>
+  <span class="preview-group">
+    <button type="button" id="preview-poller" aria-pressed="false">Poller: online</button>
+    <button type="button" id="preview-tag" aria-pressed="false">Tag group: present</button>
+  </span>
+</div>
+
+<div class="shell">
+  <header id="topbar">
+    <div class="brand-masthead">
+      <img src="images/kone-logo.png" alt="KONE" class="brand-logo">
+      <span class="brand-title">Live Network Dashboard</span>
+    </div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="devices.html">Devices</a>
+    </nav>
+    <button id="sidebar-toggle" title="Toggle menu" aria-label="Toggle menu">
+      <span class="icon icon-list"></span>
+    </button>
+    <div id="connection-indicator">
+      <span class="connection-dot"></span>
+      <span class="connection-text">Connecting&hellip;</span>
+    </div>
+  </header>
+
+  <aside class="sidebar">
+    <div id="sidebar-tree" class="sidebar-tree">
+      <div class="sidebar-tree-header">
+        <span>Devices</span>
+        <button id="grouping-toggle" aria-pressed="false">
+          <span class="icon icon-filter"></span>
+          Group by type
+        </button>
+      </div>
+      <div class="empty-state">
+        <p>No devices have reported yet.</p>
+      </div>
+    </div>
+    <div id="sidebar-events" class="sidebar-events">
+      <div class="empty-state">
+        <p>No events yet &mdash; state changes will appear here as they happen.</p>
+      </div>
+    </div>
+  </aside>
+
+  <div id="poller-banner" hidden>
+    <span class="icon icon-warning-circle-filled" role="img" title="Poller offline" aria-label="Poller offline"></span>
+    <span class="poller-banner-text"></span>
+  </div>
+  <div id="tag-group-banner" hidden>
+    <span class="icon icon-info-filled" role="img" title="Configuration notice" aria-label="Configuration notice"></span>
+    <span class="tag-group-banner-text">No device_type tag group on this site &mdash; run the wizard's tagging phase.</span>
+    <button class="dismiss-button" aria-label="Dismiss">
+      <span class="icon icon-close-cross" role="img" title="Dismiss" aria-label="Dismiss"></span>
+    </button>
+  </div>
+
+  <div id="main-wrap">
+    <main id="main">
+      <div id="network-map"></div>
+    </main>
+
+    <!-- Proposed 11.1: event history lives here, always visible, and filters
+         to the selected device rather than living in the sidebar. -->
+    <section id="events-region">
+      <div id="events-region-head">
+        <h2>Event history</h2>
+        <span id="events-region-scope"></span>
+        <button type="button" id="events-region-clear" hidden>Show all devices</button>
+      </div>
+      <div id="events-region-body"></div>
+    </section>
+  </div>
+</div>
+
+<!-- Real dashboard modules, byte-identical to the repo. The only
+     substitution is preview-feed.js in place of mqtt-connection.js:
+     it exposes the same connection API but feeds contract-shaped
+     retained messages instead of opening a WebSocket. -->
+<script src="js/config.js"></script>
+<script src="js/staleness.js"></script>
+<script src="js/display.js"></script>
+<script src="js/grouping.js"></script>
+<script src="js/state-store.js"></script>
+<script src="js/preview-feed.js"></script>
+<script src="js/render-shell.js"></script>
+<script src="js/render-index.js"></script>
+<script src="js/render-devices.js"></script>
+<script src="js/render-details.js"></script>
+<script src="js/vendor/vis-network.min.js"></script>
+<script src="js/preview-map.js"></script>
+<script src="js/preview-phase12.js"></script>
+<script src="js/preview-events.js"></script>
+<script src="js/preview-chrome.js"></script>
+<script src="js/shell.js"></script>
