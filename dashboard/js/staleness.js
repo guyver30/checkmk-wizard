@@ -55,14 +55,22 @@ function isPollerStale(pollerStatusPayload, nowMs = Date.now()) {
   return ageSeconds >= STALENESS_FACTOR * POLL_INTERVAL_SECONDS;
 }
 
-function pollerOfflineSince(pollerStatusPayload) {
+function pollerOfflineSince(pollerStatusPayload, fallbackRaw = null) {
   // D-14's locked banner string ("Poller offline since HH:MM...") needs a Date to format.
   // `last_poll` is the more precise anchor (the last cycle that actually completed); `since`
   // (the birth-message timestamp) is the fallback when no cycle has completed at all.
+  //
+  // `fallbackRaw` (state-store.js's lastKnownPollerTimestamp) covers a third case: the
+  // poller's MQTT will (scripts/mqtt_poller.py) is the fixed payload `{"status": "offline"}`
+  // with neither field, because a will is captured at connect time and any timestamp in it
+  // would be the time the poller STARTED, not the time it died. Without this fallback, the
+  // retained "offline" payload replacing a dead poller's last heartbeat has no timestamp of
+  // its own and this function returns null -- discarding a perfectly good last-known-good
+  // time the dashboard already has. Only used when the current payload has neither field.
   if (!pollerStatusPayload || typeof pollerStatusPayload !== "object") {
     return null;
   }
-  const raw = pollerStatusPayload.last_poll || pollerStatusPayload.since;
+  const raw = pollerStatusPayload.last_poll || pollerStatusPayload.since || fallbackRaw;
   if (!raw) {
     return null;
   }

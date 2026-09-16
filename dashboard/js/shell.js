@@ -210,6 +210,17 @@ var ViewModules = ViewModules || {};
 
     connection.onStatus(renderShell.renderConnection);
 
+    // Fans render-shell.js's single page-wide clock (Bug fixed 2026-09-16) out to the active
+    // view module too, using the same "poller" changeKind every module's update() already
+    // handles for a real poller-status message -- index.js/devices.js/details.js each already
+    // do a full time-derived re-render (stale hatch, "Last Update") on that changeKind, so no
+    // per-module clock code is needed here.
+    renderShell.onTick(function () {
+      if (currentModule && currentModule.update) {
+        currentModule.update("poller", undefined);
+      }
+    });
+
     document.body.addEventListener("click", handleClick);
     document.body.addEventListener("keydown", handleKeydown);
     window.addEventListener("popstate", handlePopState);
