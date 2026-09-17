@@ -113,6 +113,8 @@ the influence itself.
   reserved exclusively for the dashboard's own stale/no-data condition. (Verified against
   https://docs.checkmk.com/latest/en/monitoring_basics.html — note UNKNOWN is orange in
   Checkmk, and grey there means PEND/"never yet polled", which is closer to our stale.)
+  Phase 11.1's light palette re-derives these colours' **values** only; the **meanings**
+  recorded above are unchanged (D-36).
 - **D-12:** Staleness threshold is **3 × the poll interval** (180s at the 60s default),
   stored as a *factor* in `config.js` mirroring the shape of Checkmk's own
   "Staleness value to mark hosts / services stale" parameter. Checkmk's default factor is 1.5,
@@ -171,19 +173,31 @@ the influence itself.
   `details.html` all exist and each renders correctly when opened cold (keeping every URL
   bookmarkable), but all three load the same `js/shell.js`, and in-app navigation is
   intercepted with `history.pushState`.
-- **D-22 (REVISED):** Layout is a **persistent shell with a swappable main area**, modelled on
-  `docs/DMC-networkmap.png` / `docs/DMC-server.png`: dark, dense, panel-based. The **left
-  column is split vertically** — grouped tree on top, **event-history panel beneath it**, both
-  always on screen. The main area swaps between overview, device table and detail without ever
-  unmounting them.
+- **D-22 (SUPERSEDED by Phase 11.1 D-25/D-27/D-36, 2026-09-16):** Layout is a **persistent
+  shell with a swappable main area**, modelled on `docs/DMC-networkmap.png` /
+  `docs/DMC-server.png`: dark, dense, panel-based. The **left column is split vertically** —
+  grouped tree on top, **event-history panel beneath it**, both always on screen. The main
+  area swaps between overview, device table and detail without ever unmounting them.
+  - **Becomes:** the layout is **light**; the **left column is ALL tree, full height**; the
+    **event-history panel moves to the bottom of the centre**. See
+    `.planning/phases/11.1-dashboard-layout-and-light-palette/11.1-CONTEXT.md` (D-25, D-27,
+    D-31). `docs/DMC-networkmap.png` / `docs/DMC-server.png` are history only — the contract
+    is now `docs/dashboard1.png` / `docs/dashboard2.png`.
 - **D-23 (NEW):** Clicking a host anywhere — tree, overview tile, or table row — opens the
   detail **as a panel in the main area, in place**. The shell, the tree and the event history
   stay mounted and live; the URL updates to `details.html?id=<host>` via `pushState`. This is
   what makes "event history always visible" true: a full page swap would unmount and
   re-subscribe it, losing scroll position mid-incident.
-- **D-24 (NEW):** `index.html` is the **stats-by-state strip plus a grouped fleet overview**
-  (cards/tiles honouring D-05's toggle and D-06's roll-up). It delivers the surviving half of
-  DASH-01 and is the natural place to drop the real map into during the map phase.
+- **D-24 (SUPERSEDED by Phase 11.1 D-25/D-27/D-36, 2026-09-16):** `index.html` is the
+  **stats-by-state strip plus a grouped fleet overview** (cards/tiles honouring D-05's toggle
+  and D-06's roll-up). It delivers the surviving half of DASH-01 and is the natural place to
+  drop the real map into during the map phase.
+  - **Becomes:** `index.html` is the stats-by-state strip above **the centre's primary
+    view**; that primary view is the topology map (DASH-07, Phase 13) and until it lands it
+    is a sized, labelled placeholder pane (D-27). The grouped fleet overview in
+    `render-index.js` is deleted by D-27; its per-state counts logic is kept for the strip.
+    See `.planning/phases/11.1-dashboard-layout-and-light-palette/11.1-CONTEXT.md`
+    (D-25, D-27, D-36).
 
 ### Claude's Discretion
 - Exact color hex values, spacing, typography, and dark-theme tokens (D-11 fixes the *meaning*
