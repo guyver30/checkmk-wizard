@@ -195,13 +195,17 @@ body {
   gap: var(--space-sm);
   height: 32px;
 }
+/* 2026-09-17: the white chip (background + padding) existed only so the logo's
+   own baked-in white background had contrast against the dark navy topbar
+   (--color-surface was #142041). Now that the topbar is light (--color-surface
+   is #f3f6fe, 1.08:1 against pure white), the chip is invisible padding around
+   the logo rather than a deliberate frame (D-29 defect 2) — removed instead of
+   replaced with a border, since the logo's own white background already reads
+   fine directly against the near-white topbar. */
 .brand-logo {
   height: 24px;
   width: auto;
-  background: #ffffff;
   border-radius: var(--radius-sm);
-  padding: 4px 6px;
-  box-sizing: content-box;
   display: block;
 }
 .brand-title {
@@ -384,12 +388,18 @@ body {
 /* ---------------------------------------------------------------------- */
 /* Stale hatch (D-14/D-15) — composes over an existing state fill, never  */
 /* replaces it. background-image ONLY — never background-color.          */
+/* 2026-09-17: the hatch's 6%-alpha WHITE stop was invisible once the     */
+/* state fills it composes over turned pale (D-29 defect 1) — a white     */
+/* hatch on a near-white fill has almost no contrast. Switched to a dark  */
+/* ink stop; background-image stays the ONLY property this rule touches, */
+/* so D-15 composability (stale-and-crit shows both facts at once) still  */
+/* holds unchanged.                                                       */
 /* ---------------------------------------------------------------------- */
 
 .is-stale {
   background-image: repeating-linear-gradient(
     45deg,
-    rgba(255,255,255,0.06) 0 6px,
+    rgba(20,20,20,0.08) 0 6px,
     transparent 6px 12px
   );
 }
@@ -637,11 +647,22 @@ body {
   font-size: 12px;
   color: var(--color-text-muted);
 }
+/* D-39 (LOCKED): render-shell.js sets this dot's fill inline to the
+   saturated var(--state-ok)/--state-warn/--state-crit mark tier, which
+   measures only 2.00:1 against a white topbar — below D-30's own 3.0:1
+   non-text-mark line. The fix is a ring, not a desaturated fill: the border
+   gives the mark a compliant, contrast-bearing edge while the fill itself
+   stays exactly the saturated color D-28 protects for future gauge
+   arcs/map nodes. box-sizing: border-box keeps the dot 8px total (ring
+   included) rather than growing it. Plan 11.1-04's contrast audit must
+   check THIS ring against the topbar, not the fill, as the mark's edge. */
 .connection-dot {
   display: inline-block;
   width: 8px;
   height: 8px;
+  box-sizing: border-box;
   border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
   background-color: var(--color-text-muted);
 }
 
@@ -672,11 +693,23 @@ body {
 }
 #poller-banner {
   grid-row: 2;
-  background-color: rgba(114, 114, 114, 0.2); /* --state-stale at 20% opacity over --color-bg */
+  /* --state-stale at 20% opacity over --color-bg. That alpha was tuned against
+     the dark --color-bg (#141414); over white it blends to ~#e3e3e3, only
+     1.28:1 against white — text still clears AA (ink on #e3e3e3 is ~12.9:1)
+     but the banner itself barely reads as a distinct row (D-29 defect 3).
+     Chose a border over raising the alpha, for the same reason as
+     #tag-group-banner below: it keeps the banner's intended flat tint and
+     just gives it a visible edge. */
+  background-color: rgba(114, 114, 114, 0.2);
+  border-bottom: 1px solid var(--color-border);
 }
 #tag-group-banner {
   grid-row: 3;
   background-color: var(--color-surface-raised);
+  /* --color-surface-raised is now the same white as --color-bg (D-29 defect 3)
+     — a border, not a distinct fill, is what makes this panel read as raised
+     on white (see the --color-surface-raised token comment in :root). */
+  border-bottom: 1px solid var(--color-border);
   justify-content: space-between;
 }
 #tag-group-banner .dismiss-button {
@@ -789,8 +822,13 @@ body {
   padding: var(--space-sm);
   border-bottom: 1px solid var(--color-border);
 }
+/* 2026-09-17: was --color-surface-raised, now the same white as --color-bg
+   (D-29 defect 3), which made a hover a no-op. A border here would shift row
+   heights, so this one consumer re-points to --color-surface (#f3f6fe,
+   1.08:1 against white) instead of gaining a border, for the intended
+   barely-there hover tint without a layout shift. */
 #device-table tr:hover {
-  background: var(--color-surface-raised);
+  background: var(--color-surface);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -885,6 +923,9 @@ body {
 }
 .count-badge {
   background: var(--color-surface-raised);
+  /* --color-surface-raised is now the same white as --color-bg (D-29 defect
+     3) — a border, not a distinct fill, makes this pill read as raised. */
+  border: 1px solid var(--color-border);
   color: var(--color-text);
 }
 /* `.detail-flag-badge` composes with `.state-badge` for its pill shape; render-details.js
