@@ -252,9 +252,9 @@ Summary:
 Plans:
 **Wave 1**
 
-- [ ] 11.1-01-PLAN.md — Supersede Phase 11's D-22/D-24 in `11-CONTEXT.md`; confirm DASH-01's re-wording (D-36)
-- [ ] 11.1-02-PLAN.md — Verify newest-first event ordering against the live poller; pin it with two pytest regression tests (D-33)
-- [ ] 11.1-03-PLAN.md — KONE light palette: three state-token tiers (`--state-*` / `-fill` / `-ink`) plus four palette defects and the connection-dot ring (D-28, D-29, D-38, D-39)
+- [x] 11.1-01-PLAN.md — Supersede Phase 11's D-22/D-24 in `11-CONTEXT.md`; confirm DASH-01's re-wording (D-36)
+- [x] 11.1-02-PLAN.md — Verify newest-first event ordering against the live poller; pin it with two pytest regression tests (D-33)
+- [x] 11.1-03-PLAN.md — KONE light palette: three state-token tiers (`--state-*` / `-fill` / `-ink`) plus four palette defects and the connection-dot ring (D-28, D-29, D-38, D-39)
 
 **Wave 2** *(blocked on 11.1-03)*
 
