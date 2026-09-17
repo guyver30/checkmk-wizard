@@ -45,19 +45,34 @@
 /* ---------------------------------------------------------------------- */
 
 :root {
-  /* Color — sourced from KONE design-tokens.json (UI-SPEC Color) */
-  --color-bg: #141414;
-  --color-surface: #142041;
-  --color-surface-raised: #142c6e;
-  --color-border: rgba(20, 56, 155, 0.35);
-  --color-accent: #1450f5;
-  --color-accent-text: #7296f9;
-  --color-text: #ffffff;
-  --color-text-muted: #a1b9fb;
+  /* Color — KONE LIGHT palette (Phase 11.1, D-22/D-29 supersede the dark
+     11-UI-SPEC values this block replaced). Every hex below is sourced from
+     KONE's own
+     web_assets/kone-design-system-main/packages/kone-ds-tokens/input/design-tokens.json,
+     independently verified against that file in
+     .planning/phases/11.1-dashboard-layout-and-light-palette/11.1-RESEARCH.md
+     section 2 — lifted verbatim, not re-derived. */
+  --color-bg: #ffffff;               /* grayscale."800 bg primary" */
+  --color-surface: #f3f6fe;          /* color background."bg blue secondary" */
+  --color-surface-raised: #ffffff;   /* same as --color-bg on purpose — a raised
+                                         panel is made distinguishable by a border,
+                                         not a distinct fill (D-29 defect 3) */
+  --color-border: #d0d0d0;           /* grayscale."400 border" */
+  --color-accent: #1450f5;           /* unchanged — primary."kone blue" */
+  --color-accent-text: #1450f5;      /* re-derived from blue.l40 (#7296f9), which
+                                         measures only 2.82:1 on white; base clears
+                                         AA text contrast where l40 does not */
+  --color-text: #141414;             /* grayscale."100 text" */
+  --color-text-muted: #727272;       /* grayscale."200 inactive", 4.81:1 on white —
+                                         blue.l60 (the dark theme's muted color) sits
+                                         far below AA on white and must not carry over */
 
-  /* State palette — D-11 hue meanings, KONE token hexes.
-     Note D-11 red split: --state-down is deliberately NOT the same hex as
-     --state-crit (UI-SPEC "Noted deviation: D-11 red split"). */
+  /* Mark tier — KEEP SATURATED, byte-identical to the dark theme. Read
+     directly as a *mark*, not a fill, by render-shell.js's inline
+     connection-dot color assignment today, and by Phase 12's gauge arcs and
+     Phase 13's map nodes later (D-28). Do not lighten or repoint any of
+     these eight values under any circumstance — doing so silently breaks
+     those future consumers months after this plan lands. */
   --state-ok: #1ed273;
   --state-warn: #ffe141;
   --state-crit: #ff5f28;
@@ -66,6 +81,41 @@
   --state-unreach: #ffa023;
   --state-pend: #959595;
   --state-stale: #727272;
+
+  /* Fill tier — NEW. Pale l80-step backgrounds; only the seven .state-*
+     background rules below re-point at these (D-28). KONE's own
+     "bg green/orange/red (don't use)" tokens are deliberately NOT used here
+     per the sourcing rule; the hue ramps' own l80 step is used instead. */
+  --state-ok-fill: #d2f6e3;        /* green.l80 */
+  --state-warn-fill: #fff9d9;      /* derived — KONE ships yellow as a single flat
+                                       #ffe141 with no l80..d80 ramp (`grep -ril
+                                       yellow web_assets/kone-design-system-main/
+                                       packages/kone-ds-tokens/` confirms
+                                       input/design-tokens.json is the only hit).
+                                       Exact 20% yellow-on-white alpha blend:
+                                       0.20*(255,225,65) + 0.80*(255,255,255) =
+                                       (255, 249, 217) = #fff9d9. */
+  --state-crit-fill: #ffdfd4;      /* red.l80 */
+  --state-down-fill: #ffdfd4;      /* red.l80 reused — accent."destructive text"
+                                       has no own ramp */
+  --state-unknown-fill: #ffecd3;   /* orange.l80 */
+  --state-unreach-fill: #ffecd3;   /* orange.l80 */
+  --state-pend-fill: #f1f1f1;      /* grayscale."600 bg tertiary" */
+  --state-stale-fill: #f1f1f1;     /* grayscale."600 bg tertiary" */
+
+  /* Ink tier — NEW, d40 shades. For a state rendered as TEXT or as an ICON
+     (D-38, D-29 fact 1): on white, every KONE BASE hue fails as text —
+     green.base 2.00:1, orange.base 2.04:1, yellow 1.30:1 — and d20 is still
+     short of the 4.5:1 text line (green.d20 3.09:1, orange.d20 exactly
+     3.00:1). d40 is the first step on each ramp that clears it. */
+  --state-ok-ink: #087827;         /* green.d40 */
+  --state-warn-ink: #a1681d;       /* orange.d40 borrowed — no yellow ramp exists */
+  --state-crit-ink: #a14120;       /* red.d40 */
+  --state-down-ink: #a14120;       /* red.d40 — destructive-text has no own d-shade */
+  --state-unknown-ink: #a1681d;    /* orange.d40 */
+  --state-unreach-ink: #a1681d;    /* orange.d40 */
+  --state-pend-ink: #141414;       /* grayscale."100 text" */
+  --state-stale-ink: #141414;      /* grayscale."100 text" */
 
   /* Spacing scale (UI-SPEC Spacing Scale) */
   --space-xs: 4px;
@@ -145,13 +195,17 @@ body {
   gap: var(--space-sm);
   height: 32px;
 }
+/* 2026-09-17: the white chip (background + padding) existed only so the logo's
+   own baked-in white background had contrast against the dark navy topbar
+   (--color-surface was #142041). Now that the topbar is light (--color-surface
+   is #f3f6fe, 1.08:1 against pure white), the chip is invisible padding around
+   the logo rather than a deliberate frame (D-29 defect 2) — removed instead of
+   replaced with a border, since the logo's own white background already reads
+   fine directly against the near-white topbar. */
 .brand-logo {
   height: 24px;
   width: auto;
-  background: #ffffff;
   border-radius: var(--radius-sm);
-  padding: 4px 6px;
-  box-sizing: content-box;
   display: block;
 }
 .brand-title {
@@ -297,23 +351,26 @@ body {
 /* state string (e.g. "state-" + state.toLowerCase()).                   */
 /* ---------------------------------------------------------------------- */
 
-.state-ok      { background-color: var(--state-ok); }
-.state-warn    { background-color: var(--state-warn); }
-.state-crit    { background-color: var(--state-crit); }
-.state-down    { background-color: var(--state-down); }
-.state-unknown { background-color: var(--state-unknown); }
-.state-unreach { background-color: var(--state-unreach); }
-.state-pend    { background-color: var(--state-pend); }
+.state-ok      { background-color: var(--state-ok-fill); }
+.state-warn    { background-color: var(--state-warn-fill); }
+.state-crit    { background-color: var(--state-crit-fill); }
+.state-down    { background-color: var(--state-down-fill); }
+.state-unknown { background-color: var(--state-unknown-fill); }
+.state-unreach { background-color: var(--state-unreach-fill); }
+.state-pend    { background-color: var(--state-pend-fill); }
 
 /* Icon-recoloring pairing rule: an icon inside a state context takes that
-   state's color instead of inheriting currentColor. */
-.icon.state-ok      { background-color: var(--state-ok); }
-.icon.state-warn    { background-color: var(--state-warn); }
-.icon.state-crit    { background-color: var(--state-crit); }
-.icon.state-down    { background-color: var(--state-down); }
-.icon.state-unknown { background-color: var(--state-unknown); }
-.icon.state-unreach { background-color: var(--state-unreach); }
-.icon.state-pend    { background-color: var(--state-pend); }
+   state's color instead of inheriting currentColor. Reads the -ink tier,
+   not -fill: this renders the state AS an icon glyph, not as a background
+   fill, so it needs a d40 shade that clears text/icon contrast on white
+   (D-38, D-29 fact 1). */
+.icon.state-ok      { background-color: var(--state-ok-ink); }
+.icon.state-warn    { background-color: var(--state-warn-ink); }
+.icon.state-crit    { background-color: var(--state-crit-ink); }
+.icon.state-down    { background-color: var(--state-down-ink); }
+.icon.state-unknown { background-color: var(--state-unknown-ink); }
+.icon.state-unreach { background-color: var(--state-unreach-ink); }
+.icon.state-pend    { background-color: var(--state-pend-ink); }
 
 /* Border-only state indicator, for contexts where the whole element must
    keep its surface fill and only a border strip carries the state color
@@ -331,12 +388,18 @@ body {
 /* ---------------------------------------------------------------------- */
 /* Stale hatch (D-14/D-15) — composes over an existing state fill, never  */
 /* replaces it. background-image ONLY — never background-color.          */
+/* 2026-09-17: the hatch's 6%-alpha WHITE stop was invisible once the     */
+/* state fills it composes over turned pale (D-29 defect 1) — a white     */
+/* hatch on a near-white fill has almost no contrast. Switched to a dark  */
+/* ink stop; background-image stays the ONLY property this rule touches, */
+/* so D-15 composability (stale-and-crit shows both facts at once) still  */
+/* holds unchanged.                                                       */
 /* ---------------------------------------------------------------------- */
 
 .is-stale {
   background-image: repeating-linear-gradient(
     45deg,
-    rgba(255,255,255,0.06) 0 6px,
+    rgba(20,20,20,0.08) 0 6px,
     transparent 6px 12px
   );
 }
@@ -584,11 +647,22 @@ body {
   font-size: 12px;
   color: var(--color-text-muted);
 }
+/* D-39 (LOCKED): render-shell.js sets this dot's fill inline to the
+   saturated var(--state-ok)/--state-warn/--state-crit mark tier, which
+   measures only 2.00:1 against a white topbar — below D-30's own 3.0:1
+   non-text-mark line. The fix is a ring, not a desaturated fill: the border
+   gives the mark a compliant, contrast-bearing edge while the fill itself
+   stays exactly the saturated color D-28 protects for future gauge
+   arcs/map nodes. box-sizing: border-box keeps the dot 8px total (ring
+   included) rather than growing it. Plan 11.1-04's contrast audit must
+   check THIS ring against the topbar, not the fill, as the mark's edge. */
 .connection-dot {
   display: inline-block;
   width: 8px;
   height: 8px;
+  box-sizing: border-box;
   border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
   background-color: var(--color-text-muted);
 }
 
@@ -619,11 +693,23 @@ body {
 }
 #poller-banner {
   grid-row: 2;
-  background-color: rgba(114, 114, 114, 0.2); /* --state-stale at 20% opacity over --color-bg */
+  /* --state-stale at 20% opacity over --color-bg. That alpha was tuned against
+     the dark --color-bg (#141414); over white it blends to ~#e3e3e3, only
+     1.28:1 against white — text still clears AA (ink on #e3e3e3 is ~12.9:1)
+     but the banner itself barely reads as a distinct row (D-29 defect 3).
+     Chose a border over raising the alpha, for the same reason as
+     #tag-group-banner below: it keeps the banner's intended flat tint and
+     just gives it a visible edge. */
+  background-color: rgba(114, 114, 114, 0.2);
+  border-bottom: 1px solid var(--color-border);
 }
 #tag-group-banner {
   grid-row: 3;
   background-color: var(--color-surface-raised);
+  /* --color-surface-raised is now the same white as --color-bg (D-29 defect 3)
+     — a border, not a distinct fill, is what makes this panel read as raised
+     on white (see the --color-surface-raised token comment in :root). */
+  border-bottom: 1px solid var(--color-border);
   justify-content: space-between;
 }
 #tag-group-banner .dismiss-button {
@@ -736,8 +822,13 @@ body {
   padding: var(--space-sm);
   border-bottom: 1px solid var(--color-border);
 }
+/* 2026-09-17: was --color-surface-raised, now the same white as --color-bg
+   (D-29 defect 3), which made a hover a no-op. A border here would shift row
+   heights, so this one consumer re-points to --color-surface (#f3f6fe,
+   1.08:1 against white) instead of gaining a border, for the intended
+   barely-there hover tint without a layout shift. */
 #device-table tr:hover {
-  background: var(--color-surface-raised);
+  background: var(--color-surface);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -832,6 +923,9 @@ body {
 }
 .count-badge {
   background: var(--color-surface-raised);
+  /* --color-surface-raised is now the same white as --color-bg (D-29 defect
+     3) — a border, not a distinct fill, makes this pill read as raised. */
+  border: 1px solid var(--color-border);
   color: var(--color-text);
 }
 /* `.detail-flag-badge` composes with `.state-badge` for its pill shape; render-details.js
