@@ -1115,6 +1115,55 @@ def test_run_cycle_truncates_history_and_events_to_configured_bounds():
     assert len(state.events) <= 1
 
 
+# Regression for D-33 (oldest-events-on-top was reported live, but the shipped
+# code is correct): `renderEvents()` (dashboard/js/render-shell.js) reverses
+# the published array exactly once, trusting that the poller publishes it
+# oldest-first. No prior test pinned array *order* across multiple cycles --
+# every existing events test above checks membership or `entries[-1]`, which a
+# producer-side order flip would not fail. This asserts the full ordered list.
+def test_events_published_oldest_first_across_cycles():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    node_b = {"id": "b", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    state = _poller_state(
+        previous_nodes={"a": node_a, "b": node_b},
+        last_status={"a": "OK", "b": "OK"},
+    )
+    config = _make_config(events_max_entries=10)
+
+    # Cycle 1: only "a" changes state.
+    poller.run_cycle(client, config, state, [_snapshot("a", state="CRIT"), _snapshot("b", state="OK")])
+    # Cycle 2: only "b" changes state.
+    poller.run_cycle(client, config, state, [_snapshot("a", state="CRIT"), _snapshot("b", state="WARN")])
+
+    events_calls = _published(client, poller.TOPIC_EVENTS)
+    entries = json.loads(events_calls[-1].args[1])
+    assert [e["device_id"] for e in entries] == ["a", "b"]
+
+
+# Regression for D-33, truncation case: `[-config.events_max_entries:]` must
+# drop the OLDEST entries and leave the survivors still oldest-first -- the
+# same order `renderEvents()` reverses for display.
+def test_events_truncation_drops_oldest_and_preserves_order():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    node_b = {"id": "b", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    node_c = {"id": "c", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    state = _poller_state(
+        previous_nodes={"a": node_a, "b": node_b, "c": node_c},
+        last_status={"a": "OK", "b": "OK", "c": "OK"},
+    )
+    config = _make_config(events_max_entries=2)
+
+    poller.run_cycle(client, config, state, [_snapshot("a", state="CRIT"), _snapshot("b", state="OK"), _snapshot("c", state="OK")])
+    poller.run_cycle(client, config, state, [_snapshot("a", state="CRIT"), _snapshot("b", state="WARN"), _snapshot("c", state="OK")])
+    poller.run_cycle(client, config, state, [_snapshot("a", state="CRIT"), _snapshot("b", state="WARN"), _snapshot("c", state="CRIT")])
+
+    events_calls = _published(client, poller.TOPIC_EVENTS)
+    entries = json.loads(events_calls[-1].args[1])
+    assert [e["device_id"] for e in entries] == ["b", "c"]
+
+
 def test_run_cycle_publishes_heartbeat_with_refreshed_last_poll_and_device_count():
     client = MagicMock()
     state = _poller_state()
