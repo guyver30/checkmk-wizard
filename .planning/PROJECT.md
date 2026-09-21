@@ -27,7 +27,7 @@ A single Python-based toolchain takes a bare Checkmk install all the way to a fu
 - [ ] `mosquitto.conf` gains a WebSockets listener so browser-based MQTT clients (`mqtt.js`) can subscribe directly
 - [ ] A new Checkmk host tag group captures device type from a config-driven, site-specific choice list; the wizard's Phase 4 classification flow prompts for it and Phase 5 onboarding sets it per host
 - [ ] Topology links (`parent`) come from Livestatus's `parents` column; a location/group label is derived from the host's Checkmk folder association — no new Checkmk configuration needed for either
-- [ ] A dashboard (no new backend) — topology/overview view (at-a-glance stats strip + map), a live sortable device table with recent-events panel, and a per-device drill-down with a bounded status-history strip — served by a new nginx container added to `compose.yaml`. *(Revised 2026-09-21: rebuilt as a React SPA against `kone-design-system`, superseding the original "3 static HTML files, no build step" description — see Constraints and Phase 11.1's CONTEXT.md.)*
+- [ ] A dashboard (no new backend) — topology/overview view (at-a-glance stats strip + map), a live sortable device table with recent-events panel, and a per-device drill-down with a bounded status-history strip — served by a new nginx container added to `compose.yaml`. *(Revised 2026-09-21: rebuilt as a React SPA against `kone-design-system`, superseding the original "3 static HTML files, no build step" description — see Constraints and Phase 11.1's CONTEXT.md. Validated in Phase 11.1: three-pane layout, KONE light palette, resizable/collapsible panes, device tree with grouping, stats strip, and event history are built and tested — DASH-01/DASH-06. The topology map itself is still a placeholder pending Phase 13 (DASH-07), and the sortable device table/drill-down pages remain unbuilt.)*
 - [ ] Dashboard shows a connection-status indicator with exponential-backoff MQTT reconnect, and merges incoming updates into existing UI state rather than re-rendering from scratch
 
 ### Out of Scope
@@ -80,4 +80,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-05 after initialization*
+*Last updated: 2026-09-21 after Phase 11.1 (Dashboard Layout and Light Palette) completion*
