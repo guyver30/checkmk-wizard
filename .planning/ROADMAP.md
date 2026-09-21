@@ -182,7 +182,8 @@ Plans:
 
 **Goal**: The dashboard's per-device drill-down shows live agent-derived metrics and per-service status, sourced from a new Livestatus `services` query published on its own MQTT topic
 **Depends on**: Phase 11
-**Requirements**: TBD — to be defined in REQUIREMENTS.md before planning
+**Requirements**: PLR-09, PLR-10, PLR-11, PLR-12, DASH-08, DASH-09, DASH-10, DASH-11, DASH-03 (partial)
+**Requirements note**: PLR-09..PLR-12 and DASH-08..DASH-11 were minted in REQUIREMENTS.md during this phase's planning pass (2026-09-21), per 12-RESEARCH.md's recommendation — Phase 12's scope existed only as ROADMAP prose until then. DASH-03 is only PARTIALLY covered: this phase ships its bounded per-device status-history strip (D-16) but deliberately not its "link out to Checkmk's own UI" clause (D-17), so DASH-03 must stay `Partial`, not `Complete`, after this phase verifies.
 **Scope** (from `.planning/phases/11-live-dashboard/11-CONTEXT.md` deferred section):
 
   1. Extend `scripts/mqtt_poller.py` with a `GET services` Livestatus query — it currently issues only `GET hosts`, so per-service state, `plugin_output` and `perf_data` do not exist anywhere in the contract today
@@ -194,7 +195,18 @@ Plans:
 
 **Note**: host color is *already* influenced by service state — the poller folds `worst_service_state` in via worst-of aggregation (Phase 9 D-08). This phase adds visibility into which service is failing, not the influence itself.
 
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+**Wave 1**
+
+- [ ] 12-01-PLAN.md — Poller services foundation: `GET services` column triad, Nagios `perf_data` parser, `ServiceSnapshot`/`query_services`, plus a `--dump-service-names` diagnostic for confirming Checkmk's SMART service naming live
+- [ ] 12-03-PLAN.md — Dashboard data layer: gauge fields + `ServiceEntry`/`ServiceHistoryEntry` types, two new subscribed topics and store slices, and the `gaugeColor`/`smartBadge`/`compareServices` helpers
+- [ ] 12-05-PLAN.md — Tree-row navigation into `/details?id=` (D-15) and the PROJECT.md Out of Scope amendment (scope item 6)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 12-02-PLAN.md — Poller publishing: gauge/SMART/service-list classification, `lan/devices/{id}/services` (change-only) and `lan/devices/{id}/service_history` (bounded), extended status payload and tombstones, cycle wiring
+- [ ] 12-04-PLAN.md — `DetailsRoute` fill-in: CPU/RAM/Disk gauge row, other-mounts and SMART badges, per-service `Table` sorted worst-first, per-device history strip (DASH-03's history half)
 
 ### Phase 13: Wizard Parents Support and Topology Map
 
