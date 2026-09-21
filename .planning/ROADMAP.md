@@ -269,7 +269,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 11.1-07-PLAN.md — Device-state -> `Badge` mapping, stats strip above the map placeholder, `StatusBadge` connection indicator, MQTT bootstrap (D-44, D-11, DASH-01)
+- [x] 11.1-07-PLAN.md — Device-state -> `Badge` mapping, stats strip above the map placeholder, `StatusBadge` connection indicator, MQTT bootstrap (D-44, D-11, DASH-01)
 
 **Wave 4** *(blocked on Wave 3)*
 
