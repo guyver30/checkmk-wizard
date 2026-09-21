@@ -281,7 +281,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5)*
 
-- [ ] 11.1-10-PLAN.md — Newest-first event history with a consumer-side ordering regression test, middle-truncated device identification (D-33, D-35)
+- [x] 11.1-10-PLAN.md — Newest-first event history with a consumer-side ordering regression test, middle-truncated device identification (D-33, D-35)
 
 **Wave 7** *(blocked on Wave 6)*
 
