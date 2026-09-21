@@ -22,20 +22,25 @@ explicitly three additions: **the gauge row, the SMART badge, and the service `T
 This contract covers exactly those three additions, plus the minimum page chrome
 (header/title, not-found/empty states) needed for the route to be usable on its own.
 
-**Explicitly NOT re-specified here** (flagged, not silently assumed complete):
-- The bounded per-device status-history strip and the "link out to Checkmk's own UI"
-  (originally DASH-03, Phase 11 scope). `DetailsRoute.tsx` is currently a bare stub with
-  neither built — `REQUIREMENTS.md`'s traceability table still lists DASH-03 as Pending
-  against the vanilla (pre-React-pivot) dashboard. Whether DASH-03's React implementation
-  is silently folded into this phase or remains a separate follow-up is a planning decision,
-  not a design-contract one — flagged for the planner/orchestrator to confirm explicitly.
-  `CHECKMK_BASE_URL` / `isCheckmkLinkConfigured()` already exist in `lib/config.ts` (D-20)
-  ready to be consumed whenever that link is built.
-- Navigation INTO `/details?id=` (e.g. making `Tree`/`TreeNode` rows clickable). No such
-  wiring exists today (`TreeNode.tsx` device rows have no `onClick`); the route is reachable
-  only via a bookmarked/typed `?id=` URL (D-19/D-41). Not this phase's stated scope per
-  Canonical Refs, but the feature is unreachable from the UI without it — flagged for the
-  planner to confirm ownership (this phase, or a fast-follow).
+**Resolved during orchestrator scope review (2026-09-21, `12-CONTEXT.md` D-15/D-16/D-17)** —
+both flagged gaps below are now IN SCOPE for this phase, with one explicit exclusion:
+
+- **Tree-row navigation into `/details?id=`** (D-15) — IN SCOPE. Make `Tree`/`TreeNode` device
+  rows navigate to `/details?id={id}` (no `onClick` exists today). No new visual contract
+  needed: reuse the row's existing hover/interactive styling.
+- **Bounded per-device status-history strip** (D-16, the DASH-03 requirement's history half)
+  — IN SCOPE. Data already flows (`lan/devices/{id}/history`, already subscribed and stored
+  per-device in `useAppStore.ts`). This is a rendering task: reuse `EventHistory.tsx`'s
+  per-entry item rendering (icon/label/timestamp per transition), scoped to one device's
+  `history[id]` list instead of the global recent-events feed. Place it below the service
+  `Table` on `DetailsRoute` (mirrors the DMC-server.png reference's SERVICES/HISTORY tab
+  pairing, rendered here as stacked sections rather than tabs since no tab component is
+  otherwise in use in this app). No new color/typography tokens — inherits `EventHistory`'s
+  existing visual treatment verbatim.
+- **Checkmk external deep-link** (D-17, the DASH-03 requirement's link half) — OUT OF SCOPE,
+  explicitly declined. No "View in Checkmk" CTA copy is needed this phase (the Copywriting
+  Contract's "Primary CTA" row's conditional language is superseded by this: there is no
+  primary CTA in this phase at all).
 
 ---
 
@@ -118,7 +123,7 @@ existing `Badge`/icon usage — do not introduce new 500-weight uses this phase)
 |------|-------|-------|
 | Dominant (60%) | `#ffffff` (`--neutral-0`, `bg-canvas`/`bg-surface`) | Page background, gauge-row card background, `Table` background |
 | Secondary (30%) | `#f2f2f4` (`--neutral-100`, `bg-subtle`); `#e2e2e7`/`#d5d5dc` (`--neutral-150`/`--neutral-200`) for hairline borders | `Table` row dividers/hover, gauge-row card's subtle inner divider (if used), the "no data" placeholder background |
-| Accent (10%) | `#1450f5` (`--blue-500`, `--color-fg-brand`) | Reserved for: focus rings on interactive elements (inherited from the design system's global focus style), and — if the deep-Checkmk-link is added in this phase's scope — the link/button itself. **Never** used for gauge rings: gauges signal metric health, and brand blue would visually compete with the success/warning/danger severity meaning already established for state (D-11's colors). |
+| Accent (10%) | `#1450f5` (`--blue-500`, `--color-fg-brand`) | Reserved for: focus rings on interactive elements (inherited from the design system's global focus style), including the new tree-row navigation links (D-15) and history-strip entries (D-16). **Never** used for gauge rings: gauges signal metric health, and brand blue would visually compete with the success/warning/danger severity meaning already established for state (D-11's colors). |
 | Destructive | `#e5252a` (`--red-500`, `--color-fg-danger`/`bg-alert`) | CRIT-state service badges, danger-state gauge rings (D-04, value ≥ crit threshold), SMART-fail badge. No destructive *action* exists in this read-only phase (no delete/confirm buttons). |
 
 Gauge ring color (D-04) uses the existing `ProgressColor` set from `Progress.tsx` —
@@ -135,7 +140,7 @@ color-selection rule itself (below-warn → `success`, warn-to-crit → `warning
 
 | Element | Copy |
 |---------|------|
-| Primary CTA | None in this phase's scope (read-only view, no form submission). If the Checkmk deep link is built here (see Scope Boundary), its label is **"View in Checkmk"**, opening in a new tab. |
+| Primary CTA | None (read-only view, no form submission; the Checkmk deep link is explicitly out of scope — see Scope Boundary D-17). |
 | No device selected (`?id=` absent) | Heading: **"No device selected"** · Body: **"Choose a device from the fleet tree to view its live metrics and service status."** |
 | Device not found (`?id=` set, no matching device in the store) | Heading: **"Device not found"** · Body: **"No device with ID '{id}' is currently known. It may have been removed, or the ID may be mistyped."** |
 | No agent metrics at all (CPU, RAM, AND Disk services all absent — e.g. a pure network device) | **"No agent metrics available for this device."** — replaces the entire gauge row (new for this phase; per-gauge hiding per D-03/D-06 still applies when only SOME are absent) |

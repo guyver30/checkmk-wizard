@@ -109,6 +109,28 @@ per PROJECT.md, no time-series database exists).
   share space with a very different transition rate, and existing history-consuming code
   (`EventHistory.tsx`, `lan/events/recent`) doesn't need to filter entry types.
 
+### Scope Amendment (added post-UI-SPEC review, 2026-09-21)
+
+- **D-15:** Tree-row navigation into `DetailsRoute` is IN SCOPE for this phase. `TreeNode.tsx`
+  device rows currently have no `onClick`/link, so the gauges/service-list this phase builds
+  would otherwise be reachable only via a manually typed `?id=` URL. Add navigation (e.g. a
+  `Link`/`onClick` to `/details?id={id}`) so the feature is reachable from the fleet tree.
+- **D-16:** DASH-03's bounded per-device status-history strip (`REQUIREMENTS.md`, still
+  "Pending" against Phase 11) IS in scope for this phase, since it targets the same
+  `DetailsRoute.tsx` file/route this phase is filling in. The underlying data already exists —
+  `lan/devices/{id}/history` is already subscribed (`mqttClient.ts` `SUBSCRIBE_TOPICS`) and
+  stored per-device in `useAppStore.ts`'s `history: Record<string, HistoryEntry[]>` — so this
+  is a rendering task (reuse `EventHistory.tsx`'s per-entry rendering pattern, scoped to a
+  single device's list instead of the global recent-events feed), not new data plumbing.
+  DASH-03's requirement text also asks for "linking out to Checkmk's own UI for full
+  service-level detail" — that piece is explicitly OUT of scope per D-17 below, so DASH-03
+  should NOT be marked fully Complete in REQUIREMENTS.md's traceability table once this
+  phase's history strip ships; only the history-strip half is satisfied.
+- **D-17:** The Checkmk external deep-link (the other half of DASH-03) is explicitly NOT built
+  this phase — user declined it when this scope amendment was discussed. `CHECKMK_BASE_URL`/
+  `isCheckmkLinkConfigured()` already exist in `lib/config.ts` for whenever it is built later;
+  no design-contract copy for a "View in Checkmk" CTA is needed this phase.
+
 ### Claude's Discretion
 
 - Exact `perf_data` field names for Checkmk's "CPU utilization" and "Memory" services —
