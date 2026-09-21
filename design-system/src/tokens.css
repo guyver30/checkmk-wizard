@@ -1,0 +1,199 @@
+/**
+ * KONE design tokens.
+ * Source: Guidelines.pen "colors" frame (Brand.png, Fg colors.png, Bg colors.png,
+ * info/Success/Warning/alert color.png) which documents an actual token spec with
+ * light/dark values -- these are authoritative where hex is given (KONE Blue
+ * #1450F5, the secondary brand tints, and all Fg/Bg semantic mappings).
+ * Where the sheets only reference a primitive step (e.g. "Color/Green/500") without
+ * printing its hex, the primitive scale below is a close visual read of the swatch,
+ * not a sampled value -- true these up if the primitive palette gets exported later.
+ */
+
+:root {
+  /* ---- Primitives: brand blue ---- */
+  --blue-100: #dbe6ff;
+  --blue-150: #eaf0ff;
+  --blue-200: #c2d3fe;
+  --blue-300: #8ea8fb;
+  --blue-400: #4d76f8;
+  --blue-500: #1450f5; /* KONE Blue -- primary actions/active states/brand. Not for large fills. */
+  --blue-600: #1140c4;
+
+  /* ---- Primitives: success green ---- */
+  --green-100: #eafdf3;
+  --green-150: #dbfbe9;
+  --green-200: #b9f5d2;
+  --green-400: #4fdb8f;
+  --green-500: #22c55e;
+  --green-600: #17a04a;
+
+  /* ---- Primitives: warning orange ---- */
+  --orange-100: #fff4e8;
+  --orange-150: #ffe9d1;
+  --orange-200: #ffd6a8;
+  --orange-400: #fb923c;
+  --orange-500: #f97316;
+  --orange-600: #ea580c;
+
+  /* ---- Primitives: alert/danger red ---- */
+  --red-100: #fdecec;
+  --red-150: #fbd9d9;
+  --red-200: #f7bcbc;
+  --red-400: #f16565;
+  --red-500: #e5252a;
+  --red-600: #c11a1f;
+
+  /* ---- Primitives: link-visited purple ---- */
+  --purple-500: #7c6cf0;
+  --purple-600: #6248d6;
+
+  /* ---- Primitives: brand secondary tints (exact, from Brand.png) ---- */
+  --linen: #f3eee6;
+  --sunflower: #ffe141;
+  --powderblue: #d2f5ff;
+  --blush: #ffcdd7;
+  --mint: #aae1c8;
+
+  /* ---- Primitives: neutral scale ---- */
+  --neutral-0: #ffffff;
+  --neutral-50: #fafafa;
+  --neutral-90: #f5f5f6;
+  --neutral-100: #f2f2f4;
+  --neutral-110: #eeeef1;
+  --neutral-125: #e9e9ed;
+  --neutral-150: #e2e2e7;
+  --neutral-200: #d5d5dc;
+  --neutral-300: #b8b8c2;
+  --neutral-400: #96969f;
+  --neutral-500: #6f6f7c;
+  --neutral-600: #55555f;
+  --neutral-700: #3d3d46;
+  --neutral-750: #303038;
+  --neutral-800: #26262c;
+  --neutral-850: #1c1c21;
+  --neutral-900: #111114;
+  --neutral-950: #08080a;
+
+  /* =====================================================================
+   * Semantic tokens (light mode / root)
+   * ===================================================================== */
+
+  /* Foreground (text/icon) */
+  --color-fg-primary: var(--neutral-900);
+  --color-fg-secondary: var(--neutral-700);
+  --color-fg-tertiary: var(--neutral-600);
+  --color-fg-placeholder: var(--neutral-500);
+  --color-fg-disabled: var(--neutral-400);
+  --color-fg-brand: var(--blue-500);
+  --color-fg-brand-inverse: var(--blue-500);
+  --color-fg-danger: var(--red-500);
+  --color-fg-warning: var(--orange-500);
+  --color-fg-success: var(--green-500);
+  --color-fg-oncolor-primary: var(--neutral-0);
+  --color-fg-onwhite-primary: var(--neutral-900);
+  --color-fg-link-default: var(--blue-500);
+  --color-fg-link-visited: var(--purple-500);
+
+  /* Background: canvas / surface */
+  --color-bg-canvas-default: var(--neutral-0);
+  --color-bg-surface-default: var(--neutral-0);
+  --color-bg-surface-hover: var(--neutral-90);
+  --color-bg-surface-active: var(--neutral-100);
+  --color-bg-surface-disabled: var(--neutral-125);
+  --color-bg-surface-subtle-default: var(--neutral-100);
+  --color-bg-surface-subtle-hover: var(--neutral-110);
+  --color-bg-surface-subtle-active: var(--neutral-125);
+  --color-bg-surface-subtle-disabled: var(--neutral-150);
+
+  /* Background: primary control (e.g. primary button) */
+  --color-bg-control-primary-default: var(--blue-500);
+  --color-bg-control-primary-hover: var(--blue-400);
+  --color-bg-control-primary-active: var(--blue-600);
+  --color-bg-control-primary-disabled: var(--neutral-300);
+  --color-bg-control-primary-focus: var(--blue-300);
+
+  /* Modal scrim -- raw value by design, no semantic token upstream */
+  --color-scrim: rgba(23, 23, 28, 0.45);
+
+  /* Brand blue interaction states (secondary/tertiary buttons, links) */
+  --color-brand-default: var(--blue-500);
+  --color-brand-hover: var(--blue-400);
+  --color-brand-active: var(--blue-600);
+  --color-brand-disabled: var(--neutral-400);
+  --color-brand-light: var(--blue-150);
+  --color-brand-light-hover: var(--blue-100);
+  --color-brand-light-active: var(--blue-200);
+  --color-brand-light-disabled: var(--neutral-150);
+  --color-brand-focus: var(--blue-300);
+
+  /* Success / Warning / Alert interaction states -- no disabled variant by design */
+  --color-success-default: var(--green-500);
+  --color-success-hover: var(--green-400);
+  --color-success-active: var(--green-600);
+  --color-success-light: var(--green-150);
+  --color-success-light-hover: var(--green-100);
+  --color-success-light-active: var(--green-200);
+
+  --color-warning-default: var(--orange-500);
+  --color-warning-hover: var(--orange-400);
+  --color-warning-active: var(--orange-600);
+  --color-warning-light: var(--orange-150);
+  --color-warning-light-hover: var(--orange-100);
+  --color-warning-light-active: var(--orange-200);
+
+  --color-alert-default: var(--red-500);
+  --color-alert-hover: var(--red-400);
+  --color-alert-active: var(--red-600);
+  --color-alert-light: var(--red-150);
+  --color-alert-light-hover: var(--red-100);
+  --color-alert-light-active: var(--red-200);
+
+  /* ---- Border radius ---- */
+  --radius-xs: 4px;   /* checkbox */
+  --radius-sm: 6px;   /* inputs, square/compact buttons, tooltip */
+  --radius-md: 10px;  /* accordion group, dropdown panels */
+  --radius-lg: 16px;  /* snackbar & message cards */
+  --radius-pill: 999px; /* buttons, search, badges, chips, switch, FAB */
+
+  /* ---- Elevation ---- */
+  --shadow-card: 0 4px 12px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-menu: 0 8px 24px rgba(16, 24, 40, 0.14), 0 2px 6px rgba(16, 24, 40, 0.08);
+  --shadow-tooltip: 0 4px 10px rgba(16, 24, 40, 0.18);
+  --shadow-focus: 0 0 0 3px rgba(20, 80, 245, 0.35);
+
+  /* ---- Typography ---- */
+  --font-family-base: "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-size-xs: 12px;   /* hint text, tooltip ("UI 6 Regular") */
+  --font-size-sm: 13px;   /* input labels, compact UI */
+  --font-size-base: 14px; /* body, buttons */
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 28px;  /* page headings */
+}
+
+/* =====================================================================
+ * Dark mode overrides -- only the values the source sheets actually
+ * specified (Fg/Bg semantic tables + brand blue). Success/warning/alert
+ * dark hex weren't given a full ramp in the sheets read, so they fall
+ * back to the same value in both modes for now.
+ * ===================================================================== */
+[data-theme="dark"] {
+  --color-fg-primary: var(--neutral-200);
+  --color-fg-secondary: var(--neutral-300);
+  --color-fg-tertiary: var(--neutral-400);
+  --color-fg-placeholder: var(--neutral-500);
+  --color-fg-disabled: var(--neutral-600);
+  --color-fg-brand-inverse: var(--blue-150);
+  --color-fg-oncolor-primary: var(--neutral-100);
+  --color-fg-onwhite-primary: var(--neutral-900);
+
+  --color-bg-canvas-default: var(--neutral-950);
+  --color-bg-surface-default: var(--neutral-900);
+  --color-bg-surface-hover: var(--neutral-850);
+  --color-bg-surface-active: var(--neutral-800);
+  --color-bg-surface-disabled: var(--neutral-700);
+  --color-bg-surface-subtle-default: var(--neutral-750);
+  --color-bg-surface-subtle-hover: var(--neutral-700);
+  --color-bg-surface-subtle-active: var(--neutral-800);
+  --color-bg-surface-subtle-disabled: var(--neutral-600);
+}
