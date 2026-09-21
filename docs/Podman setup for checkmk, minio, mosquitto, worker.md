@@ -173,6 +173,16 @@ every asset under `dashboard/` (HTML, CSS, JS, the vendored `mqtt.js`, fonts and
 committed as-is, and deployment is nothing more than the `dashboard` service's read-only bind
 mount (§4/§6).
 
+**Note on `dashboard-react/` (Phase 11.1):** a React + TypeScript rewrite of the dashboard now
+lives at `dashboard-react/` (see `dashboard-react/README.md`). Its equivalent of
+`dashboard/js/config.js` is `dashboard-react/src/lib/config.ts` — same `CHECKMK_BASE_URL`
+placeholder trap as above (`http://<HOST_IP>:8080`, disabled deep link until edited). The
+compose `dashboard` service (§6) still serves the vanilla `dashboard/` unchanged until cutover;
+`dashboard-react/` is not yet wired into `deploy/compose.yaml`. Unlike `dashboard/`, this app
+does have a build step (it needs `design-system/dist/` built first — see its README), and its
+eventual cutover additionally requires adding the nginx SPA fallback
+(`try_files $uri $uri/ /index.html;`) that the stock `nginx:alpine` image's default config lacks.
+
 **Note on `CMK_REST_SECRET` (poller):** the `poller` service now makes an authenticated Checkmk REST call every poll cycle to read each host's folder, alongside its unauthenticated Livestatus query. `deploy/compose.yaml` ships `CMK_REST_USERNAME=automation` and interpolates `CMK_REST_SECRET` from `deploy/.env`, which is gitignored so the real secret never lands in a tracked file. The real secret comes from the Checkmk UI (Setup -> Users -> the `automation` user -> Automation secret), or by reading `/omd/sites/dmc/var/check_mk/web/automation/automation.secret` inside the `checkmk` container — and it only exists once checkmk-wizard's Phase 1 bootstrap has created that user (see §8.3), so this step happens after a first wizard run. Copy `deploy/.env.example` to `deploy/.env`, put the real value in it, and run `podman compose up -d poller` to pick it up. `CMK_REST_SECRET` defaults to empty rather than refusing to start compose: a forgotten or missing secret leaves folder enrichment degraded (empty `folder` on every device) rather than blocking the stack, because a hard `:?` guard would also block `checkmk` and `mosquitto` from starting on a first-time deployment — before the automation secret this variable demands can even exist. A *wrong* secret degrades the same way (empty `folder` on every device) — see §7. This copy is manual because the `poller` container deliberately has no filesystem access to `checkmk` — the same container boundary the whole stack is built around. Like `CMK_PASSWORD` above, rotate it before exposing this stack beyond a trusted LAN.
 
 ---
