@@ -56,13 +56,24 @@ per PROJECT.md, no time-series database exists).
 
 ### SMART Disk-Health Display
 
-- **D-05:** SMART status is NOT its own 4th gauge (the DMC-server.png reference only shows
-  3). It renders as a worst-of-all-disks badge next to the Disk gauge, mirroring D-01's
-  "headline gauge + worst-of badge" pattern. Checkmk creates one `Smart <device>` service
-  per physical disk (e.g. `/dev/sda`, `/dev/sdb`) — separate from `Filesystem *` services.
-- **D-06:** The SMART badge is hidden entirely (not shown as N/A) when a host has no `Smart
-  <device>` services at all — VMs with virtual disks, or hosts where smartmontools setup
-  was skipped/failed during onboarding. Same hide-on-absence rule as D-03.
+- **D-05 (AMENDED 2026-09-21 — see 12-RESEARCH.md "Critical Finding"):** SMART status is NOT
+  its own 4th gauge (the DMC-server.png reference only shows 3). It renders as a
+  worst-of-all-disks badge next to the Disk gauge, mirroring D-01's "headline gauge +
+  worst-of badge" pattern. D-05 originally claimed Checkmk creates one `Smart <device>`
+  service per physical disk — 12-RESEARCH.md's source-level read of Checkmk's actual 2.4.0
+  SMART check-plugin code (`smart_ata.py`/`smart_nvme.py`/`smart_scsi.py`) found no such
+  template; the real registered service names are **`"SMART <device> Stats"`** (the
+  health/failure-relevant one — this is the service whose `state` the badge should read) and
+  a separate **`"Temperature SMART <device>"`** (not health-relevant, see D-08 below). No
+  live agent-test host is reachable to settle the discrepancy right now, so per explicit user
+  direction: **build against the source-verified names (`"SMART <device> Stats"`) now, and
+  adjust the poller's filter regex if a live agent-test run shows otherwise.** The planner/
+  executor should keep the exact match string in one clearly-commented, easy-to-change
+  location (mirroring `available_host_columns()`'s defensive-probing posture) so a future
+  correction is a one-line fix, not a re-plan.
+- **D-06:** The SMART badge is hidden entirely (not shown as N/A) when a host has no
+  `"SMART <device> Stats"` services at all — VMs with virtual disks, or hosts where
+  smartmontools setup was skipped/failed during onboarding. Same hide-on-absence rule as D-03.
 - **D-07:** When at least one disk is failing, the badge reads `"SMART: Fail"` plus a count,
   e.g. `"SMART: 1/2 disks failing"`. Exact wording for the all-pass case (e.g. whether to
   show a count there too, like `"SMART: Pass (2/2)"` vs. bare `"SMART: Pass"`) is Claude's
@@ -70,11 +81,15 @@ per PROJECT.md, no time-series database exists).
 
 ### Per-Service Status List
 
-- **D-08:** The list shows every service Checkmk currently has for the host (PING, the
-  wizard-chosen systemd services per D-02, and anything else the agent/wizard set up) MINUS
-  the four services already surfaced as gauges/badges above (`Filesystem *`, `CPU
-  utilization`, `Memory`, `Smart <device>`) — including OK rows, not filtered down to
-  non-OK only. This is the full "what's being monitored" picture, not just a failure list.
+- **D-08 (amended for D-05's correction):** The list shows every service Checkmk currently
+  has for the host (PING, the wizard-chosen systemd services per D-02, and anything else the
+  agent/wizard set up) MINUS the four services already surfaced as gauges/badges above
+  (`Filesystem *`, `CPU utilization`, `Memory`, `"SMART <device> Stats"`) — including OK
+  rows, not filtered down to non-OK only. `"Temperature SMART <device>"` (a separate service
+  D-05's original model didn't distinguish from the health/stats one) is NOT excluded — it
+  shows as a normal per-service-list row (per 12-RESEARCH.md's recommendation: informational,
+  not a failure signal, costs nothing to show). This is the full "what's being monitored"
+  picture, not just a failure list.
 - **D-09:** Each row shows service name + status badge + `plugin_output` text (e.g. "WARN -
   CPU load too high"), so the operator sees *why* without navigating further. Sorted
   worst-first: CRIT/WARN/UNKNOWN before OK.
