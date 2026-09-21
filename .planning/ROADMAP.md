@@ -277,7 +277,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 11.1-09-PLAN.md — Extensible grouping `<select>` + "Order by severity" checkbox, severity ordering derived per render, expansion survives a re-sort (D-32)
+- [x] 11.1-09-PLAN.md — Extensible grouping `<select>` + "Order by severity" checkbox, severity ordering derived per render, expansion survives a re-sort (D-32)
 
 **Wave 6** *(blocked on Wave 5)*
 
