@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 12 context gathered
-last_updated: "2026-09-21T12:31:07.177Z"
+stopped_at: Phase 12 planned — 5 plans, 2 waves, verified (2 non-blocking warnings, 1 fixed)
+last_updated: "2026-09-21T13:45:54.343Z"
 last_activity: 2026-09-21
 progress:
   total_phases: 9
   completed_phases: 6
-  total_plans: 36
+  total_plans: 41
   completed_plans: 36
   percent: 67
 ---
@@ -79,7 +79,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- [Pre-seed fixed automation-user REST secret from env](.planning/todos/pending/2026-09-21-pre-seed-fixed-automation-user-rest-secret-from-env.md) — read `CMK_REST_SECRET` from env in `bootstrap_automation_user()` instead of generating+hand-copying; needs create-vs-update idempotency handling.
 
 ### Blockers/Concerns
 
@@ -113,6 +113,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-09-21T12:31:07.154Z
-Stopped at: Phase 12 context gathered
-Resume file: .planning/phases/12-agent-metrics-and-service-status/12-CONTEXT.md
+Last session: 2026-09-21T13:45:54.321Z
+Stopped at: Phase 12 planned — 5 plans, 2 waves, verified (2 non-blocking warnings, 1 fixed)
+Resume file: .planning/phases/12-agent-metrics-and-service-status/12-01-PLAN.md
