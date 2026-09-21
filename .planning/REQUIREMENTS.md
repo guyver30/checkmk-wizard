@@ -43,7 +43,7 @@
 - [ ] **DASH-03**: `details.html` shows a per-device drill-down with a bounded status-history strip, linking out to Checkmk's own UI for full service-level detail
 - [ ] **DASH-04**: Dashboard shows a distinct stale/unknown visual state (separate from down) when a device's last-seen timestamp exceeds a threshold, or when the poller's own liveness signal goes stale
 - [ ] **DASH-05**: Dashboard shows a connection-status indicator with jittered exponential-backoff reconnect for the MQTT-over-WebSockets connection
-- [ ] **DASH-06**: Dashboard color-codes/icons hosts by device type and groups/colors by the folder-derived location/group label
+- [x] **DASH-06**: Dashboard color-codes/icons hosts by device type and groups/colors by the folder-derived location/group label
 - [ ] **DASH-07**: `index.html` renders a live topology map (vis-network) with parent/child links, merging incoming updates via `DataSet.update()` rather than re-rendering from scratch
 
 ## v2 Requirements
@@ -102,7 +102,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-03 | Phase 11 | Pending |
 | DASH-04 | Phase 11 | Pending |
 | DASH-05 | Phase 11 | Pending |
-| DASH-06 | Phase 11 | Pending |
+| DASH-06 | Phase 11 | Complete |
 | DASH-07 | Phase 13 | Pending |
 
 **Coverage:**
