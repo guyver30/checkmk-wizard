@@ -94,4 +94,58 @@ describe("buildTree", () => {
   it("returns an empty array for an empty devices map and does not throw", () => {
     expect(buildTree({}, "type", NOW_MS)).toEqual([]);
   });
+
+  it("orders groups alphabetically by default even when a later group is worse", () => {
+    const devices: Record<string, DevicePayload> = {
+      a1: { id: "a1", device_type: "ACS", state: "OK", timestamp: FRESH_TIMESTAMP },
+      z1: { id: "z1", device_type: "Zebra", state: "DOWN", timestamp: FRESH_TIMESTAMP },
+    };
+    const tree = buildTree(devices, "type", NOW_MS);
+    expect(tree.map((g) => g.key)).toEqual(["ACS", "Zebra"]);
+  });
+
+  it("orders groups by descending worstRank when orderBySeverity is true, worst group first", () => {
+    const devices: Record<string, DevicePayload> = {
+      a1: { id: "a1", device_type: "ACS", state: "OK", timestamp: FRESH_TIMESTAMP },
+      z1: { id: "z1", device_type: "Zebra", state: "DOWN", timestamp: FRESH_TIMESTAMP },
+    };
+    // Zebra is alphabetically last but has the worse state; it must sort FIRST here and
+    // LAST under the default ordering (asserted above), proving orderBySeverity actually
+    // changes the order rather than being a no-op.
+    const tree = buildTree(devices, "type", NOW_MS, { orderBySeverity: true });
+    expect(tree.map((g) => g.key)).toEqual(["Zebra", "ACS"]);
+  });
+
+  it("breaks a worstRank tie by descending nonOkCount, then alphabetically", () => {
+    const devices: Record<string, DevicePayload> = {
+      a1: { id: "a1", device_type: "ACS", state: "WARN", timestamp: FRESH_TIMESTAMP },
+      b1: { id: "b1", device_type: "Badge", state: "WARN", timestamp: FRESH_TIMESTAMP },
+      b2: { id: "b2", device_type: "Badge", state: "WARN", timestamp: FRESH_TIMESTAMP },
+    };
+    const tree = buildTree(devices, "type", NOW_MS, { orderBySeverity: true });
+    // Both groups have worstRank 1 (WARN); Badge has nonOkCount 2 vs ACS's 1, so Badge wins
+    // the tie-break despite sorting after ACS alphabetically.
+    expect(tree.map((g) => g.key)).toEqual(["Badge", "ACS"]);
+  });
+
+  it("orders devices within a group by descending severity rank, then alphabetically, when orderBySeverity is true", () => {
+    const devices: Record<string, DevicePayload> = {
+      h1: { id: "h1", alias: "Alpha", device_type: "ACS", state: "OK", timestamp: FRESH_TIMESTAMP },
+      h2: { id: "h2", alias: "Zebra", device_type: "ACS", state: "CRIT", timestamp: FRESH_TIMESTAMP },
+      h3: { id: "h3", alias: "Mid", device_type: "ACS", state: "WARN", timestamp: FRESH_TIMESTAMP },
+    };
+    const tree = buildTree(devices, "type", NOW_MS, { orderBySeverity: true });
+    expect(tree[0].children.map((c) => c.label)).toEqual(["Zebra", "Mid", "Alpha"]);
+  });
+
+  it("produces a stable, deterministic order across repeated calls with identical input", () => {
+    const devices: Record<string, DevicePayload> = {
+      a1: { id: "a1", device_type: "ACS", state: "WARN", timestamp: FRESH_TIMESTAMP },
+      b1: { id: "b1", device_type: "Badge", state: "WARN", timestamp: FRESH_TIMESTAMP },
+      b2: { id: "b2", device_type: "Badge", state: "CRIT", timestamp: FRESH_TIMESTAMP },
+    };
+    const first = buildTree(devices, "type", NOW_MS, { orderBySeverity: true });
+    const second = buildTree(devices, "type", NOW_MS, { orderBySeverity: true });
+    expect(first).toEqual(second);
+  });
 });
