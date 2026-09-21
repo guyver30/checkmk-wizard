@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/shallow";
+import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
 import { MapPlaceholder } from "../components/MapPlaceholder";
 import { StatsStrip } from "../components/StatsStrip";
@@ -89,10 +90,7 @@ export function IndexRoute() {
           </div>
         </div>
       }
-      centreBottom={
-        // Plan 10 fills the event history in here.
-        <p className="p-3 text-sm text-fg-tertiary">Event history</p>
-      }
+      centreBottom={<EventHistory />}
     />
   );
 }
