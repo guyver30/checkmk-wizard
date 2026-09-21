@@ -27,7 +27,7 @@ A single Python-based toolchain takes a bare Checkmk install all the way to a fu
 - [ ] `mosquitto.conf` gains a WebSockets listener so browser-based MQTT clients (`mqtt.js`) can subscribe directly
 - [ ] A new Checkmk host tag group captures device type from a config-driven, site-specific choice list; the wizard's Phase 4 classification flow prompts for it and Phase 5 onboarding sets it per host
 - [ ] Topology links (`parent`) come from Livestatus's `parents` column; a location/group label is derived from the host's Checkmk folder association — no new Checkmk configuration needed for either
-- [ ] A 3-page static HTML/CSS/JS dashboard (no build step, no backend) — `index.html` (live topology map via vis-network + an at-a-glance stats strip), `devices.html` (live sortable device table + recent-events panel), `details.html` (per-device drill-down with a bounded status-history strip) — served by a new nginx container added to `compose.yaml`
+- [ ] A dashboard (no new backend) — topology/overview view (at-a-glance stats strip + map), a live sortable device table with recent-events panel, and a per-device drill-down with a bounded status-history strip — served by a new nginx container added to `compose.yaml`. *(Revised 2026-09-21: rebuilt as a React SPA against `kone-design-system`, superseding the original "3 static HTML files, no build step" description — see Constraints and Phase 11.1's CONTEXT.md.)*
 - [ ] Dashboard shows a connection-status indicator with exponential-backoff MQTT reconnect, and merges incoming updates into existing UI state rather than re-rendering from scratch
 
 ### Out of Scope
@@ -47,7 +47,7 @@ A single Python-based toolchain takes a bare Checkmk install all the way to a fu
 ## Constraints
 
 - **Tech stack**: Python 3.11+, managed via `uv` (per repo convention — `uv run`/`uv add`/`uv sync`, never bare `python`/`pip`) — matches the existing wizard codebase
-- **No new backend for the dashboard**: static HTML/CSS/JS only, no build step, no server-side application — state comes entirely from MQTT retained messages
+- **No new backend for the dashboard**: no server-side application — state comes entirely from MQTT retained messages. *(Revised 2026-09-21, Phase 11.1 D-40: the "static HTML/CSS/JS only, no build step" half is retired — the dashboard is being rewritten as a React + TypeScript + Tailwind SPA against the company's own `kone-design-system` component library, built to static assets and served by the same nginx container. No new backend/API is added; this is a build-tooling change, not an architecture change. See `.planning/phases/11.1-dashboard-layout-and-light-palette/11.1-CONTEXT.md`.)*
 - **Container boundary**: the poller/publisher must not require filesystem access to the `checkmk` container — Livestatus-over-TCP and the REST API are the only touchpoints, consistent with existing container-mode design
 - **Compatibility**: new Checkmk host tag group and folder-based VLAN derivation must not break the existing 7-phase wizard flow or its tests
 

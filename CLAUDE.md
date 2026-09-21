@@ -10,7 +10,7 @@ An interactive terminal wizard that configures a fresh Checkmk Community Edition
 ### Constraints
 
 - **Tech stack**: Python 3.11+, managed via `uv` (per repo convention — `uv run`/`uv add`/`uv sync`, never bare `python`/`pip`) — matches the existing wizard codebase
-- **No new backend for the dashboard**: static HTML/CSS/JS only, no build step, no server-side application — state comes entirely from MQTT retained messages
+- **No new backend for the dashboard**: no server-side application — state comes entirely from MQTT retained messages. *(Revised 2026-09-21, Phase 11.1 D-40: the "static HTML/CSS/JS only, no build step" half is retired — the dashboard is being rewritten as a React + TypeScript + Tailwind SPA against the company's own `kone-design-system` component library, built to static assets and served by the same nginx container. No new backend/API is added; this is a build-tooling change, not an architecture change. See `.planning/phases/11.1-dashboard-layout-and-light-palette/11.1-CONTEXT.md`.)*
 - **Container boundary**: the poller/publisher must not require filesystem access to the `checkmk` container — Livestatus-over-TCP and the REST API are the only touchpoints, consistent with existing container-mode design
 - **Compatibility**: new Checkmk host tag group and folder-based VLAN derivation must not break the existing 7-phase wizard flow or its tests
 <!-- GSD:project-end -->

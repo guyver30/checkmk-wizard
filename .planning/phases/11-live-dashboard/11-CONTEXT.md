@@ -160,19 +160,36 @@ the influence itself.
 - **D-18:** Display name is **`alias` when non-empty, else `id` (hostname)**. The wizard's
   Phase 4/10.1 alias prompt exists precisely so an operator can give a host a human name.
   The hostname stays visible in the detail panel and as a device-table column.
-- **D-19:** `details.html` reads its target from a **query string** —
-  `details.html?id=<hostname>` via `URLSearchParams`. Bookmarkable, shareable, survives
-  refresh, and works with browser back/forward. Host ids are safe here: the wizard validates
-  hostnames against a strict regex and `is_publishable_device_id()` already rejects ids
-  containing `+ # /`.
+- **D-19 (SUPERSEDED by Phase 11.1 D-41, 2026-09-21):** `details.html` reads its target from a
+  **query string** — `details.html?id=<hostname>` via `URLSearchParams`. Bookmarkable,
+  shareable, survives refresh, and works with browser back/forward. Host ids are safe here:
+  the wizard validates hostnames against a strict regex and `is_publishable_device_id()`
+  already rejects ids containing `+ # /`.
+  - **Becomes:** the query-string convention (`?id=<hostname>`) survives, but it now
+    addresses a client-side route (`/details?id=<hostname>`) in a React SPA rather than a
+    second real HTML file. See
+    `.planning/phases/11.1-dashboard-layout-and-light-palette/11.1-CONTEXT.md` (D-41).
 - **D-20:** The Checkmk base URL and site name live in **`dashboard/js/config.js`** alongside
   the broker settings — one file an operator edits per deployment. The browser cannot derive
   them: the poller reaches Checkmk over an internal container hostname (`checkmk:5000`) that
   no LAN browser can resolve.
-- **D-21:** **Three real HTML files that behave as one app.** `index.html`, `devices.html` and
-  `details.html` all exist and each renders correctly when opened cold (keeping every URL
-  bookmarkable), but all three load the same `js/shell.js`, and in-app navigation is
-  intercepted with `history.pushState`.
+  - **Note (2026-09-21):** the *mechanism* is superseded by the React rewrite (D-42) — the
+    equivalent config now lives in the `dashboard-react/` source — but the *requirement*
+    (single operator-edited config point for the Checkmk URL, browser cannot derive it) is
+    unchanged.
+- **D-21 (SUPERSEDED by Phase 11.1 D-40/D-41/D-42, 2026-09-21):** **Three real HTML files that
+  behave as one app.** `index.html`, `devices.html` and `details.html` all exist and each
+  renders correctly when opened cold (keeping every URL bookmarkable), but all three load the
+  same `js/shell.js`, and in-app navigation is intercepted with `history.pushState`.
+  - **Becomes:** a React + TypeScript + Tailwind single-page app built against the company's
+    `kone-design-system` component library, superseding the whole vanilla-JS/no-build-step
+    architecture. One HTML shell, client-side routing (D-41) stands in for the three real
+    files; the operator-directed reason is "the dashboard must strictly follow our design
+    system," not a defect in the vanilla approach. Built in a new `dashboard-react/`
+    directory and swapped into `compose.yaml`'s nginx mount only once it reaches feature
+    parity with this vanilla version (D-42). See
+    `.planning/phases/11.1-dashboard-layout-and-light-palette/11.1-CONTEXT.md` (D-40 onward)
+    for the full decision set.
 - **D-22 (SUPERSEDED by Phase 11.1 D-25/D-27/D-36, 2026-09-16):** Layout is a **persistent
   shell with a swappable main area**, modelled on `docs/DMC-networkmap.png` /
   `docs/DMC-server.png`: dark, dense, panel-based. The **left column is split vertically** —
