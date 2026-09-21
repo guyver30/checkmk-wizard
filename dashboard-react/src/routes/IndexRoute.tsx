@@ -1,10 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/shallow";
+import { GroupingControls } from "../components/GroupingControls";
 import { MapPlaceholder } from "../components/MapPlaceholder";
 import { StatsStrip } from "../components/StatsStrip";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { Tree } from "../components/Tree";
+import { useGroupingPrefs } from "../hooks/useGroupingPrefs";
 import { buildTree } from "../lib/treeModel";
+import type { GroupingMode } from "../lib/types";
 import { makeSelectStateCounts } from "../store/selectors";
 import { useAppStore } from "../store/useAppStore";
 
@@ -23,12 +26,17 @@ export function IndexRoute() {
   const selectCounts = useCallback(makeSelectStateCounts(nowMs), [nowMs]);
   const counts = useAppStore(useShallow(selectCounts));
 
-  // Grouping mode is hardcoded to "type" in this plan (plan 09 replaces it with the
-  // <select> and the severity-ordered checkbox). Open-group state is lifted here, not into
-  // Tree/TreeNode, so a device-status message re-rendering this route never resets it --
-  // openKeys is a plain Set the store update has no reason to touch.
+  // Grouping mode and severity ordering are persisted (guarded storage) preferences (D-32).
+  // Open-group state is lifted here, not into Tree/TreeNode, so a device-status message
+  // re-rendering this route never resets it -- openKeys is a plain Set the store update has
+  // no reason to touch. Sort order itself is always derived from current devices/mode/
+  // orderBySeverity on every render (buildTree's own contract), never cached.
+  const { mode, orderBySeverity, setMode, setOrderBySeverity } = useGroupingPrefs();
   const devices = useAppStore((s) => s.devices);
-  const groups = useMemo(() => buildTree(devices, "type"), [devices]);
+  const groups = useMemo(
+    () => buildTree(devices, mode, undefined, { orderBySeverity }),
+    [devices, mode, orderBySeverity],
+  );
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
   const onToggleGroup = useCallback((key: string) => {
     setOpenKeys((prev) => {
@@ -42,9 +50,35 @@ export function IndexRoute() {
     });
   }, []);
 
+  const onModeChange = useCallback(
+    (nextMode: GroupingMode) => {
+      setMode(nextMode);
+      // A grouping-MODE change alters the key space (different key strings per mode), so
+      // openKeys is pruned to the keys present in the newly built tree rather than cleared
+      // wholesale -- switching to folder and back should not lose unrelated already-open
+      // state. A pure re-sort (the orderBySeverity checkbox) never reaches this code path:
+      // openKeys is keyed by group identity, not position, so a re-sort cannot invalidate it.
+      const nextKeys = new Set(buildTree(devices, nextMode).map((group) => group.key));
+      setOpenKeys((prev) => new Set([...prev].filter((key) => nextKeys.has(key))));
+    },
+    [devices, setMode],
+  );
+
   return (
     <ThreePaneLayout
-      tree={<Tree groups={groups} openKeys={openKeys} onToggle={onToggleGroup} />}
+      tree={
+        <div className="flex h-full min-h-0 flex-col">
+          <GroupingControls
+            mode={mode}
+            orderBySeverity={orderBySeverity}
+            onModeChange={onModeChange}
+            onOrderChange={setOrderBySeverity}
+          />
+          <div className="min-h-0 flex-1 overflow-auto">
+            <Tree groups={groups} openKeys={openKeys} onToggle={onToggleGroup} />
+          </div>
+        </div>
+      }
       centreTop={
         // D-25: the stats strip sits ABOVE the map placeholder, content-sized, with the
         // placeholder taking the remaining height -- both are always visible together.
