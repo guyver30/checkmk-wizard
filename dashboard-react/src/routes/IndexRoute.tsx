@@ -10,11 +10,13 @@ export function IndexRoute() {
   // A stable selector (memoized on nowMs) subscribed through useAppStore, not a one-off
   // `makeSelectStateCounts(nowMs)(useAppStore.getState())` read -- the latter would bypass
   // Zustand's subscription entirely and never re-render this route on a device update.
-  // nowMs is captured once via useState's lazy initialiser rather than read fresh on every
-  // render, since a fresh `Date.now()` per render would recreate the selector every render.
-  // `useShallow` compares the selector's output by value, not by reference -- `selectCounts`
-  // allocates a brand-new counts object on every call (selectors.ts), so without it
-  // useSyncExternalStore would treat every store notification as "changed" and loop forever.
+  // `makeSelectStateCounts` is the same factory selectors.ts's clock-agnostic `selectStateCounts`
+  // is built from (`selectStateCounts` itself pins nowMs at import time, which this component
+  // must not do). nowMs is captured once via useState's lazy initialiser rather than read fresh
+  // on every render, since a fresh `Date.now()` per render would recreate the selector every
+  // render. `useShallow` compares the selector's output by value, not by reference --
+  // `selectCounts` allocates a brand-new counts object on every call (selectors.ts), so without
+  // it useSyncExternalStore would treat every store notification as "changed" and loop forever.
   const [nowMs] = useState(() => Date.now());
   const selectCounts = useCallback(makeSelectStateCounts(nowMs), [nowMs]);
   const counts = useAppStore(useShallow(selectCounts));
