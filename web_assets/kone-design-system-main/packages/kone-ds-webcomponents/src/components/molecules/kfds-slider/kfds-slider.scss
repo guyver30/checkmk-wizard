@@ -1,0 +1,190 @@
+$range-handle-size: 12px;
+
+.kfds-slider-container {
+  label {
+    color: $color-grayscale-100-text;
+    font: $font-ui-ui-3-regular;
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    span.required {
+      color: $color-accent-accent-red;
+    }
+  }
+  .slider-wrapper {
+    display: flex;
+    align-items: center;
+    height: 40px;
+    .min-value,
+    .max-value {
+      color: $color-grayscale-100-text;
+      font: $font-ui-ui-6-regular;
+      &:disabled {
+        cursor: not-allowed;
+        color: $color-grayscale-200-inactive;
+      }
+    }
+    .container {
+      display: grid;
+      place-items: center;
+      margin-inline: 0.5rem;
+      .range {
+        height: 8px;
+        width: 160px;
+        border-radius: 4rem;
+        padding-inline: 0.3rem;
+        display: grid;
+
+        &__content {
+          position: relative;
+          display: grid;
+          place-items: center;
+        }
+        &__slider {
+          width: 100%;
+          height: 4px;
+          background-color: $color-blue-l90;
+          border-radius: 4rem;
+          box-shadow: 0 6px 12px hsla(256, 72%, 24%, 0.2);
+          overflow: hidden;
+
+          &-line {
+            width: 100%;
+            height: 100%;
+            background: $color-grayscale-150-hovor;
+            width: 0;
+
+            &.active,
+            &:hover {
+              background-color: $color-primary-kone-blue;
+            }
+
+            &.disabled,
+            &.disabled:hover {
+              background-color: $color-grayscale-300-disabled;
+              cursor: not-allowed;
+            }
+          }
+
+          &.disabled,
+          &.disabled:hover {
+            cursor: not-allowed;
+            background-color: $color-grayscale-500;
+          }
+        }
+        &__thumb {
+          width: 12px;
+          height: 12px;
+          background-color: $color-grayscale-150-hovor;
+          border-radius: 50%;
+          box-shadow: 0 0 12px hsla(256, 72%, 24%, 0.2);
+          position: absolute;
+          margin-inline: -5px;
+
+          /*         &:before {
+            display: block;
+            position: relative;
+            content: '';
+            width: 12px;
+            height: 12px;
+            z-index: -1;
+            background-color: #ffff;
+            border-radius: 4em;
+          } */
+
+          &.active,
+          &:hover {
+            background-color: $color-primary-kone-blue;
+          }
+
+          &.disabled,
+          &.disabled:hover {
+            background-color: $color-grayscale-300-disabled;
+            cursor: not-allowed;
+          }
+        }
+
+        input[type='range'] {
+          appearance: none;
+          width: 100%;
+          position: absolute;
+          opacity: 0;
+
+          &::-webkit-slider-thumb {
+            appearance: none;
+            width: 4px;
+            height: 4px;
+
+            &:hover {
+              cursor: pointer;
+            }
+            &:disabled {
+              cursor: not-allowed;
+            }
+          }
+        }
+      }
+    }
+
+    .input-container {
+      margin: 0 16px;
+      input[type='text'] {
+        display: flex;
+        padding: 8px;
+        justify-content: center;
+        gap: 8px;
+        align-self: stretch;
+        border: 1px solid $color-grayscale-600-bg-tertiary;
+        background: $color-color-background-bg-blue-primary;
+        border-radius: 20px;
+        box-sizing: border-box;
+        width: 54px;
+        height: 40px;
+        text-align: center;
+        font: $font-ui-ui-5-regular;
+        outline-width: 0;
+
+        &.active {
+          border: 2px solid $color-primary-kone-blue;
+          background: $color-color-background-bg-blue-primary;
+        }
+        &.error {
+          border: 2px solid $color-red-base;
+        }
+        &:hover {
+          border: 2px solid $color-blue-l90;
+          background: $color-color-background-bg-blue-primary;
+        }
+        &:disabled {
+          cursor: not-allowed;
+          border: 1px solid $color-grayscale-500;
+          background: $color-grayscale-500;
+          color: $color-grayscale-300-disabled;
+        }
+      }
+    }
+  }
+
+  .supporting-text-container {
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-start;
+    align-self: stretch;
+    .supporting-text {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: 1 0 0;
+      color: $color-grayscale-200-inactive;
+      font: $font-ui-ui-6-regular;
+    }
+    .icon {
+      margin: 0 8px;
+      img#info,
+      svg#warning {
+        width: 14px;
+        height: 14px;
+      }
+    }
+  }
+}

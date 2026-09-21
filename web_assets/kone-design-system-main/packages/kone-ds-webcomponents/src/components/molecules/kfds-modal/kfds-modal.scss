@@ -1,0 +1,98 @@
+.kfds-modal-wrapper {
+  opacity: 0;
+  visibility: hidden;
+
+  position:fixed;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
+
+  background: rgba(20, 20, 20, 0.20);
+  -webkit-transition: opacity 0.5s, visibility 0s 0.5s;
+          transition: opacity 0.5s, visibility 0s 0.5s;
+  
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  &.visible {
+    display: flex;
+    opacity: 1;
+    visibility: visible;
+    -webkit-transition: opacity 0.5s;
+    transition: opacity 0.5s;
+  }
+}
+
+.kfds-modal-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+
+  display: flex;
+  width: 488px;
+  padding: 24px;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+
+  border-radius: 16px;
+  border: 1px solid $color-grayscale-500;
+  background: $color-grayscale-800-bg-primary;
+
+  /* Light -WIP/Drop Shadow/4 */
+  box-shadow: $effect-drop-shadow-4-0, $effect-drop-shadow-4-1, $effect-drop-shadow-4-2;
+
+  .kfds-modal-illustration-container {
+    display: flex;
+    padding: 24px 16px;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    align-self: stretch;
+
+    border-radius: 8px;
+    background: $color-grayscale-800-bg-primary;
+  }
+  .kfds-modal-main-container {
+    display: flex;
+    padding: 4px;
+    align-items: flex-start;
+    gap: 4px;
+    align-self: stretch;
+    .kfds-modal-title-body-container {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+      flex: 1 0 0;
+      .kfds-modal-title-container {
+        display: flex;
+        align-items: flex-start;
+        align-self: stretch;
+        .kfds-modal-title {
+          flex: 1 0 0;
+
+          color: $color-grayscale-100-text;
+          font: $font-heading-h6;
+          margin: 0;
+        }
+      }
+      .kfds-modal-body {
+        color: $color-grayscale-150-hovor;
+
+        /* Body/P2.5 - 14 */
+        font: $font-ui-ui-5-regular;
+        letter-spacing: -0.42px;
+      }
+    }
+  }
+  .kfds-modal-action-container {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 16px;
+    align-self: stretch;
+  }
+}

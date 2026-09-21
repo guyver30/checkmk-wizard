@@ -1,0 +1,187 @@
+:host {
+  display: block;
+}
+.kfds-checkbox-group {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+
+  .kfds-checkbox-group-label-container{
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    .kfds-checkbox-group-label {
+      color: $color-grayscale-150-hovor;
+      font: $font-ui-ui-6-semi-bold;
+      text-transform: capitalize;
+    }
+    .kfds-checkbox-group-required {
+      color: $color-accent-accent-red;
+      font: $font-ui-ui-6-regular;
+    }
+  }
+  .kfds-checkbox-group-container {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+
+    .kfds-checkbox-container {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      &.disabled {
+        cursor: not-allowed;
+      }
+      .kfds-checkbox {
+        position: relative;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        input[type="checkbox"] {
+          /* Add if not using autoprefixer */
+          -webkit-appearance: none;
+          appearance: none;
+          /* Not removed via appearance */
+          margin: 0;
+      
+          border: 1px solid $color-grayscale-400-border;
+          background: $color-primary-white;
+          border-radius: 2px;
+          box-shadow: $effect-drop-shadow-1;
+          width: 12px;
+          height: 12px;
+          &:disabled {
+            background: $color-grayscale-700-bg-secondary;
+          }
+          &:checked {
+            border: none;
+            background: $color-primary-kone-blue;
+            &::after {
+              content: "";
+              position: absolute;
+              left: 4px;
+              top: 7px;
+              width: 2px;
+              height: 6px;
+              border: solid $color-primary-white;
+              border-width: 0 2px 2px 0;
+              -webkit-transform: rotate(45deg);
+              -ms-transform: rotate(45deg);
+              transform: rotate(45deg);
+            }
+            &:disabled {
+              opacity: 0.5;
+              box-shadow: $effect-drop-shadow-2-2, $effect-drop-shadow-2-1, $effect-drop-shadow-2-0;
+            }
+          }
+        }
+        label {
+          color: $color-grayscale-100-text;
+          font: $font-ui-ui-5-semi-bold;
+        }
+      }        
+
+      .kfds-checkbox-hint-text {
+        display: block;
+        color: $color-grayscale-200-inactive;
+        font: $font-ui-ui-7-regular;
+        padding-left: 16px;
+      }
+    }
+  }
+  &.horizontal {
+    .kfds-checkbox-group-container {
+      display: flex;
+      align-items: flex-start;
+      align-content: flex-start;
+      gap: 16px 24px;
+      align-self: stretch;
+      flex-wrap: wrap;
+      flex-direction: unset;
+    }
+  }
+  &.horizontal &.medium {
+    .kfds-checkbox-group-container {
+      gap: 18px 24px;
+    }
+  }
+  &.horizontal &.large {
+    .kfds-checkbox-group-container {
+      gap: 20px 28px;
+    }
+  }
+  &.medium {
+    gap: 20px;
+    .kfds-checkbox-group-label {
+      font: $font-ui-ui-5-semi-bold;
+    }
+    .kfds-checkbox-group-required {
+      font: $font-ui-ui-5-regular;
+    }
+    .kfds-checkbox-group-container {
+      gap: 16px;
+      .kfds-checkbox {
+        gap: 6px;
+
+        input[type="checkbox"] {
+          width: 16px;
+          height: 16px;
+          &:checked {
+            &::after {
+              left: 5px;
+              top: 5px;
+              width: 3px;
+              height: 7px;
+            }
+          }
+        }
+        label {
+          font: $font-ui-ui-4-semi-bold;
+        }
+      }
+      .kfds-checkbox-hint-text {
+        font: $font-ui-ui-6-regular;
+        padding-left: 22px;
+      }
+    }
+  }
+  &.large {
+    gap: 20px;
+    .kfds-checkbox-group-label {
+      font: $font-ui-ui-4-semi-bold;
+    }
+    .kfds-checkbox-group-required {
+      font: $font-ui-ui-4-regular;
+    }
+    .kfds-checkbox-group-container {
+      gap: 20px;
+      .kfds-checkbox {
+        gap: 8px;
+
+        input[type="checkbox"] {
+          width: 20px;
+          height: 20px;
+          &:checked {
+            &::after {
+              left: 8px;
+              top: 8px;
+              width: 3px;
+              height: 10px;
+            }
+          }
+        }
+        label {
+          font: $font-ui-ui-2-semi-bold;
+        }
+      }
+      .kfds-checkbox-hint-text {
+        font: $font-ui-ui-4-regular;
+        padding-left: 28px;
+      }
+    }
+    
+  }
+}

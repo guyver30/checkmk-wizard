@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+import * as cdk from '@aws-cdk/core';
+import * as route53 from '@aws-cdk/aws-route53';
+import * as s3 from '@aws-cdk/aws-s3';
+import * as s3deploy from '@aws-cdk/aws-s3-deployment';
+import * as acm from '@aws-cdk/aws-certificatemanager';
+import * as targets from '@aws-cdk/aws-route53-targets';
+import * as cloudfront from '@aws-cdk/aws-cloudfront';
+import * as cloudwatch from '@aws-cdk/aws-cloudwatch';
+import * as iam from '@aws-cdk/aws-iam';
+import { Construct, RemovalPolicy, Stack } from '@aws-cdk/core';
+
+export interface UIResourceProps {
+  domainName: any;
+  siteSubDomain: any;
+}
+
+/**
+ * Static site infrastructure, which deploys site content to an S3 bucket.
+ *
+ * The site redirects from HTTP to HTTPS, using a CloudFront distribution,
+ * Route53 alias record, and ACM certificate.
+ */
+export class UIResourceStack extends Construct {
+  constructor(parent: Stack, name: string, props: UIResourceProps) {
+    super(parent, name);
+
+    const zone = route53.HostedZone.fromLookup(this, 'Zone', {
+      domainName: props.domainName,
+    });
+    const siteDomain = props.siteSubDomain + '.' + props.domainName;
+    const cloudfrontOAI = new cloudfront.OriginAccessIdentity(
+      this,
+      'cloudfront-OAI',
+      {
+        comment: `OAI for ${name}`,
+      }
+    );
+
+    new cdk.CfnOutput(this, 'Site', { value: 'https://' + siteDomain });
+
+    const customErrorResponseProperty: cloudfront.CfnDistribution.CustomErrorResponseProperty =
+      {
+        errorCode: 403,
+        errorCachingMinTtl: 300,
+        responseCode: 200,
+        responsePagePath: '/index.html',
+      };
+    // Content bucket
+    const siteBucket = new s3.Bucket(this, 'SiteBucket', {
+      bucketName: siteDomain,
+      websiteIndexDocument: 'index.html',
+      publicReadAccess: false,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+    });
+    // Grant access to cloudfront
+    siteBucket.addToResourcePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:GetObject'],
+        resources: [siteBucket.arnForObjects('*')],
+        principals: [
+          new iam.CanonicalUserPrincipal(
+            cloudfrontOAI.cloudFrontOriginAccessIdentityS3CanonicalUserId
+          ),
+        ],
+      })
+    );
+    new cdk.CfnOutput(this, 'Bucket', { value: siteBucket.bucketName });
+
+    // TLS certificate
+    const certificate = new acm.DnsValidatedCertificate(
+      this,
+      'SiteCertificate',
+      {
+        domainName: siteDomain,
+        hostedZone: zone,
+        region: 'us-east-1', // Cloudfront only checks this region for certificates.
+      }
+    );
+    const certificateArn = certificate.certificateArn;
+    new cdk.CfnOutput(this, 'Certificate', { value: certificateArn });
+
+    // Specifies you want viewers to use HTTPS & TLS v1.1 to request your objects
+    const viewerCertificate = cloudfront.ViewerCertificate.fromAcmCertificate(
+      {
+        certificateArn: certificateArn,
+        env: {
+          region: cdk.Aws.REGION,
+          account: cdk.Aws.ACCOUNT_ID,
+        },
+        node: this.node,
+        stack: parent,
+        metricDaysToExpiry: () =>
+          new cloudwatch.Metric({
+            namespace: 'TLS Viewer Certificate Validity',
+            metricName: 'TLS Viewer Certificate Expired',
+          }),
+        applyRemovalPolicy: (policy: RemovalPolicy) =>
+          certificate.applyRemovalPolicy(policy),
+      },
+      {
+        sslMethod: cloudfront.SSLMethod.SNI,
+        securityPolicy: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2019,
+        aliases: [siteDomain],
+      }
+    );
+
+    // CloudFront distribution
+    const distribution = new cloudfront.CloudFrontWebDistribution(
+      this,
+      'SiteDistribution',
+      {
+        viewerCertificate,
+        originConfigs: [
+          {
+            s3OriginSource: {
+              s3BucketSource: siteBucket,
+              originAccessIdentity: cloudfrontOAI,
+            },
+            behaviors: [
+              {
+                isDefaultBehavior: true,
+                compress: true,
+                allowedMethods:
+                  cloudfront.CloudFrontAllowedMethods.GET_HEAD_OPTIONS,
+              },
+            ],
+          },
+        ],
+        errorConfigurations: [customErrorResponseProperty],
+      }
+    );
+    new cdk.CfnOutput(this, 'DistributionId', {
+      value: distribution.distributionId,
+    });
+
+    // Route53 alias record for the CloudFront distribution
+    new route53.ARecord(this, 'SiteAliasRecord', {
+      recordName: siteDomain,
+      target: route53.RecordTarget.fromAlias(
+        new targets.CloudFrontTarget(distribution)
+      ),
+      zone,
+    });
+
+    // Deploy site contents to S3 bucket
+    new s3deploy.BucketDeployment(this, 'DeployWithInvalidation', {
+      sources: [s3deploy.Source.asset('../../packages/kone-ds-webcomponents/storybook-static/')],
+      destinationBucket: siteBucket,
+      distribution,
+      distributionPaths: ['/*'],
+      memoryLimit: 512,
+    });
+  }
+}

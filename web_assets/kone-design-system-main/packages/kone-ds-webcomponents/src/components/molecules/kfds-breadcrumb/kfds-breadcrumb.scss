@@ -1,0 +1,44 @@
+:host {
+  display: block;
+}
+.kfds-breadcrumb-container {
+  &.background {
+    display: inline-flex;
+    padding: 16px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+
+    background-color: $color-color-background-bg-blue-primary;
+
+    .kfds-breadcrumb-container-inner {
+      background: rgba(255, 255, 255, 0.75);
+    }
+  }
+  .kfds-breadcrumb-container-inner {
+    display: inline-flex;
+    padding: 8px;
+    align-items: center;
+    align-content: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    a, span {
+      display: flex;
+      padding: 4px 8px;
+      justify-content: center;
+      align-items: center;
+      gap: 4px;
+      font: $font-ui-ui-4-regular;
+      color: $color-grayscale-100-text;
+    }
+    a {
+      cursor: pointer;
+      &:hover {
+        color: $color-primary-kone-blue;
+      }
+    }
+    &.small a, &.small span {
+      font: $font-ui-ui-5-regular;
+    }
+  }
+}

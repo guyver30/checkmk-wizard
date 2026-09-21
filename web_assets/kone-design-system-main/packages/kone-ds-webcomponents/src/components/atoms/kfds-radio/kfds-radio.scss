@@ -1,0 +1,185 @@
+:host {
+  display: block;
+}
+.kfds-radio-group {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+
+  .kfds-radio-group-label-container{
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    .kfds-radio-group-label {
+      color: $color-grayscale-150-hovor;
+      font: $font-ui-ui-6-semi-bold;
+      text-transform: capitalize;
+    }
+    .kfds-radio-group-required {
+      color: $color-accent-accent-red;
+      font: $font-ui-ui-6-regular;
+    }
+  }
+  .kfds-radio-group-container {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+
+    .kfds-radio-container {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      &.disabled {
+        cursor: not-allowed;
+      }
+      .kfds-radio {
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        input[type="radio"] {
+          /* Add if not using autoprefixer */
+          -webkit-appearance: none;
+          appearance: none;
+          /* Not removed via appearance */
+          margin: 0;
+      
+          position: relative;
+          border: 1px solid $color-grayscale-400-border;
+          background: $color-primary-white;
+          border-radius: 100px;
+          box-shadow: $effect-drop-shadow-1;
+          width: 14px;
+          height: 14px;
+          &:disabled {
+            background: $color-grayscale-600-bg-tertiary;
+          }
+          &:checked {
+              border: none;
+              background: $color-primary-kone-blue;
+            &::after {
+              content: "";
+              position: absolute;
+              left: 4.6px;
+              top: 4.6px;
+              width: 5px;
+              height: 5px;
+              border-radius: 50%;
+              background: $color-primary-white;
+            }
+            &:disabled {
+              opacity: 0.5;
+              background: $color-primary-kone-blue;
+              box-shadow: $effect-drop-shadow-2-2, $effect-drop-shadow-2-1, $effect-drop-shadow-2-0;
+            }
+          }
+        }
+        label {
+          color: $color-grayscale-100-text;
+          font: $font-ui-ui-5-semi-bold;
+        }
+      }        
+
+      .kfds-radio-hint-text {
+        display: block;
+        color: $color-grayscale-200-inactive;
+        font: $font-ui-ui-7-regular;
+        padding-left: 18px;
+      }
+    }
+  }
+  &.horizontal {
+    .kfds-radio-group-container {
+      display: flex;
+      align-items: flex-start;
+      align-content: flex-start;
+      gap: 16px 24px;
+      align-self: stretch;
+      flex-wrap: wrap;
+      flex-direction: unset;
+    }
+  }
+  &.horizontal &.medium {
+    .kfds-radio-group-container {
+      gap: 18px 24px;
+    }
+  }
+  &.horizontal &.large {
+    .kfds-radio-group-container {
+      gap: 20px 28px;
+    }
+  }
+  &.medium {
+    gap: 20px;
+    .kfds-radio-group-label {
+      font: $font-ui-ui-5-semi-bold;
+    }
+    .kfds-radio-group-required {
+      font: $font-ui-ui-5-regular;
+    }
+    .kfds-radio-group-container {
+      gap: 16px;
+      .kfds-radio {
+        gap: 6px;
+
+        input[type="radio"] {
+          width: 18px;
+          height: 18px;
+          &:checked {
+            &::after {
+              left: 5.8px;
+              top: 5.8px;
+              width: 6.55px;
+              height: 6.55px;
+            }
+          }
+        }
+        label {
+          font: $font-ui-ui-4-semi-bold;
+        }
+      }
+      .kfds-radio-hint-text {
+        padding-left: 24px;
+        font: $font-ui-ui-6-regular;
+      }
+    }
+  }
+  &.large {
+    gap: 20px;
+    .kfds-radio-group-label {
+      font: $font-ui-ui-4-semi-bold;
+    }
+    .kfds-radio-group-required {
+      font: $font-ui-ui-4-regular;
+    }
+    .kfds-radio-group-container {
+      gap: 20px;
+      .kfds-radio {
+        gap: 8px;
+
+        input[type="radio"] {
+          width: 22px;
+          height: 22px;
+          &:checked {
+            &::after {
+              left: 6.9px;
+              top: 6.9px;
+              width: 8px;
+              height: 8px;
+            }
+          }
+        }
+        label {
+          font: $font-ui-ui-2-semi-bold;
+        }
+      }
+      .kfds-radio-hint-text {
+        font: $font-ui-ui-4-regular;
+        padding-left: 30px;
+      }
+    }
+    
+  }
+}

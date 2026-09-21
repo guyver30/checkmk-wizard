@@ -1,0 +1,4 @@
+# Excluded project folders
+node_modules/
+deploy/static-web-content/.npm/
+packages/kone-ds-webcomponents/storybook-static/

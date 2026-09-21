@@ -1,0 +1,25 @@
+{
+  "name": "kone-ds",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "lerna run build --scope=@kone-ds/assets && lerna run build --scope=@kone-ds/fonts && lerna run build --scope=@kone-ds/tokens && lerna run build --scope=@kone-ds/webcomponents && lerna run build --scope=@kone-ds/webcomponents-react && lerna run build --scope=@kone-ds/webcomponents-angular",
+    "start": "lerna run start --scope=@kone-ds/webcomponents",
+    "publish-assets": "lerna run publish --scope=@kone-ds/assets",
+    "publish-fonts": "lerna run publish --scope=@kone-ds/fonts",
+    "publish-tokens": "lerna run publish --scope=@kone-ds/tokens",
+    "publish-webcomponents": "lerna run publish --scope=@kone-ds/webcomponents",
+    "publish-webcomponents-react": "lerna run publish --scope=@kone-ds/webcomponents-react",
+    "publish-webcomponents-angular": "lerna run publish --scope=@kone-ds/webcomponents-angular",
+    "release": "lerna version --force-publish"
+  },
+  "devDependencies": {
+    "lerna": "^7.1.1"
+  },
+  "dependencies": {
+    "-": "^0.0.1",
+    "f": "^1.4.0"
+  }
+}

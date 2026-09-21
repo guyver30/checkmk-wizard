@@ -1,0 +1,193 @@
+.kfds-input-container {
+  display: flex;
+  width: 256px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  input {
+    display: flex;
+    padding: 18px 18px 18px 16px;
+    align-items: center;
+    gap: 8px;
+    align-self: stretch;
+    border: 1px solid $color-grayscale-600-bg-tertiary;
+    background: $color-color-background-bg-blue-secondary;
+    border-radius: 16px;
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    height: 64px;
+    font: $font-ui-ui-3-regular;
+    &:hover {
+      border: 1px solid $color-grayscale-400-border;
+    }
+    &:focus {
+      border: 2px solid $color-blue-base;
+    }
+    &.pill {
+      border-radius: 32px;
+    }
+    &.disabled {
+      cursor: not-allowed;
+      background: $color-grayscale-600-bg-tertiary;
+    }
+    &::placeholder,
+    ::-ms-input-placeholder,
+    &:-ms-input-placeholder {
+      color: #727272;
+    }
+  }
+
+  &.floating {
+    position: relative;
+
+    &.small label {
+      transform: translate(12px, 10px) scale(1);
+
+      &:has(+ input:focus),
+      &:has(+ input:not(:placeholder-shown)) {
+        transform: translate(12px, 3px) scale(0.75);
+        font: $font-ui-ui-7-regular;
+      }
+    }
+
+    &.medium label {
+      transform: translate(14px, 12px) scale(1);
+
+      &:has(+ input:focus),
+      &:has(+ input:not(:placeholder-shown)) {
+        transform: translate(14px, 3px) scale(0.75);
+        font: $font-ui-ui-6-regular;
+      }
+    }
+
+    label {
+      font: $font-ui-ui-3-regular;
+      color: $color-grayscale-200-inactive;
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: top left;
+      transition: all 0.1s ease-in-out;
+      transform: translate(20px, 17px) scale(1);
+
+      &:has(+ input:focus),
+      &:has(+ input:not(:placeholder-shown)) {
+        transform: translate(20px, 3px) scale(0.75);
+        font: $font-ui-ui-5-regular;
+      }
+    }
+    input::placeholder {
+      opacity: 0;
+    }
+  }
+
+  label {
+    color: $color-grayscale-100-text;
+    font: $font-ui-ui-3-regular;
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    span {
+      color: $color-accent-accent-red;
+    }
+  }
+
+  .kfds-input-info-container {
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-start;
+    align-self: stretch;
+    font: $font-ui-ui-4-regular;
+    .kfds-input-supporting-text {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: 1 0 0;
+      color: $color-grayscale-200-inactive;
+      img#info, svg#warning {
+        width: 20px;
+        height: 20px;
+      }
+    }
+    .kfds-input-char-length {
+      color: #727272;
+    }
+  }
+
+  &.medium {
+    width: 224px;
+    gap: 10px;
+    input {
+      border-radius: 12px;
+      padding: 12px 14px;
+      height: 48px;
+      font: $font-ui-ui-4-regular;
+    }
+    label {
+      font: $font-ui-ui-4-regular;
+    }
+    .kfds-input-info-container {
+      font: $font-ui-ui-5-regular;
+      img#info, svg#warning {
+        width: 16px;
+        height: 16px;
+      }
+    }
+  }
+
+  &.small {
+    width: 192px;
+    gap: 8px;
+    input {
+      height: 40px;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font: $font-ui-ui-5-regular;
+    }
+    label {
+      font: $font-ui-ui-5-regular;
+    }
+    .kfds-input-info-container {
+      font: $font-ui-ui-6-regular;
+      img#info, svg#warning {
+        width: 14px;
+        height: 14px;
+      }
+    }
+  }
+
+  &.inline {
+    width: auto;
+    display: table;
+    label {
+      float: none;
+      padding-right: 12px;
+      font: $font-ui-ui-6-regular;
+      display: table-cell;
+      padding-bottom: 0;
+    }
+    input {
+      height: 32px;
+      width: 213px;
+      font: $font-ui-ui-6-regular;
+    }
+    .kfds-input-info-container {
+      font: $font-ui-ui-6-regular;
+      img#info, svg#warning {
+        width: 14px;
+        height: 14px;
+      }
+    }
+  }
+
+  &.error {
+    input {
+      border: 2px solid $color-accent-accent-red;
+    }
+    .kfds-input-supporting-text {
+      color: $color-accent-accent-red;
+    }
+  }
+}

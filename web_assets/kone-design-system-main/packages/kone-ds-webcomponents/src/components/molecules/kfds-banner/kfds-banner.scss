@@ -1,0 +1,46 @@
+.kfds-banner-container {
+  position: fixed;
+  width: calc(100% - 78px);
+  margin: 15px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  padding: 16px 24px;
+  box-shadow: $effect-drop-shadow-1;
+  border-radius: 8px;
+  background-color: $color-color-background-bg-blue-secondary;
+  &.bottom {
+    bottom: 0;
+    left: 0;
+  }
+  &.top {
+    top: 0;
+    left: 0;
+  }
+  .icon svg {
+    width: 21px;
+    height: 21px;
+  }
+  .message {
+    padding-left: 17.5px;
+    padding-right: 16px;
+    font: $font-ui-ui-5-regular;
+    color: $color-primary-black;
+  }
+  &.success {
+    background-color: $color-accent-accent-green;
+  }
+  &.warning {
+    background-color: $color-accent-accent-orange;
+  }
+  &.alert {
+    background-color: $color-accent-accent-red;
+  }
+  kfds-hyperlink {
+    padding-right: 16px;
+  }
+  .close {
+    margin-left: auto;
+    cursor: pointer;
+  }
+}

@@ -1,0 +1,21 @@
+@font-face {
+  font-family: "KONE Information";
+  src: url('fonts/KONE Information.eot'); /* IE9 Compat Modes */
+  src: url('fonts/KONE Information.eot?#iefix') format('embedded-opentype'), /* IE6-IE8 */
+       url('fonts/KONE Information.woff2') format('woff2'), /* Super Modern Browsers */
+       url('fonts/KONE Information.woff') format('woff'), /* Pretty Modern Browsers */
+       url('fonts/KONE Information.ttf')  format('truetype'), /* Safari, Android, iOS */
+       url('fonts/KONE Information.svg#svgFontName') format('svg'); /* Legacy iOS */
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url('fonts/Inter-Regular.ttf')  format('truetype');
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url('fonts/Inter-SemiBold.ttf')  format('truetype');
+  font-weight: 600;
+}

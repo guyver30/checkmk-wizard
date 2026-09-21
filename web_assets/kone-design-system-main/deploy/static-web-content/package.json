@@ -1,0 +1,31 @@
+{
+  "name": "ui-resource",
+  "version": "0.1.0",
+  "bin": {
+    "ui-resource": "bin/ui-resource.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "prettier:check": "prettier --check */**.ts",
+    "prettier:write": "prettier --write */**.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.3.2",
+    "typescript": "^5.1.6"
+  },
+  "dependencies": {
+    "@aws-cdk/aws-certificatemanager": "^1.203.0",
+    "@aws-cdk/aws-cloudfront": "^1.203.0",
+    "@aws-cdk/aws-iam": "^1.203.0",
+    "@aws-cdk/aws-route53": "^1.203.0",
+    "@aws-cdk/aws-route53-targets": "^1.203.0",
+    "@aws-cdk/aws-s3": "^1.203.0",
+    "@aws-cdk/aws-s3-deployment": "^1.203.0",
+    "@aws-cdk/core": "^1.203.0",
+    "aws-cdk": "^2.86.0",
+    "envalid": "^6.0.2",
+    "prettier": "^2.8.8"
+  }
+}

@@ -1,0 +1,127 @@
+.kfds-tooltip {
+  display: inline-flex;
+  position: relative;
+  cursor: default;
+
+  &::before,
+  &::after {
+    position: absolute;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease-in-out;
+    font: $font-ui-ui-7-regular;
+  }
+
+  &:hover::before,
+  &:hover::after {
+    opacity: 1;
+    visibility: visible;
+  }
+  &::before {
+    content: attr(data-tooltip);
+    z-index: 2;
+    color: #fff;
+    background: blue;
+    border-radius: 5px;
+    padding: 5px;
+    width: max-content;
+    max-width: 200px;
+  }
+
+  &.primary::before {
+    background: blue;
+  }
+  &.secondary::before {
+    background: black;
+  }
+
+  &::after {
+    content: '';
+    width: 0;
+    height: 0;
+  }
+
+  &.top::before,
+  &.top::after {
+    bottom: 100%;
+    left: 50%;
+    transform: translate(-50%);
+    margin-bottom: 15px;
+  }
+
+  &.top::after {
+    margin-bottom: 9px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+  }
+
+  &.primary.top::after {
+    border-top: 7px solid blue;
+  }
+  &.secondary.top::after {
+    border-top: 7px solid black;
+  }
+
+  &.bottom::before,
+  &.bottom::after {
+    top: 100%;
+    left: 50%;
+    transform: translate(-50%);
+    margin-top: 15px;
+  }
+
+  &.bottom::after {
+    margin-top: 9px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+  }
+
+  &.primary.bottom::after {
+    border-bottom: 7px solid blue;
+  }
+  &.secondary.bottom::after {
+    border-bottom: 7px solid black;
+  }
+
+  &.right::before,
+  &.right::after {
+    top: 50%;
+    left: 100%;
+    transform: translate(0, -50%);
+    margin-left: 15px;
+  }
+
+  &.right::after {
+    margin-left: 9px;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+  }
+
+  &.primary.right::after {
+    border-right: 7px solid blue;
+  }
+  &.secondary.right::after {
+    border-right: 7px solid black;
+  }
+
+  &.left::before,
+  &.left::after {
+    top: 50%;
+    right: 100%;
+    transform: translate(0, -50%);
+    margin-right: 15px;
+  }
+
+  &.left::after {
+    margin-right: 9px;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+  }
+
+  &.primary.left::after {
+    border-left: 7px solid blue;
+  }
+  &.secondary.left::after {
+    border-left: 7px solid black;
+  }
+}

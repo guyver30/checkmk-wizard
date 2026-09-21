@@ -1,0 +1,88 @@
+button {
+  display: inline-flex;
+  height: 32px;
+  padding: 8px 10px;
+  justify-content: center;
+  align-items: center;
+  flex-shrink: 0;
+  font: $font-ui-ui-2-semi-bold;
+  box-sizing: border-box;
+  cursor: pointer;
+  border: none;
+  border-radius: 100px;
+  color: $color-primary-white;
+  background-color: $color-primary-kone-blue;
+  &.extra {
+    font: $font-ui-ui-1-semi-bold;
+    padding: 8px 24px;
+    height: 72px;
+  }
+  &.big {
+    font: $font-ui-ui-2-semi-bold;
+    padding: 8px 20px;
+    height: 64px;
+  }
+  &.medium {
+    font: $font-ui-ui-3-semi-bold;
+    padding: 8px 14px;
+    height: 48px;
+  }
+  &.small {
+    font: $font-ui-ui-5-semi-bold;
+  }
+  &:hover {
+    background-color: $color-blue-l20;
+  }
+  &:disabled {
+    background-color: $color-blue-l60;
+    cursor: not-allowed;
+  }
+  &.secondary {
+    color: $color-primary-white;
+    background-color: $color-primary-black;
+    &:hover {
+      background: linear-gradient(0deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2)), #4F4F4F;
+    }
+    &:disabled {
+      background-color: #959595;
+    }
+  }
+  &.tertiary {
+    color: $color-blue-base;
+    background-color: $color-color-background-bg-blue-secondary;
+    &:hover {
+      border: 1px solid $color-blue-base;
+    }
+    &:disabled {
+      background-color: $color-color-background-bg-blue-secondary;
+      color: $color-blue-l40;
+    }
+  }
+  &.destructive {
+    color: $color-primary-white;
+    background-color: $color-accent-accent-red;
+    &:hover {
+      background-color: $color-accent-destructive-text;
+    }
+    &:disabled {
+      background-color: #959595;
+    }
+  }
+  &.borderless {
+    color: $color-blue-base;
+    background-color: $color-primary-white;
+    &:hover {
+      color: $color-blue-l20;
+    }
+    &:disabled {
+      color: $color-blue-l40;
+    }
+  }
+}
+
+html[data-theme="dark"] {
+  button.primary {
+    color: $color-primary-white;
+    background: $color-primary-kone-blue;
+  }
+}

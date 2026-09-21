@@ -1,0 +1,37 @@
+{
+  "name": "@kone-ds/assets",
+  "version": "1.1.0",
+  "description": "Kone design system static assets",
+  "keywords": [
+    "icons",
+    "logos",
+    "images"
+  ],
+  "author": "Vasanthakumar Dharmalingam <vasanthakumar.dharmalingam@kone.com>",
+  "homepage": "",
+  "license": "SEE LICENSE IN LICENSE",
+  "main": "lib/kone-ds-assets.js",
+  "directories": {
+    "lib": "lib",
+    "test": "__tests__"
+  },
+  "files": [
+    "lib",
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.prod.devops.kiot.fi/kone-ux/kone-design-system.git"
+  },
+  "scripts": {
+    "test": "echo \"Error: run tests from root\" && exit 1",
+    "clean": "rimraf dist && rimraf ../../node_modules/@types/cacheable-request",
+    "copy": "copyfiles -f icons/* ./dist/icons/",
+    "build": "npm run clean && npm run copy",
+    "publish": "npm publish"
+  },
+  "devDependencies": {
+    "copyfiles": "^2.4.1",
+    "rimraf": "^5.0.1"
+  }
+}

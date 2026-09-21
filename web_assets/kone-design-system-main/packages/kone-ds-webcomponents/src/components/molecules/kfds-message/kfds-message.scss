@@ -1,0 +1,50 @@
+.kfds-message-container {
+  display: flex;
+  padding: 16px 24px;
+  flex-direction: column;
+  border-radius: 16px;
+  background-color: $color-primary-white;
+  border: 1px solid $color-grayscale-500;
+  box-shadow: $effect-drop-shadow-3-0 $effect-drop-shadow-3-1 $effect-drop-shadow-3-2;
+  &.inline {
+    width: 100%;
+  }
+  &.top {
+    top: 16px;
+    position: fixed;
+    width: 488px;
+  }
+  .kfds-message-icon svg {
+    width: 32px;
+    height: 32px;
+  }
+  .kfds-message-title-container {
+    display: flex;
+  }
+  .kfds-message-title {
+    padding-left: 16px;
+    font: $font-heading-h6;
+    color: $color-primary-black;
+  }
+  .kfds-message-body {
+    padding-left: 48px;
+    font: $font-ui-ui-5-regular;
+    color: $color-primary-black;
+    padding-top: 12px;
+  }
+  .kfds-message-close {
+    margin-left: auto;
+    cursor: pointer;
+    img {
+      width: 32px;
+      height: 32px;
+    }
+  }
+  .kfds-message-button-container {
+    padding-top: 16px;
+    display: flex;
+    flex-direction: row;
+    margin-left: auto;
+    gap: 24px;
+  }
+}

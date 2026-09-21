@@ -1,0 +1,306 @@
+$backgroundColor: white; // background color of window "white" or "black"
+$progressBar: hidden; // visibility of progress bar "hidden" or "show"
+$progressNum: hidden; // visibility of progress number in % "hidden" or "show"
+$logoSize: 16vmin; // logo % size of the minimum window dimensions(width or height)
+$fontSizeAppName: 1.5em; // font size of application name
+$fontSizeCopyright: 0.6em; // font size of copyright
+$numberAlign: right; // progress % number alignment "left" "center" "right"
+$progressThickness: 2px; // thickness of progress bar
+$kbMotionCurve: cubic-bezier(0.8, 0, 0.1, 1); // motion curve of KONE blocks
+$kbMotionDuration: 3s; // duration of the starting and ending KONE logo
+$loadingLoopDuration: 4s; // duration of each loading block movement loop
+$kbFadeCurve: cubic-bezier(0.4, 0, 0.2, 1); // motion curve of the fading effect
+$kbFadeDuration: 0.5s; // duration of the fading effect
+$kbMotionStep: 0s; // sequential delay of each block motion
+
+$kbColorPrime: #1450f5;
+$kbColorBlack80: #434343;
+$kbColorBlack60: #727272;
+$videoMaskBGColor: white;
+
+$progressColor: $kbColorPrime; // color of the progress bar
+$logoColor: $kbColorPrime; // color of the logo "var(--kbColorPrime)" or "white"
+$appNameColor: $kbColorBlack80; // color of the application name
+
+$body-font-family: 'KONE Information';
+$body-font-size: 1em;
+
+.kfds-loader {
+  display: block;
+  font-family: $body-font-family;
+  font-size: $body-font-size;
+}
+
+.copyright {
+  position: absolute;
+  bottom: 0px;
+  left: 50vw;
+  transform: translate(-50%, -50%);
+  font-size: $fontSizeCopyright;
+  color: $kbColorBlack60;
+}
+
+.btn {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  font-size: 12px;
+}
+
+video {
+  height: 100vh;
+  object-fit: cover;
+  object-position: 50% 50%;
+}
+
+svg#svgMask {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  width: 100vw;
+}
+
+svg#svgMask #maskRect {
+  transition: width 1s 1s, height 1s 1s, x 1s 1s, y 1s 1s, fill 0s 1s;
+  transition-timing-function: $kbMotionCurve;
+}
+
+.maskZoomIn {
+  transition: width 1s 0s, height 1s 0s, x 1s 0s, y 1s 0s, fill 0s 1s !important;
+  width: $logoSize;
+  height: calc($logoSize * 0.38);
+  x: calc(50vw - $logoSize / 2);
+  y: calc(50vh - $logoSize * 0.38 / 2);
+  fill: white;
+}
+
+.maskZoomOut {
+  width: 100vw;
+  height: 100vh;
+  x: 0;
+  y: 0;
+  fill: black;
+}
+
+svg#svgMask #maskBG {
+  fill: $backgroundColor;
+}
+
+.container {
+  background: $backgroundColor; // animation bg color
+  position: relative;
+  overflow: hidden;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+#brand {
+  position: absolute;
+  height: $logoSize;
+  width: $logoSize;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  text-align: left;
+}
+
+#brand svg {
+  height: 100%;
+  width: 100%;
+  display: inline-block;
+  vertical-align: middle;
+  .brand_rect {
+    opacity: 0;
+  }
+}
+
+[id*='_rect'] {
+  fill: $logoColor;
+  transition: transform 0.5s;
+  transition-timing-function: $kbMotionCurve;
+}
+
+[id*='_txt'] {
+  fill: $backgroundColor;
+  transition: transform 0.5s;
+  transition-timing-function: $kbMotionCurve;
+}
+
+#k_rect {
+  animation-delay: 0s;
+}
+
+#o_rect {
+  animation-delay: calc($kbMotionStep * 0.33);
+}
+
+#n_rect {
+  animation-delay: calc($kbMotionStep * 0.66);
+}
+
+#e_rect {
+  animation-delay: calc($kbMotionStep * 1);
+}
+
+.logoIn rect {
+  transform: matrix(1, 0, 0, 1, 0, 0);
+}
+
+.logoIn path {
+  transform: matrix(1, 0, 0, 1, 0, 0);
+}
+
+.logoOut #k_rect,
+.logoOut #n_rect {
+  transform: matrix(1, 0, 0, 0.0001, 0, 39);
+}
+
+.logoOut #o_rect,
+.logoOut #e_rect {
+  transform: matrix(1, 0, 0, 0.0001, 0, 89);
+}
+
+.logoOut #k_txt,
+.logoOut #n_txt {
+  transform: matrix(1, 0, 0, 1, 0, 30);
+}
+
+.logoOut #o_txt,
+.logoOut #e_txt {
+  transform: matrix(1, 0, 0, 1, 0, -30);
+}
+
+.info {
+  display: inline-block;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin-top: calc($logoSize * 0.5);
+  transform: translate(-50%, 0);
+}
+
+#appName {
+  display: inline-block;
+  color: $appNameColor;
+  width: auto;
+  letter-spacing: -0.05em;
+  font-size: $fontSizeAppName;
+  white-space: nowrap;
+  font-weight: 500;
+  text-shadow: 0px 1px 3px rgba(0, 0, 0, 0);
+  margin-top: calc($logoSize * 0.6);
+  margin-bottom: 0em;
+  transform: translate(0, -50%);
+  opacity: 0;
+}
+
+#progress {
+  display: block;
+  background-color: $kbColorPrime;
+  height: $progressThickness;
+  text-align: $numberAlign;
+  color: $appNameColor;
+  font-size: $fontSizeAppName;
+  margin-top: calc($logoSize * -0.25);
+  margin-bottom: 0.2em;
+  visibility: $progressBar;
+}
+
+#progressNum {
+  font-size: $fontSizeAppName;
+  visibility: $progressNum;
+}
+
+sup {
+  vertical-align: super;
+  font-size: 0.4em;
+}
+
+.fadeIn {
+  animation: fadeIn 0.5s $kbFadeCurve 0s 1 normal forwards;
+}
+
+.fadeOut {
+  animation: fadeOut 0.5s $kbFadeCurve 0s 1 normal forwards;
+}
+
+.loadingO {
+  animation: loadingMoveO $loadingLoopDuration $kbMotionCurve 0s infinite alternate forwards;
+}
+
+.loadingE {
+  animation: loadingMoveE $loadingLoopDuration $kbMotionCurve 0s infinite alternate forwards;
+}
+
+@keyframes loadingMoveO {
+  0% {
+    transform: matrix(1, 0, 0, 0.00001, 0, 39);
+    visibility: hidden;
+  }
+  10% {
+    transform: matrix(1, 0, 0, 0.00001, 0, 39);
+    visibility: hidden;
+  }
+  35% {
+    transform: matrix(1, 0, 0, 1, 0, 0);
+    visibility: visible;
+  }
+  65% {
+    transform: matrix(1, 0, 0, 1, 0, 0);
+    visibility: visible;
+  }
+  90% {
+    transform: matrix(1, 0, 0, 0.00001, 0, 89);
+    visibility: hidden;
+  }
+  100% {
+    transform: matrix(1, 0, 0, 0.00001, 0, 89);
+    visibility: hidden;
+  }
+}
+
+@keyframes loadingMoveE {
+  0% {
+    transform: matrix(1, 0, 0, 0.00001, 0, 89);
+    visibility: hidden;
+  }
+  10% {
+    transform: matrix(1, 0, 0, 0.00001, 0, 89);
+    visibility: hidden;
+  }
+  35% {
+    transform: matrix(1, 0, 0, 1, 0, 0);
+    visibility: visible;
+  }
+  65% {
+    transform: matrix(1, 0, 0, 1, 0, 0);
+    visibility: visible;
+  }
+  90% {
+    transform: matrix(1, 0, 0, 0.00001, 0, 39);
+    visibility: hidden;
+  }
+  100% {
+    transform: matrix(1, 0, 0, 0.00001, 0, 39);
+    visibility: hidden;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}

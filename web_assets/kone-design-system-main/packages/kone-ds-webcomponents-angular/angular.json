@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "newProjectRoot": "projects",
+  "projects": {
+    "kone-ds-webcomponents-angular": {
+      "projectType": "library",
+      "root": "projects/kone-ds-webcomponents-angular",
+      "sourceRoot": "projects/kone-ds-webcomponents-angular/src",
+      "prefix": "lib",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:ng-packagr",
+          "options": {
+            "project": "projects/kone-ds-webcomponents-angular/ng-package.json"
+          },
+          "configurations": {
+            "production": {
+              "tsConfig": "projects/kone-ds-webcomponents-angular/tsconfig.lib.prod.json"
+            },
+            "development": {
+              "tsConfig": "projects/kone-ds-webcomponents-angular/tsconfig.lib.json"
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "test": {
+          "builder": "@angular-devkit/build-angular:karma",
+          "options": {
+            "main": "projects/kone-ds-webcomponents-angular/src/test.ts",
+            "tsConfig": "projects/kone-ds-webcomponents-angular/tsconfig.spec.json",
+            "karmaConfig": "projects/kone-ds-webcomponents-angular/karma.conf.js"
+          }
+        }
+      }
+    }
+  }
+}
