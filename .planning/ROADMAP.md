@@ -248,37 +248,44 @@ Summary:
 
 **Explicitly out of scope**: everything in Phase 14, plus the Phase 12 and 13 mockups present in the working preview. Those are illustrative only.
 
-**Plans**: 9 plans
+**Plans**: 11 plans
 Plans:
 **Wave 1**
 
 - [x] 11.1-01-PLAN.md — Supersede Phase 11's D-22/D-24 in `11-CONTEXT.md`; confirm DASH-01's re-wording (D-36)
 - [x] 11.1-02-PLAN.md — Verify newest-first event ordering against the live poller; pin it with two pytest regression tests (D-33)
-- [x] 11.1-03-PLAN.md — KONE light palette: three state-token tiers (`--state-*` / `-fill` / `-ink`) plus four palette defects and the connection-dot ring (D-28, D-29, D-38, D-39)
+- [x] 11.1-03-PLAN.md — KONE light palette in the vanilla dashboard (D-28, D-29, D-38, D-39) — *superseded by the 2026-09-21 React pivot (D-40/D-43); shipped, not extended*
 
-**Wave 2** *(blocked on 11.1-03)*
+*Plans 04-11 below were replanned on 2026-09-21 for the React pivot (D-40-D-46). The original waves 2-7 (contrast-audit script, vanilla three-pane layout, `panes.js`, vanilla grouping controls, vanilla stale-flip fix, `dashboard/README.md`) are dropped: D-43 supersedes the technology and keeps the product behavior, which is now delivered in `dashboard-react/`.*
 
-- [ ] 11.1-04-PLAN.md — `scripts/contrast_audit.py`: committed, runnable WCAG audit over 20+ pairs, exit 0 against the shipped CSS (D-30)
+**Wave 1 (React)**
+
+- [ ] 11.1-04-PLAN.md — `dashboard-react/` scaffold: Vite + React 19 + TS + Tailwind v3, kone-design-system via packed tarball, react-router v8 Declarative Mode, vitest harness, `src/lib/config.ts` (D-40, D-41, D-37)
+
+**Wave 2** *(blocked on 11.1-04)*
+
+- [ ] 11.1-05-PLAN.md — Ported logic (`display`/`staleness`/`grouping`), Zustand store with wholesale-replace slices, mqtt.js singleton with jittered backoff (D-46, DASH-05)
+- [ ] 11.1-06-PLAN.md — Custom `Splitter` with the full ARIA separator contract, `usePaneLayout` guarded persistence, three-pane grid, sized map placeholder (D-26, D-25, D-27, D-31, D-45)
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 11.1-05-PLAN.md — Three-pane layout: wrap `#main` in `#centre`, move the event panel to centre-bottom, ship the sized map placeholder, delete the grouped fleet overview (D-25, D-27, D-31)
+- [ ] 11.1-07-PLAN.md — Device-state -> `Badge` mapping, stats strip above the map placeholder, `StatusBadge` connection indicator, MQTT bootstrap (D-44, D-11, DASH-01)
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 11.1-06-PLAN.md — `panes.js`: pointer-drag and arrow-key splitters with the full ARIA separator contract, real collapse buttons, guarded-storage persistence (D-26)
+- [ ] 11.1-08-PLAN.md — `treeModel` + custom multi-open severity-aware `Tree`/`TreeNode`, device-type icons, folder grouping (D-45, DASH-06)
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 11.1-07-PLAN.md — Extensible grouping `<select>` plus "Order by severity" checkbox, group- and host-level comparators built from `grouping.js`'s existing primitives (D-32)
+- [ ] 11.1-09-PLAN.md — Extensible grouping `<select>` + "Order by severity" checkbox, severity ordering derived per render, expansion survives a re-sort (D-32)
 
 **Wave 6** *(blocked on Wave 5)*
 
-- [ ] 11.1-08-PLAN.md — Stale flips toggle classes instead of rebuilding; `CLOCK_TICK_MS` re-measured; event rows identify their device (D-34, D-35)
+- [ ] 11.1-10-PLAN.md — Newest-first event history with a consumer-side ordering regression test, middle-truncated device identification (D-33, D-35)
 
 **Wave 7** *(blocked on Wave 6)*
 
-- [ ] 11.1-09-PLAN.md — `dashboard/README.md` and deployment doc updated, `CHECKMK_BASE_URL` surfaced (D-37), live-verification checkpoint
+- [ ] 11.1-11-PLAN.md — `useNowTick` clock, D-34 stale-stability regression suite, `dashboard-react/README.md` + deployment-doc `CHECKMK_BASE_URL` callout and nginx `try_files` cutover note, human verification (D-34, D-37, D-41, D-42)
 
 ### Phase 14: Fleet Intelligence
 
