@@ -1,0 +1,29 @@
+import { render, screen } from "@testing-library/react";
+import { Badge } from "kone-design-system";
+import { MemoryRouter, Route, Routes } from "react-router";
+import { describe, expect, it } from "vitest";
+import App from "./App";
+import { DetailsRoute } from "./routes/DetailsRoute";
+
+describe("App", () => {
+  it("renders the index heading at /", () => {
+    render(<App />);
+    expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
+  });
+
+  it("reads the hostname from the ?id= query string on /details", () => {
+    render(
+      <MemoryRouter initialEntries={["/details?id=sw-edge-01"]}>
+        <Routes>
+          <Route path="/details" element={<DetailsRoute />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("sw-edge-01")).toBeInTheDocument();
+  });
+
+  it("renders a design-system Badge with the library's own compiled styles applied", () => {
+    render(<Badge>connected</Badge>);
+    expect(screen.getByText("connected").className).toContain("rounded-pill");
+  });
+});
