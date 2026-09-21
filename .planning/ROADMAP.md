@@ -264,8 +264,8 @@ Plans:
 
 **Wave 2** *(blocked on 11.1-04)*
 
-- [ ] 11.1-05-PLAN.md — Ported logic (`display`/`staleness`/`grouping`), Zustand store with wholesale-replace slices, mqtt.js singleton with jittered backoff (D-46, DASH-05)
-- [ ] 11.1-06-PLAN.md — Custom `Splitter` with the full ARIA separator contract, `usePaneLayout` guarded persistence, three-pane grid, sized map placeholder (D-26, D-25, D-27, D-31, D-45)
+- [x] 11.1-05-PLAN.md — Ported logic (`display`/`staleness`/`grouping`), Zustand store with wholesale-replace slices, mqtt.js singleton with jittered backoff (D-46, DASH-05)
+- [x] 11.1-06-PLAN.md — Custom `Splitter` with the full ARIA separator contract, `usePaneLayout` guarded persistence, three-pane grid, sized map placeholder (D-26, D-25, D-27, D-31, D-45)
 
 **Wave 3** *(blocked on Wave 2)*
 
