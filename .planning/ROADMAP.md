@@ -17,7 +17,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 10: Checkmk Tag-Group & Onboarding Integration** - A device-type host tag and a folder-derived location/group label are wired into the wizard's onboarding flow (completed 2026-09-11)
 - [x] **Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps** (INSERTED) - Urgent insertion after Phase 10 (completed 2026-09-12)
 - [x] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract (completed 2026-09-16)
-- [ ] **Phase 11.1: Dashboard Layout and Light Palette** - The dashboard moves to KONE's light palette and a resizable three-pane layout (tree / map-or-details / event history), with a grouping combo and severity ordering
+- [x] **Phase 11.1: Dashboard Layout and Light Palette** - The dashboard moves to KONE's light palette and a resizable three-pane layout (tree / map-or-details / event history), with a grouping combo and severity ordering (completed 2026-09-21)
 - [ ] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query
 - [ ] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map
 - [ ] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, availability reporting on MinIO, a time-series store with Grafana, and failure prediction from SMART/disk/memory trends
@@ -285,7 +285,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6)*
 
-- [ ] 11.1-11-PLAN.md — `useNowTick` clock, D-34 stale-stability regression suite, `dashboard-react/README.md` + deployment-doc `CHECKMK_BASE_URL` callout and nginx `try_files` cutover note, human verification (D-34, D-37, D-41, D-42)
+- [x] 11.1-11-PLAN.md — `useNowTick` clock, D-34 stale-stability regression suite, `dashboard-react/README.md` + deployment-doc `CHECKMK_BASE_URL` callout and nginx `try_files` cutover note, human verification (D-34, D-37, D-41, D-42)
 
 ### Phase 14: Fleet Intelligence
 
