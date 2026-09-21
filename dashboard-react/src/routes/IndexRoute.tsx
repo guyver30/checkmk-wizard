@@ -7,23 +7,25 @@ import { StatsStrip } from "../components/StatsStrip";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { Tree } from "../components/Tree";
 import { useGroupingPrefs } from "../hooks/useGroupingPrefs";
+import { useNowTick } from "../hooks/useNowTick";
 import { buildTree } from "../lib/treeModel";
 import type { GroupingMode } from "../lib/types";
 import { makeSelectStateCounts } from "../store/selectors";
 import { useAppStore } from "../store/useAppStore";
 
 export function IndexRoute() {
-  // A stable selector (memoized on nowMs) subscribed through useAppStore, not a one-off
-  // `makeSelectStateCounts(nowMs)(useAppStore.getState())` read -- the latter would bypass
-  // Zustand's subscription entirely and never re-render this route on a device update.
-  // `makeSelectStateCounts` is the same factory selectors.ts's clock-agnostic `selectStateCounts`
-  // is built from (`selectStateCounts` itself pins nowMs at import time, which this component
-  // must not do). nowMs is captured once via useState's lazy initialiser rather than read fresh
-  // on every render, since a fresh `Date.now()` per render would recreate the selector every
-  // render. `useShallow` compares the selector's output by value, not by reference --
-  // `selectCounts` allocates a brand-new counts object on every call (selectors.ts), so without
-  // it useSyncExternalStore would treat every store notification as "changed" and loop forever.
-  const [nowMs] = useState(() => Date.now());
+  // useNowTick is the app's single periodic clock (D-34): it drives every time-derived
+  // surface on this route so staleness becomes visible even when the poller goes silent and
+  // no new MQTT message ever arrives. A stable selector (memoized on nowMs) is subscribed
+  // through useAppStore, not a one-off `makeSelectStateCounts(nowMs)(useAppStore.getState())`
+  // read -- the latter would bypass Zustand's subscription entirely and never re-render this
+  // route on a device update. `makeSelectStateCounts` is the same factory selectors.ts's
+  // clock-agnostic `selectStateCounts` is built from (`selectStateCounts` itself pins nowMs
+  // at import time, which this component must not do). `useShallow` compares the selector's
+  // output by value, not by reference -- `selectCounts` allocates a brand-new counts object
+  // on every call (selectors.ts), so without it useSyncExternalStore would treat every store
+  // notification as "changed" and loop forever.
+  const nowMs = useNowTick();
   const selectCounts = useCallback(makeSelectStateCounts(nowMs), [nowMs]);
   const counts = useAppStore(useShallow(selectCounts));
 
@@ -35,8 +37,8 @@ export function IndexRoute() {
   const { mode, orderBySeverity, setMode, setOrderBySeverity } = useGroupingPrefs();
   const devices = useAppStore((s) => s.devices);
   const groups = useMemo(
-    () => buildTree(devices, mode, undefined, { orderBySeverity }),
-    [devices, mode, orderBySeverity],
+    () => buildTree(devices, mode, nowMs, { orderBySeverity }),
+    [devices, mode, nowMs, orderBySeverity],
   );
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
   const onToggleGroup = useCallback((key: string) => {
