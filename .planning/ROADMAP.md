@@ -260,7 +260,7 @@ Plans:
 
 **Wave 1 (React)**
 
-- [ ] 11.1-04-PLAN.md — `dashboard-react/` scaffold: Vite + React 19 + TS + Tailwind v3, kone-design-system via packed tarball, react-router v8 Declarative Mode, vitest harness, `src/lib/config.ts` (D-40, D-41, D-37)
+- [x] 11.1-04-PLAN.md — `dashboard-react/` scaffold: Vite + React 19 + TS + Tailwind v3, kone-design-system via packed tarball, react-router v8 Declarative Mode, vitest harness, `src/lib/config.ts` (D-40, D-41, D-37)
 
 **Wave 2** *(blocked on 11.1-04)*
 
