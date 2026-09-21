@@ -273,7 +273,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 11.1-08-PLAN.md — `treeModel` + custom multi-open severity-aware `Tree`/`TreeNode`, device-type icons, folder grouping (D-45, DASH-06)
+- [x] 11.1-08-PLAN.md — `treeModel` + custom multi-open severity-aware `Tree`/`TreeNode`, device-type icons, folder grouping (D-45, DASH-06)
 
 **Wave 5** *(blocked on Wave 4)*
 
