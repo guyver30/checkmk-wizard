@@ -6,9 +6,9 @@ import App from "./App";
 import { DetailsRoute } from "./routes/DetailsRoute";
 
 describe("App", () => {
-  it("renders the index heading at /", () => {
+  it("renders the three-pane layout at /", () => {
     render(<App />);
-    expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
+    expect(screen.getByText("Topology map — Phase 13")).toBeInTheDocument();
   });
 
   it("reads the hostname from the ?id= query string on /details", () => {
