@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 config_snapshot_*.json
 deploy/.env
+dashboard-react/node_modules/
+dashboard-react/dist/
+design-system/*.tgz
