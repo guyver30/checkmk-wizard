@@ -15,6 +15,10 @@
 - [x] **PLR-06**: Poller publishes empty/tombstone retained payloads for devices removed from Checkmk, clearing their status/history/topology entries so they don't persist as permanent ghosts
 - [x] **PLR-07**: Poller publishes a birth/Last-Will-and-Testament liveness signal on `lan/poller/status`, so the dashboard can distinguish "the poller itself is down" from "this device is down"
 - [x] **PLR-08**: Poller surfaces Checkmk downtime/acknowledgement state in the per-device status payload
+- [ ] **PLR-09**: Poller issues a `GET services` Livestatus query alongside its existing `GET hosts` query, behind the same defensive column-availability probe, and parses each service's Nagios-format `perf_data` server-side (never in the browser)
+- [ ] **PLR-10**: Poller adds gauge-backing values (CPU utilisation %, memory used %, `Filesystem /` used %, worst other-mount used %, SMART pass/fail counts) as additive keys on the existing every-cycle `lan/devices/{id}/status` payload
+- [ ] **PLR-11**: Poller publishes the per-host non-gauge service list (name, state, `plugin_output`) on a new retained `lan/devices/{id}/services` topic, republished only when a service's state or the service set itself changes — never on `plugin_output` text drift
+- [ ] **PLR-12**: Poller publishes a bounded per-service transition history on `lan/devices/{id}/service_history`, kept separate from the device-level `lan/devices/{id}/history` topic, and tombstones both new topics when a device is removed
 
 ### Broker
 
@@ -45,6 +49,10 @@
 - [ ] **DASH-05**: Dashboard shows a connection-status indicator with jittered exponential-backoff reconnect for the MQTT-over-WebSockets connection
 - [x] **DASH-06**: Dashboard color-codes/icons hosts by device type and groups/colors by the folder-derived location/group label
 - [ ] **DASH-07**: `index.html` renders a live topology map (vis-network) with parent/child links, merging incoming updates via `DataSet.update()` rather than re-rendering from scratch
+- [ ] **DASH-08**: The per-device drill-down renders CPU / RAM / Disk ring gauges whose colour is decided by each metric's OWN `perf_data` warn/crit thresholds (not the Checkmk service state), hiding any individual gauge whose backing service does not exist on that host
+- [ ] **DASH-09**: The per-device drill-down renders a worst-of-all-disks SMART badge next to the Disk gauge, hidden entirely (not shown as N/A) when the host has no SMART health service
+- [ ] **DASH-10**: The per-device drill-down renders a per-service status table (service name, state badge, `plugin_output`) covering every service except the gauge-backed ones, sorted worst-first, so an operator can see *why* a host is red without leaving the dashboard
+- [ ] **DASH-11**: Device rows in the fleet tree navigate to that device's drill-down (`/details?id={id}`), so the drill-down is reachable without hand-typing a URL
 
 ## v2 Requirements
 
@@ -63,7 +71,7 @@ Explicitly excluded. Documented to prevent scope creep.
 |---------|--------|
 | MAC address collection for topology nodes | Not reliably available without Checkmk's HW/SW inventory plugin; would add a new subsystem dependency for one field |
 | Checkmk notification rules as the live-update delivery mechanism | Requires deploying scripts into the `checkmk` container's own OMD filesystem, breaking the worker/checkmk container-mode boundary |
-| Duplicating Checkmk's per-service drill-down UI in the new dashboard | Link out to Checkmk's UI instead — this project isn't replacing Checkmk |
+| Duplicating Checkmk's per-service *configuration/administration* UI in the new dashboard | Partially reversed 2026-09-21 (Phase 12, DASH-08..DASH-10): a read-only per-service status list and agent metric gauges ARE now in scope, because "why is this host red" could not be answered without them. What stays out is everything beyond read-only status — rule editing, downtime scheduling, acknowledgement, discovery and any other write action remains Checkmk's own UI's job |
 | Time-series graphing/charting | No time-series database; a bounded transition-history strip is sufficient for v1's "dig deeper" need |
 | In-dashboard alerting/notifications | Checkmk already owns alerting; this dashboard is visualization-only |
 | Drag-and-drop topology editing / editable device metadata | No backend to persist edits; topology and metadata are derived read-only from Checkmk |
@@ -99,15 +107,23 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-04 | Phase 10.1 | Complete |
 | DASH-01 | Phase 11 | Complete |
 | DASH-02 | Phase 11 | Pending |
-| DASH-03 | Phase 11 | Pending |
+| DASH-03 | Phase 11 / Phase 12 | Partial |
 | DASH-04 | Phase 11 | Pending |
 | DASH-05 | Phase 11 | Pending |
 | DASH-06 | Phase 11 | Complete |
 | DASH-07 | Phase 13 | Pending |
+| PLR-09 | Phase 12 | Pending |
+| PLR-10 | Phase 12 | Pending |
+| PLR-11 | Phase 12 | Pending |
+| PLR-12 | Phase 12 | Pending |
+| DASH-08 | Phase 12 | Pending |
+| DASH-09 | Phase 12 | Pending |
+| DASH-10 | Phase 12 | Pending |
+| DASH-11 | Phase 12 | Pending |
 
 **Coverage:**
-- v1 requirements: 20 total
-- Mapped to phases: 20 ✓
+- v1 requirements: 28 total
+- Mapped to phases: 28 ✓
 - Unmapped: 0
 
 ---
@@ -118,3 +134,5 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Re-wording note (2026-09-16): DASH-01's "a grouped fleet overview" became "the centre's primary view" when Phase 11.1 moved the event history into the centre and reserved the centre's main area for the topology map (decisions D-25 and D-27, `.planning/phases/11.1-dashboard-layout-and-light-palette/11.1-CONTEXT.md`). The stats strip, the "above", and the merge-in-place clause are unchanged, so the requirement is **re-worded, not re-scoped** — and stays verifiable in Phase 11.1 against the placeholder. `render-index.js`'s grouped fleet overview is superseded and deleted by D-27; Phase 13 (DASH-07) drops the real map into the placeholder's geometry.*
 
 *Terminology note: TAG-01/02/03 and DASH-06 wording was reframed from "VLAN"/"unknown"/"Phase 5" to "location/group label"/"other"/"Phase 4 prompt, Phase 5 apply" during Phase 10's `/bm:discuss-phase` session, per decisions D-01, D-02, D-06 and D-07 (`.planning/phases/10-checkmk-tag-group-onboarding-integration/10-CONTEXT.md`).*
+
+*Phase 12 requirement note (2026-09-21, added during `/bm:plan-phase 12`): Phase 12's ROADMAP entry carried `Requirements: TBD`. PLR-09..PLR-12 and DASH-08..DASH-11 were minted in this planning pass to cover the six prose scope items ROADMAP.md already describes for Phase 12, per `12-RESEARCH.md`'s "Phase Requirements" recommendation. **DASH-03 is deliberately marked Partial, not Complete**: Phase 12 delivers only its bounded per-device status-history-strip half (decision D-16). Its "linking out to Checkmk's own UI for full service-level detail" clause was explicitly declined for this phase (decision D-17) — `CHECKMK_BASE_URL`/`isCheckmkLinkConfigured()` already exist in `dashboard-react/src/lib/config.ts` for whenever that half is built. DASH-03 must not be flipped to Complete by Phase 12's verification. See `.planning/phases/12-agent-metrics-and-service-status/12-CONTEXT.md`.*
