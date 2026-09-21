@@ -36,6 +36,12 @@ export interface EventEntry {
   device_id?: string;
   state?: string;
   timestamp?: string;
+  /**
+   * scripts/mqtt_poller.py's `run_cycle()` publishes `from`/`to` (the state transition), not
+   * `state` -- a device removal has `to: null` and a device addition has `from: null`.
+   */
+  from?: string | null;
+  to?: string | null;
   [key: string]: unknown;
 }
 
