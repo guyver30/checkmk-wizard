@@ -316,13 +316,17 @@ describe("TopologyMap edit mode (13-06)", () => {
     expect(typeof manipulation.addNode).toBe("function");
     expect(manipulation.editNode).toBeUndefined();
 
+    // Mounting with editMode already false calls disableEditMode() once on its own (the gating
+    // effect also runs on first render) -- assert the *off* toggle adds exactly one more call,
+    // rather than asserting an absolute count.
+    const disableCallsBeforeToggleOff = network.disableEditModeCallCount;
     rerenderMap(rerender, { topologyDevices, statuses, editMode: false });
     const offCall = network.setOptionsCalls[network.setOptionsCalls.length - 1];
     expect(offCall).toMatchObject({
       manipulation: expect.objectContaining({ enabled: false }),
       interaction: expect.objectContaining({ dragNodes: false }),
     });
-    expect(network.disableEditModeCallCount).toBe(1);
+    expect(network.disableEditModeCallCount).toBe(disableCallsBeforeToggleOff + 1);
   });
 
   it("addEdge writes updateParents(to, add-from) and adds the edge with onEditSaved", async () => {
@@ -574,12 +578,21 @@ describe("TopologyMap edit mode (13-06)", () => {
     const { rerender } = renderMap({ topologyDevices, statuses, editMode: true });
     const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
     const addEdge = manipulation.addEdge as ManipulationCallback<{ from: string; to: string }>;
+    const edges = instances[0].data.edges as unknown as {
+      getIds: () => string[];
+      add: (item: unknown) => void;
+    };
 
+    // Mirrors vis-network's own _performAddEdge: calling callback(finalizedData) is what adds
+    // the edge to the DataSet -- TopologyMap's addEdge itself only calls the callback.
     await act(async () => {
-      await addEdge({ from: "sw", to: "h1" }, vi.fn());
+      await addEdge({ from: "sw", to: "h1" }, (result) => {
+        if (result) {
+          edges.add(result);
+        }
+      });
     });
 
-    const edges = instances[0].data.edges as unknown as { getIds: () => string[] };
     expect(edges.getIds()).toContain("sw->h1");
 
     // Topology re-arrives, but the poller hasn't caught up yet -- h1 still shows no parents.
@@ -611,12 +624,21 @@ describe("TopologyMap edit mode (13-06)", () => {
     const { rerender } = renderMap({ topologyDevices, statuses, editMode: true });
     const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
     const deleteEdge = manipulation.deleteEdge as ManipulationCallback<{ nodes: string[]; edges: string[] }>;
+    const edges = instances[0].data.edges as unknown as {
+      getIds: () => string[];
+      remove: (ids: string[]) => void;
+    };
 
+    // Mirrors vis-network's own deleteSelected: calling callback(finalizedData) is what removes
+    // the edges from the DataSet -- TopologyMap's deleteEdge itself only calls the callback.
     await act(async () => {
-      await deleteEdge({ nodes: [], edges: ["sw->h1"] }, vi.fn());
+      await deleteEdge({ nodes: [], edges: ["sw->h1"] }, (result) => {
+        if (result) {
+          edges.remove(result.edges);
+        }
+      });
     });
 
-    const edges = instances[0].data.edges as unknown as { getIds: () => string[] };
     expect(edges.getIds()).not.toContain("sw->h1");
 
     // Topology still shows the stale parent -- overlay keeps the edge hidden.
