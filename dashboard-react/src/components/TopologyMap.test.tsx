@@ -373,6 +373,36 @@ describe("TopologyMap edit mode", () => {
     expect(onEditSaved).toHaveBeenCalledTimes(1);
   });
 
+  // Regression: live UAT (2026-09-23) found the "No connections drawn yet" banner flashing
+  // back on the instant edit mode was turned off right after drawing an edge, because the
+  // banner checked only model.edges (the last MQTT-sourced topology), which lags a real edit
+  // by up to one Apply + one poll cycle -- even though the edge was genuinely drawn and
+  // visibly on screen the whole time. Fixed by also counting the pending-edit overlay.
+  it("does not show the no-connections banner right after drawing an edge, even before the model catches up", async () => {
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    mockUpdateParents.mockResolvedValue(undefined);
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: [] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), h1: device({ id: "h1" }) };
+    const { rerender } = renderMap({ topologyDevices, statuses, editMode: true });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addEdge = manipulation.addEdge as ManipulationCallback<{ from: string; to: string; id?: string }>;
+
+    await act(async () => {
+      await addEdge({ from: "sw", to: "h1" }, vi.fn());
+    });
+
+    // Exit edit mode -- topologyDevices/statuses are unchanged (the model has NOT caught up
+    // to the new parents attribute yet, same as real life before Apply + the next poll).
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: false });
+
+    expect(
+      screen.queryByText("No connections drawn yet — turn on Edit topology to start."),
+    ).not.toBeInTheDocument();
+  });
+
   it("addEdge rejects self-loops and duplicate edges without writing", async () => {
     const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
     const topologyDevices = [
