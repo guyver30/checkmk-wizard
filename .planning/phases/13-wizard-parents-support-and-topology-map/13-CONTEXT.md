@@ -96,6 +96,11 @@ host attribute. Checkmk's REST/GUI port is already LAN-published (`8080:5000` in
   — no separate sentinel-host/folder-blob mechanism needed (this supersedes an
   intermediate idea floated mid-discussion of a shared JSON blob on a sentinel host or the
   root folder; D-05/D-06 made that unnecessary).
+  **Addendum (2026-09-23, planning):** implemented as a Checkmk **host label**
+  (`map_position`), not a custom host attribute — Checkmk's REST API has no endpoint to define
+  new custom-attribute *definitions* (GUI/WATO-only), while labels need zero predefinition and
+  satisfy this decision's storage intent identically. See `13-RESEARCH.md` and the plan-checker's
+  confirmation in `13-01`/`13-02`/`13-04`/`13-05`-PLAN.md.
 
 ### Rendering: node shape, icons, coloring
 - **D-08:** Map nodes use `shape: 'circularImage'` with a **dynamically-recolored SVG data

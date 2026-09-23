@@ -624,8 +624,8 @@ check (and A1/A3's narrower live checks) happen.
 
 ## Open Questions
 
-1. **Does the live 2.4.0p35 CE site's `openapi-doc.yaml` actually lack `host_attribute`/`user_role`
-   creation endpoints, or did WebSearch only surface older (2.0–2.3) forum threads?**
+1. **(RESOLVED by plan 13-01's live probe)** Does the live 2.4.0p35 CE site's `openapi-doc.yaml` actually lack `host_attribute`/`user_role`
+   creation endpoints, or did WebSearch only surface older (2.0–2.3) forum threads?
    - What we know: Multiple community forum threads (2.0.0p5 through 2.3-era) consistently report
      no REST endpoint for defining custom host attributes or roles; no contradicting source found.
    - What's unclear: Whether 2.4 changed this — Checkmk's REST API has grown steadily across
@@ -637,8 +637,8 @@ check (and A1/A3's narrower live checks) happen.
      If a capability was added, the labels/`NetworkDevice`/manual-role workarounds can be dropped
      in favor of the more literal D-07/D-09/D-04 wording.
 
-2. **Should `map_position` also ride the poller's MQTT `lan/devices/topology` payload, or stay a
-   browser-side direct-Checkmk-read concern?** (Explicitly left open by CONTEXT.md's Deferred
+2. **(RESOLVED — YES, implemented conditionally in plan 13-04, gated on 13-01's V-LABELS-IN-COLLECTION verdict)** Should `map_position` also ride the poller's MQTT `lan/devices/topology` payload, or stay a
+   browser-side direct-Checkmk-read concern? (Explicitly left open by CONTEXT.md's Deferred
    section.)
    - What we know: `topology_nodes()`/`publish_topology()` in `scripts/mqtt_poller.py` already
      read every host's Livestatus-exposed columns each cycle and could trivially add a `labels`
@@ -658,7 +658,7 @@ check (and A1/A3's narrower live checks) happen.
      `mqtt_poller.py --probe`'s existing capability, referenced at line 1835) before planning locks
      the data-flow diagram.
 
-3. **REQUIREMENTS.md has no requirement ID for the write-back/edit-mode capability** (CONTEXT.md
+3. **(RESOLVED — planner minted DASH-12, DASH-13, PLR-13 in REQUIREMENTS.md)** REQUIREMENTS.md has no requirement ID for the write-back/edit-mode capability (CONTEXT.md
    already flags this; restated here because it blocks clean traceability in the plan). Not
    resolved by this research agent — flagged for whoever runs requirements definition.
 
