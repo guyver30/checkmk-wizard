@@ -149,6 +149,47 @@ def test_extract_device_type_defaults_to_unknown_when_key_absent():
     assert poller.extract_device_type({}) == "unknown"
 
 
+# --- parse_perf_data ----------------------------------------------------------
+
+
+def test_parse_perf_data_filesystem_shaped_string():
+    raw = "/=45.2;80.00;90.00;0;488281.25 fs_size=488281.25;;;;"
+    result = poller.parse_perf_data(raw)
+    assert result["/"] == {"value": 45.2, "warn": 80.0, "crit": 90.0, "min": 0.0, "max": 488281.25}
+    assert result["fs_size"] == {"value": 488281.25, "warn": None, "crit": None, "min": None, "max": None}
+
+
+def test_parse_perf_data_cpu_shaped_string():
+    result = poller.parse_perf_data("util=42.5;80;90;0;100")
+    assert result == {"util": {"value": 42.5, "warn": 80.0, "crit": 90.0, "min": 0.0, "max": 100.0}}
+
+
+def test_parse_perf_data_percent_suffixed_value():
+    result = poller.parse_perf_data("mem_used_percent=23.0%;80;90;;")
+    assert result["mem_used_percent"]["value"] == 23.0
+    assert result["mem_used_percent"]["min"] is None
+    assert result["mem_used_percent"]["max"] is None
+
+
+def test_parse_perf_data_quoted_label_with_space():
+    result = poller.parse_perf_data("'total used'=5;;;;")
+    assert result["total used"]["value"] == 5.0
+
+
+def test_parse_perf_data_garbage_token_skipped_sibling_still_parses():
+    result = poller.parse_perf_data("notametric util=1;;;;")
+    assert "util" in result
+    assert "notametric" not in result
+
+
+def test_parse_perf_data_empty_string_returns_empty_dict():
+    assert poller.parse_perf_data("") == {}
+
+
+def test_parse_perf_data_non_string_returns_empty_dict():
+    assert poller.parse_perf_data(None) == {}
+
+
 # --- PollerConfig.from_env ---------------------------------------------------
 
 
@@ -341,6 +382,48 @@ def test_available_host_columns_sends_expected_lql_query():
     sent = sock.sendall.call_args[0][0].decode()
     assert sent == "GET columns\nColumns: name\nFilter: table = hosts\nOutputFormat: json\n\n"
     assert result == {"name", "state"}
+
+
+# --- available_service_columns / select_service_columns / build_services_query ---
+
+
+def test_build_services_query_produces_exact_lql_text():
+    assert poller.build_services_query(["host_name", "description", "state"]) == (
+        "GET services\nColumns: host_name description state\nOutputFormat: json\n\n"
+    )
+
+
+def test_available_service_columns_sends_expected_lql_query():
+    sock = _fake_connection(b'[["host_name"], ["description"], ["state"]]')
+    with patch("socket.create_connection", return_value=sock):
+        result = poller.available_service_columns("checkmk", poller.DEFAULT_LIVESTATUS_PORT, 10)
+    sent = sock.sendall.call_args[0][0].decode()
+    assert sent == "GET columns\nColumns: name\nFilter: table = services\nOutputFormat: json\n\n"
+    assert result == {"host_name", "description", "state"}
+
+
+def test_select_service_columns_orders_required_then_available_optional():
+    result = poller.select_service_columns({"host_name", "description", "state", "plugin_output", "perf_data"})
+    assert result == ["host_name", "description", "state", "plugin_output", "perf_data"]
+
+
+def test_select_service_columns_no_exception_when_perf_data_absent():
+    result = poller.select_service_columns({"host_name", "description", "state"})
+    assert result == ["host_name", "description", "state"]
+
+
+def test_select_service_columns_raises_on_missing_required_column():
+    try:
+        poller.select_service_columns({"host_name", "state"})
+    except poller.LivestatusError as exc:
+        assert "description" in str(exc)
+    else:
+        raise AssertionError("expected LivestatusError")
+
+
+def test_select_service_columns_omits_unavailable_optional_columns():
+    result = poller.select_service_columns({"host_name", "description", "state", "plugin_output"})
+    assert result == ["host_name", "description", "state", "plugin_output"]
 
 
 # --- query_devices --------------------------------------------------------------
@@ -580,6 +663,84 @@ def test_query_devices_connects_with_configured_timeout():
     with patch("socket.create_connection", return_value=sock) as mock_connect:
         poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 7.5)
     mock_connect.assert_called_once_with(("checkmk", poller.DEFAULT_LIVESTATUS_PORT), timeout=7.5)
+
+
+# --- query_services / ServiceSnapshot ----------------------------------------
+
+
+def test_query_services_parses_full_row_into_service_snapshot():
+    columns = ["host_name", "description", "state", "plugin_output", "perf_data"]
+    row = ["web1", "CPU utilization", 1, "WARN - util 85%", "util=85;80;90;0;100"]
+    sock = _fake_connection(json.dumps([row]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot == poller.ServiceSnapshot(
+        host_name="web1",
+        description="CPU utilization",
+        state="WARN",
+        state_raw=1,
+        plugin_output="WARN - util 85%",
+        perf_data=snapshot.perf_data,
+    )
+    assert snapshot.perf_data["util"]["crit"] == 90.0
+
+
+def test_query_services_skips_malformed_row_keeps_valid_sibling():
+    columns = ["host_name", "description", "state"]
+    rows = [
+        ["web1", "PING", "not-a-number"],
+        ["web2", "PING", 0],
+    ]
+    sock = _fake_connection(json.dumps(rows).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert len(snapshots) == 1
+    assert snapshots[0].host_name == "web2"
+
+
+def test_query_services_required_only_columns_degrade_optional_fields():
+    columns = ["host_name", "description", "state"]
+    sock = _fake_connection(json.dumps([["web1", "PING", 0]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].plugin_output == ""
+    assert snapshots[0].perf_data == {}
+
+
+def test_query_services_empty_body_returns_empty_list():
+    sock = _fake_connection(b"")
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["host_name", "description", "state"], 10
+        )
+    assert snapshots == []
+
+
+def test_query_services_malformed_json_raises_livestatus_error():
+    sock = _fake_connection(b"not json")
+    with patch("socket.create_connection", return_value=sock):
+        try:
+            poller.query_services(
+                "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["host_name", "description", "state"], 10
+            )
+        except poller.LivestatusError:
+            pass
+        else:
+            raise AssertionError("expected LivestatusError")
+
+
+def test_query_services_skips_host_failing_publishable_device_id():
+    columns = ["host_name", "description", "state"]
+    rows = [
+        ["lan/rogue", "PING", 0],
+        ["web2", "PING", 0],
+    ]
+    sock = _fake_connection(json.dumps(rows).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert [s.host_name for s in snapshots] == ["web2"]
 
 
 # --- MQTT client lifecycle and publish helpers ------------------------------

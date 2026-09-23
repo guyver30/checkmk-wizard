@@ -41,6 +41,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import sys
@@ -157,6 +158,16 @@ OPTIONAL_HOST_COLUMNS = (
     # in place: a present column can still return null per-host.
     "staleness",
 )
+
+# Phase 12 (D-08/D-11): the services-table required/optional split mirrors
+# REQUIRED_HOST_COLUMNS/OPTIONAL_HOST_COLUMNS above. `perf_data` is
+# deliberately OPTIONAL, never REQUIRED, per 12-RESEARCH.md Pitfall 4: the
+# per-service list (`description`/`state`/`plugin_output`) degrades fine
+# without it, whereas promoting `perf_data` to REQUIRED would take gauges,
+# the SMART badge and the whole service list down together on any site
+# that does not expose it.
+REQUIRED_SERVICE_COLUMNS = ("host_name", "description", "state")
+OPTIONAL_SERVICE_COLUMNS = ("plugin_output", "perf_data")
 
 # Standard Nagios plugin return codes, used unchanged by Checkmk/Livestatus
 # for the `worst_service_state` column (verified: checkmk.com/werk/8003).
@@ -322,6 +333,23 @@ class DeviceSnapshot:
     host_state_raw: str = "UP"
 
 
+@dataclass
+class ServiceSnapshot:
+    """One service's current state, as derived from a single Livestatus `services` row."""
+
+    host_name: str
+    description: str
+    # The OK/WARN/CRIT/UNKNOWN name, mapped through the existing
+    # `_SERVICE_STATE_NAMES` table -- never the raw int (mirrors
+    # DeviceSnapshot.state's own name-not-int convention).
+    state: str
+    state_raw: int
+    plugin_output: str = ""
+    # Already-parsed `parse_perf_data()` output. The raw perf_data string
+    # is deliberately not retained -- nothing downstream needs it.
+    perf_data: dict = field(default_factory=dict)
+
+
 def configure_logging(level: str) -> None:
     """Wire up `logging.basicConfig`. Called by `main()`; never at import time."""
     logging.basicConfig(
@@ -434,6 +462,80 @@ def extract_device_type(tags: dict) -> str:
     if "device_type" in tags:
         return tags["device_type"]
     return UNKNOWN_DEVICE_TYPE
+
+
+# Leading numeric prefix of a Nagios perfdata value token: an optional
+# sign, digits, at most one decimal point, and an optional exponent.
+# Scanning for this prefix (rather than enumerating Nagios's own unit
+# strings -- %, s/ms/us, B/KB/MB/GB/TB, c) means an unrecognized unit is
+# still handled by `_strip_uom` below instead of failing to parse.
+_PERF_DATA_NUMERIC_PREFIX_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+# Tokenizes a perfdata string on whitespace, EXCEPT inside a single-quoted
+# label (which may itself contain spaces per the format spec) -- a bare
+# `raw.split()` would incorrectly break `'total used'=5;;;;` into two
+# tokens. Tried in order per match: a quoted-label token first, falling
+# back to a plain non-space token.
+_PERF_DATA_TOKEN_RE = re.compile(r"'[^']*'=\S*|\S+")
+
+
+def _strip_uom(token: str) -> str:
+    """Strip a trailing unit-of-measure from a perfdata value token.
+
+    Nagios permits `%`, `s`/`ms`/`us`, `B`/`KB`/`MB`/`GB`/`TB` and `c` as
+    units (nagios-plugins.org/doc/guidelines.html, Performance Data Format
+    Specification). Returns only the leading numeric portion; a token with
+    no numeric prefix at all returns the original token unchanged.
+    """
+    match = _PERF_DATA_NUMERIC_PREFIX_RE.match(token)
+    return match.group(0) if match else token
+
+
+def parse_perf_data(raw: str) -> dict[str, dict]:
+    """Parse a Nagios-format performance-data string into per-metric value/warn/crit/min/max.
+
+    Format (nagios-plugins.org/doc/guidelines.html, Performance Data Format
+    Specification): space-separated `'label'=value[UOM];[warn];[crit];[min];[max]`
+    tokens, the label single-quoted only when it contains a space. Returns
+    `{label: {"value": float, "warn": float | None, "crit": float | None,
+    "min": float | None, "max": float | None}}`.
+
+    No exception ever escapes this function (matches this module's
+    existing skip-not-fatal posture, T-09-03): a token with no `=` is
+    skipped; a value that does not parse as a float skips that one token
+    only; an empty or non-numeric warn/crit/min/max field becomes `None`;
+    a non-string or empty `raw` returns `{}`.
+    """
+    if not isinstance(raw, str) or not raw:
+        return {}
+
+    def _num(parts: list[str], index: int) -> float | None:
+        if index >= len(parts) or not parts[index]:
+            return None
+        try:
+            return float(parts[index])
+        except ValueError:
+            return None
+
+    result: dict[str, dict] = {}
+    for token in _PERF_DATA_TOKEN_RE.findall(raw):
+        if "=" not in token:
+            continue
+        label, _, rest = token.partition("=")
+        label = label.strip("'")
+        parts = rest.split(";")
+        try:
+            value = float(_strip_uom(parts[0]))
+        except (ValueError, IndexError):
+            continue
+        result[label] = {
+            "value": value,
+            "warn": _num(parts, 1),
+            "crit": _num(parts, 2),
+            "min": _num(parts, 3),
+            "max": _num(parts, 4),
+        }
+    return result
 
 
 def _livestatus_request(host: str, port: int, query: str, timeout: float) -> str:
@@ -573,6 +675,55 @@ def build_hosts_query(columns: list[str]) -> str:
     return f"GET hosts\nColumns: {' '.join(columns)}\nOutputFormat: json\n\n"
 
 
+def available_service_columns(host: str, port: int, timeout: float) -> set[str]:
+    """Return the column names the live site's `services` table actually exposes.
+
+    Literal parallel of `available_host_columns()` above, filtered to
+    `table = services` instead of `table = hosts` -- same choke point
+    (`_livestatus_request`), same malformed-response handling.
+    """
+    query = "GET columns\nColumns: name\nFilter: table = services\nOutputFormat: json\n\n"
+    body = _livestatus_request(host, port, query, timeout)
+    if not body.strip():
+        return set()
+    try:
+        rows = json.loads(body)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise LivestatusError(f"Malformed columns response from {host}:{port}: {exc}") from exc
+    return {row[0] for row in rows}
+
+
+def select_service_columns(available: set[str]) -> list[str]:
+    """Build the services column list to request, degrading unverified optional columns gracefully.
+
+    Literal parallel of `select_host_columns()` above: every name in
+    REQUIRED_SERVICE_COLUMNS must be present or the query cannot proceed at
+    all. `plugin_output`/`perf_data` are included only when the live site
+    actually exposes them; an absent optional column is a logged
+    degradation, not a hard failure (12-RESEARCH.md Pitfall 4).
+    """
+    missing = [name for name in REQUIRED_SERVICE_COLUMNS if name not in available]
+    if missing:
+        raise LivestatusError(
+            f"Livestatus services table is missing required column(s): {', '.join(missing)}"
+        )
+    columns = list(REQUIRED_SERVICE_COLUMNS)
+    for name in OPTIONAL_SERVICE_COLUMNS:
+        if name in available:
+            columns.append(name)
+        else:
+            _logger.warning(
+                "Livestatus services table does not expose optional column %r; "
+                "degrading to a safe default for that field",
+                name,
+            )
+    return columns
+
+
+def build_services_query(columns: list[str]) -> str:
+    return f"GET services\nColumns: {' '.join(columns)}\nOutputFormat: json\n\n"
+
+
 def query_devices(
     host: str,
     port: int,
@@ -680,6 +831,79 @@ def query_devices(
                 alias=alias,
                 staleness=staleness,
                 host_state_raw=host_state_raw,
+            )
+        )
+    return snapshots
+
+
+def query_services(
+    host: str, port: int, columns: list[str], timeout: float
+) -> list[ServiceSnapshot]:
+    """Run one `GET services` round trip and parse it into typed ServiceSnapshot records.
+
+    Defensive by design (T-09-03), same skip-this-row-not-the-cycle
+    posture as `query_devices()` above: a malformed row, a host name that
+    could not be addressed as an MQTT topic segment, or a non-numeric
+    state skips that one row rather than crashing the poll loop; a
+    missing/non-string `plugin_output` or `perf_data` degrades to `""`/
+    `{}` rather than raising (T-12-01/T-12-02).
+    """
+    body = _livestatus_request(host, port, build_services_query(columns), timeout)
+    if not body.strip():
+        return []
+    try:
+        rows = json.loads(body)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise LivestatusError(f"Malformed services response from {host}:{port}: {exc}") from exc
+
+    index = {name: position for position, name in enumerate(columns)}
+    snapshots: list[ServiceSnapshot] = []
+    for row in rows:
+        try:
+            host_name = row[index["host_name"]]
+        except (IndexError, TypeError):
+            _logger.warning("Skipping malformed services row: %r", row)
+            continue
+        if not is_publishable_device_id(host_name):
+            _logger.warning(
+                "Skipping service row for host %r: not publishable as an MQTT topic segment",
+                host_name,
+            )
+            continue
+        try:
+            description = row[index["description"]]
+        except (IndexError, TypeError):
+            _logger.warning("Skipping malformed services row: %r", row)
+            continue
+        try:
+            state_raw = int(row[index["state"]])
+        except (IndexError, TypeError, ValueError):
+            _logger.warning(
+                "Skipping service %r on host %r: non-numeric state", description, host_name
+            )
+            continue
+
+        try:
+            plugin_output = row[index["plugin_output"]] if "plugin_output" in index else ""
+        except (IndexError, TypeError):
+            plugin_output = ""
+        if not isinstance(plugin_output, str):
+            plugin_output = ""
+
+        try:
+            raw_perf_data = row[index["perf_data"]] if "perf_data" in index else ""
+        except (IndexError, TypeError):
+            raw_perf_data = ""
+        perf_data = parse_perf_data(raw_perf_data) if isinstance(raw_perf_data, str) else {}
+
+        snapshots.append(
+            ServiceSnapshot(
+                host_name=host_name,
+                description=description,
+                state=_SERVICE_STATE_NAMES.get(state_raw, "UNKNOWN"),
+                state_raw=state_raw,
+                plugin_output=plugin_output,
+                perf_data=perf_data,
             )
         )
     return snapshots
@@ -1254,6 +1478,13 @@ def main() -> int:
         action="store_true",
         help="Run exactly one poll cycle then exit, for manual verification.",
     )
+    parser.add_argument(
+        "--dump-service-names",
+        action="store_true",
+        help="Print every distinct service description the live site reports, then exit -- "
+        "used to confirm Checkmk's actual SMART service naming against a real host "
+        "(see SMART_HEALTH_SERVICE_RE).",
+    )
     args = parser.parse_args()
     config = PollerConfig.from_env()
 
@@ -1273,7 +1504,45 @@ def main() -> int:
             print(f"{'present' if present else 'MISSING'}: {name} (required)")
         for name in OPTIONAL_HOST_COLUMNS:
             print(f"{'present' if name in available else 'missing'}: {name} (optional)")
+
+        try:
+            available_services = available_service_columns(
+                config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+            )
+        except LivestatusError as exc:
+            _logger.error("Services column check failed: %s", exc)
+            return 1
+        for name in REQUIRED_SERVICE_COLUMNS:
+            present = name in available_services
+            ok = ok and present
+            print(f"{'present' if present else 'MISSING'}: {name} (required, services)")
+        for name in OPTIONAL_SERVICE_COLUMNS:
+            print(f"{'present' if name in available_services else 'missing'}: {name} (optional, services)")
         return 0 if ok else 1
+
+    if args.dump_service_names:
+        configure_logging(config.log_level)
+        try:
+            body = _livestatus_request(
+                config.livestatus_host,
+                config.livestatus_port,
+                "GET services\nColumns: description\nOutputFormat: json\n\n",
+                DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+            )
+        except LivestatusError as exc:
+            _logger.error("Service name dump failed: %s", exc)
+            return 1
+        if not body.strip():
+            descriptions: set[str] = set()
+        else:
+            try:
+                descriptions = {row[0] for row in json.loads(body)}
+            except (json.JSONDecodeError, ValueError) as exc:
+                _logger.error("Service name dump failed: malformed services response: %s", exc)
+                return 1
+        for description in sorted(descriptions):
+            print(description)
+        return 0
 
     if args.once:
         configure_logging(config.log_level)
