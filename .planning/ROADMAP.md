@@ -240,7 +240,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 13-06-PLAN.md — Map edit wiring: manipulation toolbar add/edit/delete edge, drag-to-save position, add unmanaged switch, pending overlay, toolbar restyle
+- [x] 13-06-PLAN.md — Map edit wiring: manipulation toolbar add/edit/delete edge, drag-to-save position, add unmanaged switch, pending overlay, toolbar restyle
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -262,7 +262,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
 | 12. Agent Metrics and Service Status | 5/5 | Complete    | 2026-09-23 |
-| 13. Wizard Parents Support and Topology Map | 5/8 | In Progress|  |
+| 13. Wizard Parents Support and Topology Map | 6/8 | In Progress|  |
 
 ### Phase 11.1: Dashboard Layout and Light Palette
 
