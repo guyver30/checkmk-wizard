@@ -19,7 +19,7 @@
 - [x] **PLR-10**: Poller adds gauge-backing values (CPU utilisation %, memory used %, `Filesystem /` used %, worst other-mount used %, SMART pass/fail counts) as additive keys on the existing every-cycle `lan/devices/{id}/status` payload
 - [x] **PLR-11**: Poller publishes the per-host non-gauge service list (name, state, `plugin_output`) on a new retained `lan/devices/{id}/services` topic, republished only when a service's state or the service set itself changes — never on `plugin_output` text drift
 - [x] **PLR-12**: Poller publishes a bounded per-service transition history on `lan/devices/{id}/service_history`, kept separate from the device-level `lan/devices/{id}/history` topic, and tombstones both new topics when a device is removed
-- [ ] **PLR-13**: Poller adds each host's saved map position and unmanaged-switch marker (read from Checkmk host labels through its existing once-per-cycle REST `host_config` lookup) to the `lan/devices/topology` node shape and to the topology change-detection signature, so every dashboard viewer sees the same saved layout without holding a Checkmk credential
+- [x] **PLR-13**: Poller adds each host's saved map position and unmanaged-switch marker (read from Checkmk host labels through its existing once-per-cycle REST `host_config` lookup) to the `lan/devices/topology` node shape and to the topology change-detection signature, so every dashboard viewer sees the same saved layout without holding a Checkmk credential
 
 ### Broker
 
@@ -117,7 +117,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-07 | Phase 13 | Complete |
 | DASH-12 | Phase 13 | Pending |
 | DASH-13 | Phase 13 | Pending |
-| PLR-13 | Phase 13 | Pending |
+| PLR-13 | Phase 13 | Complete |
 | PLR-09 | Phase 12 | Complete |
 | PLR-10 | Phase 12 | Complete |
 | PLR-11 | Phase 12 | Complete |
