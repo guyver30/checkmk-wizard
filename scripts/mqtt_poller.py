@@ -333,6 +333,23 @@ class DeviceSnapshot:
     host_state_raw: str = "UP"
 
 
+@dataclass
+class ServiceSnapshot:
+    """One service's current state, as derived from a single Livestatus `services` row."""
+
+    host_name: str
+    description: str
+    # The OK/WARN/CRIT/UNKNOWN name, mapped through the existing
+    # `_SERVICE_STATE_NAMES` table -- never the raw int (mirrors
+    # DeviceSnapshot.state's own name-not-int convention).
+    state: str
+    state_raw: int
+    plugin_output: str = ""
+    # Already-parsed `parse_perf_data()` output. The raw perf_data string
+    # is deliberately not retained -- nothing downstream needs it.
+    perf_data: dict = field(default_factory=dict)
+
+
 def configure_logging(level: str) -> None:
     """Wire up `logging.basicConfig`. Called by `main()`; never at import time."""
     logging.basicConfig(
@@ -814,6 +831,79 @@ def query_devices(
                 alias=alias,
                 staleness=staleness,
                 host_state_raw=host_state_raw,
+            )
+        )
+    return snapshots
+
+
+def query_services(
+    host: str, port: int, columns: list[str], timeout: float
+) -> list[ServiceSnapshot]:
+    """Run one `GET services` round trip and parse it into typed ServiceSnapshot records.
+
+    Defensive by design (T-09-03), same skip-this-row-not-the-cycle
+    posture as `query_devices()` above: a malformed row, a host name that
+    could not be addressed as an MQTT topic segment, or a non-numeric
+    state skips that one row rather than crashing the poll loop; a
+    missing/non-string `plugin_output` or `perf_data` degrades to `""`/
+    `{}` rather than raising (T-12-01/T-12-02).
+    """
+    body = _livestatus_request(host, port, build_services_query(columns), timeout)
+    if not body.strip():
+        return []
+    try:
+        rows = json.loads(body)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise LivestatusError(f"Malformed services response from {host}:{port}: {exc}") from exc
+
+    index = {name: position for position, name in enumerate(columns)}
+    snapshots: list[ServiceSnapshot] = []
+    for row in rows:
+        try:
+            host_name = row[index["host_name"]]
+        except (IndexError, TypeError):
+            _logger.warning("Skipping malformed services row: %r", row)
+            continue
+        if not is_publishable_device_id(host_name):
+            _logger.warning(
+                "Skipping service row for host %r: not publishable as an MQTT topic segment",
+                host_name,
+            )
+            continue
+        try:
+            description = row[index["description"]]
+        except (IndexError, TypeError):
+            _logger.warning("Skipping malformed services row: %r", row)
+            continue
+        try:
+            state_raw = int(row[index["state"]])
+        except (IndexError, TypeError, ValueError):
+            _logger.warning(
+                "Skipping service %r on host %r: non-numeric state", description, host_name
+            )
+            continue
+
+        try:
+            plugin_output = row[index["plugin_output"]] if "plugin_output" in index else ""
+        except (IndexError, TypeError):
+            plugin_output = ""
+        if not isinstance(plugin_output, str):
+            plugin_output = ""
+
+        try:
+            raw_perf_data = row[index["perf_data"]] if "perf_data" in index else ""
+        except (IndexError, TypeError):
+            raw_perf_data = ""
+        perf_data = parse_perf_data(raw_perf_data) if isinstance(raw_perf_data, str) else {}
+
+        snapshots.append(
+            ServiceSnapshot(
+                host_name=host_name,
+                description=description,
+                state=_SERVICE_STATE_NAMES.get(state_raw, "UNKNOWN"),
+                state_raw=state_raw,
+                plugin_output=plugin_output,
+                perf_data=perf_data,
             )
         )
     return snapshots

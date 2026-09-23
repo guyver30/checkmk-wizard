@@ -665,6 +665,84 @@ def test_query_devices_connects_with_configured_timeout():
     mock_connect.assert_called_once_with(("checkmk", poller.DEFAULT_LIVESTATUS_PORT), timeout=7.5)
 
 
+# --- query_services / ServiceSnapshot ----------------------------------------
+
+
+def test_query_services_parses_full_row_into_service_snapshot():
+    columns = ["host_name", "description", "state", "plugin_output", "perf_data"]
+    row = ["web1", "CPU utilization", 1, "WARN - util 85%", "util=85;80;90;0;100"]
+    sock = _fake_connection(json.dumps([row]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot == poller.ServiceSnapshot(
+        host_name="web1",
+        description="CPU utilization",
+        state="WARN",
+        state_raw=1,
+        plugin_output="WARN - util 85%",
+        perf_data=snapshot.perf_data,
+    )
+    assert snapshot.perf_data["util"]["crit"] == 90.0
+
+
+def test_query_services_skips_malformed_row_keeps_valid_sibling():
+    columns = ["host_name", "description", "state"]
+    rows = [
+        ["web1", "PING", "not-a-number"],
+        ["web2", "PING", 0],
+    ]
+    sock = _fake_connection(json.dumps(rows).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert len(snapshots) == 1
+    assert snapshots[0].host_name == "web2"
+
+
+def test_query_services_required_only_columns_degrade_optional_fields():
+    columns = ["host_name", "description", "state"]
+    sock = _fake_connection(json.dumps([["web1", "PING", 0]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].plugin_output == ""
+    assert snapshots[0].perf_data == {}
+
+
+def test_query_services_empty_body_returns_empty_list():
+    sock = _fake_connection(b"")
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["host_name", "description", "state"], 10
+        )
+    assert snapshots == []
+
+
+def test_query_services_malformed_json_raises_livestatus_error():
+    sock = _fake_connection(b"not json")
+    with patch("socket.create_connection", return_value=sock):
+        try:
+            poller.query_services(
+                "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["host_name", "description", "state"], 10
+            )
+        except poller.LivestatusError:
+            pass
+        else:
+            raise AssertionError("expected LivestatusError")
+
+
+def test_query_services_skips_host_failing_publishable_device_id():
+    columns = ["host_name", "description", "state"]
+    rows = [
+        ["lan/rogue", "PING", 0],
+        ["web2", "PING", 0],
+    ]
+    sock = _fake_connection(json.dumps(rows).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_services("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert [s.host_name for s in snapshots] == ["web2"]
+
+
 # --- MQTT client lifecycle and publish helpers ------------------------------
 
 
