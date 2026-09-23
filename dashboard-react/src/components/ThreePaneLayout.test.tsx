@@ -1,6 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MapPlaceholder } from "./MapPlaceholder";
 import { ThreePaneLayout } from "./ThreePaneLayout";
 
 // jsdom does not implement Element.setPointerCapture/releasePointerCapture; Splitter calls
@@ -16,16 +15,16 @@ describe("ThreePaneLayout", () => {
     localStorage.clear();
   });
 
-  it("renders all three named pane regions, including the map placeholder", () => {
+  it("renders all three named pane regions", () => {
     render(
       <ThreePaneLayout
         tree={<p>Device tree content</p>}
-        centreTop={<MapPlaceholder />}
+        centreTop={<div>centre top</div>}
         centreBottom={<p>Event history content</p>}
       />,
     );
     expect(screen.getByText("Device tree content")).toBeInTheDocument();
-    expect(screen.getByText("Topology map — Phase 13")).toBeInTheDocument();
+    expect(screen.getByText("centre top")).toBeInTheDocument();
     expect(screen.getByText("Event history content")).toBeInTheDocument();
   });
 
