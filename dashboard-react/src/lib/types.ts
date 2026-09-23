@@ -23,12 +23,44 @@ export interface DevicePayload {
   staleness?: number | null;
   downtime?: boolean;
   acknowledged?: boolean;
-  services?: unknown;
+  // Gauge fields produced by scripts/mqtt_poller.py::classify_host_services. A `null` value
+  // means this host has no such service -- the signal the hide-on-absence rules D-03/D-06
+  // key off, not a zero reading.
+  cpu_percent?: number | null;
+  cpu_warn?: number | null;
+  cpu_crit?: number | null;
+  ram_percent?: number | null;
+  ram_warn?: number | null;
+  ram_crit?: number | null;
+  disk_percent?: number | null;
+  disk_warn?: number | null;
+  disk_crit?: number | null;
+  disk_other_worst_percent?: number | null;
+  disk_other_worst_warn?: number | null;
+  disk_other_worst_crit?: number | null;
+  disk_other_worst_mount?: string | null;
+  smart_total?: number | null;
+  smart_failing?: number | null;
 }
 
 export interface HistoryEntry {
   state?: string;
   timestamp?: string;
+  [key: string]: unknown;
+}
+
+export interface ServiceEntry {
+  description?: string;
+  state?: string;
+  plugin_output?: string;
+  [key: string]: unknown;
+}
+
+export interface ServiceHistoryEntry {
+  timestamp?: string;
+  description?: string;
+  from?: string | null;
+  to?: string | null;
   [key: string]: unknown;
 }
 
