@@ -58,6 +58,11 @@ DEFAULT_MQTT_PORT = 1883
 DEFAULT_POLL_INTERVAL_SECONDS = 60
 DEFAULT_HISTORY_MAX_ENTRIES = 20
 DEFAULT_EVENTS_MAX_ENTRIES = 50
+# Phase 12 (D-14): bounds `lan/devices/{id}/service_history`, the same
+# convention as DEFAULT_HISTORY_MAX_ENTRIES above but on its own topic and
+# its own env var (SERVICE_HISTORY_MAX_ENTRIES) so the two bounded logs'
+# caps can be tuned independently.
+DEFAULT_SERVICE_HISTORY_MAX_ENTRIES = 20
 DEFAULT_RECONCILE_TIMEOUT_SECONDS = 5.0
 # Not env-configurable (D-04 scopes env vars to the settings it names): this
 # is the per-request socket timeout for the poller's own Livestatus calls,
@@ -276,6 +281,10 @@ class PollerConfig:
     cmk_site_id: str = "dmc"
     cmk_rest_username: str = ""
     cmk_rest_secret: str = ""
+    # Phase 12 (D-14). Appended after cmk_rest_secret for the same reason
+    # those fields were: no existing positional PollerConfig(...) call site
+    # breaks.
+    service_history_max_entries: int = DEFAULT_SERVICE_HISTORY_MAX_ENTRIES
 
     def __repr__(self) -> str:
         # T-09-02: this object must be safe to log — never render the raw
@@ -292,6 +301,7 @@ class PollerConfig:
             "mqtt_password='***', "
             f"poll_interval_seconds={self.poll_interval_seconds!r}, "
             f"history_max_entries={self.history_max_entries!r}, "
+            f"service_history_max_entries={self.service_history_max_entries!r}, "
             f"events_max_entries={self.events_max_entries!r}, "
             f"reconcile_timeout_seconds={self.reconcile_timeout_seconds!r}, "
             f"log_level={self.log_level!r}, "
@@ -313,6 +323,9 @@ class PollerConfig:
             mqtt_password=os.environ.get("MQTT_PASSWORD", "poller"),
             poll_interval_seconds=_env_int("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS),
             history_max_entries=_env_int("HISTORY_MAX_ENTRIES", DEFAULT_HISTORY_MAX_ENTRIES),
+            service_history_max_entries=_env_int(
+                "SERVICE_HISTORY_MAX_ENTRIES", DEFAULT_SERVICE_HISTORY_MAX_ENTRIES
+            ),
             events_max_entries=_env_int("EVENTS_MAX_ENTRIES", DEFAULT_EVENTS_MAX_ENTRIES),
             reconcile_timeout_seconds=_env_float(
                 "RECONCILE_TIMEOUT_SECONDS", DEFAULT_RECONCILE_TIMEOUT_SECONDS
@@ -392,6 +405,14 @@ def device_status_topic(device_id: str) -> str:
 
 def device_history_topic(device_id: str) -> str:
     return f"lan/devices/{device_id}/history"
+
+
+def device_services_topic(device_id: str) -> str:
+    return f"lan/devices/{device_id}/services"
+
+
+def device_service_history_topic(device_id: str) -> str:
+    return f"lan/devices/{device_id}/service_history"
 
 
 def is_publishable_device_id(device_id: str) -> bool:
@@ -1113,7 +1134,12 @@ def _publish_json(client: mqtt.Client, topic: str, payload: object, qos: int, re
         _logger.warning("Failed to publish to %s: %s", topic, exc)
 
 
-def publish_device_status(client: mqtt.Client, snapshot: DeviceSnapshot, timestamp: str) -> None:
+def publish_device_status(
+    client: mqtt.Client,
+    snapshot: DeviceSnapshot,
+    timestamp: str,
+    gauge_fields: dict | None = None,
+) -> None:
     """Publish one device's current status. QoS 0: republished every cycle from live data."""
     payload = {
         "id": snapshot.id,
@@ -1129,6 +1155,12 @@ def publish_device_status(client: mqtt.Client, snapshot: DeviceSnapshot, timesta
         "host_state_raw": snapshot.host_state_raw,
         "timestamp": timestamp,
     }
+    # Phase 12 (D-12): additive gauge keys (cpu/ram/disk/smart), in the same
+    # spirit as the dated D-17 staleness/host_state_raw comment above -- an
+    # older subscriber simply never sees these. `None` (a services-query
+    # failure this cycle) keeps the status topic publishing without gauge
+    # keys rather than publishing wrong `null`s over a good retained value.
+    payload.update(gauge_fields or {})
     _publish_json(client, device_status_topic(snapshot.id), payload, qos=0, retain=True)
 
 
@@ -1143,13 +1175,29 @@ def publish_history(client: mqtt.Client, device_id: str, entries: list[dict]) ->
     _publish_json(client, device_history_topic(device_id), entries, qos=1, retain=True)
 
 
+def publish_services(client: mqtt.Client, device_id: str, rows: list[dict]) -> None:
+    """Publish one device's per-service row list. QoS 1: change-triggered (D-12/D-13), not
+    republished every cycle -- the caller only calls this when `services_signature` differs
+    from the previously published signature.
+    """
+    _publish_json(client, device_services_topic(device_id), rows, qos=1, retain=True)
+
+
+def publish_service_history(client: mqtt.Client, device_id: str, entries: list[dict]) -> None:
+    """Publish one device's full bounded per-service transition history (already truncated by
+    the caller). QoS 1: change-triggered (D-14), published only on a per-service state
+    transition.
+    """
+    _publish_json(client, device_service_history_topic(device_id), entries, qos=1, retain=True)
+
+
 def publish_events(client: mqtt.Client, entries: list[dict]) -> None:
     """Publish the full bounded global events feed (already truncated by the caller)."""
     _publish_json(client, TOPIC_EVENTS, entries, qos=1, retain=True)
 
 
 def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
-    """Clear a removed device's retained status and history topics.
+    """Clear a removed device's retained status, history, services and service_history topics.
 
     A zero-length retained payload is MQTT's own defined "clear this
     retained topic" semantic -- the same mechanism as
@@ -1157,8 +1205,17 @@ def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
     real deployed broker. Uses `wait_for_publish` like that function does,
     since a tombstone matters more than most publishes: the removed
     device must not linger as a stale retained message.
+
+    Phase 12 (T-12-04/PLR-06): extended from two topics to four so a
+    removed host leaves no ghost retained message on `services` or
+    `service_history` either.
     """
-    for topic in (device_status_topic(device_id), device_history_topic(device_id)):
+    for topic in (
+        device_status_topic(device_id),
+        device_history_topic(device_id),
+        device_services_topic(device_id),
+        device_service_history_topic(device_id),
+    ):
         try:
             info = client.publish(topic, payload=None, retain=True, qos=1)
             info.wait_for_publish(timeout=5)

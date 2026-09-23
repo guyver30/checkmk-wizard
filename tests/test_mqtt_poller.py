@@ -1019,6 +1019,30 @@ def test_publish_device_status_uses_qos0_and_exact_payload_keys():
     assert kwargs["retain"] is True
 
 
+def test_publish_device_status_with_gauge_fields_adds_them_to_existing_payload():
+    mock_client = MagicMock()
+    snapshot = poller.DeviceSnapshot(
+        id="web1",
+        state="OK",
+        in_downtime=False,
+        acknowledged=False,
+        device_type="server",
+        folder="vlan10",
+        parents=[],
+        alias="Web Server 1",
+    )
+    gauge_fields = {"cpu_percent": 12.5, "cpu_warn": 80.0, "cpu_crit": 90.0}
+
+    poller.publish_device_status(
+        mock_client, snapshot, "2026-09-06T00:00:00+00:00", gauge_fields=gauge_fields
+    )
+
+    args, _ = mock_client.publish.call_args
+    payload = json.loads(args[1])
+    assert payload["cpu_percent"] == 12.5
+    assert payload["id"] == "web1"  # pre-existing keys still present
+
+
 def test_publish_topology_uses_qos1_and_devices_envelope():
     mock_client = MagicMock()
     nodes = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
@@ -1056,14 +1080,43 @@ def test_publish_events_publishes_full_array():
     assert kwargs["retain"] is True
 
 
-def test_publish_tombstone_clears_both_status_and_history_topics():
+def test_publish_services_uses_qos1_and_bare_array():
+    mock_client = MagicMock()
+    rows = [{"description": "PING", "state": "OK", "plugin_output": "OK - up"}]
+    poller.publish_services(mock_client, "web1", rows)
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == "lan/devices/web1/services"
+    assert json.loads(args[1]) == rows
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_publish_service_history_uses_qos1_and_bare_array():
+    mock_client = MagicMock()
+    entries = [{"timestamp": "t1", "description": "PING", "from": "OK", "to": "CRIT"}]
+    poller.publish_service_history(mock_client, "web1", entries)
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == "lan/devices/web1/service_history"
+    assert json.loads(args[1]) == entries
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_publish_tombstone_clears_all_four_per_device_topics():
     mock_client = MagicMock()
     poller.publish_tombstone(mock_client, "web1")
 
     calls = mock_client.publish.call_args_list
-    assert len(calls) == 2
+    assert len(calls) == 4
     topics = {call.args[0] for call in calls}
-    assert topics == {"lan/devices/web1/status", "lan/devices/web1/history"}
+    assert topics == {
+        "lan/devices/web1/status",
+        "lan/devices/web1/history",
+        "lan/devices/web1/services",
+        "lan/devices/web1/service_history",
+    }
     for call in calls:
         assert call.kwargs["payload"] is None
         assert call.kwargs["retain"] is True
