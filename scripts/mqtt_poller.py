@@ -80,6 +80,19 @@ TOPIC_POLLER_STATUS = "lan/poller/status"
 
 UNKNOWN_DEVICE_TYPE = "unknown"
 
+# Phase 13 (D-07 addendum, plan 13-04): the map's saved position and
+# unmanaged-switch marker are stored as Checkmk host labels (not a custom
+# host attribute -- 13-01 VERDICT V-CUSTOMATTR found no REST endpoint to
+# define new custom-attribute definitions, while labels need zero
+# predefinition). `dashboard-react/src/lib/topologyLayout.ts` is the
+# browser-side twin that must use these exact same strings/regex -- both
+# consumers of the `host_config` collection's `extensions.attributes.labels`
+# (13-01 VERDICT V-LABELS-IN-COLLECTION: YES, no extra per-host GET needed).
+MAP_POSITION_LABEL = "map_position"
+UNMANAGED_SWITCH_LABEL = "unmanaged_switch"
+UNMANAGED_SWITCH_VALUE = "yes"
+_MAP_POSITION_RE = re.compile(r"^-?\d{1,6},-?\d{1,6}$")
+
 # Phase 12 (D-05/D-08): the SMART health-service name match string, kept in
 # this one clearly-commented location so a future live re-check is a
 # one-line fix. Source-verified against Checkmk 2.4.0's own SMART
@@ -343,6 +356,21 @@ class PollerConfig:
 
 
 @dataclass
+class HostConfigInfo:
+    """One host's REST-sourced config: folder plus the two map-editing labels.
+
+    Returned by `fetch_host_config()` below -- a superset of what
+    `fetch_host_folders()` used to return alone, from the same single
+    `host_config` collection GET (no extra REST call per Phase 13's D-07
+    addendum / 13-01 VERDICT V-LABELS-IN-COLLECTION).
+    """
+
+    folder: str = ""
+    map_position: str | None = None
+    unmanaged: bool = False
+
+
+@dataclass
 class DeviceSnapshot:
     """One device's current state, as derived from a single Livestatus `hosts` row."""
 
@@ -372,6 +400,14 @@ class DeviceSnapshot:
     # aggregation keeps `state` an OK/WARN/CRIT/UNKNOWN/DOWN enum); this
     # field is additive, not a replacement.
     host_state_raw: str = "UP"
+    # Phase 13 (D-07 addendum): the map's saved "x,y" position and
+    # unmanaged-switch marker, sourced from `fetch_host_config()`'s
+    # `HostConfigInfo` via `query_devices()`'s `host_config` parameter.
+    # `None`/`False` when the host has no `host_config` entry (or the
+    # cycle's REST lookup degraded) -- same graceful-degradation posture
+    # as `folder` above, never a hard failure.
+    map_position: str | None = None
+    unmanaged: bool = False
 
 
 @dataclass
@@ -467,13 +503,24 @@ def topology_nodes(snapshots: list[DeviceSnapshot]) -> list[dict]:
             "device_type": snapshot.device_type,
             "folder": snapshot.folder,
             "alias": snapshot.alias,
+            "map_position": snapshot.map_position,
+            "unmanaged": snapshot.unmanaged,
         }
         for snapshot in snapshots
     ]
 
 
 def topology_signature(nodes: list[dict]) -> tuple:
-    """Order-independent signature used to decide whether topology actually changed."""
+    """Order-independent signature used to decide whether topology actually changed.
+
+    `map_position`/`unmanaged` are read with `.get()`, not direct indexing,
+    unlike the five original fields: a node dict fed in here may come from
+    `topology_nodes()`/`_normalise_restored_node()` (always populated) or
+    from a hand-built fixture in an older test/caller that predates these
+    two Phase 13 fields -- `.get()` degrades that case to the same
+    None/False default `_normalise_restored_node()` backfills, rather than
+    raising `KeyError` for every caller that hasn't been updated yet.
+    """
     return tuple(
         sorted(
             (
@@ -482,6 +529,8 @@ def topology_signature(nodes: list[dict]) -> tuple:
                 node["device_type"],
                 node["folder"],
                 node["alias"],
+                node.get("map_position"),
+                node.get("unmanaged", False),
             )
             for node in nodes
         )
@@ -741,8 +790,8 @@ def cmk_rest_base_url(config: PollerConfig) -> str:
     return f"http://{config.cmk_rest_host}:{config.cmk_rest_port}/{config.cmk_site_id}/check_mk/api/1.0"
 
 
-def fetch_host_folders(base_url: str, username: str, secret: str, timeout: float) -> dict[str, str]:
-    """Fetch every host's Checkmk-computed folder association via one REST GET.
+def fetch_host_config(base_url: str, username: str, secret: str, timeout: float) -> dict[str, HostConfigInfo]:
+    """Fetch every host's folder, map position, and unmanaged-switch marker via one REST GET.
 
     Every REST network failure funnels through this one choke point and
     is normalized into `RestError` exactly once, mirroring
@@ -757,6 +806,15 @@ def fetch_host_folders(base_url: str, username: str, secret: str, timeout: float
     `folder_config` link href exists anywhere in the entry's `links`
     array on this site/version -- Pattern 3 Candidate B (link-following)
     is not available, so this implements Candidate A exclusively.
+
+    Extended 2026-09-23 (plan 13-04) to also read `extensions.attributes.labels`
+    off the same collection entry -- live-verified present by 13-01's probe
+    (VERDICT V-LABELS-IN-COLLECTION: YES) on the same GET, so `map_position`/
+    `unmanaged` cost no additional REST call. `map_position` is accepted only
+    when it matches `_MAP_POSITION_RE` (mirrors `dashboard-react/src/lib/
+    topologyLayout.ts`'s `parseMapPosition()` validation exactly, T-13-11);
+    an invalid or absent value degrades to `None`, never raises. `unmanaged`
+    is a strict `== UNMANAGED_SWITCH_VALUE` check, never a truthy coercion.
     """
     url = f"{base_url}/domain-types/host_config/collections/all"
     try:
@@ -776,9 +834,9 @@ def fetch_host_folders(base_url: str, username: str, secret: str, timeout: float
         TimeoutError,
         json.JSONDecodeError,
     ) as exc:
-        raise RestError(f"REST folder lookup to {url} failed: {exc}") from exc
+        raise RestError(f"REST host-config lookup to {url} failed: {exc}") from exc
 
-    folders: dict[str, str] = {}
+    result: dict[str, HostConfigInfo] = {}
     for entry in data.get("value", []) if isinstance(data, dict) else []:
         if not isinstance(entry, dict):
             continue
@@ -787,13 +845,46 @@ def fetch_host_folders(base_url: str, username: str, secret: str, timeout: float
             _logger.debug("Skipping host_config entry with no id: %r", entry)
             continue
         extensions = entry.get("extensions", {})
-        folder = extensions.get("folder", "") if isinstance(extensions, dict) else ""
+        if not isinstance(extensions, dict):
+            extensions = {}
+        folder = extensions.get("folder", "")
         # `extensions.folder` (A2, live-confirmed) carries a leading slash
         # and no trailing slash (e.g. '/folder2') -- strip the leading
         # slash so downstream consumers see the same `a/b` segment shape
         # `derive_folder()` used to produce, no shape change for callers.
-        folders[host_id] = folder.lstrip("/") if isinstance(folder, str) else ""
-    return folders
+        folder = folder.lstrip("/") if isinstance(folder, str) else ""
+
+        attributes = extensions.get("attributes", {})
+        labels = attributes.get("labels", {}) if isinstance(attributes, dict) else {}
+        if not isinstance(labels, dict):
+            labels = {}
+
+        raw_map_position = labels.get(MAP_POSITION_LABEL)
+        map_position = (
+            raw_map_position
+            if isinstance(raw_map_position, str) and _MAP_POSITION_RE.match(raw_map_position)
+            else None
+        )
+        unmanaged = labels.get(UNMANAGED_SWITCH_LABEL) == UNMANAGED_SWITCH_VALUE
+
+        result[host_id] = HostConfigInfo(folder=folder, map_position=map_position, unmanaged=unmanaged)
+    return result
+
+
+def fetch_host_folders(base_url: str, username: str, secret: str, timeout: float) -> dict[str, str]:
+    """Thin folder-only wrapper over `fetch_host_config()` (D-04 legacy shape).
+
+    Every existing caller/test of this function predates Phase 13 and only
+    needs the folder mapping -- this keeps that contract byte-for-byte
+    unchanged (same return type, same behavior on success and on
+    `RestError`) while `fetch_host_config()` above becomes the single real
+    REST call both this function and the map-position/unmanaged callers
+    share, per 13-01 VERDICT V-LABELS-IN-COLLECTION (no second REST call).
+    """
+    return {
+        host_id: info.folder
+        for host_id, info in fetch_host_config(base_url, username, secret, timeout).items()
+    }
 
 
 def available_host_columns(host: str, port: int, timeout: float) -> set[str]:
@@ -901,6 +992,7 @@ def query_devices(
     timeout: float,
     *,
     folders: dict[str, str] | None = None,
+    host_config: dict[str, HostConfigInfo] | None = None,
 ) -> list[DeviceSnapshot]:
     """Run one `GET hosts` round trip and parse it into typed DeviceSnapshot records.
 
@@ -912,7 +1004,14 @@ def query_devices(
     `folders` is the REST-sourced host-name -> folder mapping fetched
     once per cycle by `fetch_host_folders()` (D-04); a host missing from
     the mapping (or a `None` mapping, e.g. a cycle whose REST fetch never
-    succeeded) degrades to folder `""` rather than raising.
+    succeeded) degrades to folder `""` rather than raising. Kept working
+    exactly as before Phase 13.
+
+    `host_config` (Phase 13, plan 13-04) is the richer REST-sourced
+    host-name -> `HostConfigInfo` mapping fetched once per cycle by
+    `fetch_host_config()`; a host missing from it (or a `None` mapping)
+    degrades `map_position`/`unmanaged` to their `DeviceSnapshot` defaults
+    (`None`/`False`), same graceful-degradation posture as `folders`.
     """
     body = _livestatus_request(host, port, build_hosts_query(columns), timeout)
     if not body.strip():
@@ -973,6 +1072,10 @@ def query_devices(
 
         folder = folders.get(name, "") if folders else ""
 
+        host_info = host_config.get(name) if host_config else None
+        map_position = host_info.map_position if host_info else None
+        unmanaged = host_info.unmanaged if host_info else False
+
         try:
             alias = row[index["alias"]] if "alias" in index else ""
         except (IndexError, TypeError):
@@ -1001,6 +1104,8 @@ def query_devices(
                 alias=alias,
                 staleness=staleness,
                 host_state_raw=host_state_raw,
+                map_position=map_position,
+                unmanaged=unmanaged,
             )
         )
     return snapshots
@@ -1350,6 +1455,14 @@ def parse_topology_payload(payload: bytes) -> dict[str, dict]:
 #                                     that republishes topology every cycle.
 # Types are checked with `isinstance` to match how `query_devices` already
 # validates these same fields, rather than introducing a second style.
+#
+# 2026-09 (plan 13-04): this is exactly the "next field needs one default
+# here" case the comment above already predicted -- Phase 13 adds
+# `map_position`/`unmanaged` to `topology_nodes()`/`topology_signature()`,
+# so a retained payload written by a pre-13-04 poller has neither key.
+# Backfilled the same way as every prior field: missing or wrong-type both
+# fall back to the same default `topology_nodes()` itself uses for a host
+# with no `host_config` entry (`None`/`False`), never a crash.
 def _normalise_restored_node(node: dict) -> dict:
     """Backfill AND type-check a node restored from a retained payload.
 
@@ -1375,7 +1488,21 @@ def _normalise_restored_node(node: dict) -> dict:
     alias = node.get("alias")
     if not isinstance(alias, str):
         alias = ""
-    return {**node, "parents": parents, "device_type": device_type, "folder": folder, "alias": alias}
+    map_position = node.get("map_position")
+    if not isinstance(map_position, str):
+        map_position = None
+    unmanaged = node.get("unmanaged")
+    if not isinstance(unmanaged, bool):
+        unmanaged = False
+    return {
+        **node,
+        "parents": parents,
+        "device_type": device_type,
+        "folder": folder,
+        "alias": alias,
+        "map_position": map_position,
+        "unmanaged": unmanaged,
+    }
 
 
 def parse_events_payload(payload: bytes) -> list[dict]:
@@ -1662,8 +1789,11 @@ def run_forever(config: PollerConfig) -> int:
     # full spurious topology change and then publish another one when
     # REST recovered -- violating PLR-04's "republish only when topology
     # actually changes". Reusing the last known good map keeps the
-    # signature stable across a REST blip (T-10-12).
-    last_folders: dict[str, str] = {}
+    # signature stable across a REST blip (T-10-12). Phase 13 (plan
+    # 13-04): `last_host_config` carries `map_position`/`unmanaged` too,
+    # same reuse-on-failure reasoning -- both now participate in
+    # `topology_signature`.
+    last_host_config: dict[str, HostConfigInfo] = {}
 
     # OPS-03 posture decision, dated 2026-09-12: the requirement asks for
     # "one consistent failure posture" across the startup Livestatus probe
@@ -1772,19 +1902,22 @@ def run_forever(config: PollerConfig) -> int:
     signal.signal(signal.SIGINT, _handle_signal)
 
     while not stop_event.is_set():
-        # A folder lookup is enrichment, not the poller's core duty
+        # A host-config lookup is enrichment, not the poller's core duty
         # (RESEARCH.md Pitfall 3): unlike the mandatory Livestatus query
-        # below, a RestError here degrades only the folder field for this
-        # cycle -- it never skips the cycle or crashes the loop.
+        # below, a RestError here degrades only the folder/map_position/
+        # unmanaged fields for this cycle -- it never skips the cycle or
+        # crashes the loop. One REST GET now covers folder, map_position,
+        # and unmanaged (13-01 VERDICT V-LABELS-IN-COLLECTION), replacing
+        # the old folder-only `fetch_host_folders()` call.
         try:
-            last_folders = fetch_host_folders(
+            last_host_config = fetch_host_config(
                 rest_base_url,
                 config.cmk_rest_username,
                 config.cmk_rest_secret,
                 DEFAULT_REST_TIMEOUT_SECONDS,
             )
         except RestError as exc:
-            _logger.warning("Reusing last known folder map; REST folder refresh failed: %s", exc)
+            _logger.warning("Reusing last known host-config map; REST refresh failed: %s", exc)
 
         # Phase 12: a services-query failure degrades only this cycle's
         # gauges/services (D-12/D-13/D-14) -- it never skips the cycle or
@@ -1802,6 +1935,7 @@ def run_forever(config: PollerConfig) -> int:
                 _logger.warning("Services query failed this cycle: %s", exc)
                 services = None
 
+        last_folders = {host_id: info.folder for host_id, info in last_host_config.items()}
         try:
             snapshots = query_devices(
                 config.livestatus_host,
@@ -1809,6 +1943,7 @@ def run_forever(config: PollerConfig) -> int:
                 columns,
                 DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
                 folders=last_folders,
+                host_config=last_host_config,
             )
         except LivestatusError as exc:
             _logger.warning("Skipping cycle: %s", exc)
@@ -1921,23 +2056,27 @@ def main() -> int:
             # path published retained `status` AND `topology` with every folder
             # blank -- overwriting correct retained values on the broker with
             # empty ones. Mirrors run_forever's own degrade-on-RestError
-            # posture rather than inventing a new one.
-            once_folders: dict[str, str] = {}
+            # posture rather than inventing a new one. Phase 13 (plan 13-04):
+            # `fetch_host_config()` replaces `fetch_host_folders()` here too,
+            # so this one-shot path also carries map_position/unmanaged.
+            once_host_config: dict[str, HostConfigInfo] = {}
             try:
-                once_folders = fetch_host_folders(
+                once_host_config = fetch_host_config(
                     cmk_rest_base_url(config),
                     config.cmk_rest_username,
                     config.cmk_rest_secret,
                     DEFAULT_REST_TIMEOUT_SECONDS,
                 )
             except RestError as exc:
-                _logger.warning("Folder enrichment unavailable for this one-shot cycle: %s", exc)
+                _logger.warning("Host-config enrichment unavailable for this one-shot cycle: %s", exc)
+            once_folders = {host_id: info.folder for host_id, info in once_host_config.items()}
             snapshots = query_devices(
                 config.livestatus_host,
                 config.livestatus_port,
                 columns,
                 DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
                 folders=once_folders,
+                host_config=once_host_config,
             )
         except LivestatusError as exc:
             _logger.error("One-shot cycle failed: %s", exc)
