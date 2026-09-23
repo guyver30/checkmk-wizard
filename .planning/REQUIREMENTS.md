@@ -19,6 +19,7 @@
 - [x] **PLR-10**: Poller adds gauge-backing values (CPU utilisation %, memory used %, `Filesystem /` used %, worst other-mount used %, SMART pass/fail counts) as additive keys on the existing every-cycle `lan/devices/{id}/status` payload
 - [x] **PLR-11**: Poller publishes the per-host non-gauge service list (name, state, `plugin_output`) on a new retained `lan/devices/{id}/services` topic, republished only when a service's state or the service set itself changes — never on `plugin_output` text drift
 - [x] **PLR-12**: Poller publishes a bounded per-service transition history on `lan/devices/{id}/service_history`, kept separate from the device-level `lan/devices/{id}/history` topic, and tombstones both new topics when a device is removed
+- [ ] **PLR-13**: Poller adds each host's saved map position and unmanaged-switch marker (read from Checkmk host labels through its existing once-per-cycle REST `host_config` lookup) to the `lan/devices/topology` node shape and to the topology change-detection signature, so every dashboard viewer sees the same saved layout without holding a Checkmk credential
 
 ### Broker
 
@@ -53,6 +54,8 @@
 - [x] **DASH-09**: The per-device drill-down renders a worst-of-all-disks SMART badge next to the Disk gauge, hidden entirely (not shown as N/A) when the host has no SMART health service
 - [x] **DASH-10**: The per-device drill-down renders a per-service status table (service name, state badge, `plugin_output`) covering every service except the gauge-backed ones, sorted worst-first, so an operator can see *why* a host is red without leaving the dashboard
 - [x] **DASH-11**: Device rows in the fleet tree navigate to that device's drill-down (`/details?id={id}`), so the drill-down is reachable without hand-typing a URL
+- [ ] **DASH-12**: While an explicit "Edit topology" mode is switched on (off by default), an operator can draw, reconnect and delete parent/child links and drag host positions on the topology map. Each edit is written to Checkmk's REST API (the `parents` host attribute and a `map_position` host label) with a dedicated, narrowly-scoped automation credential, and goes live only when the operator presses a single "Apply changes" action that runs Checkmk's Activate Changes
+- [ ] **DASH-13**: From the same edit mode, an operator can add an unmanaged LAN switch as a real Checkmk host (one host per switch) configured so Checkmk runs no checks against it, so it carries parents and a map position like any other host but never raises WARN/CRIT
 
 ## v2 Requirements
 
@@ -74,7 +77,7 @@ Explicitly excluded. Documented to prevent scope creep.
 | Duplicating Checkmk's per-service *configuration/administration* UI in the new dashboard | Partially reversed 2026-09-21 (Phase 12, DASH-08..DASH-10): a read-only per-service status list and agent metric gauges ARE now in scope, because "why is this host red" could not be answered without them. What stays out is everything beyond read-only status — rule editing, downtime scheduling, acknowledgement, discovery and any other write action remains Checkmk's own UI's job |
 | Time-series graphing/charting | No time-series database; a bounded transition-history strip is sufficient for v1's "dig deeper" need |
 | In-dashboard alerting/notifications | Checkmk already owns alerting; this dashboard is visualization-only |
-| Drag-and-drop topology editing / editable device metadata | No backend to persist edits; topology and metadata are derived read-only from Checkmk |
+| Editable device metadata (alias, device type, folder) in the dashboard | Partially reversed 2026-09-23 (Phase 13, DASH-12/DASH-13): topology editing (parent/child links, map positions, adding unmanaged switches) IS now in scope, persisted in Checkmk's own config via its REST API with no new backend. Editing any other host metadata stays Checkmk's (and the wizard's) job |
 | Multi-user accounts/login | Static, backend-less dashboard on a trusted LAN; broker-level ACL is the only access control layer |
 | Full L2/LLDP/SNMP auto-discovery of topology | Out of scope for this milestone — parent/child links come from Checkmk's existing `parents` configuration |
 | Client-side HTTP polling fallback | MQTT-over-WebSockets is the only transport; no backend exists to poll |
@@ -112,6 +115,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-05 | Phase 11 | Pending |
 | DASH-06 | Phase 11 | Complete |
 | DASH-07 | Phase 13 | Pending |
+| DASH-12 | Phase 13 | Pending |
+| DASH-13 | Phase 13 | Pending |
+| PLR-13 | Phase 13 | Pending |
 | PLR-09 | Phase 12 | Complete |
 | PLR-10 | Phase 12 | Complete |
 | PLR-11 | Phase 12 | Complete |
@@ -122,8 +128,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-11 | Phase 12 | Complete |
 
 **Coverage:**
-- v1 requirements: 28 total
-- Mapped to phases: 28 ✓
+- v1 requirements: 31 total
+- Mapped to phases: 31 ✓
 - Unmapped: 0
 
 ---
@@ -136,3 +142,5 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Terminology note: TAG-01/02/03 and DASH-06 wording was reframed from "VLAN"/"unknown"/"Phase 5" to "location/group label"/"other"/"Phase 4 prompt, Phase 5 apply" during Phase 10's `/bm:discuss-phase` session, per decisions D-01, D-02, D-06 and D-07 (`.planning/phases/10-checkmk-tag-group-onboarding-integration/10-CONTEXT.md`).*
 
 *Phase 12 requirement note (2026-09-21, added during `/bm:plan-phase 12`): Phase 12's ROADMAP entry carried `Requirements: TBD`. PLR-09..PLR-12 and DASH-08..DASH-11 were minted in this planning pass to cover the six prose scope items ROADMAP.md already describes for Phase 12, per `12-RESEARCH.md`'s "Phase Requirements" recommendation. **DASH-03 is deliberately marked Partial, not Complete**: Phase 12 delivers only its bounded per-device status-history-strip half (decision D-16). Its "linking out to Checkmk's own UI for full service-level detail" clause was explicitly declined for this phase (decision D-17) — `CHECKMK_BASE_URL`/`isCheckmkLinkConfigured()` already exist in `dashboard-react/src/lib/config.ts` for whenever that half is built. DASH-03 must not be flipped to Complete by Phase 12's verification. See `.planning/phases/12-agent-metrics-and-service-status/12-CONTEXT.md`.*
+
+*Phase 13 requirement note (2026-09-23, added during `/bm:plan-phase 13`): ROADMAP.md's Phase 13 entry anticipated "requirement IDs covering the wizard's `parents` support". The discuss-phase session replaced that wizard-CLI approach with an in-dashboard topology editor (13-CONTEXT.md Scope Revision, D-01..D-07), so the minted IDs describe that instead: DASH-12 (edit mode, write-back, batched Apply), DASH-13 (unmanaged switches as check-free Checkmk hosts) and PLR-13 (the poller carries saved positions to every viewer). PLR-13 widens PLR-04's "host added/removed/reparented" trigger to also include a saved-position or unmanaged-marker change; the change-only publishing rule itself is unchanged. The "Drag-and-drop topology editing" Out of Scope row was narrowed in the same pass. See `.planning/phases/13-wizard-parents-support-and-topology-map/13-CONTEXT.md`.*
