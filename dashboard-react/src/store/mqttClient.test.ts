@@ -52,6 +52,13 @@ afterEach(() => {
   __resetForTests();
 });
 
+describe("SUBSCRIBE_TOPICS", () => {
+  it("includes the Phase 12 services and service_history wildcard topics", () => {
+    expect(SUBSCRIBE_TOPICS).toContain("lan/devices/+/services");
+    expect(SUBSCRIBE_TOPICS).toContain("lan/devices/+/service_history");
+  });
+});
+
 describe("connect", () => {
   it("creates exactly one underlying client even when called twice (StrictMode guard)", () => {
     const fake = createFakeClient();

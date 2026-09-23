@@ -51,6 +51,29 @@ describe("handleMessage - device status", () => {
     expect(useAppStore.getState().history).not.toHaveProperty("h1");
   });
 
+  it("deletes services and serviceHistory too on a zero-length status payload (tombstone)", () => {
+    useAppStore.getState().handleMessage("lan/devices/h1/status", encode({ state: "OK" }));
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/services",
+        encode([{ description: "PING", state: "OK", plugin_output: "ok" }]),
+      );
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/service_history",
+        encode([{ timestamp: "2026-09-21T10:00:00Z", description: "PING", from: "OK", to: "CRIT" }]),
+      );
+
+    useAppStore.getState().handleMessage("lan/devices/h1/status", EMPTY_PAYLOAD);
+
+    expect(useAppStore.getState().devices).not.toHaveProperty("h1");
+    expect(useAppStore.getState().history).not.toHaveProperty("h1");
+    expect(useAppStore.getState().services).not.toHaveProperty("h1");
+    expect(useAppStore.getState().serviceHistory).not.toHaveProperty("h1");
+  });
+
   it("keeps the previous value and does not throw on invalid JSON", () => {
     useAppStore.getState().handleMessage("lan/devices/h1/status", encode({ state: "OK" }));
 
@@ -66,6 +89,128 @@ describe("handleMessage - device status", () => {
     useAppStore.getState().handleMessage("lan/devices/h1/status", encode([1, 2, 3]));
 
     expect(useAppStore.getState().devices.h1).toEqual({ state: "OK" });
+  });
+});
+
+describe("handleMessage - services", () => {
+  it("puts a well-formed services array at services.h1", () => {
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/services",
+        encode([{ description: "PING", state: "OK", plugin_output: "ok" }]),
+      );
+
+    expect(useAppStore.getState().services.h1).toEqual([
+      { description: "PING", state: "OK", plugin_output: "ok" },
+    ]);
+  });
+
+  it("keeps the previous value and does not throw on invalid JSON", () => {
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/services",
+        encode([{ description: "PING", state: "OK", plugin_output: "ok" }]),
+      );
+
+    expect(() => {
+      useAppStore
+        .getState()
+        .handleMessage("lan/devices/h1/services", new TextEncoder().encode("{not json"));
+    }).not.toThrow();
+
+    expect(useAppStore.getState().services.h1).toEqual([
+      { description: "PING", state: "OK", plugin_output: "ok" },
+    ]);
+  });
+
+  it("drops a wrong-shaped (object) payload, keeping last-known-good", () => {
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/services",
+        encode([{ description: "PING", state: "OK", plugin_output: "ok" }]),
+      );
+    useAppStore.getState().handleMessage("lan/devices/h1/services", encode({ not: "an array" }));
+
+    expect(useAppStore.getState().services.h1).toEqual([
+      { description: "PING", state: "OK", plugin_output: "ok" },
+    ]);
+  });
+
+  it("sets services.h1 to [] on a zero-length payload", () => {
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/services",
+        encode([{ description: "PING", state: "OK", plugin_output: "ok" }]),
+      );
+    useAppStore.getState().handleMessage("lan/devices/h1/services", EMPTY_PAYLOAD);
+
+    expect(useAppStore.getState().services.h1).toEqual([]);
+  });
+});
+
+describe("handleMessage - service_history", () => {
+  it("puts a well-formed service_history array at serviceHistory.h1", () => {
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/service_history",
+        encode([{ timestamp: "2026-09-21T10:00:00Z", description: "PING", from: "OK", to: "CRIT" }]),
+      );
+
+    expect(useAppStore.getState().serviceHistory.h1).toEqual([
+      { timestamp: "2026-09-21T10:00:00Z", description: "PING", from: "OK", to: "CRIT" },
+    ]);
+  });
+
+  it("keeps the previous value and does not throw on invalid JSON", () => {
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/service_history",
+        encode([{ timestamp: "2026-09-21T10:00:00Z", description: "PING", from: "OK", to: "CRIT" }]),
+      );
+
+    expect(() => {
+      useAppStore
+        .getState()
+        .handleMessage("lan/devices/h1/service_history", new TextEncoder().encode("{not json"));
+    }).not.toThrow();
+
+    expect(useAppStore.getState().serviceHistory.h1).toEqual([
+      { timestamp: "2026-09-21T10:00:00Z", description: "PING", from: "OK", to: "CRIT" },
+    ]);
+  });
+
+  it("drops a wrong-shaped (object) payload, keeping last-known-good", () => {
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/service_history",
+        encode([{ timestamp: "2026-09-21T10:00:00Z", description: "PING", from: "OK", to: "CRIT" }]),
+      );
+    useAppStore
+      .getState()
+      .handleMessage("lan/devices/h1/service_history", encode({ not: "an array" }));
+
+    expect(useAppStore.getState().serviceHistory.h1).toEqual([
+      { timestamp: "2026-09-21T10:00:00Z", description: "PING", from: "OK", to: "CRIT" },
+    ]);
+  });
+
+  it("sets serviceHistory.h1 to [] on a zero-length payload", () => {
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/devices/h1/service_history",
+        encode([{ timestamp: "2026-09-21T10:00:00Z", description: "PING", from: "OK", to: "CRIT" }]),
+      );
+    useAppStore.getState().handleMessage("lan/devices/h1/service_history", EMPTY_PAYLOAD);
+
+    expect(useAppStore.getState().serviceHistory.h1).toEqual([]);
   });
 });
 
