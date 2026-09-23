@@ -234,7 +234,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 13-03-PLAN.md — Read-only live topology map replacing MapPlaceholder (DASH-07): in-place DataSet merge, stabilize-then-freeze, click-through to details
+- [x] 13-03-PLAN.md — Read-only live topology map replacing MapPlaceholder (DASH-07): in-place DataSet merge, stabilize-then-freeze, click-through to details
 - [ ] 13-04-PLAN.md — Poller carries map_position/unmanaged in the topology payload (PLR-13) + scoped topology_editor credential provisioning script
 - [ ] 13-05-PLAN.md — Browser Checkmk REST writer (GET-ETag-merge-PUT, serialized, batched activation), scoped-credential config, same-origin /checkmk-api proxy
 
@@ -262,7 +262,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
 | 12. Agent Metrics and Service Status | 5/5 | Complete    | 2026-09-23 |
-| 13. Wizard Parents Support and Topology Map | 2/8 | In Progress|  |
+| 13. Wizard Parents Support and Topology Map | 3/8 | In Progress|  |
 
 ### Phase 11.1: Dashboard Layout and Light Palette
 
