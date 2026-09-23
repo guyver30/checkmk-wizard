@@ -212,8 +212,9 @@ Plans:
 
 **Goal**: Checkmk's `parents` host attribute is populated by the wizard, so the dashboard can render a real, auto-derived topology map instead of a hand-maintained diagram
 **Depends on**: Phase 11 (the dashboard shell the map drops into — independent of Phase 12)
-**Requirements**: DASH-07
-**Requirements note**: DASH-07 is the vis-network topology-map half split out of DASH-01 on 2026-09-12. Additional requirement IDs covering the wizard's `parents` support still need defining in REQUIREMENTS.md before this phase is planned.
+**Requirements**: DASH-07, DASH-12, DASH-13, PLR-13
+**Requirements note**: DASH-07 is the vis-network topology-map half split out of DASH-01 on 2026-09-12. DASH-12, DASH-13 and PLR-13 were minted during `/bm:plan-phase 13` (2026-09-23) for the in-dashboard topology editor that replaced the wizard-CLI `parents` approach — see REQUIREMENTS.md's Phase 13 requirement note.
+**Scope revision (2026-09-23)**: scope bullets 1 and 3 below are superseded by `.planning/phases/13-wizard-parents-support-and-topology-map/13-CONTEXT.md` (Scope Revision): `parents` is drawn in a dashboard edit mode and written to Checkmk's REST API from the browser, not prompted by the wizard; vis-network is an npm dependency of `dashboard-react/`, not a vendored UMD. The open layout-persistence question below is resolved by D-07 (positions stored as Checkmk host labels, carried to every viewer by the poller — PLR-13).
 **Scope** (from `.planning/phases/11-live-dashboard/11-CONTEXT.md` deferred section):
 
   1. Teach the wizard to set Checkmk's `parents` host attribute over the REST API, the same way Phase 10 sets `tag_device_type`. This makes topology real monitoring data, benefits Checkmk's own views, and removes the need for any dashboard-side layout persistence
@@ -224,7 +225,30 @@ Plans:
 
 **Open question for this phase's discussion**: if a hand-drawn map is still wanted after `parents` support lands, layout persistence with no backend is unsolved. Candidates considered and recorded: `localStorage` (per-browser, lost on other devices), an exported `layout.json` committed to the repo (read-only, clunky), or a retained `lan/dashboard/layout` topic (shared and backend-free, but requires a writable mosquitto user and gives up the read-only posture Phase 11's D-01 safety argument rests on).
 
-**Plans**: TBD
+**Plans**: 8 plans
+Plans:
+**Wave 1**
+
+- [ ] 13-01-PLAN.md — Live REST capability probe (roles, permissions, no-IP switch shape, labels/parents round-trip, CORS) run on the deployment host; verdicts recorded as the source of truth for later plans
+- [ ] 13-02-PLAN.md — Dashboard data layer: vis-network/vis-data npm deps, vendored device-type SVGs, state-recoloured icon builder, buildMapModel + grid placement
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 13-03-PLAN.md — Read-only live topology map replacing MapPlaceholder (DASH-07): in-place DataSet merge, stabilize-then-freeze, click-through to details
+- [ ] 13-04-PLAN.md — Poller carries map_position/unmanaged in the topology payload (PLR-13) + scoped topology_editor credential provisioning script
+- [ ] 13-05-PLAN.md — Browser Checkmk REST writer (GET-ETag-merge-PUT, serialized, batched activation), scoped-credential config, same-origin /checkmk-api proxy
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 13-06-PLAN.md — Map edit wiring: manipulation toolbar add/edit/delete edge, drag-to-save position, add unmanaged switch, pending overlay, toolbar restyle
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 13-07-PLAN.md — Edit topology toggle, pending-changes banner, single Apply changes activation, Snackbar feedback, 5-minute idle auto-exit
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 13-08-PLAN.md — Docs (dashboard README, deployment doc, PROJECT.md) + live end-to-end verification on the deployment host
 
 ## Progress
 
@@ -238,7 +262,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
 | 12. Agent Metrics and Service Status | 5/5 | Complete    | 2026-09-23 |
-| 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |
+| 13. Wizard Parents Support and Topology Map | 0/8 | Planned | - |
 
 ### Phase 11.1: Dashboard Layout and Light Palette
 
