@@ -56,14 +56,70 @@ The `Authorization` header and the raw secret are never printed. If shown
 at all, the header is rendered as `Bearer <username> ***`, following
 `scripts/probe_host_attribute_merge.py`'s redaction precedent.
 
-This file has not yet been run against a live site as of this commit -- no
-findings block exists here yet. Once this script is run against the real
-deployment host and its stdout pasted back (see
-`.planning/phases/13-wizard-parents-support-and-topology-map/
-13-01-PLAN.md` Task 2), a dated "Live-verified" findings block recording
-one line per VERDICT id is appended below this paragraph (Task 3), and
-becomes the single source of truth plans 13-04/13-05/13-06 read their
-inputs from.
+Live-verified against a real Checkmk 2.4.0p35/p36 CE site on 2026-09-23 (the
+running site's exact patch version was not printed by this probe;
+"2.4.0p35/p36" repeats this docstring's own targeting statement above
+rather than a version banner read from output):
+
+VERDICT V-ROLE: REST. P1 printed `user_role create: AVAILABLE` and
+`user_role edit: AVAILABLE (matched paths: ['/objects/user_role/{role_id}'])`
+-- both role-management endpoints exist, so plan 13-04's `topology_editor`
+role can be created and edited over REST, with no manual GUI step required.
+
+VERDICT V-PERMS: `wato.use`, `wato.edit`, `wato.all_folders`,
+`wato.edit_hosts`, `wato.manage_hosts`, `wato.activate` -- all six are
+present in P6's admin `wato.*` permission list, covering using Setup,
+making changes, writing to every folder, modifying existing hosts, adding
+hosts, and activating one's own changes respectively. `wato.activateforeign`
+is present on the admin role too but is deliberately EXCLUDED from what
+`topology_editor` should be granted -- a scoped write role must only
+activate its own changes, never someone else's.
+
+VERDICT V-SWITCH: {'tag_address_family': 'no-ip', 'tag_agent': 'no-agent',
+'tag_snmp_ds': 'no-snmp', 'tag_device_type': 'NetworkDevice'} -- P3's first
+attempt was accepted on the first try (status 200), so no fallback variant
+without `tag_device_type` or `tag_address_family` was needed.
+
+VERDICT V-PARENTS: parents round-trip OK (['gsd-probe-topo-parent']) -- a
+GET-merge-PUT of `parents` on `host_config` round-trips exactly as sent.
+
+VERDICT V-LABELS: label values with comma and minus accepted: YES (P3
+map_position='120,-40' accepted=True; P4 map_position='0,0' accepted=True)
+-- both label values, one with a comma and a minus sign and one with only
+a comma, were accepted and echoed back unchanged.
+
+VERDICT V-LABELS-IN-COLLECTION: YES -- P4's collection GET showed
+`extensions.attributes.labels` present on both probe hosts' collection
+entries (`gsd-probe-topo-child` value `{'map_position': '0,0'}`,
+`gsd-probe-topo-parent` value `{'map_position': '120,-40',
+'unmanaged_switch': 'yes'}`).
+
+VERDICT V-CORS: NOT ALLOWED -- P5's OPTIONS preflight returned status 405
+with no `Access-Control-*` response headers at all.
+
+VERDICT V-CUSTOMATTR: P1 printed `custom host attribute definition: ABSENT
+(matched paths: [])`. map_position is stored as a host label regardless
+(plan decision: labels need no per-site provisioning; D-07's intent of
+Checkmk-owned storage on the checkmk_data volume is met identically).
+
+VERDICT V-TAGPUT: P1 printed `host_tag_group update: AVAILABLE (matched
+paths: ['/objects/host_tag_group/{name}'])`. unmanaged switches reuse
+device_type NetworkDevice (RESEARCH Pitfall 2).
+
+Consequences for plans 13-04/13-05/13-06: plan 13-04 must create and edit
+the `topology_editor` role over REST (`POST
+/domain-types/user_role/collections/all`, `PUT
+/objects/user_role/{role_id}`), granted exactly the six `wato.*` ids listed
+under V-PERMS and never `wato.activateforeign` (V-ROLE). Plan 13-04's
+poller can read `map_position` and other labels directly from the
+`host_config` collection response it already polls, with no extra
+per-host GET (V-LABELS-IN-COLLECTION). Plan 13-05 must set
+`UNMANAGED_SWITCH_ATTRIBUTES` to exactly `{'tag_address_family': 'no-ip',
+'tag_agent': 'no-agent', 'tag_snmp_ds': 'no-snmp', 'tag_device_type':
+'NetworkDevice'}`, the dict accepted on the first attempt with no fallback
+needed (V-SWITCH). The browser cannot reach Checkmk cross-origin -- CORS is
+not enabled -- so plan 13-05's dashboard write path requires a same-origin
+proxy in front of Checkmk rather than a direct browser fetch (V-CORS).
 """
 
 from __future__ import annotations
