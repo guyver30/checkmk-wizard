@@ -98,15 +98,24 @@ ROLE_ALIAS = "Topology editor (dashboard)"
 BASE_ROLE_ID = "user"
 USER_ID = "topology_editor"
 
-# 13-01 VERDICT V-PERMS (live-verified 2026-09-23): exactly these six ids
-# are needed to use Setup, make changes, write to every folder, add/edit
-# hosts, and activate the role's own changes. `wato.activateforeign` is
-# present on the admin role too but is deliberately EXCLUDED -- a scoped
-# write role must only activate its own changes, never someone else's.
+# 13-01's VERDICT V-PERMS (2026-09-23) listed six ids derived from which
+# wato.* permissions the ADMIN role happened to have enabled -- it never
+# live-tested the scoped role itself. Live UAT (2026-09-23) found that six
+# was incomplete: a freshly-cloned role with no folder contact-group
+# membership got a blanket 404 on GET /objects/host_config/{name} for
+# every host, because `wato.all_folders` only grants WRITE access to every
+# folder -- it does not make the role able to SEE (discover) a host it
+# isn't a contact for in the first place. `wato.see_all_folders` is the
+# separate "see" counterpart to `wato.all_folders`'s "write", and without
+# it a scoped role can edit nothing because it can't find anything.
+# `wato.activateforeign` is present on the admin role too but is
+# deliberately EXCLUDED -- a scoped write role must only activate its own
+# changes, never someone else's.
 REQUIRED_PERMISSIONS: tuple[str, ...] = (
     "wato.use",
     "wato.edit",
     "wato.all_folders",
+    "wato.see_all_folders",
     "wato.edit_hosts",
     "wato.manage_hosts",
     "wato.activate",

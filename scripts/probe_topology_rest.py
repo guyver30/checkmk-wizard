@@ -75,6 +75,19 @@ is present on the admin role too but is deliberately EXCLUDED from what
 `topology_editor` should be granted -- a scoped write role must only
 activate its own changes, never someone else's.
 
+CORRECTION (live UAT, 2026-09-23): this six-id verdict was derived only
+from which permissions the ADMIN role happens to have enabled -- it was
+never live-tested against the actual scoped role. Doing so found it
+incomplete: a freshly-provisioned `topology_editor` role with no folder
+contact-group membership got a blanket 404 on every `GET
+/objects/host_config/{name}`, because `wato.all_folders` only grants
+WRITE access across every folder -- it is not the "see" permission.
+`wato.see_all_folders` is the separate id that lets a scoped role
+discover a host it isn't a contact for at all; without it there is
+nothing to write to. The correct list is seven ids: the original six
+plus `wato.see_all_folders`. `scripts/provision_topology_editor.py`'s
+`REQUIRED_PERMISSIONS` has been corrected to match.
+
 VERDICT V-SWITCH: {'tag_address_family': 'no-ip', 'tag_agent': 'no-agent',
 'tag_snmp_ds': 'no-snmp', 'tag_device_type': 'NetworkDevice'} -- P3's first
 attempt was accepted on the first try (status 200), so no fallback variant
