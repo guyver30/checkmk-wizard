@@ -489,7 +489,13 @@ export function TopologyMap({
     );
   }
 
-  const showBanner = model.edges.length === 0 && !editMode && !bannerDismissed;
+  // Includes a just-drawn, not-yet-applied-or-not-yet-polled-back pending edge -- model.edges
+  // alone reflects only the last MQTT-sourced topology, which lags a real edit by up to one
+  // Apply + one poll cycle. Without this, exiting edit mode right after drawing an edge
+  // incorrectly flashed "No connections drawn yet" until the poller caught up (live UAT,
+  // 2026-09-23), even though the edge was genuinely drawn and visibly on screen the whole time.
+  const hasAnyEdges = model.edges.length > 0 || pendingEdgeAdds.current.size > 0;
+  const showBanner = !hasAnyEdges && !editMode && !bannerDismissed;
 
   return (
     <div data-testid="topology-map" className={ROOT_CLASS_NAME}>
