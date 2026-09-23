@@ -104,3 +104,13 @@ None — no external service configuration required. `deploy/mosquitto.acl`'s ex
 ---
 *Phase: 12-agent-metrics-and-service-status*
 *Completed: 2026-09-23*
+
+## Self-Check: PASSED
+- FOUND: `.planning/phases/12-agent-metrics-and-service-status/12-02-SUMMARY.md`
+- FOUND: `scripts/mqtt_poller.py`
+- FOUND: `tests/test_mqtt_poller.py`
+- FOUND: `docs/Podman setup for checkmk, minio, mosquitto, worker.md`
+- FOUND: `e587c14` (Task 1 commit)
+- FOUND: `541cbf5` (Task 2 commit)
+- FOUND: `a0b7d7d` (Task 3 commit)
+- FOUND: `00f0347` (Task 4 commit)
