@@ -41,6 +41,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import sys
@@ -444,6 +445,80 @@ def extract_device_type(tags: dict) -> str:
     if "device_type" in tags:
         return tags["device_type"]
     return UNKNOWN_DEVICE_TYPE
+
+
+# Leading numeric prefix of a Nagios perfdata value token: an optional
+# sign, digits, at most one decimal point, and an optional exponent.
+# Scanning for this prefix (rather than enumerating Nagios's own unit
+# strings -- %, s/ms/us, B/KB/MB/GB/TB, c) means an unrecognized unit is
+# still handled by `_strip_uom` below instead of failing to parse.
+_PERF_DATA_NUMERIC_PREFIX_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+# Tokenizes a perfdata string on whitespace, EXCEPT inside a single-quoted
+# label (which may itself contain spaces per the format spec) -- a bare
+# `raw.split()` would incorrectly break `'total used'=5;;;;` into two
+# tokens. Tried in order per match: a quoted-label token first, falling
+# back to a plain non-space token.
+_PERF_DATA_TOKEN_RE = re.compile(r"'[^']*'=\S*|\S+")
+
+
+def _strip_uom(token: str) -> str:
+    """Strip a trailing unit-of-measure from a perfdata value token.
+
+    Nagios permits `%`, `s`/`ms`/`us`, `B`/`KB`/`MB`/`GB`/`TB` and `c` as
+    units (nagios-plugins.org/doc/guidelines.html, Performance Data Format
+    Specification). Returns only the leading numeric portion; a token with
+    no numeric prefix at all returns the original token unchanged.
+    """
+    match = _PERF_DATA_NUMERIC_PREFIX_RE.match(token)
+    return match.group(0) if match else token
+
+
+def parse_perf_data(raw: str) -> dict[str, dict]:
+    """Parse a Nagios-format performance-data string into per-metric value/warn/crit/min/max.
+
+    Format (nagios-plugins.org/doc/guidelines.html, Performance Data Format
+    Specification): space-separated `'label'=value[UOM];[warn];[crit];[min];[max]`
+    tokens, the label single-quoted only when it contains a space. Returns
+    `{label: {"value": float, "warn": float | None, "crit": float | None,
+    "min": float | None, "max": float | None}}`.
+
+    No exception ever escapes this function (matches this module's
+    existing skip-not-fatal posture, T-09-03): a token with no `=` is
+    skipped; a value that does not parse as a float skips that one token
+    only; an empty or non-numeric warn/crit/min/max field becomes `None`;
+    a non-string or empty `raw` returns `{}`.
+    """
+    if not isinstance(raw, str) or not raw:
+        return {}
+
+    def _num(parts: list[str], index: int) -> float | None:
+        if index >= len(parts) or not parts[index]:
+            return None
+        try:
+            return float(parts[index])
+        except ValueError:
+            return None
+
+    result: dict[str, dict] = {}
+    for token in _PERF_DATA_TOKEN_RE.findall(raw):
+        if "=" not in token:
+            continue
+        label, _, rest = token.partition("=")
+        label = label.strip("'")
+        parts = rest.split(";")
+        try:
+            value = float(_strip_uom(parts[0]))
+        except (ValueError, IndexError):
+            continue
+        result[label] = {
+            "value": value,
+            "warn": _num(parts, 1),
+            "crit": _num(parts, 2),
+            "min": _num(parts, 3),
+            "max": _num(parts, 4),
+        }
+    return result
 
 
 def _livestatus_request(host: str, port: int, query: str, timeout: float) -> str:

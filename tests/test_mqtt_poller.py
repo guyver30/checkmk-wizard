@@ -149,6 +149,47 @@ def test_extract_device_type_defaults_to_unknown_when_key_absent():
     assert poller.extract_device_type({}) == "unknown"
 
 
+# --- parse_perf_data ----------------------------------------------------------
+
+
+def test_parse_perf_data_filesystem_shaped_string():
+    raw = "/=45.2;80.00;90.00;0;488281.25 fs_size=488281.25;;;;"
+    result = poller.parse_perf_data(raw)
+    assert result["/"] == {"value": 45.2, "warn": 80.0, "crit": 90.0, "min": 0.0, "max": 488281.25}
+    assert result["fs_size"] == {"value": 488281.25, "warn": None, "crit": None, "min": None, "max": None}
+
+
+def test_parse_perf_data_cpu_shaped_string():
+    result = poller.parse_perf_data("util=42.5;80;90;0;100")
+    assert result == {"util": {"value": 42.5, "warn": 80.0, "crit": 90.0, "min": 0.0, "max": 100.0}}
+
+
+def test_parse_perf_data_percent_suffixed_value():
+    result = poller.parse_perf_data("mem_used_percent=23.0%;80;90;;")
+    assert result["mem_used_percent"]["value"] == 23.0
+    assert result["mem_used_percent"]["min"] is None
+    assert result["mem_used_percent"]["max"] is None
+
+
+def test_parse_perf_data_quoted_label_with_space():
+    result = poller.parse_perf_data("'total used'=5;;;;")
+    assert result["total used"]["value"] == 5.0
+
+
+def test_parse_perf_data_garbage_token_skipped_sibling_still_parses():
+    result = poller.parse_perf_data("notametric util=1;;;;")
+    assert "util" in result
+    assert "notametric" not in result
+
+
+def test_parse_perf_data_empty_string_returns_empty_dict():
+    assert poller.parse_perf_data("") == {}
+
+
+def test_parse_perf_data_non_string_returns_empty_dict():
+    assert poller.parse_perf_data(None) == {}
+
+
 # --- PollerConfig.from_env ---------------------------------------------------
 
 
