@@ -54,7 +54,7 @@
 - [x] **DASH-09**: The per-device drill-down renders a worst-of-all-disks SMART badge next to the Disk gauge, hidden entirely (not shown as N/A) when the host has no SMART health service
 - [x] **DASH-10**: The per-device drill-down renders a per-service status table (service name, state badge, `plugin_output`) covering every service except the gauge-backed ones, sorted worst-first, so an operator can see *why* a host is red without leaving the dashboard
 - [x] **DASH-11**: Device rows in the fleet tree navigate to that device's drill-down (`/details?id={id}`), so the drill-down is reachable without hand-typing a URL
-- [ ] **DASH-12**: While an explicit "Edit topology" mode is switched on (off by default), an operator can draw, reconnect and delete parent/child links and drag host positions on the topology map. Each edit is written to Checkmk's REST API (the `parents` host attribute and a `map_position` host label) with a dedicated, narrowly-scoped automation credential, and goes live only when the operator presses a single "Apply changes" action that runs Checkmk's Activate Changes
+- [x] **DASH-12**: While an explicit "Edit topology" mode is switched on (off by default), an operator can draw, reconnect and delete parent/child links and drag host positions on the topology map. Each edit is written to Checkmk's REST API (the `parents` host attribute and a `map_position` host label) with a dedicated, narrowly-scoped automation credential, and goes live only when the operator presses a single "Apply changes" action that runs Checkmk's Activate Changes
 - [ ] **DASH-13**: From the same edit mode, an operator can add an unmanaged LAN switch as a real Checkmk host (one host per switch) configured so Checkmk runs no checks against it, so it carries parents and a map position like any other host but never raises WARN/CRIT
 
 ## v2 Requirements
@@ -115,7 +115,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-05 | Phase 11 | Pending |
 | DASH-06 | Phase 11 | Complete |
 | DASH-07 | Phase 13 | Complete |
-| DASH-12 | Phase 13 | Pending |
+| DASH-12 | Phase 13 | Complete |
 | DASH-13 | Phase 13 | Pending |
 | PLR-13 | Phase 13 | Complete |
 | PLR-09 | Phase 12 | Complete |
