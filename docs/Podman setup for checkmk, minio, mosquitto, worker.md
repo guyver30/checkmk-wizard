@@ -183,6 +183,34 @@ does have a build step (it needs `design-system/dist/` built first — see its R
 eventual cutover additionally requires adding the nginx SPA fallback
 (`try_files $uri $uri/ /index.html;`) that the stock `nginx:alpine` image's default config lacks.
 
+**Note on the topology editor credential (Phase 13):** the dashboard's map edit mode (§7's
+"Topology map check") writes directly to Checkmk's REST API from the browser, using a
+dedicated, narrowly-scoped `topology_editor` credential — never the wizard's own full-power
+`automation` user. Provision it once per deployment, from inside the `worker` container:
+
+```bash
+podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/provision_topology_editor.py"
+```
+
+`CMK_REST_SECRET` must already be set in the `worker` container's environment (the wizard's own
+admin automation secret — the same one `poller` uses, see above), since this script uses it
+server-side to create the new scoped role and user. If the site's role-management REST
+endpoints are unavailable on your Checkmk version (13-01's live probe found them present on
+2.4.0p35/p36; a future version may differ), the script prints a manual WATO procedure instead
+of failing silently — do that by hand in the Checkmk UI (Setup > Users > Roles & Permissions),
+then re-run the script so it can still create the automation user against the role you just
+created.
+
+The script prints the new user's automation secret exactly once. Paste it into
+`TOPOLOGY_EDITOR_SECRET` in `dashboard-react/src/lib/config.ts` (a local edit — do not commit
+it). Until that placeholder is replaced, edit mode's writes stay disabled.
+
+Blast radius: the `topology_editor` credential can edit host attributes (`parents`,
+`map_position`), add new hosts, and activate its own pending changes. It cannot manage users,
+edit global settings or rulesets, and — critically — cannot activate another operator's
+pending changes (`wato.activateforeign` is deliberately not granted), so a topology edit can
+never accidentally push someone else's unreviewed configuration change live.
+
 **Note on `CMK_REST_SECRET` (poller):** the `poller` service now makes an authenticated Checkmk REST call every poll cycle to read each host's folder, alongside its unauthenticated Livestatus query. `deploy/compose.yaml` ships `CMK_REST_USERNAME=automation` and interpolates `CMK_REST_SECRET` from `deploy/.env`, which is gitignored so the real secret never lands in a tracked file. The real secret comes from the Checkmk UI (Setup -> Users -> the `automation` user -> Automation secret), or by reading `/omd/sites/dmc/var/check_mk/web/automation/automation.secret` inside the `checkmk` container — and it only exists once checkmk-wizard's Phase 1 bootstrap has created that user (see §8.3), so this step happens after a first wizard run. Copy `deploy/.env.example` to `deploy/.env`, put the real value in it, and run `podman compose up -d poller` to pick it up. `CMK_REST_SECRET` defaults to empty rather than refusing to start compose: a forgotten or missing secret leaves folder enrichment degraded (empty `folder` on every device) rather than blocking the stack, because a hard `:?` guard would also block `checkmk` and `mosquitto` from starting on a first-time deployment — before the automation secret this variable demands can even exist. A *wrong* secret degrades the same way (empty `folder` on every device) — see §7. This copy is manual because the `poller` container deliberately has no filesystem access to `checkmk` — the same container boundary the whole stack is built around. Like `CMK_PASSWORD` above, rotate it before exposing this stack beyond a trusted LAN.
 
 ---
@@ -440,6 +468,25 @@ LAN browser. Confirm:
 If the indicator never leaves "Connecting…", check that `config.js`'s `WS_PORT`/credentials match
 this doc's §6 defaults (or your rotated ones) and that port 9002 is reachable from the browser's
 own network, not just from the deployment host.
+
+### Topology map check (Phase 13)
+
+With `TOPOLOGY_EDITOR_SECRET` provisioned (§3) and the stack up, condensed from the full live
+UAT checklist:
+
+1. Confirm the poller's `lan/devices/topology` payload carries `map_position`/`unmanaged` keys
+   on each device node (`mosquitto_sub -u wsreader -P wsreader -t lan/devices/topology -C 1 -W 5`).
+2. Open the dashboard — the topology map (vis-network) replaces the old placeholder, coloured by
+   live state, with parent→child arrows and click-to-detail navigation.
+3. Turn on "Edit topology", draw an edge, drag a node, and press "Apply changes" — confirm it
+   goes live in a second browser within about two poll cycles, and in Checkmk's own UI
+   (Setup > Hosts > the child host > Parents).
+4. Add an unmanaged switch (Add Node); confirm it appears in Checkmk as UP with zero services
+   (no PING) and never turns WARN/CRIT.
+5. With another operator's change pending in Checkmk, confirm Apply shows "Saved, but not live
+   yet" instead of force-activating it.
+
+See `dashboard-react/README.md`'s "Topology map and editing" section for the full behaviour.
 
 ---
 
