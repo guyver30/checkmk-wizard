@@ -343,6 +343,48 @@ def test_available_host_columns_sends_expected_lql_query():
     assert result == {"name", "state"}
 
 
+# --- available_service_columns / select_service_columns / build_services_query ---
+
+
+def test_build_services_query_produces_exact_lql_text():
+    assert poller.build_services_query(["host_name", "description", "state"]) == (
+        "GET services\nColumns: host_name description state\nOutputFormat: json\n\n"
+    )
+
+
+def test_available_service_columns_sends_expected_lql_query():
+    sock = _fake_connection(b'[["host_name"], ["description"], ["state"]]')
+    with patch("socket.create_connection", return_value=sock):
+        result = poller.available_service_columns("checkmk", poller.DEFAULT_LIVESTATUS_PORT, 10)
+    sent = sock.sendall.call_args[0][0].decode()
+    assert sent == "GET columns\nColumns: name\nFilter: table = services\nOutputFormat: json\n\n"
+    assert result == {"host_name", "description", "state"}
+
+
+def test_select_service_columns_orders_required_then_available_optional():
+    result = poller.select_service_columns({"host_name", "description", "state", "plugin_output", "perf_data"})
+    assert result == ["host_name", "description", "state", "plugin_output", "perf_data"]
+
+
+def test_select_service_columns_no_exception_when_perf_data_absent():
+    result = poller.select_service_columns({"host_name", "description", "state"})
+    assert result == ["host_name", "description", "state"]
+
+
+def test_select_service_columns_raises_on_missing_required_column():
+    try:
+        poller.select_service_columns({"host_name", "state"})
+    except poller.LivestatusError as exc:
+        assert "description" in str(exc)
+    else:
+        raise AssertionError("expected LivestatusError")
+
+
+def test_select_service_columns_omits_unavailable_optional_columns():
+    result = poller.select_service_columns({"host_name", "description", "state", "plugin_output"})
+    assert result == ["host_name", "description", "state", "plugin_output"]
+
+
 # --- query_devices --------------------------------------------------------------
 
 

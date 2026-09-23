@@ -158,6 +158,16 @@ OPTIONAL_HOST_COLUMNS = (
     "staleness",
 )
 
+# Phase 12 (D-08/D-11): the services-table required/optional split mirrors
+# REQUIRED_HOST_COLUMNS/OPTIONAL_HOST_COLUMNS above. `perf_data` is
+# deliberately OPTIONAL, never REQUIRED, per 12-RESEARCH.md Pitfall 4: the
+# per-service list (`description`/`state`/`plugin_output`) degrades fine
+# without it, whereas promoting `perf_data` to REQUIRED would take gauges,
+# the SMART badge and the whole service list down together on any site
+# that does not expose it.
+REQUIRED_SERVICE_COLUMNS = ("host_name", "description", "state")
+OPTIONAL_SERVICE_COLUMNS = ("plugin_output", "perf_data")
+
 # Standard Nagios plugin return codes, used unchanged by Checkmk/Livestatus
 # for the `worst_service_state` column (verified: checkmk.com/werk/8003).
 _SERVICE_STATE_NAMES = {0: "OK", 1: "WARN", 2: "CRIT", 3: "UNKNOWN"}
@@ -571,6 +581,55 @@ def select_host_columns(available: set[str]) -> list[str]:
 
 def build_hosts_query(columns: list[str]) -> str:
     return f"GET hosts\nColumns: {' '.join(columns)}\nOutputFormat: json\n\n"
+
+
+def available_service_columns(host: str, port: int, timeout: float) -> set[str]:
+    """Return the column names the live site's `services` table actually exposes.
+
+    Literal parallel of `available_host_columns()` above, filtered to
+    `table = services` instead of `table = hosts` -- same choke point
+    (`_livestatus_request`), same malformed-response handling.
+    """
+    query = "GET columns\nColumns: name\nFilter: table = services\nOutputFormat: json\n\n"
+    body = _livestatus_request(host, port, query, timeout)
+    if not body.strip():
+        return set()
+    try:
+        rows = json.loads(body)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise LivestatusError(f"Malformed columns response from {host}:{port}: {exc}") from exc
+    return {row[0] for row in rows}
+
+
+def select_service_columns(available: set[str]) -> list[str]:
+    """Build the services column list to request, degrading unverified optional columns gracefully.
+
+    Literal parallel of `select_host_columns()` above: every name in
+    REQUIRED_SERVICE_COLUMNS must be present or the query cannot proceed at
+    all. `plugin_output`/`perf_data` are included only when the live site
+    actually exposes them; an absent optional column is a logged
+    degradation, not a hard failure (12-RESEARCH.md Pitfall 4).
+    """
+    missing = [name for name in REQUIRED_SERVICE_COLUMNS if name not in available]
+    if missing:
+        raise LivestatusError(
+            f"Livestatus services table is missing required column(s): {', '.join(missing)}"
+        )
+    columns = list(REQUIRED_SERVICE_COLUMNS)
+    for name in OPTIONAL_SERVICE_COLUMNS:
+        if name in available:
+            columns.append(name)
+        else:
+            _logger.warning(
+                "Livestatus services table does not expose optional column %r; "
+                "degrading to a safe default for that field",
+                name,
+            )
+    return columns
+
+
+def build_services_query(columns: list[str]) -> str:
+    return f"GET services\nColumns: {' '.join(columns)}\nOutputFormat: json\n\n"
 
 
 def query_devices(
@@ -1254,6 +1313,13 @@ def main() -> int:
         action="store_true",
         help="Run exactly one poll cycle then exit, for manual verification.",
     )
+    parser.add_argument(
+        "--dump-service-names",
+        action="store_true",
+        help="Print every distinct service description the live site reports, then exit -- "
+        "used to confirm Checkmk's actual SMART service naming against a real host "
+        "(see SMART_HEALTH_SERVICE_RE).",
+    )
     args = parser.parse_args()
     config = PollerConfig.from_env()
 
@@ -1273,7 +1339,45 @@ def main() -> int:
             print(f"{'present' if present else 'MISSING'}: {name} (required)")
         for name in OPTIONAL_HOST_COLUMNS:
             print(f"{'present' if name in available else 'missing'}: {name} (optional)")
+
+        try:
+            available_services = available_service_columns(
+                config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+            )
+        except LivestatusError as exc:
+            _logger.error("Services column check failed: %s", exc)
+            return 1
+        for name in REQUIRED_SERVICE_COLUMNS:
+            present = name in available_services
+            ok = ok and present
+            print(f"{'present' if present else 'MISSING'}: {name} (required, services)")
+        for name in OPTIONAL_SERVICE_COLUMNS:
+            print(f"{'present' if name in available_services else 'missing'}: {name} (optional, services)")
         return 0 if ok else 1
+
+    if args.dump_service_names:
+        configure_logging(config.log_level)
+        try:
+            body = _livestatus_request(
+                config.livestatus_host,
+                config.livestatus_port,
+                "GET services\nColumns: description\nOutputFormat: json\n\n",
+                DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+            )
+        except LivestatusError as exc:
+            _logger.error("Service name dump failed: %s", exc)
+            return 1
+        if not body.strip():
+            descriptions: set[str] = set()
+        else:
+            try:
+                descriptions = {row[0] for row in json.loads(body)}
+            except (json.JSONDecodeError, ValueError) as exc:
+                _logger.error("Service name dump failed: malformed services response: %s", exc)
+                return 1
+        for description in sorted(descriptions):
+            print(description)
+        return 0
 
     if args.once:
         configure_logging(config.log_level)
