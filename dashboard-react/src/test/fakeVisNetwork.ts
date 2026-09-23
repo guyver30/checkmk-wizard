@@ -27,6 +27,7 @@ export class FakeNetwork {
   setOptionsCalls: Record<string, unknown>[] = [];
   destroyed = false;
   editModeEnabled = false;
+  disableEditModeCallCount = 0;
 
   private handlers: Record<string, EventHandler[]> = {};
   private onceHandlers: Record<string, EventHandler[]> = {};
@@ -76,6 +77,7 @@ export class FakeNetwork {
 
   disableEditMode(): void {
     this.editModeEnabled = false;
+    this.disableEditModeCallCount += 1;
   }
 
   enableEditMode(): void {
@@ -84,6 +86,14 @@ export class FakeNetwork {
 
   addEdgeMode(): void {
     // No-op in tests -- the real toolbar arrives in 13-06/13-07.
+  }
+
+  // 13-06: the manipulation option object (addEdge/editEdge/deleteEdge/addNode functions) is
+  // set via setOptions(), same as every other option -- this.options already accumulates every
+  // setOptions() call (see setOptions() above), so exposing it here just gives tests direct
+  // access to invoke those callbacks without reaching into setOptionsCalls themselves.
+  lastManipulation(): Record<string, unknown> | undefined {
+    return this.options.manipulation as Record<string, unknown> | undefined;
   }
 
   // Test-only helper: fires every registered `on`/`once` handler for `event`, then clears the
