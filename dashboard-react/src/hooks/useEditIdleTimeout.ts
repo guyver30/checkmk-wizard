@@ -35,6 +35,9 @@ export function useEditIdleTimeout(
     }, timeoutMs);
   }
 
+  // arm/clear close over stable refs (timerRef/onTimeoutRef), so re-running this effect only on
+  // [active, timeoutMs] is intentional -- they always read the latest onTimeout through the ref.
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (active) {
       arm();
@@ -42,9 +45,8 @@ export function useEditIdleTimeout(
       clear();
     }
     return clear;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- arm/clear close over stable refs
-    // (timerRef/onTimeoutRef); only [active, timeoutMs] should re-run this effect.
   }, [active, timeoutMs]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   function touch() {
     if (active) {
