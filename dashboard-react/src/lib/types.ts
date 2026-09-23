@@ -77,7 +77,27 @@ export interface EventEntry {
   [key: string]: unknown;
 }
 
+/**
+ * One raw entry inside TopologyPayload.devices, as published by
+ * scripts/mqtt_poller.py's topology_nodes() and extended by plan 13-04/PLR-13
+ * (map_position/unmanaged). Every field is optional and loosely typed on purpose --
+ * this describes untrusted JSON crossing the MQTT trust boundary, not a contract
+ * TypeScript can enforce at runtime. topologyLayout.ts's buildMapModel() is the
+ * runtime guard that actually validates/defaults these fields.
+ */
+export interface TopologyNode {
+  id?: string;
+  parents?: unknown;
+  device_type?: string;
+  folder?: string;
+  alias?: string;
+  map_position?: string | null;
+  unmanaged?: boolean;
+}
+
 export interface TopologyPayload {
+  // Kept as unknown[] on purpose (untrusted JSON) -- topologyLayout.ts's buildMapModel()
+  // is the runtime guard that validates/defaults each entry's TopologyNode shape.
   devices?: unknown[];
   timestamp?: string;
   [key: string]: unknown;
