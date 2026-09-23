@@ -37,6 +37,26 @@ describe("ThreePaneLayout", () => {
     expect(orientations).toContain("horizontal");
   });
 
+  // Regression: live UAT (2026-09-23) found the event-history divider working backwards --
+  // dragging it DOWN shrank the map instead of growing it, because sizes.events is the BOTTOM
+  // pane's own height while Splitter's contract makes dragging down always increase whatever
+  // value it's given. Fixed by mirroring value/onResize in ThreePaneLayout so the divider
+  // follows the natural "boundary tracks the cursor" convention for a divider above a
+  // fixed-size bottom pane.
+  it("dragging the event-history separator down grows the top pane by shrinking the bottom one", () => {
+    render(<ThreePaneLayout tree={<p>tree</p>} centreTop={<p>top</p>} centreBottom={<p>bottom</p>} />);
+    const separator = screen.getByRole("separator", { name: /resize event history/i });
+    const grid = separator.parentElement as HTMLElement;
+    const rowHeightPx = () => Number(grid.style.gridTemplateRows.split(" ")[2].replace("px", ""));
+    const before = rowHeightPx();
+
+    fireEvent.pointerDown(separator, { clientY: 500, pointerId: 1 });
+    fireEvent.pointerMove(separator, { clientY: 550, pointerId: 1 });
+    fireEvent.pointerUp(separator, { clientY: 550, pointerId: 1 });
+
+    expect(rowHeightPx()).toBeLessThan(before);
+  });
+
   it("collapses and restores the tree pane via its collapse button", () => {
     render(
       <ThreePaneLayout tree={<p>Device tree content</p>} centreTop={<p>top</p>} centreBottom={<p>bottom</p>} />,
