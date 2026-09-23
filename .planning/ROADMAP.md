@@ -18,7 +18,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 10.1: Bulk Device-Type Tagging and Deployment Gaps** (INSERTED) - Urgent insertion after Phase 10 (completed 2026-09-12)
 - [x] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract (completed 2026-09-16)
 - [x] **Phase 11.1: Dashboard Layout and Light Palette** - The dashboard moves to KONE's light palette and a resizable three-pane layout (tree / map-or-details / event history), with a grouping combo and severity ordering (completed 2026-09-21)
-- [ ] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query
+- [x] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query (completed 2026-09-23)
 - [ ] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map
 - [ ] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, availability reporting on MinIO, a time-series store with Grafana, and failure prediction from SMART/disk/memory trends
 
@@ -205,8 +205,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 12-02-PLAN.md — Poller publishing: gauge/SMART/service-list classification, `lan/devices/{id}/services` (change-only) and `lan/devices/{id}/service_history` (bounded), extended status payload and tombstones, cycle wiring
-- [ ] 12-04-PLAN.md — `DetailsRoute` fill-in: CPU/RAM/Disk gauge row, other-mounts and SMART badges, per-service `Table` sorted worst-first, per-device history strip (DASH-03's history half)
+- [x] 12-02-PLAN.md — Poller publishing: gauge/SMART/service-list classification, `lan/devices/{id}/services` (change-only) and `lan/devices/{id}/service_history` (bounded), extended status payload and tombstones, cycle wiring
+- [x] 12-04-PLAN.md — `DetailsRoute` fill-in: CPU/RAM/Disk gauge row, other-mounts and SMART badges, per-service `Table` sorted worst-first, per-device history strip (DASH-03's history half)
 
 ### Phase 13: Wizard Parents Support and Topology Map
 
@@ -237,7 +237,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
-| 12. Agent Metrics and Service Status | 3/5 | In Progress|  |
+| 12. Agent Metrics and Service Status | 5/5 | Complete   | 2026-09-23 |
 | 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |
 
 ### Phase 11.1: Dashboard Layout and Light Palette
