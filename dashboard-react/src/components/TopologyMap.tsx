@@ -296,10 +296,16 @@ export function TopologyMap({
     }
   }
 
-  // Mount once -- vis-network's Network is not a React component; it owns its own canvas and
-  // is only ever constructed here, never re-constructed on a prop change (13-RESEARCH.md
-  // Pattern 1). No canvas div is rendered (see JSX below) until at least one device exists, so
-  // this effect's containerRef guard also covers the "zero devices -> no Network" case.
+  // Construct once the container div actually exists -- vis-network's Network is not a React
+  // component; it owns its own canvas and is only ever constructed here, never re-constructed on
+  // a prop change (13-RESEARCH.md Pattern 1). No canvas div is rendered (see JSX below) until at
+  // least one device exists, so on a fresh page load -- before the first MQTT topology message
+  // arrives -- hasNodes starts false and containerRef.current is null. [hasNodes] (rather than an
+  // empty dep array) makes this effect re-run the moment hasNodes flips to true and the div
+  // commits, so the canvas still mounts on that first real data arrival instead of staying
+  // permanently unconstructed until some unrelated remount (bug: devices loaded after initial
+  // render never showed a map, only the "no connections" banner, until the page was reloaded or
+  // re-navigated).
   useEffect(() => {
     if (!containerRef.current) {
       return;
@@ -355,8 +361,10 @@ export function TopologyMap({
       edgesRef.current = null;
       networkRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: mount once (see comment above).
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: [hasNodes] is a
+    // trigger dependency (not referenced in the body) so this re-runs exactly when the container
+    // div commits; navigate/setMapPosition are stable module-level/hook values (see comment above).
+  }, [hasNodes]);
 
   // Gating: manipulation and node dragging are only active while editMode is true. editNode is
   // never passed, so vis-network's toolbar never shows an "Edit Node" button; deleteNode stays

@@ -98,6 +98,25 @@ describe("TopologyMap", () => {
     expect(instances).toHaveLength(0);
   });
 
+  // Regression: live UAT (2026-09-23) found the map stuck on the "no connections" banner with
+  // no map ever appearing after a genuine fresh page load, because MQTT's retained topology
+  // message arrives asynchronously -- the first render always has zero devices, and the mount
+  // effect's containerRef guard used to bail permanently (empty dep array) since the container
+  // div doesn't exist in the DOM until hasNodes flips true. Only an unrelated remount (e.g.
+  // re-navigating) picked it up, because by then the store already held cached data. Fixed by
+  // keying the mount effect on [hasNodes] so it retries the moment the container div commits.
+  it("constructs the Network once devices arrive after an initial zero-device render (async MQTT data)", () => {
+    const { rerender } = renderMap({ topologyDevices: [], statuses: {} });
+    expect(instances).toHaveLength(0);
+    expect(screen.getByText("No connections drawn yet")).toBeInTheDocument();
+
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    rerenderMap(rerender, { topologyDevices, statuses: { h1: device({ id: "h1", state: "OK" }) } });
+
+    expect(instances).toHaveLength(1);
+    expect(screen.queryByText("No connections drawn yet")).not.toBeInTheDocument();
+  });
+
   it("constructs the Network exactly once across rerenders with changed statuses, reusing the same node DataSet instance", () => {
     const topologyDevices = [{ id: "h1", parents: [] }];
     const { rerender } = renderMap({ topologyDevices, statuses: { h1: device({ id: "h1", state: "OK" }) } });
