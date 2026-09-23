@@ -1269,6 +1269,27 @@ class PollerState:
     history: dict[str, list[dict]]
     events: list[dict]
     since: str
+    # Phase 12 (D-13/D-14). `default_factory=dict` so every existing
+    # `PollerState(...)` construction in tests and in `reconcile_state`
+    # stays valid without passing these explicitly.
+    #
+    # `previous_services` (device id -> last published `services_signature`)
+    # and `last_service_states` (device id -> description -> state) are
+    # deliberately NOT reconciled from a retained topic on restart -- they
+    # live only in memory and rebuild from live Livestatus every cycle, the
+    # same argument the pre-existing `last_status` comment in `run_cycle`
+    # already makes for device-level status. This makes a first-cycle false
+    # transition structurally impossible, and 12-RESEARCH.md Pitfall 3
+    # concludes the cost of not reconciling is just one redundant
+    # `services` republish per device after a restart -- cheap, and simpler
+    # than reconciling two more retained shapes.
+    previous_services: dict[str, tuple] = field(default_factory=dict)
+    last_service_states: dict[str, dict[str, str]] = field(default_factory=dict)
+    # `service_history` IS reconciled by `reconcile_state` below (mirrors
+    # `history`'s own reconciliation): 12-RESEARCH.md Pitfall 3 also notes
+    # that reconciling the bounded history prevents a restart from
+    # clobbering a good retained history with a one-entry array.
+    service_history: dict[str, list[dict]] = field(default_factory=dict)
 
 
 def parse_topology_payload(payload: bytes) -> dict[str, dict]:
@@ -1395,6 +1416,14 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     republished fresh from live Livestatus every cycle (`run_cycle`), so
     it has no "previous" value worth recovering.
 
+    Phase 12 (D-13/D-14): `previous_services` and `last_service_states` are
+    likewise deliberately NOT reconciled here -- see the dated comment on
+    `PollerState` above; `lan/devices/+/service_history` IS subscribed and
+    reconciled, mirroring the existing `lan/devices/+/history` wildcard's
+    same best-effort-cosmetic-restoration contract (12-RESEARCH.md
+    Pitfall 3: reconciling the bounded history prevents a restart from
+    clobbering a good retained history with a one-entry array).
+
     This is what satisfies "self-heals across restarts with no persisted
     state of its own" (PLR-02): the durable store is Mosquitto's
     `persistence true` from Phase 8, not a poller-owned file.
@@ -1406,6 +1435,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     topology_result: list[bytes] = []
     events_result: list[bytes] = []
     history_payloads: dict[str, bytes] = {}
+    service_history_payloads: dict[str, bytes] = {}
     topology_received = threading.Event()
 
     def on_message(client, userdata, msg):
@@ -1417,6 +1447,13 @@ def reconcile_state(config: PollerConfig) -> PollerState:
             events_result.append(msg.payload)
         elif len(parts) == 4 and parts[0] == "lan" and parts[1] == "devices" and parts[3] == "history":
             history_payloads[parts[2]] = msg.payload
+        elif (
+            len(parts) == 4
+            and parts[0] == "lan"
+            and parts[1] == "devices"
+            and parts[3] == "service_history"
+        ):
+            service_history_payloads[parts[2]] = msg.payload
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.username_pw_set(config.mqtt_username, config.mqtt_password)
@@ -1426,6 +1463,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         client.subscribe(TOPIC_TOPOLOGY, qos=1)
         client.subscribe(TOPIC_EVENTS, qos=1)
         client.subscribe("lan/devices/+/history", qos=1)
+        client.subscribe("lan/devices/+/service_history", qos=1)
         client.loop_start()
         topology_received.wait(timeout=config.reconcile_timeout_seconds)
     finally:
@@ -1435,6 +1473,10 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     previous_nodes = parse_topology_payload(topology_result[0] if topology_result else b"")
     events = parse_events_payload(events_result[0] if events_result else b"")
     history = {device_id: parse_events_payload(payload) for device_id, payload in history_payloads.items()}
+    service_history = {
+        device_id: parse_events_payload(payload)
+        for device_id, payload in service_history_payloads.items()
+    }
 
     return PollerState(
         previous_nodes=previous_nodes,
@@ -1442,11 +1484,16 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         history=history,
         events=events,
         since=utc_now_iso(),
+        service_history=service_history,
     )
 
 
 def run_cycle(
-    client: mqtt.Client, config: PollerConfig, state: PollerState, snapshots: list[DeviceSnapshot]
+    client: mqtt.Client,
+    config: PollerConfig,
+    state: PollerState,
+    snapshots: list[DeviceSnapshot],
+    services: list[ServiceSnapshot] | None = None,
 ) -> None:
     """Run one poll cycle: publish status, detect changes, tombstone removals.
 
@@ -1461,11 +1508,59 @@ def run_cycle(
     poller mathematically cannot compute a false transition on its first
     cycle -- the suppression falls out of the data structure rather than
     needing a flag.
+
+    Phase 12 (D-12/D-13/D-14): `services` is `None` on a cycle whose
+    services query failed (or hasn't run yet) -- the status topic then
+    keeps publishing every snapshot's core fields with no gauge keys at
+    all, rather than publishing wrong `null`s over a good retained value,
+    and neither `services` nor `service_history` is touched. When
+    `services` is a list (including an empty one), each snapshot's rows
+    are diffed via `services_signature()` against `state.previous_services`
+    -- the row list republishes only on a real change (D-13) -- and any
+    per-service state transition appends one bounded entry to that
+    device's `service_history`, republished once per cycle rather than
+    once per transition.
     """
     now = utc_now_iso()
 
+    services_by_host: dict[str, list[ServiceSnapshot]] = {}
+    if services is not None:
+        for service in services:
+            services_by_host.setdefault(service.host_name, []).append(service)
+
     for snapshot in snapshots:
-        publish_device_status(client, snapshot, now)
+        if services is None:
+            publish_device_status(client, snapshot, now)
+            continue
+
+        gauge_fields, rows = classify_host_services(services_by_host.get(snapshot.id, []))
+        publish_device_status(client, snapshot, now, gauge_fields=gauge_fields)
+
+        signature = services_signature(rows)
+        if signature != state.previous_services.get(snapshot.id):
+            publish_services(client, snapshot.id, rows)
+            state.previous_services[snapshot.id] = signature
+
+        # A description absent from the previous map is a first
+        # observation, never a transition -- only descriptions present in
+        # BOTH maps can produce a `service_history` entry.
+        previous_service_states = state.last_service_states.get(snapshot.id, {})
+        current_service_states = {row["description"]: row["state"] for row in rows}
+        transitions = [
+            {"timestamp": now, "description": description, "from": previous_service_states[description], "to": current_state}
+            for description, current_state in current_service_states.items()
+            if description in previous_service_states
+            and previous_service_states[description] != current_state
+        ]
+        if transitions:
+            device_service_history = state.service_history.get(snapshot.id, [])
+            for entry in transitions:
+                device_service_history = append_bounded(
+                    device_service_history, entry, config.service_history_max_entries
+                )
+            state.service_history[snapshot.id] = device_service_history
+            publish_service_history(client, snapshot.id, device_service_history)
+        state.last_service_states[snapshot.id] = current_service_states
 
     nodes = topology_nodes(snapshots)
     snapshots_by_id = {snapshot.id: snapshot for snapshot in snapshots}
@@ -1480,6 +1575,12 @@ def run_cycle(
         publish_tombstone(client, device_id)
         last_state = state.last_status.pop(device_id, None)
         state.history.pop(device_id, None)
+        # The tombstone published above already clears the broker side of
+        # all four per-device topics (task 2); these three pops clear the
+        # in-process side so a re-added host with the same id starts clean.
+        state.previous_services.pop(device_id, None)
+        state.last_service_states.pop(device_id, None)
+        state.service_history.pop(device_id, None)
         events_this_cycle.append(
             {
                 "timestamp": now,
@@ -1608,6 +1709,46 @@ def run_forever(config: PollerConfig) -> int:
         shutdown_mqtt_client(client)
         return 1
 
+    # Phase 12 (D-12/D-13/D-14) services column probe, deliberately
+    # asymmetric with the hosts probe above: Livestatus hosts is the
+    # poller's sole mandatory data source (no hosts means nothing to
+    # publish at all), whereas services only adds gauges/SMART/the
+    # service list -- the same enrichment-degrades posture Phase 10 D-03
+    # already established for the REST folder lookup below. On retry
+    # exhaustion this logs a warning and disables gauges/services for the
+    # process's lifetime (until a restart re-probes) rather than treating
+    # the whole poller as unable to start.
+    service_columns: list[str] | None
+    service_columns = None
+    last_service_exc: LivestatusError | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            available_services = available_service_columns(
+                config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+            )
+            service_columns = select_service_columns(available_services)
+            break
+        except LivestatusError as exc:
+            last_service_exc = exc
+            if attempt < max_attempts:
+                delay = _STARTUP_RETRY_DELAYS_SECONDS[attempt - 1]
+                _logger.warning(
+                    "Startup services column probe failed (attempt %d/%d): %s -- retrying in %ds",
+                    attempt,
+                    max_attempts,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+
+    if service_columns is None:
+        _logger.warning(
+            "Services probe failed after %d attempts: %s -- gauges and the per-service list "
+            "are disabled until the poller restarts",
+            max_attempts,
+            last_service_exc,
+        )
+
     # OPS-04: a greppable line in `podman logs` distinguishing a healthy
     # poller from a hung one on the first line after startup. Only the
     # four non-secret fields named by the requirement are logged --
@@ -1645,6 +1786,22 @@ def run_forever(config: PollerConfig) -> int:
         except RestError as exc:
             _logger.warning("Reusing last known folder map; REST folder refresh failed: %s", exc)
 
+        # Phase 12: a services-query failure degrades only this cycle's
+        # gauges/services (D-12/D-13/D-14) -- it never skips the cycle or
+        # affects the mandatory hosts query below.
+        services: list[ServiceSnapshot] | None = None
+        if service_columns is not None:
+            try:
+                services = query_services(
+                    config.livestatus_host,
+                    config.livestatus_port,
+                    service_columns,
+                    DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+                )
+            except LivestatusError as exc:
+                _logger.warning("Services query failed this cycle: %s", exc)
+                services = None
+
         try:
             snapshots = query_devices(
                 config.livestatus_host,
@@ -1656,7 +1813,7 @@ def run_forever(config: PollerConfig) -> int:
         except LivestatusError as exc:
             _logger.warning("Skipping cycle: %s", exc)
         else:
-            run_cycle(client, config, state, snapshots)
+            run_cycle(client, config, state, snapshots, services=services)
         stop_event.wait(timeout=config.poll_interval_seconds)
 
     # Graceful stop must leave the same retained value the LWT would have
@@ -1786,7 +1943,26 @@ def main() -> int:
             _logger.error("One-shot cycle failed: %s", exc)
             shutdown_mqtt_client(client)
             return 1
-        run_cycle(client, config, state, snapshots)
+        # Phase 12: same optional-services treatment as run_forever's poll
+        # loop, so this documented one-shot verification path publishes the
+        # same payload shape as the long-running loop -- a services failure
+        # degrades only gauges/services for this one cycle, never the
+        # one-shot run itself.
+        once_services: list[ServiceSnapshot] | None = None
+        try:
+            available_services = available_service_columns(
+                config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+            )
+            once_service_columns = select_service_columns(available_services)
+            once_services = query_services(
+                config.livestatus_host,
+                config.livestatus_port,
+                once_service_columns,
+                DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+            )
+        except LivestatusError as exc:
+            _logger.warning("Services query unavailable for this one-shot cycle: %s", exc)
+        run_cycle(client, config, state, snapshots, services=once_services)
         shutdown_mqtt_client(client)
         return 0
 
