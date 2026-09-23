@@ -244,7 +244,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 13-07-PLAN.md — Edit topology toggle, pending-changes banner, single Apply changes activation, Snackbar feedback, 5-minute idle auto-exit
+- [x] 13-07-PLAN.md — Edit topology toggle, pending-changes banner, single Apply changes activation, Snackbar feedback, 5-minute idle auto-exit
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -262,7 +262,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
 | 12. Agent Metrics and Service Status | 5/5 | Complete    | 2026-09-23 |
-| 13. Wizard Parents Support and Topology Map | 6/8 | In Progress|  |
+| 13. Wizard Parents Support and Topology Map | 7/8 | In Progress|  |
 
 ### Phase 11.1: Dashboard Layout and Light Palette
 
