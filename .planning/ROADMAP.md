@@ -19,7 +19,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 11: Live Dashboard** - A static 3-page dashboard renders topology, device status, and history live from the poller's MQTT contract (completed 2026-09-16)
 - [x] **Phase 11.1: Dashboard Layout and Light Palette** - The dashboard moves to KONE's light palette and a resizable three-pane layout (tree / map-or-details / event history), with a grouping combo and severity ordering (completed 2026-09-21)
 - [x] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query (completed 2026-09-23)
-- [ ] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map
+- [x] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map (completed 2026-09-23)
 - [ ] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, availability reporting on MinIO, a time-series store with Grafana, and failure prediction from SMART/disk/memory trends
 
 ## Phase Details
@@ -248,7 +248,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 13-08-PLAN.md — Docs (dashboard README, deployment doc, PROJECT.md) + live end-to-end verification on the deployment host
+- [x] 13-08-PLAN.md — Docs (dashboard README, deployment doc, PROJECT.md) + live end-to-end verification on the deployment host
 
 ## Progress
 
@@ -262,7 +262,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
 | 12. Agent Metrics and Service Status | 5/5 | Complete    | 2026-09-23 |
-| 13. Wizard Parents Support and Topology Map | 7/8 | In Progress|  |
+| 13. Wizard Parents Support and Topology Map | 8/8 | Complete   | 2026-09-23 |
 
 ### Phase 11.1: Dashboard Layout and Light Palette
 
