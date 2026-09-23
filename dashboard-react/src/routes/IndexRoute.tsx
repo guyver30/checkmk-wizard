@@ -2,9 +2,9 @@ import { useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/shallow";
 import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
-import { MapPlaceholder } from "../components/MapPlaceholder";
 import { StatsStrip } from "../components/StatsStrip";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
+import { TopologyMap } from "../components/TopologyMap";
 import { Tree } from "../components/Tree";
 import { useGroupingPrefs } from "../hooks/useGroupingPrefs";
 import { useNowTick } from "../hooks/useNowTick";
@@ -28,6 +28,12 @@ export function IndexRoute() {
   const nowMs = useNowTick();
   const selectCounts = useCallback(makeSelectStateCounts(nowMs), [nowMs]);
   const counts = useAppStore(useShallow(selectCounts));
+
+  const topology = useAppStore((s) => s.topology);
+  const topologyDevices = useMemo(
+    () => (Array.isArray(topology?.devices) ? topology.devices : []),
+    [topology],
+  );
 
   // Grouping mode and severity ordering are persisted (guarded storage) preferences (D-32).
   // Open-group state is lifted here, not into Tree/TreeNode, so a device-status message
@@ -83,12 +89,12 @@ export function IndexRoute() {
         </div>
       }
       centreTop={
-        // D-25: the stats strip sits ABOVE the map placeholder, content-sized, with the
-        // placeholder taking the remaining height -- both are always visible together.
+        // D-25: the stats strip sits ABOVE the map, content-sized, with the map taking the
+        // remaining height -- both are always visible together.
         <div className="flex h-full flex-col gap-2 p-3">
           <StatsStrip counts={counts} />
           <div className="min-h-0 flex-1">
-            <MapPlaceholder />
+            <TopologyMap topologyDevices={topologyDevices} statuses={devices} nowMs={nowMs} />
           </div>
         </div>
       }
