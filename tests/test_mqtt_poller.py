@@ -743,6 +743,158 @@ def test_query_services_skips_host_failing_publishable_device_id():
     assert [s.host_name for s in snapshots] == ["web2"]
 
 
+# --- classify_host_services / services_signature -----------------------------
+
+
+def _service(host_name, description, state, plugin_output="", perf_data=None):
+    state_raw = {"OK": 0, "WARN": 1, "CRIT": 2, "UNKNOWN": 3}[state]
+    return poller.ServiceSnapshot(
+        host_name=host_name,
+        description=description,
+        state=state,
+        state_raw=state_raw,
+        plugin_output=plugin_output,
+        perf_data=perf_data or {},
+    )
+
+
+def test_classify_host_services_full_fixture_computes_gauges_smart_and_rows():
+    services = [
+        _service(
+            "web1",
+            "CPU utilization",
+            "OK",
+            perf_data={"util": {"value": 12.5, "warn": 80.0, "crit": 90.0, "min": 0.0, "max": 100.0}},
+        ),
+        _service(
+            "web1",
+            "Memory",
+            "OK",
+            perf_data={
+                "mem_used_percent": {"value": 45.0, "warn": 80.0, "crit": 90.0, "min": None, "max": None}
+            },
+        ),
+        _service(
+            "web1",
+            "Filesystem /",
+            "OK",
+            perf_data={
+                "fs_used_percent": {"value": 55.0, "warn": 80.0, "crit": 90.0, "min": None, "max": None}
+            },
+        ),
+        _service(
+            "web1",
+            "Filesystem /boot",
+            "WARN",
+            perf_data={
+                "fs_used_percent": {"value": 82.0, "warn": 80.0, "crit": 90.0, "min": None, "max": None}
+            },
+        ),
+        _service("web1", "SMART /dev/sda Stats", "OK"),
+        _service("web1", "Temperature SMART /dev/sda", "OK"),
+        _service("web1", "Systemd Service cron", "OK"),
+        _service("web1", "Systemd Service Summary", "OK"),
+        _service("web1", "PING", "OK"),
+    ]
+
+    gauge_fields, service_rows = poller.classify_host_services(services)
+
+    assert gauge_fields["cpu_percent"] == 12.5
+    assert gauge_fields["cpu_warn"] == 80.0
+    assert gauge_fields["cpu_crit"] == 90.0
+    assert gauge_fields["ram_percent"] == 45.0
+    assert gauge_fields["ram_warn"] == 80.0
+    assert gauge_fields["ram_crit"] == 90.0
+    assert gauge_fields["disk_percent"] == 55.0
+    assert gauge_fields["disk_warn"] == 80.0
+    assert gauge_fields["disk_crit"] == 90.0
+    assert gauge_fields["disk_other_worst_percent"] == 82.0
+    assert gauge_fields["disk_other_worst_warn"] == 80.0
+    assert gauge_fields["disk_other_worst_crit"] == 90.0
+    assert gauge_fields["disk_other_worst_mount"] == "/boot"
+    assert gauge_fields["smart_total"] == 1
+    assert gauge_fields["smart_failing"] == 0
+    descriptions = [row["description"] for row in service_rows]
+    assert descriptions == ["PING", "Systemd Service cron", "Temperature SMART /dev/sda"]
+    assert "Systemd Service Summary" not in descriptions
+
+
+def test_classify_host_services_snmp_only_host_yields_all_gauge_keys_present_and_none():
+    services = [_service("snmp1", "PING", "OK")]
+
+    gauge_fields, service_rows = poller.classify_host_services(services)
+
+    assert set(gauge_fields.keys()) == {
+        "cpu_percent",
+        "cpu_warn",
+        "cpu_crit",
+        "ram_percent",
+        "ram_warn",
+        "ram_crit",
+        "disk_percent",
+        "disk_warn",
+        "disk_crit",
+        "disk_other_worst_percent",
+        "disk_other_worst_warn",
+        "disk_other_worst_crit",
+        "disk_other_worst_mount",
+        "smart_total",
+        "smart_failing",
+    }
+    assert all(value is None for value in gauge_fields.values())
+    assert [row["description"] for row in service_rows] == ["PING"]
+
+
+def test_classify_host_services_empty_list_returns_all_none_gauges_and_no_rows():
+    gauge_fields, service_rows = poller.classify_host_services([])
+    assert gauge_fields["cpu_percent"] is None
+    assert gauge_fields["ram_percent"] is None
+    assert gauge_fields["disk_percent"] is None
+    assert gauge_fields["disk_other_worst_percent"] is None
+    assert gauge_fields["smart_total"] is None
+    assert gauge_fields["smart_failing"] is None
+    assert service_rows == []
+
+
+def test_classify_host_services_smart_failing_counts_warn_and_crit_not_unknown():
+    services = [
+        _service("web1", "SMART /dev/sda Stats", "OK"),
+        _service("web1", "SMART /dev/sdb Stats", "WARN"),
+        _service("web1", "SMART /dev/sdc Stats", "CRIT"),
+        _service("web1", "SMART /dev/sdd Stats", "UNKNOWN"),
+    ]
+    gauge_fields, _ = poller.classify_host_services(services)
+    assert gauge_fields["smart_total"] == 4
+    assert gauge_fields["smart_failing"] == 2
+
+
+def test_services_signature_order_independent_and_excludes_plugin_output():
+    rows_a = [
+        {"description": "PING", "state": "OK", "plugin_output": "OK - up"},
+        {"description": "cron", "state": "OK", "plugin_output": "OK - running"},
+    ]
+    rows_b_diff_output_only = [
+        {"description": "cron", "state": "OK", "plugin_output": "OK - running 5 days"},
+        {"description": "PING", "state": "OK", "plugin_output": "OK - up 2ms"},
+    ]
+    assert poller.services_signature(rows_a) == poller.services_signature(rows_b_diff_output_only)
+
+
+def test_services_signature_differs_on_state_change():
+    rows_a = [{"description": "PING", "state": "OK", "plugin_output": ""}]
+    rows_b = [{"description": "PING", "state": "CRIT", "plugin_output": ""}]
+    assert poller.services_signature(rows_a) != poller.services_signature(rows_b)
+
+
+def test_services_signature_differs_on_row_added():
+    rows_a = [{"description": "PING", "state": "OK", "plugin_output": ""}]
+    rows_b = [
+        {"description": "PING", "state": "OK", "plugin_output": ""},
+        {"description": "cron", "state": "OK", "plugin_output": ""},
+    ]
+    assert poller.services_signature(rows_a) != poller.services_signature(rows_b)
+
+
 # --- MQTT client lifecycle and publish helpers ------------------------------
 
 

@@ -75,6 +75,34 @@ TOPIC_POLLER_STATUS = "lan/poller/status"
 
 UNKNOWN_DEVICE_TYPE = "unknown"
 
+# Phase 12 (D-05/D-08): the SMART health-service name match string, kept in
+# this one clearly-commented location so a future live re-check is a
+# one-line fix. Source-verified against Checkmk 2.4.0's own SMART
+# check-plugin code (`cmk/plugins/smart/agent_based/smart_ata.py`,
+# `smart_nvme.py`, `smart_scsi.py`, all registering `service_name="SMART %s
+# Stats"`), NOT live-verified -- no agent-test host was reachable on
+# 2026-09-21. CONTEXT.md D-05 originally paraphrased this as `Smart
+# <device>`; if a live `uv run python scripts/mqtt_poller.py
+# --dump-service-names` run shows a different string, correcting this one
+# regex is the entire fix. `"Temperature SMART <device>"` is deliberately
+# NOT matched here -- it is informational, not a health signal, and shows
+# as a normal service-list row instead (D-08).
+SMART_HEALTH_SERVICE_RE = re.compile(r"^SMART .+ Stats$")
+
+# Phase 12 (D-01): the CPU/RAM gauges' backing service names and the
+# Filesystem service-name prefix every `Filesystem <mount>` service shares.
+# The headline disk gauge reads the service named exactly "Filesystem /";
+# every other `Filesystem *` service feeds the `disk_other_worst_*` badge
+# instead.
+GAUGE_CPU_SERVICE = "CPU utilization"
+GAUGE_RAM_SERVICE = "Memory"
+GAUGE_FILESYSTEM_PREFIX = "Filesystem "
+
+# Phase 12 (D-02): the systemd roll-up service is explicitly never shown in
+# the per-service list -- only the individual wizard-chosen
+# `Systemd Service <name>` entries are.
+SERVICE_LIST_EXCLUDED_EXACT = ("Systemd Service Summary",)
+
 # Live-verified against a real Checkmk 2.4.0p35 CE site on 2026-09-08: a
 # `GET columns` probe (`mqtt_poller.py --check-columns`, run via
 # scripts/smoke_test_poller.py's `check_livestatus_columns`) reported all
@@ -462,6 +490,127 @@ def extract_device_type(tags: dict) -> str:
     if "device_type" in tags:
         return tags["device_type"]
     return UNKNOWN_DEVICE_TYPE
+
+
+def classify_host_services(services: list[ServiceSnapshot]) -> tuple[dict, list[dict]]:
+    """Split one host's service snapshots into gauge fields and the D-08 service-row list.
+
+    Returns `(gauge_fields, service_rows)`.
+
+    `gauge_fields` is exactly the `lan/devices/{id}/status` additive-key
+    dict (D-12): CPU reads `perf_data["util"]` off `GAUGE_CPU_SERVICE`, RAM
+    reads `perf_data["mem_used_percent"]` off `GAUGE_RAM_SERVICE`, disk
+    reads `perf_data["fs_used_percent"]` off the service named exactly
+    "Filesystem /". `disk_other_worst_*` is the highest `fs_used_percent`
+    across every other `GAUGE_FILESYSTEM_PREFIX` service (D-01), carrying
+    that mount's own warn/crit and its mount string (the service
+    description with the `GAUGE_FILESYSTEM_PREFIX` stripped). Every key is
+    present with value `None` when its backing service or metric is absent
+    -- absence is expressed as `null`, never an omitted key, so the
+    dashboard's hide-on-absence rule (D-03/D-06) has one thing to test.
+
+    `smart_total` counts services matching `SMART_HEALTH_SERVICE_RE`;
+    `smart_failing` counts those whose `state_raw` is 1 (WARN) or 2 (CRIT)
+    -- UNKNOWN (3) counts toward the total but not toward failing, since an
+    unreadable SMART check is not itself evidence of a failing disk. Both
+    are `None` when no SMART health service exists (D-06's hide-entirely
+    rule).
+
+    `service_rows` is the D-08 list: every service except
+    `GAUGE_CPU_SERVICE`, `GAUGE_RAM_SERVICE`, any `GAUGE_FILESYSTEM_PREFIX`
+    service, any `SMART_HEALTH_SERVICE_RE` match, and any
+    `SERVICE_LIST_EXCLUDED_EXACT` entry. Each row carries only
+    `description`/`state`/`plugin_output` -- `perf_data` is deliberately
+    not published on this topic. OK rows are included (D-08 is the full
+    "what is monitored" picture, not a failure list). Rows are sorted by
+    `description` for a stable payload.
+    """
+    gauge_fields: dict = {
+        "cpu_percent": None,
+        "cpu_warn": None,
+        "cpu_crit": None,
+        "ram_percent": None,
+        "ram_warn": None,
+        "ram_crit": None,
+        "disk_percent": None,
+        "disk_warn": None,
+        "disk_crit": None,
+        "disk_other_worst_percent": None,
+        "disk_other_worst_warn": None,
+        "disk_other_worst_crit": None,
+        "disk_other_worst_mount": None,
+        "smart_total": None,
+        "smart_failing": None,
+    }
+
+    smart_services = [s for s in services if SMART_HEALTH_SERVICE_RE.match(s.description)]
+    if smart_services:
+        gauge_fields["smart_total"] = len(smart_services)
+        gauge_fields["smart_failing"] = sum(1 for s in smart_services if s.state_raw in (1, 2))
+
+    worst_other_mount: tuple[float, float | None, float | None, str] | None = None
+    for service in services:
+        if service.description == GAUGE_CPU_SERVICE:
+            metric = service.perf_data.get("util")
+            if metric:
+                gauge_fields["cpu_percent"] = metric.get("value")
+                gauge_fields["cpu_warn"] = metric.get("warn")
+                gauge_fields["cpu_crit"] = metric.get("crit")
+        elif service.description == GAUGE_RAM_SERVICE:
+            metric = service.perf_data.get("mem_used_percent")
+            if metric:
+                gauge_fields["ram_percent"] = metric.get("value")
+                gauge_fields["ram_warn"] = metric.get("warn")
+                gauge_fields["ram_crit"] = metric.get("crit")
+        elif service.description == f"{GAUGE_FILESYSTEM_PREFIX}/":
+            metric = service.perf_data.get("fs_used_percent")
+            if metric:
+                gauge_fields["disk_percent"] = metric.get("value")
+                gauge_fields["disk_warn"] = metric.get("warn")
+                gauge_fields["disk_crit"] = metric.get("crit")
+        elif service.description.startswith(GAUGE_FILESYSTEM_PREFIX):
+            metric = service.perf_data.get("fs_used_percent")
+            if not metric or metric.get("value") is None:
+                continue
+            if worst_other_mount is None or metric["value"] > worst_other_mount[0]:
+                mount = service.description[len(GAUGE_FILESYSTEM_PREFIX) :]
+                worst_other_mount = (metric["value"], metric.get("warn"), metric.get("crit"), mount)
+
+    if worst_other_mount is not None:
+        value, warn, crit, mount = worst_other_mount
+        gauge_fields["disk_other_worst_percent"] = value
+        gauge_fields["disk_other_worst_warn"] = warn
+        gauge_fields["disk_other_worst_crit"] = crit
+        gauge_fields["disk_other_worst_mount"] = mount
+
+    gauge_backed_exact = {GAUGE_CPU_SERVICE, GAUGE_RAM_SERVICE}
+    service_rows = sorted(
+        (
+            {"description": s.description, "state": s.state, "plugin_output": s.plugin_output}
+            for s in services
+            if s.description not in gauge_backed_exact
+            and not s.description.startswith(GAUGE_FILESYSTEM_PREFIX)
+            and not SMART_HEALTH_SERVICE_RE.match(s.description)
+            and s.description not in SERVICE_LIST_EXCLUDED_EXACT
+        ),
+        key=lambda row: row["description"],
+    )
+    return gauge_fields, service_rows
+
+
+def services_signature(rows: list[dict]) -> tuple:
+    """Order-independent signature deciding whether the service row list changed.
+
+    Mirrors `topology_signature()`'s technique: a sorted tuple of
+    (description, state) pairs, order-independent so a same-content list
+    from a different underlying row order still compares equal.
+
+    Deliberately excludes plugin_output (12-RESEARCH.md Pitfall 2): a
+    chatty check's embedded numbers would otherwise force a republish
+    almost every cycle, defeating D-12's whole point in splitting gauges
+    from the service list.
+    """
+    return tuple(sorted((row["description"], row["state"]) for row in rows))
 
 
 # Leading numeric prefix of a Nagios perfdata value token: an optional
