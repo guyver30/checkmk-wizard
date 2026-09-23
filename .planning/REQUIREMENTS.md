@@ -15,10 +15,10 @@
 - [x] **PLR-06**: Poller publishes empty/tombstone retained payloads for devices removed from Checkmk, clearing their status/history/topology entries so they don't persist as permanent ghosts
 - [x] **PLR-07**: Poller publishes a birth/Last-Will-and-Testament liveness signal on `lan/poller/status`, so the dashboard can distinguish "the poller itself is down" from "this device is down"
 - [x] **PLR-08**: Poller surfaces Checkmk downtime/acknowledgement state in the per-device status payload
-- [ ] **PLR-09**: Poller issues a `GET services` Livestatus query alongside its existing `GET hosts` query, behind the same defensive column-availability probe, and parses each service's Nagios-format `perf_data` server-side (never in the browser)
-- [ ] **PLR-10**: Poller adds gauge-backing values (CPU utilisation %, memory used %, `Filesystem /` used %, worst other-mount used %, SMART pass/fail counts) as additive keys on the existing every-cycle `lan/devices/{id}/status` payload
-- [ ] **PLR-11**: Poller publishes the per-host non-gauge service list (name, state, `plugin_output`) on a new retained `lan/devices/{id}/services` topic, republished only when a service's state or the service set itself changes — never on `plugin_output` text drift
-- [ ] **PLR-12**: Poller publishes a bounded per-service transition history on `lan/devices/{id}/service_history`, kept separate from the device-level `lan/devices/{id}/history` topic, and tombstones both new topics when a device is removed
+- [x] **PLR-09**: Poller issues a `GET services` Livestatus query alongside its existing `GET hosts` query, behind the same defensive column-availability probe, and parses each service's Nagios-format `perf_data` server-side (never in the browser)
+- [x] **PLR-10**: Poller adds gauge-backing values (CPU utilisation %, memory used %, `Filesystem /` used %, worst other-mount used %, SMART pass/fail counts) as additive keys on the existing every-cycle `lan/devices/{id}/status` payload
+- [x] **PLR-11**: Poller publishes the per-host non-gauge service list (name, state, `plugin_output`) on a new retained `lan/devices/{id}/services` topic, republished only when a service's state or the service set itself changes — never on `plugin_output` text drift
+- [x] **PLR-12**: Poller publishes a bounded per-service transition history on `lan/devices/{id}/service_history`, kept separate from the device-level `lan/devices/{id}/history` topic, and tombstones both new topics when a device is removed
 
 ### Broker
 
@@ -44,7 +44,7 @@
 
 - [x] **DASH-01**: `index.html` shows an at-a-glance stats strip (counts by state) above the centre's primary view, merging incoming updates in place rather than re-rendering from scratch. The primary view is the topology map (DASH-07, Phase 13); until that lands it is a sized, labelled placeholder pane
 - [ ] **DASH-02**: `devices.html` shows a live sortable device table plus a recent-events panel, updating in place
-- [ ] **DASH-03**: `details.html` shows a per-device drill-down with a bounded status-history strip, linking out to Checkmk's own UI for full service-level detail
+- [x] **DASH-03**: `details.html` shows a per-device drill-down with a bounded status-history strip, linking out to Checkmk's own UI for full service-level detail
 - [ ] **DASH-04**: Dashboard shows a distinct stale/unknown visual state (separate from down) when a device's last-seen timestamp exceeds a threshold, or when the poller's own liveness signal goes stale
 - [ ] **DASH-05**: Dashboard shows a connection-status indicator with jittered exponential-backoff reconnect for the MQTT-over-WebSockets connection
 - [x] **DASH-06**: Dashboard color-codes/icons hosts by device type and groups/colors by the folder-derived location/group label
@@ -52,7 +52,7 @@
 - [x] **DASH-08**: The per-device drill-down renders CPU / RAM / Disk ring gauges whose colour is decided by each metric's OWN `perf_data` warn/crit thresholds (not the Checkmk service state), hiding any individual gauge whose backing service does not exist on that host
 - [x] **DASH-09**: The per-device drill-down renders a worst-of-all-disks SMART badge next to the Disk gauge, hidden entirely (not shown as N/A) when the host has no SMART health service
 - [x] **DASH-10**: The per-device drill-down renders a per-service status table (service name, state badge, `plugin_output`) covering every service except the gauge-backed ones, sorted worst-first, so an operator can see *why* a host is red without leaving the dashboard
-- [ ] **DASH-11**: Device rows in the fleet tree navigate to that device's drill-down (`/details?id={id}`), so the drill-down is reachable without hand-typing a URL
+- [x] **DASH-11**: Device rows in the fleet tree navigate to that device's drill-down (`/details?id={id}`), so the drill-down is reachable without hand-typing a URL
 
 ## v2 Requirements
 
@@ -112,14 +112,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-05 | Phase 11 | Pending |
 | DASH-06 | Phase 11 | Complete |
 | DASH-07 | Phase 13 | Pending |
-| PLR-09 | Phase 12 | Pending |
-| PLR-10 | Phase 12 | Pending |
-| PLR-11 | Phase 12 | Pending |
-| PLR-12 | Phase 12 | Pending |
+| PLR-09 | Phase 12 | Complete |
+| PLR-10 | Phase 12 | Complete |
+| PLR-11 | Phase 12 | Complete |
+| PLR-12 | Phase 12 | Complete |
 | DASH-08 | Phase 12 | Complete |
 | DASH-09 | Phase 12 | Complete |
 | DASH-10 | Phase 12 | Complete |
-| DASH-11 | Phase 12 | Pending |
+| DASH-11 | Phase 12 | Complete |
 
 **Coverage:**
 - v1 requirements: 28 total
