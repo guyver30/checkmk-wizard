@@ -39,7 +39,7 @@ afterEach(() => {
 
 describe("request() choke point (exercised via the exported writers)", () => {
   it("throws CheckmkWriteError with method, url, status and parsed body on a non-2xx response", async () => {
-    fetchMock.mockResolvedValueOnce(mockResponse(404, { detail: "not found" }));
+    fetchMock.mockResolvedValue(mockResponse(404, { detail: "not found" }));
 
     await expect(countPendingChanges()).rejects.toMatchObject({
       method: "GET",
