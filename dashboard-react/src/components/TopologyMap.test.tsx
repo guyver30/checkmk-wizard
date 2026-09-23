@@ -5,11 +5,12 @@ import { TopologyMap } from "./TopologyMap";
 import { instances, resetFakeNetworks } from "../test/fakeVisNetwork";
 import type { DevicePayload } from "../lib/types";
 import * as checkmkWrite from "../lib/checkmkWrite";
+import { nodeVisual } from "../lib/mapIcons";
 
-// 13-06: every write in edit mode goes through checkmkWrite.ts (13-05) -- mocked here so these
-// tests exercise TopologyMap's own callback wiring (what it calls, with what args, and how it
-// reacts to success/failure) without making a real network call. isValidHostName is kept real
-// (a pure regex) since Task 2's addNode tests need actual validation behavior, not a stub.
+// Every write in edit mode goes through checkmkWrite.ts -- mocked here so these tests exercise
+// TopologyMap's own callback wiring (what it calls, with what args, and how it reacts to
+// success/failure) without making a real network call. isValidHostName is kept real (a pure
+// regex) since the addNode tests below need actual validation behavior, not a stub.
 vi.mock("../lib/checkmkWrite", () => ({
   updateParents: vi.fn(),
   setMapPosition: vi.fn(),
@@ -295,7 +296,7 @@ describe("TopologyMap", () => {
   });
 });
 
-describe("TopologyMap edit mode (13-06)", () => {
+describe("TopologyMap edit mode", () => {
   it("enables manipulation/dragNodes and passes addEdge/editEdge/deleteEdge/addNode (never editNode) when editMode turns on, then disables and calls disableEditMode when it turns off", () => {
     const topologyDevices = [{ id: "h1", parents: [] }];
     const statuses = { h1: device({ id: "h1" }) };
@@ -654,5 +655,169 @@ describe("TopologyMap edit mode (13-06)", () => {
     expect(edges.getIds()).not.toContain("sw->h1");
 
     confirmSpy.mockRestore();
+  });
+
+  it("addNode with a cancelled or empty prompt makes no write", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue(null);
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40, y: -20, label: "new" }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(mockCreateUnmanagedSwitch).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it("addNode with an invalid name makes no write and calls onEditFailed", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("bad name!");
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    const onEditFailed = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true, onEditFailed });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40, y: -20, label: "new" }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(mockCreateUnmanagedSwitch).not.toHaveBeenCalled();
+    expect(onEditFailed).toHaveBeenCalledWith({
+      title: "Couldn't add that switch",
+      body: "Use letters, digits, dot, dash or underscore only.",
+    });
+    promptSpy.mockRestore();
+  });
+
+  it("addNode with a name matching an existing node makes no write and calls onEditFailed", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("h1");
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    const onEditFailed = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true, onEditFailed });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40, y: -20, label: "new" }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(mockCreateUnmanagedSwitch).not.toHaveBeenCalled();
+    expect(onEditFailed).toHaveBeenCalledWith({
+      title: "Couldn't add that switch",
+      body: "A device with that name already exists.",
+    });
+    promptSpy.mockRestore();
+  });
+
+  it("addNode with a valid new name creates an unmanaged switch and survives a later topology update that doesn't yet include it", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("sw-lobby");
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    mockCreateUnmanagedSwitch.mockResolvedValue(undefined);
+    const onEditSaved = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    const statuses = { h1: device({ id: "h1" }) };
+    const { rerender } = renderMap({ topologyDevices, statuses, editMode: true, onEditSaved });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const nodes = instances[0].data.nodes as unknown as {
+      add: (item: unknown) => void;
+      get: (id: string) => Record<string, unknown> | null;
+      getIds: () => string[];
+    };
+    const callback = vi.fn((result: unknown) => {
+      if (result) {
+        nodes.add(result);
+      }
+    });
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40.4, y: -20.4, label: "new" }, callback);
+    });
+
+    expect(mockCreateUnmanagedSwitch).toHaveBeenCalledWith("sw-lobby", { x: 40, y: -20 });
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "sw-lobby",
+        label: "sw-lobby",
+        title: "Unmanaged switch (not monitored)",
+        physics: false,
+      }),
+    );
+    expect(onEditSaved).toHaveBeenCalledTimes(1);
+    expect(nodes.get("sw-lobby")).toMatchObject(nodeVisual("NetworkDevice", "PEND"));
+
+    // Survives a later topology update that doesn't yet include the new host.
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: true, onEditSaved });
+    expect(nodes.getIds()).toContain("sw-lobby");
+
+    promptSpy.mockRestore();
+  });
+
+  it("addNode failure calls callback(null) and onEditFailed with the switch-creation copy", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("sw-lobby");
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    mockCreateUnmanagedSwitch.mockRejectedValue(new Error("rejected"));
+    const onEditSaved = vi.fn();
+    const onEditFailed = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({
+      topologyDevices,
+      statuses: { h1: device({ id: "h1" }) },
+      editMode: true,
+      onEditSaved,
+      onEditFailed,
+    });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40, y: -20, label: "new" }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(onEditFailed).toHaveBeenCalledWith({
+      title: "Couldn't add that switch",
+      body: "Checkmk rejected the new host. Check the name isn't already used, then try again.",
+    });
+    expect(onEditSaved).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
   });
 });
