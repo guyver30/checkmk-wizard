@@ -237,7 +237,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
-| 12. Agent Metrics and Service Status | 5/5 | Complete   | 2026-09-23 |
+| 12. Agent Metrics and Service Status | 5/5 | Complete    | 2026-09-23 |
 | 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |
 
 ### Phase 11.1: Dashboard Layout and Light Palette
