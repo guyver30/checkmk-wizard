@@ -70,13 +70,23 @@ export function ThreePaneLayout({ tree, centreTop, centreBottom }: ThreePaneLayo
       <div className="grid h-full min-h-0 min-w-0" style={{ gridTemplateRows: `1fr 4px ${eventsRowHeight}px` }}>
         <div className="min-h-0 overflow-auto bg-bg-surface">{centreTop}</div>
 
+        {/* sizes.events stores the BOTTOM pane's (event history) own height, but this
+            divider sits between a top pane (centreTop) that should grow when you drag DOWN --
+            the natural "boundary follows the cursor" convention for a divider above a fixed-size
+            pane. Splitter's own contract is the opposite: dragging down always INCREASES the
+            value you give it (see Splitter.tsx's docstring, "wire that up in how they compute
+            the size they pass in, not by inverting this component"). So the value/onResize here
+            are mirrored around the pane's min+max range: as the mirrored value goes up (drag
+            down), the real eventsHeight goes down (event history shrinks, map grows) -- and vice
+            versa. Confirmed backwards in live testing before this mirroring was added
+            (2026-09-23): dragging down was shrinking the map instead of growing it. */}
         <Splitter
           orientation="horizontal"
-          value={sizes.events}
+          value={bounds.events.min + bounds.events.max - sizes.events}
           min={bounds.events.min}
           max={bounds.events.max}
           label="Resize event history"
-          onResize={(next) => setSize("events", next)}
+          onResize={(next) => setSize("events", bounds.events.min + bounds.events.max - next)}
           onResizeCommit={commit}
         />
 
