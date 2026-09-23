@@ -1384,16 +1384,27 @@ def test_run_cycle_removed_device_tombstones_status_and_history_and_events():
     client = MagicMock()
     node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
+    state.previous_services["a"] = (("PING", "OK"),)
+    state.last_service_states["a"] = {"PING": "OK"}
+    state.service_history["a"] = []
 
     poller.run_cycle(client, _make_config(), state, [])
 
     tombstones = [c for c in client.publish.call_args_list if c.kwargs.get("payload", "unset") is None]
-    assert {c.args[0] for c in tombstones} == {"lan/devices/a/status", "lan/devices/a/history"}
+    assert {c.args[0] for c in tombstones} == {
+        "lan/devices/a/status",
+        "lan/devices/a/history",
+        "lan/devices/a/services",
+        "lan/devices/a/service_history",
+    }
     for call in tombstones:
         assert call.kwargs["retain"] is True
         assert call.kwargs["qos"] == 1
     assert "a" not in state.last_status
     assert "a" not in state.history
+    assert "a" not in state.previous_services
+    assert "a" not in state.last_service_states
+    assert "a" not in state.service_history
 
     events_calls = _published(client, poller.TOPIC_EVENTS)
     assert len(events_calls) == 1
@@ -1479,6 +1490,82 @@ def test_run_cycle_truncates_history_and_events_to_configured_bounds():
 
     assert len(state.history["a"]) <= 2
     assert len(state.events) <= 1
+
+
+# --- run_cycle: services / service_history (D-12/D-13/D-14) -----------------
+
+
+def test_run_cycle_identical_services_across_two_cycles_publishes_services_once():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+    services = [_service("web1", "PING", "OK", plugin_output="OK - up")]
+
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services)
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services)
+
+    assert len(_published(client, "lan/devices/web1/services")) == 1
+
+
+def test_run_cycle_plugin_output_only_change_does_not_republish_services():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+    services_cycle1 = [_service("web1", "PING", "OK", plugin_output="OK - up 1ms")]
+    services_cycle2 = [_service("web1", "PING", "OK", plugin_output="OK - up 9ms")]
+
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle1)
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle2)
+
+    assert len(_published(client, "lan/devices/web1/services")) == 1
+
+
+def test_run_cycle_service_state_change_republishes_services_and_appends_one_history_entry():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+    services_cycle1 = [_service("web1", "PING", "OK")]
+    services_cycle2 = [_service("web1", "PING", "CRIT")]
+
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle1)
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle2)
+
+    assert len(_published(client, "lan/devices/web1/services")) == 2
+    history_calls = _published(client, "lan/devices/web1/service_history")
+    assert len(history_calls) == 1
+    entries = json.loads(history_calls[0].args[1])
+    assert len(entries) == 1
+    assert entries[0]["from"] == "OK"
+    assert entries[0]["to"] == "CRIT"
+    assert entries[0]["description"] == "PING"
+
+
+def test_run_cycle_service_history_bounded_to_configured_max_entries():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config(service_history_max_entries=2)
+
+    states = ["OK", "WARN", "OK", "CRIT"]
+    for service_state in states:
+        poller.run_cycle(
+            client,
+            config,
+            state,
+            [_snapshot("web1")],
+            services=[_service("web1", "PING", service_state)],
+        )
+
+    assert len(state.service_history["web1"]) <= 2
+
+
+def test_run_cycle_services_none_publishes_status_but_nothing_on_services_topic():
+    client = MagicMock()
+    state = _poller_state()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("web1")], services=None)
+
+    assert len(_published(client, "lan/devices/web1/status")) == 1
+    assert _published(client, "lan/devices/web1/services") == []
 
 
 # Regression for D-33 (oldest-events-on-top was reported live, but the shipped
@@ -1578,6 +1665,10 @@ def test_run_forever_survives_livestatus_error_and_does_not_raise():
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
         patch.object(poller, "fetch_host_folders", return_value={}),
         patch.object(poller, "query_devices", side_effect=poller.LivestatusError("boom")),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle") as mock_run_cycle,
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1632,6 +1723,10 @@ def test_run_forever_startup_probe_retries_then_recovers(caplog):
         ),
         patch.object(poller, "fetch_host_folders", return_value={}),
         patch.object(poller, "query_devices", return_value=[]),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1686,6 +1781,10 @@ def test_run_forever_logs_startup_success(caplog):
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
         patch.object(poller, "fetch_host_folders", return_value={}),
         patch.object(poller, "query_devices", return_value=[]),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1703,6 +1802,42 @@ def test_run_forever_logs_startup_success(caplog):
         and str(config.mqtt_port) in message
         for message in messages
     )
+
+
+def test_run_forever_services_probe_exhausted_is_non_fatal_and_still_runs_cycle(caplog):
+    # Phase 12 OPS-03 asymmetry: unlike the mandatory hosts probe, a
+    # permanently-failing services probe must not abort the poller --
+    # gauges/services are disabled for this run, but the hosts cycle still
+    # runs.
+    fake_client = MagicMock()
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_folders", return_value={}),
+        patch.object(poller, "query_devices", return_value=[]),
+        patch.object(
+            poller,
+            "available_service_columns",
+            side_effect=poller.LivestatusError("services table unreachable"),
+        ) as mock_probe,
+        patch.object(poller, "query_services") as mock_query_services,
+        patch.object(poller, "run_cycle") as mock_run_cycle,
+        patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
+        patch.object(poller.signal, "signal"),
+        patch.object(poller.time, "sleep"),
+        caplog.at_level("WARNING", logger=poller._logger.name),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result == 0
+    assert mock_probe.call_count == len(poller._STARTUP_RETRY_DELAYS_SECONDS) + 1
+    mock_query_services.assert_not_called()
+    mock_run_cycle.assert_called_once()
+    assert mock_run_cycle.call_args.kwargs["services"] is None
+    assert any("Services probe failed" in record.getMessage() for record in caplog.records)
 
 
 def test_run_forever_rest_failure_reuses_last_known_good_folder_map():
@@ -1740,6 +1875,10 @@ def test_run_forever_rest_failure_reuses_last_known_good_folder_map():
             side_effect=[{"web1": "vlan10"}, poller.RestError("REST hiccup")],
         ),
         patch.object(poller, "query_devices", side_effect=_fake_query_devices),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
         patch.object(poller.threading, "Event", return_value=_TwoShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1765,6 +1904,10 @@ def test_run_forever_rest_never_succeeded_leaves_folders_empty_and_still_runs_cy
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
         patch.object(poller, "fetch_host_folders", side_effect=poller.RestError("never up")),
         patch.object(poller, "query_devices", side_effect=_fake_query_devices),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle") as mock_run_cycle,
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1793,6 +1936,10 @@ def test_once_branch_enriches_snapshots_with_folder_map(monkeypatch):
         patch.object(poller, "select_host_columns", return_value=["name", "state", "alias"]),
         patch.object(poller, "fetch_host_folders", return_value={"192.168.0.1": "folder2"}),
         patch.object(poller, "query_devices", return_value=[]) as mock_query,
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
     ):
         assert poller.main() == 0
@@ -1812,6 +1959,10 @@ def test_once_branch_degrades_when_folder_fetch_fails(monkeypatch):
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
         patch.object(poller, "fetch_host_folders", side_effect=poller.RestError("401")),
         patch.object(poller, "query_devices", return_value=[]) as mock_query,
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
     ):
         assert poller.main() == 0
