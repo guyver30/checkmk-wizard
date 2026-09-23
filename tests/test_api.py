@@ -414,6 +414,92 @@ async def test_bootstrap_automation_user_success():
     assert not status_route.called
 
 
+_SEEDED_SECRET = "fixed-env-secret-0123456789"
+_USER_URL = f"{BASE}/objects/user_config/automation"
+
+
+def _mock_login_and_activation():
+    respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+    respx.post(LOGIN_URL).mock(
+        return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+    )
+    respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+        return_value=Response(200, json={"value": []}, headers={"ETag": '"the-etag"'})
+    )
+    return respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+        return_value=Response(200, json={"links": [], "extensions": {"is_running": False}})
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_uses_supplied_secret_when_user_missing():
+    with respx.mock:
+        activate_route = _mock_login_and_activation()
+        respx.get(_USER_URL).mock(return_value=Response(404, json={"title": "Not Found"}))
+        create_route = respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        put_route = respx.put(_USER_URL).mock(return_value=Response(200, json={}))
+        result = await bootstrap_automation_user(
+            "cmk.example", "mysite", "adminpw", secret=_SEEDED_SECRET
+        )
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["auth_option"]["secret"] == _SEEDED_SECRET
+    assert result == _SEEDED_SECRET
+    assert activate_route.called
+    assert not put_route.called
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_updates_existing_user_secret():
+    with respx.mock:
+        activate_route = _mock_login_and_activation()
+        respx.get(_USER_URL).mock(return_value=Response(200, json={}, headers={"ETag": '"u-etag"'}))
+        create_route = respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        put_route = respx.put(_USER_URL).mock(return_value=Response(200, json={}))
+        result = await bootstrap_automation_user(
+            "cmk.example", "mysite", "adminpw", secret=_SEEDED_SECRET
+        )
+
+    assert put_route.calls.last.request.headers["If-Match"] == '"u-etag"'
+    assert json.loads(put_route.calls.last.request.content) == {
+        "auth_option": {
+            "auth_type": "automation",
+            "secret": _SEEDED_SECRET,
+            "store_automation_secret": True,
+        }
+    }
+    assert not create_route.called
+    assert result == _SEEDED_SECRET
+    assert activate_route.called
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_update_rejected_raises():
+    with respx.mock:
+        _mock_login_and_activation()
+        respx.get(_USER_URL).mock(return_value=Response(200, json={}, headers={"ETag": '"u-etag"'}))
+        respx.put(_USER_URL).mock(return_value=Response(400, json={"title": "Bad secret"}))
+        with pytest.raises(CheckmkAPIError):
+            await bootstrap_automation_user(
+                "cmk.example", "mysite", "adminpw", secret=_SEEDED_SECRET
+            )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_automation_user_existing_user_missing_etag_raises():
+    with respx.mock:
+        _mock_login_and_activation()
+        respx.get(_USER_URL).mock(return_value=Response(200, json={}))
+        with pytest.raises(CheckmkAPIError):
+            await bootstrap_automation_user(
+                "cmk.example", "mysite", "adminpw", secret=_SEEDED_SECRET
+            )
+
+
 @pytest.mark.asyncio
 async def test_bootstrap_automation_user_polls_until_activation_completes():
     with respx.mock:
