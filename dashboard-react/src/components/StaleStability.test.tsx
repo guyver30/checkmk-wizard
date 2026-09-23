@@ -11,6 +11,7 @@
 // assumed from the framework's reputation.
 
 import { act, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IndexRoute } from "../routes/IndexRoute";
 import { useAppStore } from "../store/useAppStore";
@@ -75,7 +76,11 @@ describe("StaleStability (D-34)", () => {
       seedStore();
     });
 
-    render(<IndexRoute />);
+    render(
+      <MemoryRouter>
+        <IndexRoute />
+      </MemoryRouter>,
+    );
 
     // Expand both groups.
     await act(async () => {
