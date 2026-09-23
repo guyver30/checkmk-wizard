@@ -199,9 +199,9 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 12-01-PLAN.md — Poller services foundation: `GET services` column triad, Nagios `perf_data` parser, `ServiceSnapshot`/`query_services`, plus a `--dump-service-names` diagnostic for confirming Checkmk's SMART service naming live
-- [ ] 12-03-PLAN.md — Dashboard data layer: gauge fields + `ServiceEntry`/`ServiceHistoryEntry` types, two new subscribed topics and store slices, and the `gaugeColor`/`smartBadge`/`compareServices` helpers
-- [ ] 12-05-PLAN.md — Tree-row navigation into `/details?id=` (D-15) and the PROJECT.md Out of Scope amendment (scope item 6)
+- [x] 12-01-PLAN.md — Poller services foundation: `GET services` column triad, Nagios `perf_data` parser, `ServiceSnapshot`/`query_services`, plus a `--dump-service-names` diagnostic for confirming Checkmk's SMART service naming live
+- [x] 12-03-PLAN.md — Dashboard data layer: gauge fields + `ServiceEntry`/`ServiceHistoryEntry` types, two new subscribed topics and store slices, and the `gaugeColor`/`smartBadge`/`compareServices` helpers
+- [x] 12-05-PLAN.md — Tree-row navigation into `/details?id=` (D-15) and the PROJECT.md Out of Scope amendment (scope item 6)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -237,7 +237,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 9. Poller Core | 4/4 | Complete   | 2026-09-09 |
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
-| 12. Agent Metrics and Service Status | 0/TBD | Not started | - |
+| 12. Agent Metrics and Service Status | 3/5 | In Progress|  |
 | 13. Wizard Parents Support and Topology Map | 0/TBD | Not started | - |
 
 ### Phase 11.1: Dashboard Layout and Light Palette
@@ -323,5 +323,25 @@ Plans:
   - Who is Grafana for? Decides whether it sits alongside the dashboard or replaces it
 
 **Honest caveat to carry**: a projection is only as good as its history. Disk-fill dates are credible almost immediately; a drive-failure date is not credible until the drive has been watched for months. Promising it sooner is the one thing that would undermine the rest.
+
+**Plans**: TBD
+
+### Phase 15: Location Hierarchy for Hosts and Dashboard Tower Tabs
+
+**Goal**: Devices carry physical-location metadata (tower/building plus sub-location such as motor room, lobby, control room), and the dashboard exposes a per-tower tab with sublocation filtering, so an operator can navigate the fleet by where a device physically sits instead of only by VLAN/device type.
+**Requirements**: TBD — needs REQUIREMENTS.md entries before planning.
+**Depends on**: Phase 10 / 10.1 (the `tag_device_type` + full-screen retag UI pattern this phase reuses) and Phase 11.1 (the React dashboard this phase adds tabs to). Not truly dependent on Phase 14 — the roadmap tool defaulted to sequential placement; this is deliberately a "look at it later" placeholder, not urgent, and can be resequenced whenever it's picked up.
+**Not urgent**: captured from a 2026-09-23 design discussion, parked here to revisit later rather than planned/executed now.
+
+**Scope** (from the 2026-09-23 discussion that produced this phase):
+
+  1. A new Checkmk host tag group (or two: `building`/`tower` and `room`/`sublocation`) captures physical location, set the same way Phase 10 sets `tag_device_type` — REST API `tag_<group_id>` attribute — and retagged through the same full-screen prompt_toolkit UI pattern Phase 10.1 built (`10.1-03-PLAN` / D-10 through D-13).
+  2. **Explicitly rejected**: reusing Checkmk folders for location. Folders already encode VLAN derivation in this project (see root `CLAUDE.md` constraint), and VLANs run horizontally across towers while location is per-tower/per-room — folder-per-location would collide with folder-per-VLAN.
+  3. The location tag(s) propagate into the MQTT device payload, mirroring how `device_type` already flows from Checkmk through the poller to the dashboard (Phase 10 → Phase 11/12 precedent).
+  4. Dashboard: one tab per tower (tower1, tower2, ...), each showing a map/view scoped to that tower's sublocations, plus filtering by sublocation within a tower.
+
+**Open questions for this phase's discussion** (deliberately not decided yet):
+  - One flat location tag (e.g. `tower1-motor_room`) vs. two separate tag groups (`building` + `room`) for real hierarchy — trades simplicity against query/filter granularity.
+  - Whether the per-tower map should reuse Phase 13's `parents`-derived topology map (vis-network) for positioning within a tower, or is a simpler non-topological sublocation list/grid — sequencing after Phase 13 may be preferable so real topology data exists first, but that dependency is not locked.
 
 **Plans**: TBD

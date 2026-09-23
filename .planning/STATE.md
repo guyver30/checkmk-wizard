@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
+status: executing
 stopped_at: Phase 12 planned — 5 plans, 2 waves, verified (2 non-blocking warnings, 1 fixed)
-last_updated: "2026-09-21T13:45:54.343Z"
-last_activity: 2026-09-21
+last_updated: "2026-09-23T01:03:46.142Z"
+last_activity: 2026-09-23 -- Phase 12 execution started
 progress:
-  total_phases: 9
+  total_phases: 10
   completed_phases: 6
   total_plans: 41
   completed_plans: 36
-  percent: 67
+  percent: 60
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Phase 12 — agent metrics and service status
+**Current focus:** Phase 12 — agent-metrics-and-service-status
 
 ## Current Position
 
-Phase: 12
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-21
+Phase: 12 (agent-metrics-and-service-status) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 12
+Last activity: 2026-09-23 -- Phase 12 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -61,6 +61,7 @@ Progress: [░░░░░░░░░░] 0%
 - Phase 12 added: Agent Metrics and Service Status — per-device CPU/RAM/disk/SMART gauges and per-service status, split out of Phase 11 during its 2026-09-12 scope discussion. Requires a new Livestatus GET services query; the poller issues only GET hosts today. Partially reverses PROJECT.md's per-service-drill-down Out of Scope entry.
 - Phase 11 replanned from scratch 2026-09-13: the original 10-plan set (2026-09-12) was written against the pre-KONE-branding UI-SPEC and was deleted (recoverable at commit 2de890c) before any of its 23 tasks ran. The replacement is 9 plans / 20 tasks / 5 waves built against the current KONE Design System UI-SPEC; plan-checker PASSED with no blockers.
 - Phase 13 added: Wizard Parents Support and Topology Map — teach the wizard to set Checkmk's parents attribute over REST (as Phase 10 does for tag_device_type), then build the vis-network map on real data. Split out of Phase 11 during its 2026-09-12 scope discussion because parents is unset on the target site, so an auto-built map would render as disconnected dots. Depends on Phase 11, not Phase 12.
+- Phase 15 added 2026-09-23: Location Hierarchy for Hosts and Dashboard Tower Tabs — a new Checkmk tag group (mirroring `tag_device_type`/Phase 10.1's retag UI) captures physical location (tower + sub-location, e.g. motor room, lobby, control room), propagated to the MQTT payload and surfaced as per-tower dashboard tabs with sublocation filtering. Deliberately rejects reusing folders (folders already encode VLAN, which is horizontal across towers). Parked as a not-urgent placeholder to revisit later, not planned/executed now.
 
 ### Decisions
 
