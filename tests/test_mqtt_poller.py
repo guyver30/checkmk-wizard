@@ -743,6 +743,158 @@ def test_query_services_skips_host_failing_publishable_device_id():
     assert [s.host_name for s in snapshots] == ["web2"]
 
 
+# --- classify_host_services / services_signature -----------------------------
+
+
+def _service(host_name, description, state, plugin_output="", perf_data=None):
+    state_raw = {"OK": 0, "WARN": 1, "CRIT": 2, "UNKNOWN": 3}[state]
+    return poller.ServiceSnapshot(
+        host_name=host_name,
+        description=description,
+        state=state,
+        state_raw=state_raw,
+        plugin_output=plugin_output,
+        perf_data=perf_data or {},
+    )
+
+
+def test_classify_host_services_full_fixture_computes_gauges_smart_and_rows():
+    services = [
+        _service(
+            "web1",
+            "CPU utilization",
+            "OK",
+            perf_data={"util": {"value": 12.5, "warn": 80.0, "crit": 90.0, "min": 0.0, "max": 100.0}},
+        ),
+        _service(
+            "web1",
+            "Memory",
+            "OK",
+            perf_data={
+                "mem_used_percent": {"value": 45.0, "warn": 80.0, "crit": 90.0, "min": None, "max": None}
+            },
+        ),
+        _service(
+            "web1",
+            "Filesystem /",
+            "OK",
+            perf_data={
+                "fs_used_percent": {"value": 55.0, "warn": 80.0, "crit": 90.0, "min": None, "max": None}
+            },
+        ),
+        _service(
+            "web1",
+            "Filesystem /boot",
+            "WARN",
+            perf_data={
+                "fs_used_percent": {"value": 82.0, "warn": 80.0, "crit": 90.0, "min": None, "max": None}
+            },
+        ),
+        _service("web1", "SMART /dev/sda Stats", "OK"),
+        _service("web1", "Temperature SMART /dev/sda", "OK"),
+        _service("web1", "Systemd Service cron", "OK"),
+        _service("web1", "Systemd Service Summary", "OK"),
+        _service("web1", "PING", "OK"),
+    ]
+
+    gauge_fields, service_rows = poller.classify_host_services(services)
+
+    assert gauge_fields["cpu_percent"] == 12.5
+    assert gauge_fields["cpu_warn"] == 80.0
+    assert gauge_fields["cpu_crit"] == 90.0
+    assert gauge_fields["ram_percent"] == 45.0
+    assert gauge_fields["ram_warn"] == 80.0
+    assert gauge_fields["ram_crit"] == 90.0
+    assert gauge_fields["disk_percent"] == 55.0
+    assert gauge_fields["disk_warn"] == 80.0
+    assert gauge_fields["disk_crit"] == 90.0
+    assert gauge_fields["disk_other_worst_percent"] == 82.0
+    assert gauge_fields["disk_other_worst_warn"] == 80.0
+    assert gauge_fields["disk_other_worst_crit"] == 90.0
+    assert gauge_fields["disk_other_worst_mount"] == "/boot"
+    assert gauge_fields["smart_total"] == 1
+    assert gauge_fields["smart_failing"] == 0
+    descriptions = [row["description"] for row in service_rows]
+    assert descriptions == ["PING", "Systemd Service cron", "Temperature SMART /dev/sda"]
+    assert "Systemd Service Summary" not in descriptions
+
+
+def test_classify_host_services_snmp_only_host_yields_all_gauge_keys_present_and_none():
+    services = [_service("snmp1", "PING", "OK")]
+
+    gauge_fields, service_rows = poller.classify_host_services(services)
+
+    assert set(gauge_fields.keys()) == {
+        "cpu_percent",
+        "cpu_warn",
+        "cpu_crit",
+        "ram_percent",
+        "ram_warn",
+        "ram_crit",
+        "disk_percent",
+        "disk_warn",
+        "disk_crit",
+        "disk_other_worst_percent",
+        "disk_other_worst_warn",
+        "disk_other_worst_crit",
+        "disk_other_worst_mount",
+        "smart_total",
+        "smart_failing",
+    }
+    assert all(value is None for value in gauge_fields.values())
+    assert [row["description"] for row in service_rows] == ["PING"]
+
+
+def test_classify_host_services_empty_list_returns_all_none_gauges_and_no_rows():
+    gauge_fields, service_rows = poller.classify_host_services([])
+    assert gauge_fields["cpu_percent"] is None
+    assert gauge_fields["ram_percent"] is None
+    assert gauge_fields["disk_percent"] is None
+    assert gauge_fields["disk_other_worst_percent"] is None
+    assert gauge_fields["smart_total"] is None
+    assert gauge_fields["smart_failing"] is None
+    assert service_rows == []
+
+
+def test_classify_host_services_smart_failing_counts_warn_and_crit_not_unknown():
+    services = [
+        _service("web1", "SMART /dev/sda Stats", "OK"),
+        _service("web1", "SMART /dev/sdb Stats", "WARN"),
+        _service("web1", "SMART /dev/sdc Stats", "CRIT"),
+        _service("web1", "SMART /dev/sdd Stats", "UNKNOWN"),
+    ]
+    gauge_fields, _ = poller.classify_host_services(services)
+    assert gauge_fields["smart_total"] == 4
+    assert gauge_fields["smart_failing"] == 2
+
+
+def test_services_signature_order_independent_and_excludes_plugin_output():
+    rows_a = [
+        {"description": "PING", "state": "OK", "plugin_output": "OK - up"},
+        {"description": "cron", "state": "OK", "plugin_output": "OK - running"},
+    ]
+    rows_b_diff_output_only = [
+        {"description": "cron", "state": "OK", "plugin_output": "OK - running 5 days"},
+        {"description": "PING", "state": "OK", "plugin_output": "OK - up 2ms"},
+    ]
+    assert poller.services_signature(rows_a) == poller.services_signature(rows_b_diff_output_only)
+
+
+def test_services_signature_differs_on_state_change():
+    rows_a = [{"description": "PING", "state": "OK", "plugin_output": ""}]
+    rows_b = [{"description": "PING", "state": "CRIT", "plugin_output": ""}]
+    assert poller.services_signature(rows_a) != poller.services_signature(rows_b)
+
+
+def test_services_signature_differs_on_row_added():
+    rows_a = [{"description": "PING", "state": "OK", "plugin_output": ""}]
+    rows_b = [
+        {"description": "PING", "state": "OK", "plugin_output": ""},
+        {"description": "cron", "state": "OK", "plugin_output": ""},
+    ]
+    assert poller.services_signature(rows_a) != poller.services_signature(rows_b)
+
+
 # --- MQTT client lifecycle and publish helpers ------------------------------
 
 
@@ -867,6 +1019,30 @@ def test_publish_device_status_uses_qos0_and_exact_payload_keys():
     assert kwargs["retain"] is True
 
 
+def test_publish_device_status_with_gauge_fields_adds_them_to_existing_payload():
+    mock_client = MagicMock()
+    snapshot = poller.DeviceSnapshot(
+        id="web1",
+        state="OK",
+        in_downtime=False,
+        acknowledged=False,
+        device_type="server",
+        folder="vlan10",
+        parents=[],
+        alias="Web Server 1",
+    )
+    gauge_fields = {"cpu_percent": 12.5, "cpu_warn": 80.0, "cpu_crit": 90.0}
+
+    poller.publish_device_status(
+        mock_client, snapshot, "2026-09-06T00:00:00+00:00", gauge_fields=gauge_fields
+    )
+
+    args, _ = mock_client.publish.call_args
+    payload = json.loads(args[1])
+    assert payload["cpu_percent"] == 12.5
+    assert payload["id"] == "web1"  # pre-existing keys still present
+
+
 def test_publish_topology_uses_qos1_and_devices_envelope():
     mock_client = MagicMock()
     nodes = [{"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}]
@@ -904,14 +1080,43 @@ def test_publish_events_publishes_full_array():
     assert kwargs["retain"] is True
 
 
-def test_publish_tombstone_clears_both_status_and_history_topics():
+def test_publish_services_uses_qos1_and_bare_array():
+    mock_client = MagicMock()
+    rows = [{"description": "PING", "state": "OK", "plugin_output": "OK - up"}]
+    poller.publish_services(mock_client, "web1", rows)
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == "lan/devices/web1/services"
+    assert json.loads(args[1]) == rows
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_publish_service_history_uses_qos1_and_bare_array():
+    mock_client = MagicMock()
+    entries = [{"timestamp": "t1", "description": "PING", "from": "OK", "to": "CRIT"}]
+    poller.publish_service_history(mock_client, "web1", entries)
+
+    args, kwargs = mock_client.publish.call_args
+    assert args[0] == "lan/devices/web1/service_history"
+    assert json.loads(args[1]) == entries
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
+
+
+def test_publish_tombstone_clears_all_four_per_device_topics():
     mock_client = MagicMock()
     poller.publish_tombstone(mock_client, "web1")
 
     calls = mock_client.publish.call_args_list
-    assert len(calls) == 2
+    assert len(calls) == 4
     topics = {call.args[0] for call in calls}
-    assert topics == {"lan/devices/web1/status", "lan/devices/web1/history"}
+    assert topics == {
+        "lan/devices/web1/status",
+        "lan/devices/web1/history",
+        "lan/devices/web1/services",
+        "lan/devices/web1/service_history",
+    }
     for call in calls:
         assert call.kwargs["payload"] is None
         assert call.kwargs["retain"] is True
@@ -1179,16 +1384,27 @@ def test_run_cycle_removed_device_tombstones_status_and_history_and_events():
     client = MagicMock()
     node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
+    state.previous_services["a"] = (("PING", "OK"),)
+    state.last_service_states["a"] = {"PING": "OK"}
+    state.service_history["a"] = []
 
     poller.run_cycle(client, _make_config(), state, [])
 
     tombstones = [c for c in client.publish.call_args_list if c.kwargs.get("payload", "unset") is None]
-    assert {c.args[0] for c in tombstones} == {"lan/devices/a/status", "lan/devices/a/history"}
+    assert {c.args[0] for c in tombstones} == {
+        "lan/devices/a/status",
+        "lan/devices/a/history",
+        "lan/devices/a/services",
+        "lan/devices/a/service_history",
+    }
     for call in tombstones:
         assert call.kwargs["retain"] is True
         assert call.kwargs["qos"] == 1
     assert "a" not in state.last_status
     assert "a" not in state.history
+    assert "a" not in state.previous_services
+    assert "a" not in state.last_service_states
+    assert "a" not in state.service_history
 
     events_calls = _published(client, poller.TOPIC_EVENTS)
     assert len(events_calls) == 1
@@ -1274,6 +1490,82 @@ def test_run_cycle_truncates_history_and_events_to_configured_bounds():
 
     assert len(state.history["a"]) <= 2
     assert len(state.events) <= 1
+
+
+# --- run_cycle: services / service_history (D-12/D-13/D-14) -----------------
+
+
+def test_run_cycle_identical_services_across_two_cycles_publishes_services_once():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+    services = [_service("web1", "PING", "OK", plugin_output="OK - up")]
+
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services)
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services)
+
+    assert len(_published(client, "lan/devices/web1/services")) == 1
+
+
+def test_run_cycle_plugin_output_only_change_does_not_republish_services():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+    services_cycle1 = [_service("web1", "PING", "OK", plugin_output="OK - up 1ms")]
+    services_cycle2 = [_service("web1", "PING", "OK", plugin_output="OK - up 9ms")]
+
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle1)
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle2)
+
+    assert len(_published(client, "lan/devices/web1/services")) == 1
+
+
+def test_run_cycle_service_state_change_republishes_services_and_appends_one_history_entry():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+    services_cycle1 = [_service("web1", "PING", "OK")]
+    services_cycle2 = [_service("web1", "PING", "CRIT")]
+
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle1)
+    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle2)
+
+    assert len(_published(client, "lan/devices/web1/services")) == 2
+    history_calls = _published(client, "lan/devices/web1/service_history")
+    assert len(history_calls) == 1
+    entries = json.loads(history_calls[0].args[1])
+    assert len(entries) == 1
+    assert entries[0]["from"] == "OK"
+    assert entries[0]["to"] == "CRIT"
+    assert entries[0]["description"] == "PING"
+
+
+def test_run_cycle_service_history_bounded_to_configured_max_entries():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config(service_history_max_entries=2)
+
+    states = ["OK", "WARN", "OK", "CRIT"]
+    for service_state in states:
+        poller.run_cycle(
+            client,
+            config,
+            state,
+            [_snapshot("web1")],
+            services=[_service("web1", "PING", service_state)],
+        )
+
+    assert len(state.service_history["web1"]) <= 2
+
+
+def test_run_cycle_services_none_publishes_status_but_nothing_on_services_topic():
+    client = MagicMock()
+    state = _poller_state()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("web1")], services=None)
+
+    assert len(_published(client, "lan/devices/web1/status")) == 1
+    assert _published(client, "lan/devices/web1/services") == []
 
 
 # Regression for D-33 (oldest-events-on-top was reported live, but the shipped
@@ -1373,6 +1665,10 @@ def test_run_forever_survives_livestatus_error_and_does_not_raise():
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
         patch.object(poller, "fetch_host_folders", return_value={}),
         patch.object(poller, "query_devices", side_effect=poller.LivestatusError("boom")),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle") as mock_run_cycle,
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1427,6 +1723,10 @@ def test_run_forever_startup_probe_retries_then_recovers(caplog):
         ),
         patch.object(poller, "fetch_host_folders", return_value={}),
         patch.object(poller, "query_devices", return_value=[]),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1481,6 +1781,10 @@ def test_run_forever_logs_startup_success(caplog):
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
         patch.object(poller, "fetch_host_folders", return_value={}),
         patch.object(poller, "query_devices", return_value=[]),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1498,6 +1802,42 @@ def test_run_forever_logs_startup_success(caplog):
         and str(config.mqtt_port) in message
         for message in messages
     )
+
+
+def test_run_forever_services_probe_exhausted_is_non_fatal_and_still_runs_cycle(caplog):
+    # Phase 12 OPS-03 asymmetry: unlike the mandatory hosts probe, a
+    # permanently-failing services probe must not abort the poller --
+    # gauges/services are disabled for this run, but the hosts cycle still
+    # runs.
+    fake_client = MagicMock()
+
+    with (
+        patch.object(poller, "reconcile_state", return_value=_poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_folders", return_value={}),
+        patch.object(poller, "query_devices", return_value=[]),
+        patch.object(
+            poller,
+            "available_service_columns",
+            side_effect=poller.LivestatusError("services table unreachable"),
+        ) as mock_probe,
+        patch.object(poller, "query_services") as mock_query_services,
+        patch.object(poller, "run_cycle") as mock_run_cycle,
+        patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
+        patch.object(poller.signal, "signal"),
+        patch.object(poller.time, "sleep"),
+        caplog.at_level("WARNING", logger=poller._logger.name),
+    ):
+        result = poller.run_forever(_make_config())
+
+    assert result == 0
+    assert mock_probe.call_count == len(poller._STARTUP_RETRY_DELAYS_SECONDS) + 1
+    mock_query_services.assert_not_called()
+    mock_run_cycle.assert_called_once()
+    assert mock_run_cycle.call_args.kwargs["services"] is None
+    assert any("Services probe failed" in record.getMessage() for record in caplog.records)
 
 
 def test_run_forever_rest_failure_reuses_last_known_good_folder_map():
@@ -1535,6 +1875,10 @@ def test_run_forever_rest_failure_reuses_last_known_good_folder_map():
             side_effect=[{"web1": "vlan10"}, poller.RestError("REST hiccup")],
         ),
         patch.object(poller, "query_devices", side_effect=_fake_query_devices),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
         patch.object(poller.threading, "Event", return_value=_TwoShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1560,6 +1904,10 @@ def test_run_forever_rest_never_succeeded_leaves_folders_empty_and_still_runs_cy
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
         patch.object(poller, "fetch_host_folders", side_effect=poller.RestError("never up")),
         patch.object(poller, "query_devices", side_effect=_fake_query_devices),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle") as mock_run_cycle,
         patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
         patch.object(poller.signal, "signal"),
@@ -1588,6 +1936,10 @@ def test_once_branch_enriches_snapshots_with_folder_map(monkeypatch):
         patch.object(poller, "select_host_columns", return_value=["name", "state", "alias"]),
         patch.object(poller, "fetch_host_folders", return_value={"192.168.0.1": "folder2"}),
         patch.object(poller, "query_devices", return_value=[]) as mock_query,
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
     ):
         assert poller.main() == 0
@@ -1607,6 +1959,10 @@ def test_once_branch_degrades_when_folder_fetch_fails(monkeypatch):
         patch.object(poller, "select_host_columns", return_value=["name", "state"]),
         patch.object(poller, "fetch_host_folders", side_effect=poller.RestError("401")),
         patch.object(poller, "query_devices", return_value=[]) as mock_query,
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
         patch.object(poller, "run_cycle"),
     ):
         assert poller.main() == 0
