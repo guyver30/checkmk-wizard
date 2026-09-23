@@ -49,9 +49,9 @@
 - [ ] **DASH-05**: Dashboard shows a connection-status indicator with jittered exponential-backoff reconnect for the MQTT-over-WebSockets connection
 - [x] **DASH-06**: Dashboard color-codes/icons hosts by device type and groups/colors by the folder-derived location/group label
 - [ ] **DASH-07**: `index.html` renders a live topology map (vis-network) with parent/child links, merging incoming updates via `DataSet.update()` rather than re-rendering from scratch
-- [ ] **DASH-08**: The per-device drill-down renders CPU / RAM / Disk ring gauges whose colour is decided by each metric's OWN `perf_data` warn/crit thresholds (not the Checkmk service state), hiding any individual gauge whose backing service does not exist on that host
-- [ ] **DASH-09**: The per-device drill-down renders a worst-of-all-disks SMART badge next to the Disk gauge, hidden entirely (not shown as N/A) when the host has no SMART health service
-- [ ] **DASH-10**: The per-device drill-down renders a per-service status table (service name, state badge, `plugin_output`) covering every service except the gauge-backed ones, sorted worst-first, so an operator can see *why* a host is red without leaving the dashboard
+- [x] **DASH-08**: The per-device drill-down renders CPU / RAM / Disk ring gauges whose colour is decided by each metric's OWN `perf_data` warn/crit thresholds (not the Checkmk service state), hiding any individual gauge whose backing service does not exist on that host
+- [x] **DASH-09**: The per-device drill-down renders a worst-of-all-disks SMART badge next to the Disk gauge, hidden entirely (not shown as N/A) when the host has no SMART health service
+- [x] **DASH-10**: The per-device drill-down renders a per-service status table (service name, state badge, `plugin_output`) covering every service except the gauge-backed ones, sorted worst-first, so an operator can see *why* a host is red without leaving the dashboard
 - [ ] **DASH-11**: Device rows in the fleet tree navigate to that device's drill-down (`/details?id={id}`), so the drill-down is reachable without hand-typing a URL
 
 ## v2 Requirements
@@ -116,9 +116,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PLR-10 | Phase 12 | Pending |
 | PLR-11 | Phase 12 | Pending |
 | PLR-12 | Phase 12 | Pending |
-| DASH-08 | Phase 12 | Pending |
-| DASH-09 | Phase 12 | Pending |
-| DASH-10 | Phase 12 | Pending |
+| DASH-08 | Phase 12 | Complete |
+| DASH-09 | Phase 12 | Complete |
+| DASH-10 | Phase 12 | Complete |
 | DASH-11 | Phase 12 | Pending |
 
 **Coverage:**
