@@ -106,3 +106,13 @@ None - no external service configuration required.
 ---
 *Phase: 12-agent-metrics-and-service-status*
 *Completed: 2026-09-23*
+
+## Self-Check: PASSED
+
+- FOUND: dashboard-react/src/components/TreeNode.tsx
+- FOUND: dashboard-react/src/components/Tree.test.tsx
+- FOUND: .planning/PROJECT.md
+- FOUND: .planning/phases/12-agent-metrics-and-service-status/12-05-SUMMARY.md
+- FOUND commit: 1060b84
+- FOUND commit: e93c347
+- FOUND commit: 09912da
