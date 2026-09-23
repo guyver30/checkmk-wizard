@@ -1,9 +1,24 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useSearchParams } from "react-router";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TopologyMap } from "./TopologyMap";
 import { instances, resetFakeNetworks } from "../test/fakeVisNetwork";
 import type { DevicePayload } from "../lib/types";
+import * as checkmkWrite from "../lib/checkmkWrite";
+import { nodeVisual } from "../lib/mapIcons";
+
+// Every write in edit mode goes through checkmkWrite.ts -- mocked here so these tests exercise
+// TopologyMap's own callback wiring (what it calls, with what args, and how it reacts to
+// success/failure) without making a real network call. isValidHostName is kept real (a pure
+// regex) since the addNode tests below need actual validation behavior, not a stub.
+vi.mock("../lib/checkmkWrite", () => ({
+  updateParents: vi.fn(),
+  setMapPosition: vi.fn(),
+  createUnmanagedSwitch: vi.fn(),
+  isValidHostName: (name: string) => /^[-0-9a-zA-Z_.]+$/.test(name),
+}));
+
+type ManipulationCallback<T> = (data: T, callback: (result: T | null) => void) => Promise<void>;
 
 const NOW_MS = Date.parse("2026-09-23T12:00:00Z");
 const FRESH_TIMESTAMP = new Date(NOW_MS - 5 * 1000).toISOString();
@@ -37,8 +52,33 @@ function renderMap(props: Partial<React.ComponentProps<typeof TopologyMap>> = {}
   );
 }
 
+// Rerenders the same MemoryRouter/Routes tree renderMap() built, with new props -- used by the
+// edit-mode tests below to simulate a new topology/statuses prop arriving (MQTT update) while
+// the map stays mounted.
+function rerenderMap(
+  rerender: (ui: React.ReactElement) => void,
+  props: Partial<React.ComponentProps<typeof TopologyMap>> = {},
+) {
+  const defaultProps: React.ComponentProps<typeof TopologyMap> = {
+    topologyDevices: [],
+    statuses: {},
+    nowMs: NOW_MS,
+  };
+  rerender(
+    <MemoryRouter initialEntries={["/"]}>
+      <Routes>
+        <Route path="/" element={<TopologyMap {...defaultProps} {...props} />} />
+        <Route path="/details" element={<DetailsProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   resetFakeNetworks();
+  vi.mocked(checkmkWrite.updateParents).mockReset();
+  vi.mocked(checkmkWrite.setMapPosition).mockReset();
+  vi.mocked(checkmkWrite.createUnmanagedSwitch).mockReset();
 });
 
 describe("TopologyMap", () => {
@@ -253,5 +293,531 @@ describe("TopologyMap", () => {
     const topologyDevices = [{ id: "h1", parents: [] }];
     renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) } });
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
+  });
+});
+
+describe("TopologyMap edit mode", () => {
+  it("enables manipulation/dragNodes and passes addEdge/editEdge/deleteEdge/addNode (never editNode) when editMode turns on, then disables and calls disableEditMode when it turns off", () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    const statuses = { h1: device({ id: "h1" }) };
+    const { rerender } = renderMap({ topologyDevices, statuses, editMode: false });
+    const network = instances[0];
+
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: true });
+
+    const onCall = network.setOptionsCalls[network.setOptionsCalls.length - 1];
+    expect(onCall).toMatchObject({
+      manipulation: expect.objectContaining({ enabled: true, initiallyActive: true, deleteNode: false }),
+      interaction: expect.objectContaining({ dragNodes: true }),
+    });
+    const manipulation = (onCall as { manipulation: Record<string, unknown> }).manipulation;
+    expect(typeof manipulation.addEdge).toBe("function");
+    expect(typeof manipulation.editEdge).toBe("function");
+    expect(typeof manipulation.deleteEdge).toBe("function");
+    expect(typeof manipulation.addNode).toBe("function");
+    expect(manipulation.editNode).toBeUndefined();
+
+    // Mounting with editMode already false calls disableEditMode() once on its own (the gating
+    // effect also runs on first render) -- assert the *off* toggle adds exactly one more call,
+    // rather than asserting an absolute count.
+    const disableCallsBeforeToggleOff = network.disableEditModeCallCount;
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: false });
+    const offCall = network.setOptionsCalls[network.setOptionsCalls.length - 1];
+    expect(offCall).toMatchObject({
+      manipulation: expect.objectContaining({ enabled: false }),
+      interaction: expect.objectContaining({ dragNodes: false }),
+    });
+    expect(network.disableEditModeCallCount).toBe(disableCallsBeforeToggleOff + 1);
+  });
+
+  it("addEdge writes updateParents(to, add-from) and adds the edge with onEditSaved", async () => {
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    mockUpdateParents.mockResolvedValue(undefined);
+    const onEditSaved = vi.fn();
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: [] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), h1: device({ id: "h1" }) };
+    renderMap({ topologyDevices, statuses, editMode: true, onEditSaved });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addEdge = manipulation.addEdge as ManipulationCallback<{ from: string; to: string; id?: string }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addEdge({ from: "sw", to: "h1" }, callback);
+    });
+
+    expect(mockUpdateParents).toHaveBeenCalledWith("h1", expect.any(Function));
+    expect(mockUpdateParents.mock.calls[0][1]([])).toEqual(["sw"]);
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({ id: "sw->h1", from: "sw", to: "h1" }));
+    expect(onEditSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("addEdge rejects self-loops and duplicate edges without writing", async () => {
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: ["sw"] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), h1: device({ id: "h1" }) };
+    renderMap({ topologyDevices, statuses, editMode: true });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addEdge = manipulation.addEdge as ManipulationCallback<{ from: string; to: string }>;
+
+    const selfLoopCallback = vi.fn();
+    await act(async () => {
+      await addEdge({ from: "h1", to: "h1" }, selfLoopCallback);
+    });
+    expect(selfLoopCallback).toHaveBeenCalledWith(null);
+
+    const dupCallback = vi.fn();
+    await act(async () => {
+      await addEdge({ from: "sw", to: "h1" }, dupCallback);
+    });
+    expect(dupCallback).toHaveBeenCalledWith(null);
+
+    expect(mockUpdateParents).not.toHaveBeenCalled();
+  });
+
+  it("addEdge failure calls callback(null) and onEditFailed with the connection copy, without onEditSaved", async () => {
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    mockUpdateParents.mockRejectedValue(new Error("rejected"));
+    const onEditSaved = vi.fn();
+    const onEditFailed = vi.fn();
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: [] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), h1: device({ id: "h1" }) };
+    renderMap({ topologyDevices, statuses, editMode: true, onEditSaved, onEditFailed });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addEdge = manipulation.addEdge as ManipulationCallback<{ from: string; to: string }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addEdge({ from: "sw", to: "h1" }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(onEditFailed).toHaveBeenCalledWith({
+      title: "Couldn't save that connection",
+      body: "Checkmk rejected the update. Check that both devices still exist, then try again.",
+    });
+    expect(onEditSaved).not.toHaveBeenCalled();
+  });
+
+  it("editEdge to the same child makes one updateParents call and swaps the edge id in the DataSet", async () => {
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    mockUpdateParents.mockResolvedValue(undefined);
+    const onEditSaved = vi.fn();
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "sw2", parents: [] },
+      { id: "h1", parents: ["sw"] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), sw2: device({ id: "sw2" }), h1: device({ id: "h1" }) };
+    renderMap({ topologyDevices, statuses, editMode: true, onEditSaved });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const editEdge = manipulation.editEdge as ManipulationCallback<{ id: string; from: string; to: string }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await editEdge({ id: "sw->h1", from: "sw2", to: "h1" }, callback);
+    });
+
+    expect(mockUpdateParents).toHaveBeenCalledTimes(1);
+    expect(mockUpdateParents).toHaveBeenCalledWith("h1", expect.any(Function));
+    expect(mockUpdateParents.mock.calls[0][1](["sw"])).toEqual(["sw2"]);
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(onEditSaved).toHaveBeenCalledTimes(1);
+
+    const edges = instances[0].data.edges as unknown as { getIds: () => string[] };
+    expect(edges.getIds()).toContain("sw2->h1");
+    expect(edges.getIds()).not.toContain("sw->h1");
+  });
+
+  it("editEdge to a different child makes two updateParents calls (remove old, add new)", async () => {
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    mockUpdateParents.mockResolvedValue(undefined);
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: ["sw"] },
+      { id: "h2", parents: [] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), h1: device({ id: "h1" }), h2: device({ id: "h2" }) };
+    renderMap({ topologyDevices, statuses, editMode: true });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const editEdge = manipulation.editEdge as ManipulationCallback<{ id: string; from: string; to: string }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await editEdge({ id: "sw->h1", from: "sw", to: "h2" }, callback);
+    });
+
+    expect(mockUpdateParents).toHaveBeenCalledTimes(2);
+    expect(mockUpdateParents).toHaveBeenNthCalledWith(1, "h1", expect.any(Function));
+    expect(mockUpdateParents.mock.calls[0][1](["sw"])).toEqual([]);
+    expect(mockUpdateParents).toHaveBeenNthCalledWith(2, "h2", expect.any(Function));
+    expect(mockUpdateParents.mock.calls[1][1]([])).toEqual(["sw"]);
+    expect(callback).toHaveBeenCalledWith(null);
+  });
+
+  it("deleteEdge cancelled by window.confirm makes no write and calls callback(null)", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: ["sw"] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), h1: device({ id: "h1" }) };
+    renderMap({ topologyDevices, statuses, editMode: true });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const deleteEdge = manipulation.deleteEdge as ManipulationCallback<{ nodes: string[]; edges: string[] }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await deleteEdge({ nodes: [], edges: ["sw->h1"] }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(mockUpdateParents).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("deleteEdge confirmed removes the parent, calls callback(data) and onEditSaved, and the confirm text names both devices", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    mockUpdateParents.mockResolvedValue(undefined);
+    const onEditSaved = vi.fn();
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: ["sw"] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), h1: device({ id: "h1" }) };
+    renderMap({ topologyDevices, statuses, editMode: true, onEditSaved });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const deleteEdge = manipulation.deleteEdge as ManipulationCallback<{ nodes: string[]; edges: string[] }>;
+    const callback = vi.fn();
+    const data = { nodes: [], edges: ["sw->h1"] };
+
+    await act(async () => {
+      await deleteEdge(data, callback);
+    });
+
+    expect(confirmSpy).toHaveBeenCalled();
+    const confirmText = confirmSpy.mock.calls[0][0] as string;
+    expect(confirmText).toContain("Remove this connection?");
+    expect(confirmText).toContain("sw");
+    expect(confirmText).toContain("h1");
+    expect(mockUpdateParents).toHaveBeenCalledWith("h1", expect.any(Function));
+    expect(mockUpdateParents.mock.calls[0][1](["sw"])).toEqual([]);
+    expect(callback).toHaveBeenCalledWith(data);
+    expect(onEditSaved).toHaveBeenCalledTimes(1);
+    confirmSpy.mockRestore();
+  });
+
+  it("dragEnd in edit mode saves the dragged node's position via setMapPosition and calls onEditSaved", async () => {
+    const mockSetMapPosition = vi.mocked(checkmkWrite.setMapPosition);
+    mockSetMapPosition.mockResolvedValue(undefined);
+    const onEditSaved = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true, onEditSaved });
+    const network = instances[0];
+    const nodes = network.data.nodes as unknown as { update: (item: Record<string, unknown>) => void };
+    nodes.update({ id: "h1", x: 77, y: -33 });
+
+    act(() => {
+      network.emit("dragEnd", { nodes: ["h1"] });
+    });
+
+    await waitFor(() => expect(mockSetMapPosition).toHaveBeenCalledWith("h1", 77, -33));
+    await waitFor(() => expect(onEditSaved).toHaveBeenCalledTimes(1));
+  });
+
+  it("dragEnd in read-only mode makes no write", () => {
+    const mockSetMapPosition = vi.mocked(checkmkWrite.setMapPosition);
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: false });
+    const network = instances[0];
+
+    act(() => {
+      network.emit("dragEnd", { nodes: ["h1"] });
+    });
+
+    expect(mockSetMapPosition).not.toHaveBeenCalled();
+  });
+
+  it("dragEnd failure calls onEditFailed with the position copy", async () => {
+    const mockSetMapPosition = vi.mocked(checkmkWrite.setMapPosition);
+    mockSetMapPosition.mockRejectedValue(new Error("rejected"));
+    const onEditFailed = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true, onEditFailed });
+    const network = instances[0];
+
+    act(() => {
+      network.emit("dragEnd", { nodes: ["h1"] });
+    });
+
+    await waitFor(() =>
+      expect(onEditFailed).toHaveBeenCalledWith({
+        title: "Couldn't save that position",
+        body: "Checkmk rejected the update. Check that the device still exists, then try again.",
+      }),
+    );
+  });
+
+  it("keeps a locally-added edge visible until the live topology catches up, then drops the overlay once it does", async () => {
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    mockUpdateParents.mockResolvedValue(undefined);
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: [] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), h1: device({ id: "h1" }) };
+    const { rerender } = renderMap({ topologyDevices, statuses, editMode: true });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addEdge = manipulation.addEdge as ManipulationCallback<{ from: string; to: string }>;
+    const edges = instances[0].data.edges as unknown as {
+      getIds: () => string[];
+      add: (item: unknown) => void;
+    };
+
+    // Mirrors vis-network's own _performAddEdge: calling callback(finalizedData) is what adds
+    // the edge to the DataSet -- TopologyMap's addEdge itself only calls the callback.
+    await act(async () => {
+      await addEdge({ from: "sw", to: "h1" }, (result) => {
+        if (result) {
+          edges.add(result);
+        }
+      });
+    });
+
+    expect(edges.getIds()).toContain("sw->h1");
+
+    // Topology re-arrives, but the poller hasn't caught up yet -- h1 still shows no parents.
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: true });
+    expect(edges.getIds()).toContain("sw->h1");
+
+    // Live topology now reflects the edge -- overlay entry is pruned, edge stays model-driven.
+    const caughtUpTopologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: ["sw"] },
+    ];
+    rerenderMap(rerender, { topologyDevices: caughtUpTopologyDevices, statuses, editMode: true });
+    expect(edges.getIds()).toContain("sw->h1");
+
+    // A later topology that drops the edge again is now honored (no longer held by the overlay).
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: true });
+    expect(edges.getIds()).not.toContain("sw->h1");
+  });
+
+  it("keeps a locally-deleted edge absent until the live topology also drops it", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const mockUpdateParents = vi.mocked(checkmkWrite.updateParents);
+    mockUpdateParents.mockResolvedValue(undefined);
+    const topologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: ["sw"] },
+    ];
+    const statuses = { sw: device({ id: "sw" }), h1: device({ id: "h1" }) };
+    const { rerender } = renderMap({ topologyDevices, statuses, editMode: true });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const deleteEdge = manipulation.deleteEdge as ManipulationCallback<{ nodes: string[]; edges: string[] }>;
+    const edges = instances[0].data.edges as unknown as {
+      getIds: () => string[];
+      remove: (ids: string[]) => void;
+    };
+
+    // Mirrors vis-network's own deleteSelected: calling callback(finalizedData) is what removes
+    // the edges from the DataSet -- TopologyMap's deleteEdge itself only calls the callback.
+    await act(async () => {
+      await deleteEdge({ nodes: [], edges: ["sw->h1"] }, (result) => {
+        if (result) {
+          edges.remove(result.edges);
+        }
+      });
+    });
+
+    expect(edges.getIds()).not.toContain("sw->h1");
+
+    // Topology still shows the stale parent -- overlay keeps the edge hidden.
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: true });
+    expect(edges.getIds()).not.toContain("sw->h1");
+
+    // Live topology now reflects the deletion -- overlay entry is pruned.
+    const caughtUpTopologyDevices = [
+      { id: "sw", parents: [] },
+      { id: "h1", parents: [] },
+    ];
+    rerenderMap(rerender, { topologyDevices: caughtUpTopologyDevices, statuses, editMode: true });
+    expect(edges.getIds()).not.toContain("sw->h1");
+
+    confirmSpy.mockRestore();
+  });
+
+  it("addNode with a cancelled or empty prompt makes no write", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue(null);
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40, y: -20, label: "new" }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(mockCreateUnmanagedSwitch).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it("addNode with an invalid name makes no write and calls onEditFailed", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("bad name!");
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    const onEditFailed = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true, onEditFailed });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40, y: -20, label: "new" }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(mockCreateUnmanagedSwitch).not.toHaveBeenCalled();
+    expect(onEditFailed).toHaveBeenCalledWith({
+      title: "Couldn't add that switch",
+      body: "Use letters, digits, dot, dash or underscore only.",
+    });
+    promptSpy.mockRestore();
+  });
+
+  it("addNode with a name matching an existing node makes no write and calls onEditFailed", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("h1");
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    const onEditFailed = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true, onEditFailed });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40, y: -20, label: "new" }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(mockCreateUnmanagedSwitch).not.toHaveBeenCalled();
+    expect(onEditFailed).toHaveBeenCalledWith({
+      title: "Couldn't add that switch",
+      body: "A device with that name already exists.",
+    });
+    promptSpy.mockRestore();
+  });
+
+  it("addNode with a valid new name creates an unmanaged switch and survives a later topology update that doesn't yet include it", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("sw-lobby");
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    mockCreateUnmanagedSwitch.mockResolvedValue(undefined);
+    const onEditSaved = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    const statuses = { h1: device({ id: "h1" }) };
+    const { rerender } = renderMap({ topologyDevices, statuses, editMode: true, onEditSaved });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const nodes = instances[0].data.nodes as unknown as {
+      add: (item: unknown) => void;
+      get: (id: string) => Record<string, unknown> | null;
+      getIds: () => string[];
+    };
+    const callback = vi.fn((result: unknown) => {
+      if (result) {
+        nodes.add(result);
+      }
+    });
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40.4, y: -20.4, label: "new" }, callback);
+    });
+
+    expect(mockCreateUnmanagedSwitch).toHaveBeenCalledWith("sw-lobby", { x: 40, y: -20 });
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "sw-lobby",
+        label: "sw-lobby",
+        title: "Unmanaged switch (not monitored)",
+        physics: false,
+      }),
+    );
+    expect(onEditSaved).toHaveBeenCalledTimes(1);
+    expect(nodes.get("sw-lobby")).toMatchObject(nodeVisual("NetworkDevice", "PEND"));
+
+    // Survives a later topology update that doesn't yet include the new host.
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: true, onEditSaved });
+    expect(nodes.getIds()).toContain("sw-lobby");
+
+    promptSpy.mockRestore();
+  });
+
+  it("addNode failure calls callback(null) and onEditFailed with the switch-creation copy", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("sw-lobby");
+    const mockCreateUnmanagedSwitch = vi.mocked(checkmkWrite.createUnmanagedSwitch);
+    mockCreateUnmanagedSwitch.mockRejectedValue(new Error("rejected"));
+    const onEditSaved = vi.fn();
+    const onEditFailed = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({
+      topologyDevices,
+      statuses: { h1: device({ id: "h1" }) },
+      editMode: true,
+      onEditSaved,
+      onEditFailed,
+    });
+    const manipulation = instances[0].lastManipulation() as Record<string, unknown>;
+    const addNode = manipulation.addNode as ManipulationCallback<{
+      id: string;
+      x: number;
+      y: number;
+      label: string;
+    }>;
+    const callback = vi.fn();
+
+    await act(async () => {
+      await addNode({ id: "vis-tmp-1", x: 40, y: -20, label: "new" }, callback);
+    });
+
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(onEditFailed).toHaveBeenCalledWith({
+      title: "Couldn't add that switch",
+      body: "Checkmk rejected the new host. Check the name isn't already used, then try again.",
+    });
+    expect(onEditSaved).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
   });
 });

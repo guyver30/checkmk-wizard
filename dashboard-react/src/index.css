@@ -1,3 +1,35 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Overrides vis-network's own shipped manipulation-toolbar classes (.vis-manipulation,
+   .vis-button and its .vis-active/.vis-delete modifiers, confirmed against
+   node_modules/vis-network/styles/vis-network.css) to match the design system's neutral/accent/
+   destructive button styling. Only color/shape/font are changed here -- vis-network's own
+   title/ARIA markup on these buttons is untouched. */
+.vis-manipulation {
+  background: #f2f2f4;
+  border-radius: 999px;
+  font-family:
+    "Inter",
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  font-size: 13px;
+  padding: 4px;
+}
+.vis-button {
+  border-radius: 999px;
+  border: 1px solid #b8b8c2;
+  color: #111114;
+}
+.vis-button.vis-active,
+.vis-button:hover {
+  background: #1450f5;
+  color: #ffffff;
+  border-color: #1450f5;
+}
+.vis-button.vis-delete {
+  color: #e5252a;
+  border-color: #e5252a;
+}
