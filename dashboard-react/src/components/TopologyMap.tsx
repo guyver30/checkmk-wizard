@@ -370,8 +370,8 @@ export function TopologyMap({
   // never passed, so vis-network's toolbar never shows an "Edit Node" button; deleteNode stays
   // false (node deletion is never offered from the dashboard -- a mistakenly
   // added switch is removed in Checkmk's own UI instead). Runs after the mount effect above
-  // (declaration order determines effect order), so networkRef.current is already set even on
-  // the very first render when editMode starts out true.
+  // (declaration order determines effect order), so networkRef.current is already set on the
+  // very first render regardless of what editMode starts as.
   useEffect(() => {
     editModeRef.current = editMode;
     const network = networkRef.current;
