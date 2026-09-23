@@ -174,7 +174,10 @@ and device status in real time over MQTT, served on port 8090 alongside the rest
 see [`dashboard/README.md`](dashboard/README.md) for the directory layout, the one file an
 operator edits per deployment (`dashboard/js/config.js`), and the vendored-asset inventory, and
 [`docs/Podman setup for checkmk, minio, mosquitto, worker.md`](<docs/Podman setup for checkmk, minio, mosquitto, worker.md>)
-for how it fits into the wider deployment.
+for how it fits into the wider deployment. A React + TypeScript rewrite at `dashboard-react/`
+(not yet cut over into the deployed stack) adds a live editable topology map on top of this —
+see [`dashboard-react/README.md`](dashboard-react/README.md)'s "Topology map and editing"
+section.
 
 ## Project layout
 
