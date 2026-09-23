@@ -19,7 +19,9 @@ describe("App", () => {
         </Routes>
       </MemoryRouter>,
     );
-    expect(screen.getByText("sw-edge-01")).toBeInTheDocument();
+    // Plan 12-04 replaced the bare-id stub with the locked "Device not found" copy (the
+    // store has no matching device here), which still echoes the id back as text.
+    expect(screen.getByText(/sw-edge-01/)).toBeInTheDocument();
   });
 
   it("renders a design-system Badge with the library's own compiled styles applied", () => {
