@@ -7,7 +7,7 @@ tags: [checkmk-rest, live-verification, probe]
 # Dependency graph
 requires: []
 provides:
-  - "scripts/probe_topology_rest.py: a stdlib-only, lint-clean probe covering P1-P6 (openapi-doc.yaml capability scan, built-in tag groups, unmanaged-switch attribute shape, parents/labels round-trip + collection visibility, CORS preflight, admin role permissions)"
+  - "scripts/probe_topology_rest.py: a stdlib-only, lint-clean probe covering P1-P6 (openapi-doc.yaml capability scan, built-in tag groups, unmanaged-switch attribute shape, parents/labels round-trip + collection visibility, CORS preflight, admin role permissions), with a dated Live-verified findings block recording one VERDICT per question"
 affects: [13-04, 13-05, 13-06]
 
 # Tech tracking
@@ -21,145 +21,106 @@ key-files:
   modified: []
 
 key-decisions:
-  - "Task 2's live probe run could not happen in this environment (no podman, no reachable Checkmk site) — execution is paused at the checkpoint, not skipped or simulated"
+  - "V-ROLE: role creation/edit is available over REST (POST /domain-types/user_role/collections/all, PUT /objects/user_role/{role_id}) — plan 13-04 provisions topology_editor over REST, not a manual GUI step"
+  - "V-PERMS: topology_editor needs exactly wato.use, wato.edit, wato.all_folders, wato.edit_hosts, wato.manage_hosts, wato.activate; wato.activateforeign is deliberately excluded even though present on the admin role"
+  - "V-SWITCH: the unmanaged-switch attribute dict is {'tag_address_family': 'no-ip', 'tag_agent': 'no-agent', 'tag_snmp_ds': 'no-snmp', 'tag_device_type': 'NetworkDevice'}, accepted on the first attempt with no fallback variant needed"
+  - "V-CORS: NOT ALLOWED (OPTIONS preflight returned 405, no Access-Control-* headers) — plan 13-05's browser dashboard cannot call Checkmk cross-origin and needs a same-origin proxy"
+  - "V-LABELS-IN-COLLECTION: YES — plan 13-04's poller can read map_position and other labels straight from the host_config collection response it already polls, no extra per-host GET"
+  - "V-CUSTOMATTR: custom host attribute definitions are not creatable over REST; map_position stays a host label, meeting D-07's Checkmk-owned-storage intent identically"
+  - "V-TAGPUT: host_tag_group update is available over REST, but unmanaged switches reuse the existing device_type NetworkDevice tag rather than a new tag group value"
 
 patterns-established:
   - "Pattern: OpenAPI paths/methods scanned via indentation-based regex (no YAML library) — see parse_openapi_paths()"
+  - "Pattern: a probe's module docstring carries its own dated Live-verified findings block with one VERDICT line per question, read directly by downstream plans instead of a separate findings doc"
 
-requirements-completed: []  # DASH-12/DASH-13/PLR-13 NOT complete — Task 2 (live run) and Task 3 (findings) remain
+requirements-completed: [DASH-12, DASH-13, PLR-13]
 
 # Metrics
-duration: ~15min (Task 1 only; plan paused before Tasks 2-3)
-completed: 2026-09-23 (Task 1 only — plan NOT complete)
+duration: ~25min total (Task 1 ~15min in a prior session; Task 3 ~10min in this session; Task 2 was a human-run checkpoint, not executor time)
+completed: 2026-09-23
 ---
 
-# Phase 13 Plan 01: Live REST Capability Probe Script (PAUSED)
+# Phase 13 Plan 01: Live REST Capability Probe Script Summary
 
-**Status: PAUSED at Task 2's blocking human-verify checkpoint — resume required.**
-
-`scripts/probe_topology_rest.py` (Task 1) is written, lint-clean, stdlib-only, and covers
-P1-P6, but it has NOT been run against the real Checkmk deployment. Task 2 requires the
-developer to run it on the live deployment host and paste back the complete stdout; Task 3
-(recording findings in the docstring) cannot start until that output exists.
+Stdlib-only probe script that answers six live REST-capability questions (role creation, tag-group values, unmanaged-switch attribute shape, parents/labels round-trip, CORS, permission ids) against the real Checkmk site, with its findings recorded as dated VERDICT lines in its own module docstring.
 
 ## Performance
 
-- **Tasks attempted:** 1 of 3 (Task 1 complete; Task 2 blocking; Task 3 not started)
+- **Tasks completed:** 3 of 3
 - **Files created:** 1
+- **Files modified:** 1 (same file, Task 3 docstring-only update)
 
 ## Accomplishments
 
-- `scripts/probe_topology_rest.py` created: a stdlib-only (`urllib.request`, `urllib.error`,
-  `json`, `os`, `re`, `sys`) diagnostic probe that creates two throwaway hosts
-  (`gsd-probe-topo-parent`, `gsd-probe-topo-child`), answers six REST-capability questions
-  (P1-P6), and deletes both hosts in a `finally` block. It never calls Checkmk's
-  changes-activation endpoint.
-- All Task 1 acceptance criteria verified by actually running the commands (not inspected):
-  - `uvx ruff check scripts/probe_topology_rest.py` → `All checks passed!`
-  - `uv run python -c "import ast,sys; ast.parse(...)"` → parses cleanly
-  - `grep -c "VERDICT V-" scripts/probe_topology_rest.py` → `13`
-  - `grep -nE "^import (httpx|requests)|^from checkmk_wizard" ...` → no matches (stdlib-only confirmed)
-  - All required literal strings present: `PROBE_PARENT = "gsd-probe-topo-parent"`,
-    `PROBE_CHILD = "gsd-probe-topo-child"`, `openapi-doc.yaml`, `OPTIONS`, `unmanaged_switch`,
-    `map_position`, `tag_address_family`
-  - All required print-statement substrings present: `VERDICT V-SWITCH`, `VERDICT V-PARENTS`,
-    `VERDICT V-LABELS`, `VERDICT V-LABELS-IN-COLLECTION`, `VERDICT V-CORS`, `user_role create:`,
-    `user_role edit:`, `custom host attribute definition:`, `host_tag_group update:`
-  - `grep -n "activate-changes/invoke" scripts/probe_topology_rest.py` → no matches (never activates)
-  - Host deletion confirmed inside a `finally:` block (line 612 in the committed file)
-  - `CMK_REST_SECRET= uv run python scripts/probe_topology_rest.py` → exited 1, printed
-    `[FAIL] CMK_REST_SECRET is not set`, no traceback
+- `scripts/probe_topology_rest.py` created (Task 1): a stdlib-only (`urllib.request`, `urllib.error`, `json`, `os`, `re`, `sys`) diagnostic probe that creates two throwaway hosts (`gsd-probe-topo-parent`, `gsd-probe-topo-child`), answers six REST-capability questions (P1-P6), and deletes both hosts in a `finally` block. It never calls Checkmk's changes-activation endpoint.
+- The probe was run on the real deployment host (Task 2, human-verify checkpoint) via `podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/probe_topology_rest.py"`. Complete verbatim stdout was pasted back and used as the sole source for Task 3 — no value was inferred or simulated.
+- Task 3 appended a dated `Live-verified against a real Checkmk 2.4.0p35/p36 CE site on 2026-09-23:` findings block to the module docstring, with one `VERDICT V-<ID>:` line for each of `ROLE`, `PERMS`, `SWITCH`, `PARENTS`, `LABELS`, `LABELS-IN-COLLECTION`, `CORS`, `CUSTOMATTR`, `TAGPUT`, plus a closing `Consequences for plans 13-04/13-05/13-06:` paragraph. No executable code was changed.
+
+## Verification (actually run, not inspected)
+
+- `RUFF_CACHE_DIR=/tmp/ruff-cache-gate uvx ruff check scripts/probe_topology_rest.py` → `All checks passed!`
+- `uv run python -c "import ast; ast.parse(open('scripts/probe_topology_rest.py').read())"` → parsed cleanly, no exception
+- `grep -c "VERDICT V-\(ROLE\|PERMS\|SWITCH\|PARENTS\|LABELS\|LABELS-IN-COLLECTION\|CORS\|CUSTOMATTR\|TAGPUT\):" scripts/probe_topology_rest.py` → `22` (well above the minimum of 9; both the docstring findings and the executable print statements contribute matching lines)
+- `grep -n "Live-verified against a real Checkmk" scripts/probe_topology_rest.py` → line 59, followed by a date
+- `grep -n "Consequences for plans 13-04/13-05/13-06:" scripts/probe_topology_rest.py` → line 109, present
+- `git diff scripts/probe_topology_rest.py` for the Task 3 commit touches only lines inside the module docstring (verified by inspecting the full diff — every changed `+`/`-` line falls between the opening `"""` and the closing `"""` at the top of the file)
+- `grep -n "activate-changes/invoke" scripts/probe_topology_rest.py` → no match (exit 1), confirming the probe still never activates changes
+- Post-commit deletion check (`git diff --diff-filter=D --name-only HEAD~1 HEAD`) → no output, no unexpected file deletions
 
 ## Task Commits
 
-1. **Task 1: Write scripts/probe_topology_rest.py (P1-P6)** - `4cf9f24` (feat)
-
-Task 2 (checkpoint:human-verify, gate="blocking") and Task 3 (record findings) were NOT
-executed — see "Why paused" below.
+1. **Task 1: Write scripts/probe_topology_rest.py (P1-P6)** — `4cf9f24` (feat, merged to main from prior worktree)
+2. **Task 2: Run the probe on the deployment host** — checkpoint resolved by the developer's pasted verbatim stdout (no commit of its own; documented in this SUMMARY's Accomplishments/Findings sections)
+3. **Task 3: Record the live findings in the probe's docstring** — `1a3e661` (docs)
 
 ## Files Created/Modified
 
-- `scripts/probe_topology_rest.py` - stdlib-only live REST capability probe covering
-  P1 (openapi-doc.yaml capability scan for user_role/custom-attribute/host_tag_group
-  endpoints), P2 (built-in tag group contents), P3 (unmanaged-switch attribute shape),
-  P4 (parents + label round-trip, labels-in-collection visibility), P5 (CORS preflight),
-  P6 (admin role permissions), plus a final pending-changes count. No findings block yet —
-  that is Task 3's job, once real output exists.
+- `scripts/probe_topology_rest.py` — stdlib-only live REST capability probe covering P1 (openapi-doc.yaml capability scan for user_role/custom-attribute/host_tag_group endpoints), P2 (built-in tag group contents), P3 (unmanaged-switch attribute shape), P4 (parents + label round-trip, labels-in-collection visibility), P5 (CORS preflight), P6 (admin role permissions), plus a final pending-changes count. Now carries a dated `Live-verified` findings block in its module docstring, the single source of truth for plans 13-04/13-05/13-06.
+
+## Live Findings (from the real deployment run, 2026-09-23)
+
+- **V-ROLE: REST.** `user_role create` and `user_role edit` are both available over REST — plan 13-04 provisions `topology_editor` via REST, no manual GUI step.
+- **V-PERMS:** `wato.use`, `wato.edit`, `wato.all_folders`, `wato.edit_hosts`, `wato.manage_hosts`, `wato.activate` are all confirmed present on the admin role and are exactly what `topology_editor` needs. `wato.activateforeign` is present on admin but deliberately excluded from the scoped role.
+- **V-SWITCH:** `{'tag_address_family': 'no-ip', 'tag_agent': 'no-agent', 'tag_snmp_ds': 'no-snmp', 'tag_device_type': 'NetworkDevice'}` — accepted on the first attempt.
+- **V-PARENTS:** parents round-trip OK.
+- **V-LABELS:** label values containing a comma and a minus sign are both accepted and echoed back unchanged.
+- **V-LABELS-IN-COLLECTION: YES** — the `host_config` collection GET already includes `extensions.attributes.labels` per entry.
+- **V-CORS: NOT ALLOWED** — the OPTIONS preflight returned 405 with no `Access-Control-*` headers; the browser dashboard needs a same-origin proxy.
+- **V-CUSTOMATTR:** custom host attribute definitions are not creatable over REST (`ABSENT`, no matching paths); `map_position` stays a host label.
+- **V-TAGPUT:** `host_tag_group update` is available over REST, but unmanaged switches reuse the existing `device_type` `NetworkDevice` tag rather than a new tag-group value.
 
 ## Decisions Made
 
-- Followed the plan's interface precedent (`scripts/probe_host_attribute_merge.py`) closely:
-  single `_rest()` choke point, `ProbeError` for connection-level failures only, redacted
-  `Authorization` header (`Bearer <username> ***`), throwaway-host cleanup in `finally`.
-- P4's `VERDICT V-LABELS` combines two independently-tested label values across the run
-  (P3's `map_position="120,-40"`, which has both a comma and a minus sign, and P4's own
-  `map_position="0,0"`, which has only a comma) rather than relying on P4's PUT alone, since
-  the plan's literal P4 label value (`"0,0"`) does not itself contain a minus sign. This is
-  made explicit in the printed VERDICT line so a human reader can see exactly which value
-  backs which half of the claim.
-- P6's admin-permissions extraction tries three candidate `extensions` key names
-  (`permissions`, `enabled_permissions`, `permission_list`) since the exact key Checkmk 2.4
-  uses for a role's permission-id list was not confirmed by RESEARCH.md; if none match, the
-  full `extensions` dict is printed so a human can locate the real key from the live output.
+- Followed the plan's interface precedent (`scripts/probe_host_attribute_merge.py`) closely: single `_rest()` choke point, `ProbeError` for connection-level failures only, redacted `Authorization` header (`Bearer <username> ***`), throwaway-host cleanup in `finally`.
+- P4's `VERDICT V-LABELS` combines two independently-tested label values across the run (P3's `map_position="120,-40"`, which has both a comma and a minus sign, and P4's own `map_position="0,0"`, which has only a comma) rather than relying on P4's PUT alone.
+- P6's admin-permissions extraction tries three candidate `extensions` key names (`permissions`, `enabled_permissions`, `permission_list`); the live run confirmed `permissions` is the correct key (`[P6] admin permissions found under extensions['permissions']`).
+- Task 3's Checkmk version string (`2.4.0p35/p36`) is carried over from the docstring's own targeting statement rather than a printed version banner, since the probe does not print one — this is noted explicitly inside the findings block itself so it is never mistaken for a live-read value.
+- Every value recorded in Task 3's findings block was copied verbatim from the developer's pasted stdout; none was inferred, softened, or filled in from the plan's candidate lists.
 
 ## Deviations from Plan
 
-None - Task 1 executed exactly as written. No Rule 1/2/3 auto-fixes were needed.
-
-## Why Paused (blocking checkpoint, not a deviation)
-
-Task 2 is `type="checkpoint:human-verify" gate="blocking"`. Per its own text: "This development
-machine has no podman and no reachable Checkmk site (confirmed during research). Do not run,
-simulate or infer the probe's results." This worktree/execution environment has no `podman`,
-no `docker`, and no reachable Checkmk site — confirmed again here (13-RESEARCH.md's own
-Environment Availability table already recorded this same finding: `curl` to `localhost:8080`
-timed out, no `docker`/`podman` present).
-
-**No attempt was made to run, simulate, or fabricate probe output.** Task 3 (recording findings
-in the docstring) was NOT started, because it depends entirely on the verbatim Task 2 output,
-which does not exist yet.
+None — Tasks 1 and 3 executed exactly as written. No Rule 1/2/3 auto-fixes were needed. Task 2 (human-verify checkpoint) was resolved by the developer running the probe on the real deployment host and pasting back complete verbatim output, per its own design.
 
 ## Issues Encountered
 
-None beyond the expected environment gap (no live Checkmk site reachable), which is the
-checkpoint's whole reason for existing.
-
-## Resume Instructions
-
-To complete this plan, the developer must:
-
-1. On the deployment host (with podman and the live Checkmk site), pull commit `4cf9f24`
-   (or later) into the repo checkout the `automation-worker` container mounts.
-2. Run:
-   ```
-   podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/probe_topology_rest.py"
-   ```
-   (The worker container already carries `CMK_REST_HOST`/`CMK_REST_PORT`/`CMK_REST_USERNAME`/
-   `CMK_REST_SECRET` and `CMK_SITE_ID` from compose.)
-3. Paste the COMPLETE output back verbatim, including every `P1`..`P6` block and every
-   `VERDICT` line, and the `=== Cleanup ===` section confirming both probe hosts were deleted
-   (DELETE status 204 or 404 for each).
-4. A continuation agent (or the same executor, re-invoked) then runs Task 3: append a dated
-   `Live-verified against a real Checkmk <version> CE site on <date>:` findings block to the
-   module docstring, with one `VERDICT V-<ID>:` line per id (`ROLE`, `PERMS`, `SWITCH`,
-   `PARENTS`, `LABELS`, `LABELS-IN-COLLECTION`, `CORS`, `CUSTOMATTR`, `TAGPUT`), copied
-   verbatim from the pasted output — never inferred or softened — plus a closing
-   `Consequences for plans 13-04/13-05/13-06:` paragraph, per the plan's Task 3 `<action>`.
-5. Only after Task 3 lands should STATE.md/ROADMAP.md be advanced past plan 13-01 and
-   downstream plans 13-04/13-05/13-06 be planned/executed against its VERDICT lines.
+None. The prior session's environment gap (no podman, no reachable Checkmk site) was the checkpoint's expected blocking condition, not an issue — it resolved once the developer ran the probe on the actual deployment host.
 
 ## User Setup Required
 
-None beyond the resume step above (running the script on the deployment host is itself the
-required manual step, per Task 2's own design — this is not a new/separate setup requirement).
+None. The probe run itself (Task 2) was the one required manual step, and it is complete.
 
 ## Next Phase Readiness
 
-**NOT ready.** Plans 13-04, 13-05, and 13-06 are documented (13-RESEARCH.md, this plan's
-frontmatter `key_links`) as depending on this probe's `VERDICT` lines. Those lines do not
-exist yet. Do not start 13-04/13-05/13-06 until this plan's Task 3 is complete with real,
-live-sourced findings.
+**Ready.** Plans 13-04, 13-05, and 13-06 can now read their REST-capability inputs directly from `scripts/probe_topology_rest.py`'s docstring `VERDICT` lines and `Consequences for plans 13-04/13-05/13-06:` paragraph — no further probing needed before those plans proceed.
+
+## Self-Check
+
+- `scripts/probe_topology_rest.py` exists: `FOUND`
+- Commit `4cf9f24` (Task 1) exists in history: `FOUND`
+- Commit `1a3e661` (Task 3) exists in history: `FOUND`
+
+## Self-Check: PASSED
 
 ---
 *Phase: 13-wizard-parents-support-and-topology-map*
-*Completed: NOT COMPLETE — paused at Task 2 of 3, 2026-09-23*
+*Completed: 2026-09-23*
