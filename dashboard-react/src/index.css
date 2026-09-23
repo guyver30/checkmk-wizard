@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ThreePaneLayout's h-full/h-screen classes need a bounded ancestor to be a percentage of --
+   Tailwind Preflight resets margin/box-sizing but deliberately never forces height:100% up the
+   html/body/#root chain, since not every app wants a viewport-pinned layout. Without this, the
+   three-pane grid (and the Splitter drag between the map and event history) renders at its
+   natural content height instead of the browser window, which looked like a broken/non-resizing
+   divider in live testing -- confirmed missing here, in index.html, and in
+   kone-design-system's own base styles (2026-09-23). */
+html,
+body,
+#root {
+  height: 100%;
+}
+
 /* Overrides vis-network's own shipped manipulation-toolbar classes (.vis-manipulation,
    .vis-button and its .vis-active/.vis-delete modifiers, confirmed against
    node_modules/vis-network/styles/vis-network.css) to match the design system's neutral/accent/
