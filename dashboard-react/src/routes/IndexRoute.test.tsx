@@ -1,4 +1,5 @@
 import { act, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it } from "vitest";
 import { IndexRoute } from "./IndexRoute";
 import { useAppStore } from "../store/useAppStore";
@@ -16,19 +17,27 @@ function encode(value: unknown): Uint8Array {
 }
 
 describe("IndexRoute", () => {
-  it("renders the stats strip before the map placeholder, in document order", () => {
-    render(<IndexRoute />);
+  it("renders the stats strip before the topology map, in document order", () => {
+    render(
+      <MemoryRouter>
+        <IndexRoute />
+      </MemoryRouter>,
+    );
     const status = screen.getByRole("status", { name: /fleet state summary/i });
-    const placeholder = screen.getByText("Topology map — Phase 13");
-    // DOCUMENT_POSITION_FOLLOWING (4) set on `placeholder` relative to `status` means status
-    // comes first in document order.
-    const position = status.compareDocumentPosition(placeholder);
+    const map = screen.getByTestId("topology-map");
+    // DOCUMENT_POSITION_FOLLOWING (4) set on `map` relative to `status` means status comes
+    // first in document order.
+    const position = status.compareDocumentPosition(map);
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("updates the strip's counts in place without remounting the map placeholder", () => {
-    render(<IndexRoute />);
-    const placeholderBefore = screen.getByText("Topology map — Phase 13");
+  it("updates the strip's counts in place without remounting the topology map", () => {
+    render(
+      <MemoryRouter>
+        <IndexRoute />
+      </MemoryRouter>,
+    );
+    const mapBefore = screen.getByTestId("topology-map");
 
     act(() => {
       useAppStore
@@ -41,7 +50,7 @@ describe("IndexRoute", () => {
 
     const status = screen.getByRole("status", { name: /fleet state summary/i });
     expect(within(status).getByText("DOWN")).toBeInTheDocument();
-    const placeholderAfter = screen.getByText("Topology map — Phase 13");
-    expect(placeholderAfter).toBe(placeholderBefore);
+    const mapAfter = screen.getByTestId("topology-map");
+    expect(mapAfter).toBe(mapBefore);
   });
 });

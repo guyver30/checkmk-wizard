@@ -90,7 +90,7 @@ describe("StaleStability (D-34)", () => {
 
     const cameraGroupRowBefore = screen.getByRole("treeitem", { name: /camera/i });
     const sensorGroupRowBefore = screen.getByRole("treeitem", { name: /sensor/i });
-    const mapPlaceholderBefore = screen.getByText("Topology map — Phase 13");
+    const mapBefore = screen.getByTestId("topology-map");
 
     // Focus the camera group's own toggle button -- the group about to flip.
     const cameraButton = screen.getByRole("button", { name: /camera/i });
@@ -132,7 +132,7 @@ describe("StaleStability (D-34)", () => {
     // 6. Scroll position is unchanged.
     expect(eventLog.scrollTop).toBe(42);
 
-    // 7. The map placeholder's DOM node identity is preserved.
-    expect(screen.getByText("Topology map — Phase 13")).toBe(mapPlaceholderBefore);
+    // 7. The topology map's DOM node identity is preserved.
+    expect(screen.getByTestId("topology-map")).toBe(mapBefore);
   });
 });
