@@ -34,6 +34,8 @@ import type {
   EventEntry,
   HistoryEntry,
   PollerStatusPayload,
+  ServiceEntry,
+  ServiceHistoryEntry,
   TopologyPayload,
 } from "../lib/types";
 
@@ -47,6 +49,8 @@ export interface ConnectionState {
 export interface AppState {
   devices: Record<string, DevicePayload>;
   history: Record<string, HistoryEntry[]>;
+  services: Record<string, ServiceEntry[]>;
+  serviceHistory: Record<string, ServiceHistoryEntry[]>;
   events: EventEntry[];
   topology: TopologyPayload | null;
   pollerStatus: PollerStatusPayload | null;
@@ -92,6 +96,8 @@ function parsePayload(payloadBuffer: Uint8Array | null | undefined): ParseResult
 export const useAppStore = create<AppState>()((set, get) => ({
   devices: {},
   history: {},
+  services: {},
+  serviceHistory: {},
   events: [],
   topology: null,
   pollerStatus: null,
@@ -116,13 +122,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
       if (parsed.value === null) {
         // Zero-length retained payload is MQTT's own tombstone semantic
-        // (scripts/mqtt_poller.py::publish_tombstone) -- remove the device and its
-        // history entry.
+        // (scripts/mqtt_poller.py::publish_tombstone) -- remove the device and every
+        // per-device slice, so a device removed from Checkmk leaves nothing orphaned
+        // behind even if its status tombstone arrives before the services/service_history
+        // ones.
         const devices = { ...get().devices };
         const history = { ...get().history };
+        const services = { ...get().services };
+        const serviceHistory = { ...get().serviceHistory };
         delete devices[id];
         delete history[id];
-        set({ devices, history });
+        delete services[id];
+        delete serviceHistory[id];
+        set({ devices, history, services, serviceHistory });
         return;
       }
       if (!isPlainObject(parsed.value)) {
@@ -146,6 +158,42 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       set({ history: { ...get().history, [id]: parsed.value as HistoryEntry[] } });
+      return;
+    }
+
+    if (parts[1] === "devices" && parts[3] === "services") {
+      const id = parts[2];
+      const parsed = parsePayload(payload);
+      if (!parsed.ok) {
+        return;
+      }
+      if (parsed.value === null) {
+        set({ services: { ...get().services, [id]: [] } });
+        return;
+      }
+      if (!Array.isArray(parsed.value)) {
+        return;
+      }
+      set({ services: { ...get().services, [id]: parsed.value as ServiceEntry[] } });
+      return;
+    }
+
+    if (parts[1] === "devices" && parts[3] === "service_history") {
+      const id = parts[2];
+      const parsed = parsePayload(payload);
+      if (!parsed.ok) {
+        return;
+      }
+      if (parsed.value === null) {
+        set({ serviceHistory: { ...get().serviceHistory, [id]: [] } });
+        return;
+      }
+      if (!Array.isArray(parsed.value)) {
+        return;
+      }
+      set({
+        serviceHistory: { ...get().serviceHistory, [id]: parsed.value as ServiceHistoryEntry[] },
+      });
       return;
     }
 

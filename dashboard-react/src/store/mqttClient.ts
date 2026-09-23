@@ -29,6 +29,8 @@ export const MAX_DELAY_MS = 30000;
 export const SUBSCRIBE_TOPICS = [
   "lan/devices/+/status",
   "lan/devices/+/history",
+  "lan/devices/+/services",
+  "lan/devices/+/service_history",
   "lan/devices/topology",
   "lan/events/recent",
   "lan/poller/status",

@@ -9,6 +9,8 @@ function stateWithDevices(devices: Record<string, DevicePayload>): AppState {
   return {
     devices,
     history: {},
+    services: {},
+    serviceHistory: {},
     events: [],
     topology: null,
     pollerStatus: null,
