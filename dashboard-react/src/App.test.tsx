@@ -8,7 +8,7 @@ import { DetailsRoute } from "./routes/DetailsRoute";
 describe("App", () => {
   it("renders the three-pane layout at /", () => {
     render(<App />);
-    expect(screen.getByText("Topology map — Phase 13")).toBeInTheDocument();
+    expect(screen.getByTestId("topology-map")).toBeInTheDocument();
   });
 
   it("reads the hostname from the ?id= query string on /details", () => {
