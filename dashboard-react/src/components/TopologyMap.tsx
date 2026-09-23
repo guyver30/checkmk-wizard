@@ -20,7 +20,7 @@ import { Network } from "vis-network/peer";
 import "vis-network/styles/vis-network.css";
 import { Banner } from "kone-design-system";
 import { nodeVisual } from "../lib/mapIcons";
-import { setMapPosition, updateParents } from "../lib/checkmkWrite";
+import { createUnmanagedSwitch, isValidHostName, setMapPosition, updateParents } from "../lib/checkmkWrite";
 import { buildMapModel, withGridPositions, type MapEdge, type MapNode } from "../lib/topologyLayout";
 import type { DevicePayload } from "../lib/types";
 
@@ -48,6 +48,20 @@ const CONNECTION_FAILURE: EditFailure = {
 const POSITION_FAILURE: EditFailure = {
   title: "Couldn't save that position",
   body: "Checkmk rejected the update. Check that the device still exists, then try again.",
+};
+
+const ADD_NODE_PROMPT = "Name for the new unmanaged switch (letters, digits, dot, dash, underscore):";
+const INVALID_SWITCH_NAME_FAILURE: EditFailure = {
+  title: "Couldn't add that switch",
+  body: "Use letters, digits, dot, dash or underscore only.",
+};
+const DUPLICATE_SWITCH_NAME_FAILURE: EditFailure = {
+  title: "Couldn't add that switch",
+  body: "A device with that name already exists.",
+};
+const SWITCH_CREATE_FAILURE: EditFailure = {
+  title: "Couldn't add that switch",
+  body: "Checkmk rejected the new host. Check the name isn't already used, then try again.",
 };
 
 // 13-UI-SPEC.md Copywriting Contract -- verbatim.
@@ -230,13 +244,56 @@ export function TopologyMap({
     }
   }
 
-  // Adds a real, check-free Checkmk host for an unmanaged switch. Prompts for a name at the
-  // dropped position; validation and the actual host creation are wired in below.
-  function addNode(
-    _data: { id: string; x: number; y: number; label: string },
+  // Adds a real, check-free Checkmk host for an unmanaged switch, styled with a "not yet
+  // monitored" (PEND) visual until Activate Changes and the next poll pick it up. Node deletion
+  // is never offered (deleteNode stays false below) -- a mistakenly added switch is removed in
+  // Checkmk's own UI instead.
+  async function addNode(
+    data: { id: string; x: number; y: number; label: string },
     callback: (result: Record<string, unknown> | null) => void,
   ) {
-    callback(null);
+    const name = window.prompt(ADD_NODE_PROMPT);
+    if (!name) {
+      callback(null);
+      return;
+    }
+    if (!isValidHostName(name)) {
+      callback(null);
+      onEditFailedRef.current?.(INVALID_SWITCH_NAME_FAILURE);
+      return;
+    }
+    if (nodesRef.current?.get(name)) {
+      callback(null);
+      onEditFailedRef.current?.(DUPLICATE_SWITCH_NAME_FAILURE);
+      return;
+    }
+    const x = Math.round(data.x);
+    const y = Math.round(data.y);
+    try {
+      await createUnmanagedSwitch(name, { x, y });
+      pendingNodeAdds.current.set(name, {
+        id: name,
+        label: name,
+        deviceType: "NetworkDevice",
+        state: "PEND",
+        position: { x, y },
+        unmanaged: true,
+      });
+      callback({
+        ...data,
+        id: name,
+        label: name,
+        title: UNMANAGED_SWITCH_TITLE,
+        physics: false,
+        x,
+        y,
+        ...nodeVisual("NetworkDevice", "PEND"),
+      });
+      onEditSavedRef.current?.();
+    } catch {
+      callback(null);
+      onEditFailedRef.current?.(SWITCH_CREATE_FAILURE);
+    }
   }
 
   // Mount once -- vis-network's Network is not a React component; it owns its own canvas and
