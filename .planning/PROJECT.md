@@ -34,7 +34,7 @@ A single Python-based toolchain takes a bare Checkmk install all the way to a fu
 
 - MAC address collection for topology nodes — not reliably available without Checkmk's HW/SW inventory plugin; would add a new subsystem dependency for marginal value
 - Checkmk notification rules as the live-update mechanism — would require deploying scripts into the `checkmk` container's own OMD filesystem, breaking the worker/checkmk boundary the container-mode architecture is built around
-- Duplicating Checkmk's own per-service drill-down UI in the new dashboard — link out to Checkmk's UI for full service-level detail instead
+- Duplicating Checkmk's per-service *configuration/administration* UI in the new dashboard — narrowed 2026-09-21 (Phase 12, DASH-08 through DASH-10): a read-only per-service status list and agent-metric gauges are in scope, because "why is this host red" could not be answered without them. Still out of scope: rule editing, downtime scheduling, acknowledgement, service discovery, and every other write/administration action — those remain Checkmk's own UI's job. The external deep link into Checkmk's UI for full service-level detail (D-17) remains unbuilt; `CHECKMK_BASE_URL` already exists in `dashboard-react/src/lib/config.ts` for whenever it is
 - Time-series graphing/historical dashboards beyond a simple bounded per-device transition-history strip — no time-series database
 
 ## Context

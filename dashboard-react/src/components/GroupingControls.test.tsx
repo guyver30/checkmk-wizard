@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it } from "vitest";
 import { IndexRoute } from "../routes/IndexRoute";
 import { useAppStore } from "../store/useAppStore";
@@ -36,10 +37,18 @@ function setDevices(devices: Record<string, DevicePayload>) {
   });
 }
 
+function renderIndex() {
+  return render(
+    <MemoryRouter>
+      <IndexRoute />
+    </MemoryRouter>,
+  );
+}
+
 describe("GroupingControls (wired into IndexRoute)", () => {
   it("renders a labelled select offering 'Group by type' and 'Group by folder', plus a labelled 'Order by severity' checkbox", () => {
     setDevices(threeGroupDevices());
-    render(<IndexRoute />);
+    renderIndex();
     const select = screen.getByLabelText(/group by/i);
     expect(select).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Group by type" })).toBeInTheDocument();
@@ -50,7 +59,7 @@ describe("GroupingControls (wired into IndexRoute)", () => {
   it("selecting 'Group by folder' re-groups the tree under folder-derived labels", async () => {
     const user = userEvent.setup();
     setDevices(threeGroupDevices());
-    render(<IndexRoute />);
+    renderIndex();
     await user.selectOptions(screen.getByLabelText(/group by/i), "folder");
     expect(screen.getByRole("button", { name: /basement/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /rooftop/i })).toBeInTheDocument();
@@ -59,7 +68,7 @@ describe("GroupingControls (wired into IndexRoute)", () => {
   it("checking 'Order by severity' reorders groups so the worst-state group is first", async () => {
     const user = userEvent.setup();
     setDevices(threeGroupDevices());
-    render(<IndexRoute />);
+    renderIndex();
     // Default (unchecked) order is alphabetical: ACS, GroupController, NetworkDevice.
     let treeitems = screen.getAllByRole("treeitem");
     expect(treeitems[0].textContent).toContain("ACS");
@@ -74,7 +83,7 @@ describe("GroupingControls (wired into IndexRoute)", () => {
   it("expanding two groups, then toggling 'Order by severity', leaves both groups expanded", async () => {
     const user = userEvent.setup();
     setDevices(threeGroupDevices());
-    render(<IndexRoute />);
+    renderIndex();
     await user.click(screen.getByRole("button", { name: /ACS/i }));
     await user.click(screen.getByRole("button", { name: /NetworkDevice/i }));
     expect(screen.getAllByRole("treeitem", { expanded: true })).toHaveLength(2);
@@ -91,7 +100,7 @@ describe("GroupingControls (wired into IndexRoute)", () => {
   it("switching grouping mode does not throw and does not leave a stale expanded row for a group key that no longer exists", async () => {
     const user = userEvent.setup();
     setDevices(threeGroupDevices());
-    render(<IndexRoute />);
+    renderIndex();
     await user.click(screen.getByRole("button", { name: /ACS/i }));
     expect(screen.getAllByRole("treeitem", { expanded: true })).toHaveLength(1);
 
@@ -109,7 +118,7 @@ describe("GroupingControls (wired into IndexRoute)", () => {
   it("switches grouping mode twice and leaves no stale group key expanded for a key absent from the current tree", async () => {
     const user = userEvent.setup();
     setDevices(threeGroupDevices());
-    render(<IndexRoute />);
+    renderIndex();
     await user.click(screen.getByRole("button", { name: /ACS/i }));
     await user.selectOptions(screen.getByLabelText(/group by/i), "folder");
     await user.click(screen.getByRole("button", { name: /basement/i }));
@@ -122,7 +131,7 @@ describe("GroupingControls (wired into IndexRoute)", () => {
   it("both controls are reachable and operable by keyboard alone", async () => {
     const user = userEvent.setup();
     setDevices(threeGroupDevices());
-    render(<IndexRoute />);
+    renderIndex();
     const select = screen.getByLabelText(/group by/i) as HTMLSelectElement;
     const checkbox = screen.getByRole("checkbox", { name: /order by severity/i }) as HTMLInputElement;
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it } from "vitest";
 import { Tree } from "./Tree";
 import type { TreeGroupNode } from "../lib/treeModel";
@@ -49,7 +50,22 @@ function TreeHarness({ groups }: { groups: TreeGroupNode[] }) {
 
 function renderStatic(devices: Record<string, DevicePayload>, mode: "type" | "folder" = "type") {
   const groups = buildTree(devices, mode, NOW_MS);
-  return render(<Tree groups={groups} openKeys={new Set()} onToggle={() => {}} />);
+  return render(
+    <MemoryRouter>
+      <Tree groups={groups} openKeys={new Set()} onToggle={() => {}} />
+    </MemoryRouter>,
+  );
+}
+
+/** Renders every group already expanded, so device-row links are mounted without a click. */
+function renderExpanded(devices: Record<string, DevicePayload>) {
+  const groups = buildTree(devices, "type", NOW_MS);
+  const openKeys = new Set(groups.map((group) => group.key));
+  return render(
+    <MemoryRouter>
+      <Tree groups={groups} openKeys={openKeys} onToggle={() => {}} />
+    </MemoryRouter>,
+  );
 }
 
 describe("Tree", () => {
@@ -63,7 +79,11 @@ describe("Tree", () => {
   it("is multi-open: clicking two different group buttons leaves both expanded", async () => {
     const user = userEvent.setup();
     const groups = buildTree(threeGroupDevices(), "type", NOW_MS);
-    render(<TreeHarness groups={groups} />);
+    render(
+      <MemoryRouter>
+        <TreeHarness groups={groups} />
+      </MemoryRouter>,
+    );
     const buttons = screen.getAllByRole("button");
     await user.click(buttons[0]);
     await user.click(buttons[1]);
@@ -94,7 +114,11 @@ describe("Tree", () => {
   it("reveals device rows with icon, label and StateBadge when a group expands", async () => {
     const user = userEvent.setup();
     const groups = buildTree(threeGroupDevices(), "type", NOW_MS);
-    render(<TreeHarness groups={groups} />);
+    render(
+      <MemoryRouter>
+        <TreeHarness groups={groups} />
+      </MemoryRouter>,
+    );
     const acsButton = screen.getByRole("button", { name: /ACS/i });
     await user.click(acsButton);
     const acsRow = screen.getByText("acs1").closest('[role="treeitem"]');
@@ -109,7 +133,11 @@ describe("Tree", () => {
       u1: { id: "u1", device_type: "unknown", state: "OK", timestamp: FRESH_TIMESTAMP },
     };
     const groups = buildTree(devices, "type", NOW_MS);
-    render(<TreeHarness groups={groups} />);
+    render(
+      <MemoryRouter>
+        <TreeHarness groups={groups} />
+      </MemoryRouter>,
+    );
     const untypedButton = screen.getByRole("button", { name: /untyped/i });
     await user.click(untypedButton);
     expect(screen.getByTitle(/device-type tag group is absent site-wide/i)).toBeInTheDocument();
@@ -118,13 +146,49 @@ describe("Tree", () => {
   it("toggles a focused group button with Enter and Space (real <button> semantics)", async () => {
     const user = userEvent.setup();
     const groups = buildTree(threeGroupDevices(), "type", NOW_MS);
-    render(<TreeHarness groups={groups} />);
+    render(
+      <MemoryRouter>
+        <TreeHarness groups={groups} />
+      </MemoryRouter>,
+    );
     const acsButton = screen.getByRole("button", { name: /ACS/i });
     acsButton.focus();
     await user.keyboard("{Enter}");
     expect(acsButton).toHaveAttribute("aria-expanded", "true");
     await user.keyboard(" ");
     expect(acsButton).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("renders a device row as a link into its own drill-down", () => {
+    const devices: Record<string, DevicePayload> = {
+      web1: { id: "web1", device_type: "NetworkDevice", state: "OK", timestamp: FRESH_TIMESTAMP },
+    };
+    renderExpanded(devices);
+    const link = screen.getByText("web1").closest("a");
+    expect(link).toHaveAttribute("href", "/details?id=web1");
+  });
+
+  it("encodes a device id containing a space in its drill-down link", () => {
+    const devices: Record<string, DevicePayload> = {
+      "web 1": { id: "web 1", device_type: "NetworkDevice", state: "OK", timestamp: FRESH_TIMESTAMP },
+    };
+    renderExpanded(devices);
+    const link = screen.getByText("web 1").closest("a");
+    expect(link).toHaveAttribute("href", "/details?id=web%201");
+  });
+
+  it("activating a group row still calls its toggle handler rather than navigating", async () => {
+    const user = userEvent.setup();
+    const groups = buildTree(threeGroupDevices(), "type", NOW_MS);
+    const toggled: string[] = [];
+    render(
+      <MemoryRouter>
+        <Tree groups={groups} openKeys={new Set()} onToggle={(key) => toggled.push(key)} />
+      </MemoryRouter>,
+    );
+    const acsButton = screen.getByRole("button", { name: /ACS/i });
+    await user.click(acsButton);
+    expect(toggled).toEqual(["ACS"]);
   });
 
   it("groups members in different folders under folder mode into distinct labelled rows", () => {
@@ -146,7 +210,11 @@ describe("Tree", () => {
         },
       });
     });
-    render(<IndexRoute />);
+    render(
+      <MemoryRouter>
+        <IndexRoute />
+      </MemoryRouter>,
+    );
     const acsButton = screen.getByRole("button", { name: /ACS/i });
     await user.click(acsButton);
     expect(acsButton).toHaveAttribute("aria-expanded", "true");

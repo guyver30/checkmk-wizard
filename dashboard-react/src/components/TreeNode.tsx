@@ -6,6 +6,7 @@
 // depth-driven left padding, and a severity-derived accent from node.worst via
 // stateMapping.badgeForState, never a second colour table.
 
+import { Link } from "react-router";
 import { badgeForState } from "../lib/stateMapping";
 import type { TreeGroupNode } from "../lib/treeModel";
 import { StateBadgeForState } from "./StateBadge";
@@ -79,22 +80,25 @@ export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
               <div
                 key={device.id}
                 role="treeitem"
-                tabIndex={-1}
                 style={{ paddingLeft: (depth + 1) * INDENT_PX + ROW_START_PX }}
-                className="flex items-center gap-2 py-1.5 pr-3 text-sm"
                 aria-label={`${device.label} — ${displayState}`}
               >
-                <span className={device.typeIcon} aria-hidden />
-                {device.tagGroupMissing && (
-                  <span
-                    role="img"
-                    title="Device-type tag group is absent site-wide"
-                    aria-label="Device-type tag group is absent site-wide"
-                    className="icon-warning-triangle-filled text-fg-warning"
-                  />
-                )}
-                <span className="flex-1 truncate text-fg-primary">{device.label}</span>
-                <StateBadgeForState state={displayState} />
+                <Link
+                  to={`/details?id=${encodeURIComponent(device.id)}`}
+                  className="flex items-center gap-2 py-1.5 pr-3 text-sm hover:bg-bg-subtle-hover"
+                >
+                  <span className={device.typeIcon} aria-hidden />
+                  {device.tagGroupMissing && (
+                    <span
+                      role="img"
+                      title="Device-type tag group is absent site-wide"
+                      aria-label="Device-type tag group is absent site-wide"
+                      className="icon-warning-triangle-filled text-fg-warning"
+                    />
+                  )}
+                  <span className="flex-1 truncate text-fg-primary">{device.label}</span>
+                  <StateBadgeForState state={displayState} />
+                </Link>
               </div>
             );
           })}
