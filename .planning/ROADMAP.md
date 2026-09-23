@@ -229,8 +229,8 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 13-01-PLAN.md — Live REST capability probe (roles, permissions, no-IP switch shape, labels/parents round-trip, CORS) run on the deployment host; verdicts recorded as the source of truth for later plans
-- [ ] 13-02-PLAN.md — Dashboard data layer: vis-network/vis-data npm deps, vendored device-type SVGs, state-recoloured icon builder, buildMapModel + grid placement
+- [x] 13-01-PLAN.md — Live REST capability probe (roles, permissions, no-IP switch shape, labels/parents round-trip, CORS) run on the deployment host; verdicts recorded as the source of truth for later plans
+- [x] 13-02-PLAN.md — Dashboard data layer: vis-network/vis-data npm deps, vendored device-type SVGs, state-recoloured icon builder, buildMapModel + grid placement
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -262,7 +262,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 | 10. Checkmk Tag-Group & Onboarding Integration | 6/6 | Complete   | 2026-09-11 |
 | 11. Live Dashboard | 9/9 | Complete   | 2026-09-16 |
 | 12. Agent Metrics and Service Status | 5/5 | Complete    | 2026-09-23 |
-| 13. Wizard Parents Support and Topology Map | 0/8 | Planned | - |
+| 13. Wizard Parents Support and Topology Map | 2/8 | In Progress|  |
 
 ### Phase 11.1: Dashboard Layout and Light Palette
 
