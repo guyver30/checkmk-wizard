@@ -29,11 +29,20 @@ def test_build_role_permissions_never_contains_activateforeign_or_excluded_prefi
 
 
 def test_build_role_permissions_matches_live_verified_v_perms():
-    # 13-01 VERDICT V-PERMS: exactly these six ids.
+    # 13-01 VERDICT V-PERMS, corrected by live UAT (2026-09-23): the original
+    # six-id verdict (derived from the admin role's own enabled permissions,
+    # never live-tested against the scoped role) was missing
+    # wato.see_all_folders -- without it a freshly-provisioned role with no
+    # folder contact-group membership 404s on every host, since
+    # wato.all_folders only grants WRITE access, not the ability to SEE a
+    # host at all. See scripts/provision_topology_editor.py's
+    # REQUIRED_PERMISSIONS comment and scripts/probe_topology_rest.py's
+    # V-PERMS CORRECTION for the full account.
     assert provisioner.REQUIRED_PERMISSIONS == (
         "wato.use",
         "wato.edit",
         "wato.all_folders",
+        "wato.see_all_folders",
         "wato.edit_hosts",
         "wato.manage_hosts",
         "wato.activate",
