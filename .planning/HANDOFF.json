@@ -1,47 +1,46 @@
 {
   "version": "1.0",
-  "timestamp": "2026-09-21T13:49:30.860Z",
-  "phase": "12",
-  "phase_name": "agent-metrics-and-service-status",
-  "phase_dir": ".planning/phases/12-agent-metrics-and-service-status",
+  "timestamp": "2026-09-23T14:16:01.376Z",
+  "phase": "13",
+  "phase_name": "wizard-parents-support-and-topology-map",
+  "phase_dir": ".planning/phases/13-wizard-parents-support-and-topology-map",
   "plan": null,
   "task": null,
-  "total_tasks": 14,
-  "status": "paused",
+  "total_tasks": 16,
+  "status": "phase_complete",
   "completed_tasks": [
-    {"id": "context", "name": "CONTEXT.md gathered + amended (D-01..D-17)", "status": "done", "commit": "2cd9dc5"},
-    {"id": "ui-spec", "name": "UI-SPEC.md created + verified (5/6 dimensions PASS)", "status": "done", "commit": "6a713b4"},
-    {"id": "scope-amend", "name": "Scope amendment: tree-row nav + DASH-03 history strip in, Checkmk link out", "status": "done", "commit": "2cd9dc5"},
-    {"id": "research", "name": "RESEARCH.md — CPU/RAM perfdata fields verified, SMART naming conflict found+resolved", "status": "done", "commit": "ee2e5be"},
-    {"id": "d05-fix", "name": "D-05 SMART service name corrected to source-verified regex", "status": "done", "commit": "f0f6fb3"},
-    {"id": "patterns", "name": "PATTERNS.md — codebase analogs mapped for all 11 files", "status": "done", "commit": "1bce855"},
-    {"id": "planning", "name": "5 PLAN.md files created (12-01..12-05), 2 waves, 14 tasks", "status": "done", "commit": "0f4b73c"},
-    {"id": "plan-check", "name": "gsd-plan-checker verification PASSED (2 warnings, 1 fixed via added Task 4 in 12-02)", "status": "done", "commit": "4b0131e"},
-    {"id": "seed", "name": "SEED-001 planted: MQTT-subscriber-backed history database for cloud reporting", "status": "done", "commit": "08131e8"},
-    {"id": "todo", "name": "Todo captured: pre-seed fixed automation-user REST secret from env", "status": "done", "commit": "462ece0"}
+    {"id": "13-01", "name": "Live REST capability probe (checkmk-rest, live-verification)", "status": "done", "commit": "dc1770c"},
+    {"id": "13-02", "name": "Topology data layer (mapIcons.ts, topologyLayout.ts)", "status": "done", "commit": "6937371"},
+    {"id": "13-03", "name": "Live vis-network topology map (TopologyMap.tsx, DASH-07)", "status": "done", "commit": "189ff97"},
+    {"id": "13-04", "name": "Poller map_position/unmanaged carry-through + topology_editor provisioning script", "status": "done", "commit": "f1c27e6"},
+    {"id": "13-05", "name": "Browser-side Checkmk REST writer (checkmkWrite.ts) + same-origin proxy", "status": "done", "commit": "057d53e"},
+    {"id": "13-06", "name": "Editable topology map (edge/position/unmanaged-switch writes)", "status": "done", "commit": "9e100dc"},
+    {"id": "13-07", "name": "Edit-topology toolbar, Apply flow, idle auto-exit", "status": "done", "commit": "e6fd81d"},
+    {"id": "13-08", "name": "Docs update + 13-step live end-to-end UAT on the real deployment host", "status": "done", "commit": "02d91ca"},
+    {"id": "13-review", "name": "Code review (0 critical, 3 warning, 3 info, 5 convention-noise)", "status": "done", "commit": "95cd182"},
+    {"id": "13-verify", "name": "Goal-backward phase verification (passed, 8/8 must-haves)", "status": "done", "commit": "7371f80"},
+    {"id": "fix-1", "name": "Topology map canvas-mount race (fix(13-08))", "status": "done", "commit": "e89ff0b"},
+    {"id": "fix-2", "name": "Missing html/body/#root height chain (fix(13-08))", "status": "done", "commit": "2206789"},
+    {"id": "fix-3", "name": "Inverted resize-divider direction (fix(13-08))", "status": "done", "commit": "b0b2267"},
+    {"id": "fix-4", "name": "Missing wato.see_all_folders permission (fix(13-08))", "status": "done", "commit": "6341287"},
+    {"id": "fix-5", "name": "Banner flash-back on pending edit (fix(13-08))", "status": "done", "commit": "219fcc6"},
+    {"id": "roadmap", "name": "ROADMAP.md/STATE.md/REQUIREMENTS.md tracking updated, phase marked complete", "status": "done", "commit": "2d9daba"}
   ],
-  "remaining_tasks": [
-    {"id": "12-01", "name": "Poller: GET services column triad, Nagios perfdata parser, ServiceSnapshot, --dump-service-names", "status": "not_started", "wave": 1},
-    {"id": "12-03", "name": "Dashboard data layer: gauge fields + ServiceEntry/ServiceHistoryEntry types, 2 new subscribed topics + store slices, gauges.ts/serviceSort.ts", "status": "not_started", "wave": 1},
-    {"id": "12-05", "name": "Tree-row navigation to /details?id= (D-15) + PROJECT.md Out of Scope amendment", "status": "not_started", "wave": 1},
-    {"id": "12-02", "name": "Classification, 2 new MQTT topics, change-only publish, bounded service history, cycle wiring, Podman-doc sync (depends on 12-01)", "status": "not_started", "wave": 2},
-    {"id": "12-04", "name": "DetailsRoute fill-in: gauge row, SMART badge, service Table, history strip (depends on 12-03)", "status": "not_started", "wave": 2}
-  ],
+  "remaining_tasks": [],
   "blockers": [],
   "human_actions_pending": [
     {
-      "action": "When a live agent-test/Checkmk host is reachable, run `uv run python scripts/mqtt_poller.py --dump-service-names` (built in plan 12-01) and confirm the SMART service is actually named \"SMART <device> Stats\", not the originally-assumed \"Smart <device>\"",
-      "context": "D-05 was corrected to the source-verified name (Checkmk 2.4.0 GitHub source) because no live host was reachable during planning to settle a conflict between that source read and the original CONTEXT.md claim. The fix location is a single regex constant (SMART_HEALTH_SERVICE_RE in scripts/mqtt_poller.py) if the live name differs.",
+      "action": "Run /bm:secure-phase 13 to produce 13-SECURITY.md",
+      "context": "workflow.security_enforcement=true and no SECURITY.md exists yet for phase 13; the phase already carries STRIDE threat_model blocks in 13-01-PLAN.md and 13-08-PLAN.md, this just needs a formal audit pass confirming the mitigations actually hold in the shipped code. Non-blocking (advisory in the workflow), but recommended before considering the phase fully closed out.",
       "blocking": false
     }
   ],
   "decisions": [
-    {"decision": "Fold tree-row navigation (D-15) and DASH-03's history strip (D-16) into Phase 12; exclude the Checkmk external deep-link (D-17)", "rationale": "User confirmed: without nav wiring the new UI is unreachable; the history strip touches the same DetailsRoute.tsx file this phase already fills in and its data already flows via lan/devices/{id}/history; the Checkmk link was explicitly declined", "phase": "12"},
-    {"decision": "Build the SMART-service filter against the source-verified name (\"SMART <device> Stats\") now, isolated to one commented constant, rather than blocking on live verification", "rationale": "No agent-test host reachable in this environment; user explicitly chose to proceed and fix later if wrong; 12-01 adds a --dump-service-names diagnostic to make that a one-line fix", "phase": "12"},
-    {"decision": "Mint new REQUIREMENTS.md IDs during planning (PLR-09..12, DASH-08..11) instead of blocking on a separate requirements-update cycle; mark DASH-03 as Partial, not Complete", "rationale": "RESEARCH.md found no REQ IDs covered this phase's actual deliverables; DASH-03 only covers the history-strip half (D-16), not the excluded Checkmk-link half (D-17)", "phase": "12"},
-    {"decision": "Added Task 4 to plan 12-02: sync docs/Podman setup...md's MQTT topic contract table with the two new topics and 15 new status payload keys", "rationale": "gsd-plan-checker flagged that no plan updated this doc, breaking a convention every prior phase touching the MQTT contract (Phase 9/10/11) has followed", "phase": "12"}
+    {"decision": "13-01's blocking human-verify checkpoint (live REST probe) and 13-08's blocking human-verify checkpoint (13-step live UAT) were both run for real by the developer on the actual deployment host -- no step was ever simulated, fabricated or inferred, per each plan's own explicit instruction", "rationale": "This dev machine has no podman/broker/Checkmk site reachable; the codebase's own convention treats live server behaviour as the source of truth over docs/assumptions", "phase": "13"},
+    {"decision": "13-01's original VERDICT V-PERMS (six required wato.* permission ids) was corrected to seven after live UAT found every edit 404ing -- wato.see_all_folders was missing. The correction was written back into scripts/probe_topology_rest.py's own docstring (not just the provisioning script), since that docstring is this codebase's recorded source of truth for REST findings", "rationale": "wato.all_folders only grants WRITE access across folders; a freshly-cloned role with no folder contact-group membership needs the separate wato.see_all_folders 'see' permission to discover a host at all", "phase": "13"},
+    {"decision": "Three WARNING-tier code-review findings (WR-01 partial-failure overlay bookkeeping, WR-02 write-capable secret in a git-tracked file with no local-override path, WR-03 zero test coverage on provision_topology_editor.py's network-facing functions) were left as documented follow-up items rather than fixed in this session", "rationale": "None are Critical/blocking; the review's own classification treats them as advisory. The core map-render/edit/Apply/unmanaged-switch chain was proven end-to-end on the real deployment. Recommend routing to backlog rather than a blocking follow-up phase", "phase": "13"}
   ],
   "uncommitted_files": [],
-  "next_action": "Run /bm:execute-phase 12 to execute the 5 plans across 2 waves",
-  "context_notes": "Planning for Phase 12 (Agent Metrics and Service Status) is fully complete and verified. No execution has started — this is a clean phase-boundary pause, not a mid-plan interruption. All planning artifacts (CONTEXT, UI-SPEC, RESEARCH, PATTERNS, 5 PLANs) are committed. Working tree is otherwise clean. Resuming should go straight to /bm:execute-phase 12."
+  "next_action": "Run /bm:secure-phase 13 for the security audit, or /bm:plan-phase 14 to start Fleet Intelligence (no plans exist yet for Phase 14)",
+  "context_notes": "Phase 13 is fully complete: all 8 plans done, 13-step live UAT passed in full on the real deployment host, code review clean (0 critical), goal-backward verification passed (8/8 must-haves), ROADMAP.md/REQUIREMENTS.md tracking all reflect completion. This is a clean phase-boundary pause, not a mid-task interruption -- there is no partial work to resume within Phase 13 itself. An empty, untracked .gitkeep-only scaffold directory exists at .planning/phases/15-location-hierarchy-for-hosts-tower-building-sub-location-tag/ (predates this session, not touched, presumably a future phase-number reservation) -- Phase 14 (Fleet Intelligence) has no plans yet and is the next sequential phase per ROADMAP.md."
 }
