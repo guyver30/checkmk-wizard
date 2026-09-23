@@ -63,6 +63,16 @@ The remaining constants in `src/lib/config.ts`:
   time.
 - `HISTORY_MAX_ENTRIES` — bounds the event-history list.
 - `CHECKMK_SITE` — the Checkmk site name used to build deep links.
+- `TOPOLOGY_EDITOR_SECRET` — ships as the literal placeholder `<TOPOLOGY_EDITOR_SECRET>`.
+  Unlike `WS_USERNAME`/`WS_PASSWORD`, this credential is WRITE-capable: it edits/adds
+  Checkmk hosts and activates its own pending changes (map edit mode, 13-06/13-07). Paste in
+  the secret printed once by `scripts/provision_topology_editor.py`; edit-mode writes stay
+  disabled (`isTopologyEditingConfigured()` returns `false`) until you do.
+- `CHECKMK_REST_ORIGIN` — the same-origin `/checkmk-api` path prefix the browser calls
+  instead of `CHECKMK_BASE_URL` directly, because Checkmk does not answer CORS preflights
+  (13-01 VERDICT V-CORS). `vite.config.ts`'s `server.proxy`/`preview.proxy` forward it to
+  Checkmk; set `CHECKMK_PROXY_TARGET` if Checkmk isn't reachable at `http://localhost:8080`
+  from wherever `vite dev`/`vite preview` runs.
 
 ## 5. Version pins and why
 
