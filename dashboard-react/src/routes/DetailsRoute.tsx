@@ -1,10 +1,12 @@
 import { useSearchParams } from "react-router";
-import { Badge, ProgressCircle } from "kone-design-system";
-import type { BadgeColor, ProgressColor } from "kone-design-system";
+import { Badge, ProgressCircle, Table } from "kone-design-system";
+import type { BadgeColor, ProgressColor, TableColumn } from "kone-design-system";
 import { gaugeColor, otherMountsLabel, smartBadge } from "../lib/gauges";
-import { displayName } from "../lib/display";
-import { StateBadge } from "../components/StateBadge";
+import { compareServices } from "../lib/serviceSort";
+import { displayName, formatClock } from "../lib/display";
+import { StateBadge, StateBadgeForState } from "../components/StateBadge";
 import { useAppStore } from "../store/useAppStore";
+import type { ServiceEntry } from "../lib/types";
 
 // Preserves the ?id=<hostname> convention (D-19) on a route instead of a second HTML
 // file (D-41) — Phase 11 removed Details from the nav, but the route stays bookmarkable.
@@ -14,6 +16,24 @@ const NO_DEVICE_BODY =
   "Choose a device from the fleet tree to view its live metrics and service status.";
 const DEVICE_NOT_FOUND_HEADING = "Device not found";
 const NO_METRICS_TEXT = "No agent metrics available for this device.";
+const SERVICES_NOT_ARRIVED_TEXT =
+  "Service data has not arrived yet — it should appear within one poll cycle.";
+const NO_ADDITIONAL_SERVICES_TEXT = "No additional services.";
+const NO_HISTORY_TEXT = "No recent transitions for this device.";
+
+const SERVICE_COLUMNS: TableColumn<ServiceEntry>[] = [
+  { key: "service", header: "Service", render: (row) => row.description },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => <StateBadgeForState state={row.state ?? "UNKNOWN"} />,
+  },
+  {
+    key: "output",
+    header: "Output",
+    render: (row) => <span className="text-sm">{row.plugin_output}</span>,
+  },
+];
 
 // gaugeColor()/smartBadge() share ProgressColor with the gauge rings, which includes
 // "brand" -- a value neither helper ever returns (gaugeColor falls back to "success",
@@ -53,6 +73,8 @@ export function DetailsRoute() {
   const [searchParams] = useSearchParams();
   const id = searchParams.get("id");
   const device = useAppStore((s) => (id ? s.devices[id] : undefined));
+  const services = useAppStore((s) => (id ? s.services[id] : undefined));
+  const history = useAppStore((s) => (id ? s.history[id] : undefined));
 
   if (!id) {
     return <EmptyState heading={NO_DEVICE_HEADING} body={NO_DEVICE_BODY} />;
@@ -99,6 +121,14 @@ export function DetailsRoute() {
         )}
       </div>
     ) : undefined;
+
+  // Copied before sorting -- sorting the store's array in place would mutate shared state,
+  // the exact hazard EventHistory.tsx's dated slice().reverse() comment documents.
+  const sortedServices = (services ?? []).slice().sort(compareServices);
+  const serviceRowKey = (row: ServiceEntry) =>
+    row.description || String(sortedServices.indexOf(row));
+
+  const historyRows = (history ?? []).slice().reverse();
 
   return (
     <main className="px-4">
@@ -161,6 +191,39 @@ export function DetailsRoute() {
       ) : (
         <p>{NO_METRICS_TEXT}</p>
       )}
+
+      <section className="mt-3">
+        {services === undefined ? (
+          <p className="text-sm text-fg-tertiary">{SERVICES_NOT_ARRIVED_TEXT}</p>
+        ) : services.length === 0 ? (
+          <p className="text-center text-sm text-fg-tertiary">{NO_ADDITIONAL_SERVICES_TEXT}</p>
+        ) : (
+          <Table columns={SERVICE_COLUMNS} rows={sortedServices} rowKey={serviceRowKey} />
+        )}
+      </section>
+
+      <section className="mt-3">
+        <h2 className="text-sm font-semibold">History</h2>
+        {historyRows.length === 0 ? (
+          <div className="p-3 text-sm text-fg-tertiary">{NO_HISTORY_TEXT}</div>
+        ) : (
+          historyRows.map((entry, index) => {
+            const fromState = typeof entry?.from === "string" ? entry.from : "UNKNOWN";
+            const toState = typeof entry?.to === "string" ? entry.to : "UNKNOWN";
+            const key = `${entry?.timestamp ?? "unknown"}:${index}`;
+            return (
+              <div key={key} className="flex items-center gap-2 py-1.5 text-sm">
+                <span className="shrink-0 font-mono text-xs text-fg-tertiary">
+                  {formatClock(entry?.timestamp)}
+                </span>
+                <StateBadgeForState state={fromState} />
+                <span aria-hidden>→</span>
+                <StateBadgeForState state={toState} />
+              </div>
+            );
+          })
+        )}
+      </section>
     </main>
   );
 }
