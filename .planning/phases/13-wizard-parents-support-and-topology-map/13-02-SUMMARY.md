@@ -121,3 +121,8 @@ None - no external service configuration required.
 ---
 *Phase: 13-wizard-parents-support-and-topology-map*
 *Completed: 2026-09-23*
+
+## Self-Check: PASSED
+
+All 10 created source/asset files and the SUMMARY.md itself confirmed present via `[ -f ... ]`.
+All 3 commit hashes (`893e78f`, `045f424`, `6937371`) confirmed present in `git log --oneline -5`.
