@@ -292,21 +292,32 @@ async def _prompt_change_cmkadmin_password(
         return new_password
 
 
-def _print_automation_secret_created(secret: str) -> None:
-    """Print the freshly-generated 'automation' user secret to the console.
+def _print_automation_secret_created(secret: str, from_env: bool) -> None:
+    """Report that the 'automation' user was provisioned.
 
-    Printing a secret is intentional and bounded here, not a leak: the
-    terminal is already this codebase's trusted operator channel (the
-    CMK_PASSWORD pre-fill, `questionary.password` prompts), and this value
-    cannot be obtained any other way without shelling into the `checkmk`
-    container (10-06-SUMMARY.md finding 3). It goes to interactive console
-    output only — never route it into a persisted log or the
+    A generated secret is printed once, intentionally and bounded, not a
+    leak: the terminal is already this codebase's trusted operator channel
+    (the CMK_PASSWORD pre-fill, `questionary.password` prompts), and that
+    value cannot be obtained any other way without shelling into the
+    `checkmk` container (10-06-SUMMARY.md finding 3). It goes to interactive
+    console output only — never route it into a persisted log or the
     `config_snapshot_*.json` the wizard writes.
+
+    A secret that came from the `CMK_REST_SECRET` env var is deliberately
+    never echoed: the operator already has it in `deploy/.env`, so printing
+    it would only add scrollback exposure.
     """
+    if from_env:
+        console.print(
+            "[green]Automation user 'automation' provisioned with CMK_REST_SECRET "
+            "from the environment.[/green]"
+        )
+        return
     console.print(
         "[green]Automation user 'automation' created automatically.[/green] "
-        f"Secret: [bold yellow]{secret}[/bold yellow] — save this to deploy/.env as "
-        "CMK_REST_SECRET so the worker and poller containers can authenticate."
+        f"Secret: [bold yellow]{secret}[/bold yellow] — save this (or any pre-chosen "
+        "value) to deploy/.env as CMK_REST_SECRET so the worker and poller containers "
+        "can authenticate; set it BEFORE the next run to skip this step."
     )
 
 
@@ -324,10 +335,11 @@ async def _create_fresh_site(
         checkmk_host, site_name, admin_password, checkmk_port
     )
     try:
+        env_secret = os.environ.get("CMK_REST_SECRET") or None
         secret = await bootstrap_automation_user(
-            checkmk_host, site_name, admin_password, port=checkmk_port
+            checkmk_host, site_name, admin_password, port=checkmk_port, secret=env_secret
         )
-        _print_automation_secret_created(secret)
+        _print_automation_secret_created(secret, from_env=env_secret is not None)
         return secret
     except CheckmkAPIError as exc:
         console.print(
@@ -521,16 +533,22 @@ async def phase1_site_bringup() -> CheckmkConnection:
         ).ask_async()
         if cmkadmin_password:
             try:
+                # With env_secret set, an existing 'automation' user is
+                # updated to that secret rather than rejected, so the
+                # "likely already exists" branch below only fires in the
+                # generated-secret fallback.
+                env_secret = os.environ.get("CMK_REST_SECRET") or None
                 secret = await bootstrap_automation_user(
-                    checkmk_host, site_name, cmkadmin_password, port=checkmk_port
+                    checkmk_host, site_name, cmkadmin_password, port=checkmk_port, secret=env_secret
                 )
                 creds = site.SiteCredentials(site=site_name, automation_user="automation", automation_secret=secret)
-                _print_automation_secret_created(secret)
+                _print_automation_secret_created(secret, from_env=env_secret is not None)
             except CheckmkAPIError as exc:
                 console.print(
                     f"[yellow]Could not auto-create the 'automation' user ({exc}) — likely "
-                    "already exists from a previous run. You'll be prompted for its secret "
-                    "manually below.[/yellow]"
+                    "already exists from a previous run (set CMK_REST_SECRET in deploy/.env "
+                    "to have the wizard reconcile an existing user automatically). You'll be "
+                    "prompted for its secret manually below.[/yellow]"
                 )
     elif reuse_existing:
         console.print(f"Reusing existing site [bold]{site_name}[/bold].")
