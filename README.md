@@ -76,10 +76,12 @@ fallback hint, since it can't tell the two situations apart on its own.
   least-privilege account recommended for `cmk-agent-ctl register`) if no
   local secret is found for it either — falling back to reusing the
   general `automation` credential for registration if that also fails.
-- **Livestatus-over-TCP already enabled** on the target site (`omd config
-  <site> set LIVESTATUS_TCP on && omd restart <site>`, run on the Checkmk
-  host/container) — the wizard can't turn this on remotely, and warns at
-  startup if it can't reach it.
+- **Livestatus-over-TCP already enabled** on the target site — the wizard
+  can't turn this on remotely, and warns at startup if it can't reach it.
+  `deploy/compose.yaml` sets `CMK_LIVESTATUS_TCP=on` on the `checkmk`
+  service, so a site the container creates has it on automatically. For any
+  other setup, run `omd stop <site> && omd config <site> set LIVESTATUS_TCP
+  on && omd start <site>` on the Checkmk host/container.
 
 **Both modes need:**
 
