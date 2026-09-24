@@ -223,6 +223,7 @@ async def test_phase1_container_mode_bootstraps_automation_user_via_cmkadmin_pas
     """Given the cmkadmin password, container mode creates the 'automation'
     user via REST (bootstrap_automation_user) and uses its returned secret
     directly — never falling back to a local file read."""
+    monkeypatch.delenv("CMK_REST_SECRET", raising=False)
     answers = iter(["dmc", "checkmk", "cmkadmin-pw"])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
@@ -263,6 +264,77 @@ async def test_phase1_container_mode_bootstraps_automation_user_via_cmkadmin_pas
 
     assert connection.username == "automation"
     assert connection.secret == "freshly-generated-secret"
+
+
+async def _run_container_phase1_capturing_secret_kwarg(monkeypatch, returned_secret):
+    answers = iter(["dmc", "checkmk", "cmkadmin-pw"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+    seen = {}
+
+    async def fake_bootstrap(host, site_name, cmkadmin_password, **kwargs):
+        seen["secret"] = kwargs.get("secret")
+        return returned_secret
+
+    monkeypatch.setattr("checkmk_wizard.wizard.bootstrap_automation_user", fake_bootstrap)
+
+    async def fake_registration_bootstrap_unavailable(*args, **kwargs):
+        raise CheckmkAPIError("PUT", "url", 500, "not exercised by this test")
+
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.bootstrap_agent_registration_secret", fake_registration_bootstrap_unavailable
+    )
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.site.get_site_credentials", lambda site_name, automation_user="automation": None
+    )
+    with respx.mock:
+        respx.get("http://checkmk/dmc/check_mk/api/v1/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        connection = await phase1_site_bringup()
+    return connection, seen
+
+
+@pytest.mark.asyncio
+async def test_phase1_container_mode_pushes_cmk_rest_secret_from_env(monkeypatch, capsys):
+    """CMK_REST_SECRET from the worker env is passed to the bootstrap as
+    the pre-chosen secret and, since the operator already holds it in
+    deploy/.env, is never echoed to the console."""
+    monkeypatch.setenv("CMK_REST_SECRET", "env-secret-abcdefghij")
+    connection, seen = await _run_container_phase1_capturing_secret_kwarg(
+        monkeypatch, "env-secret-abcdefghij"
+    )
+
+    assert seen["secret"] == "env-secret-abcdefghij"
+    assert connection.secret == "env-secret-abcdefghij"
+    # rich wraps at terminal width; collapse whitespace before matching.
+    out = " ".join(capsys.readouterr().out.split())
+    assert "env-secret-abcdefghij" not in out
+    assert "CMK_REST_SECRET from the environment" in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("env_value", [None, ""])
+async def test_phase1_container_mode_without_cmk_rest_secret_keeps_generated_fallback(
+    monkeypatch, capsys, env_value
+):
+    """Unset or empty CMK_REST_SECRET (compose interpolates an unset one to
+    an empty string) keeps the generate-and-print-once behaviour."""
+    if env_value is None:
+        monkeypatch.delenv("CMK_REST_SECRET", raising=False)
+    else:
+        monkeypatch.setenv("CMK_REST_SECRET", env_value)
+    connection, seen = await _run_container_phase1_capturing_secret_kwarg(
+        monkeypatch, "generated-secret-xyz"
+    )
+
+    assert seen["secret"] is None
+    assert connection.secret == "generated-secret-xyz"
+    assert "generated-secret-xyz" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
