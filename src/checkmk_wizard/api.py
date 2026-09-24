@@ -391,6 +391,7 @@ async def bootstrap_automation_user(
     username: str = "automation",
     cmkadmin_user: str = "cmkadmin",
     port: int | None = None,
+    secret: str | None = None,
 ) -> str:
     """Auto-provision the REST 'automation' user right after a fresh site is
     created, instead of requiring the operator to click through Setup >
@@ -421,15 +422,37 @@ async def bootstrap_automation_user(
     real running site (login → create user → Bearer-auth with the new
     secret → automation.secret file appears on disk).
 
+    Pre-seeded secret: when `secret` is supplied (the wizard passes the
+    `CMK_REST_SECRET` from `deploy/.env`, which worker and poller share, so
+    the value has to be known before Checkmk generates anything), that exact
+    value is used instead of a random one. Since a re-run or site restore
+    must re-sync Checkmk to `.env`, this path first probes
+    `GET /objects/user_config/<username>`: 404 creates the user as above,
+    200 updates only the secret via `PUT` with the returned ETag (same
+    GET-ETag-PUT shape as `change_cmkadmin_password()`), anything else
+    raises. It probes rather than parsing a duplicate-user error from the
+    POST because that error's status code is not live-verified (the tests
+    mock both 400 and 409). Without `secret` nothing changes: random secret,
+    POST only, so an existing user still raises rather than being silently
+    rotated out from under a poller/script holding the old secret.
+
+    UNVERIFIED against a live site: `PUT` with `auth_type: automation` +
+    `store_automation_secret` on update, and any minimum-length / password-
+    policy rule Checkmk applies to automation secrets. Neither is validated
+    client-side; Checkmk's rejection surfaces as `CheckmkAPIError`.
+
     Raises `CheckmkAPIError` on any failure (wrong password, unexpected
-    HTML, non-2xx response, e.g. `username` already exists) — this is
+    HTML, non-2xx response, e.g. `username` already exists when no `secret`
+    was supplied — with one, an existing user is updated instead) — this is
     best-effort; the caller should treat a failure here as "fall back to
     the existing manual instructions", never as fatal.
 
     `port` is for sites not served on the protocol default (e.g. the
     `check-mk-raw` container's 5000).
     """
-    secret = secrets.token_urlsafe(24)
+    pre_seeded = secret is not None
+    if secret is None:
+        secret = secrets.token_urlsafe(24)
     base = _site_base(proto, host, port, site)
     login_url = f"{base}/login.py"
     async with httpx.AsyncClient() as client:
@@ -443,32 +466,70 @@ async def bootstrap_automation_user(
         try:
             await _gui_login(client, login_url, site, cmkadmin_user, cmkadmin_password)
 
-            create_resp = await client.post(
-                f"{base}/api/v1/domain-types/user_config/collections/all",
-                json={
-                    "username": username,
-                    "fullname": "Wizard Automation User",
-                    "auth_option": {
-                        "auth_type": "automation",
-                        "secret": secret,
-                        "store_automation_secret": True,
+            user_exists = False
+            if pre_seeded:
+                probe_resp = await client.get(
+                    f"{base}/api/v1/objects/user_config/{username}",
+                    headers={"Accept": "application/json"},
+                )
+                if probe_resp.status_code == 200:
+                    user_exists = True
+                elif probe_resp.status_code != 404:
+                    try:
+                        body: Any = probe_resp.json()
+                    except ValueError:
+                        body = probe_resp.text
+                    raise CheckmkAPIError("GET", str(probe_resp.url), probe_resp.status_code, body)
+
+            if user_exists:
+                etag = probe_resp.headers.get("ETag")
+                if not etag:
+                    raise CheckmkAPIError("GET", str(probe_resp.url), probe_resp.status_code, "missing ETag header")
+                # Only the secret is reconciled; roles/fullname stay as-is.
+                put_resp = await client.put(
+                    f"{base}/api/v1/objects/user_config/{username}",
+                    json={
+                        "auth_option": {
+                            "auth_type": "automation",
+                            "secret": secret,
+                            "store_automation_secret": True,
+                        }
                     },
-                    # Matches CHECKMK_SETUP_CONFIGURATOR_PLAN.md's own stated
-                    # fallback: a scoped custom role is best practice, but
-                    # admin is acceptable for a single-operator setup tool —
-                    # there's no built-in role with the general folder/host/
-                    # discovery/activation permissions this wizard needs short
-                    # of admin.
-                    "roles": ["admin"],
-                },
-                headers={"Accept": "application/json"},
-            )
-            if create_resp.status_code not in (200, 201):
-                try:
-                    body: Any = create_resp.json()
-                except ValueError:
-                    body = create_resp.text
-                raise CheckmkAPIError("POST", str(create_resp.url), create_resp.status_code, body)
+                    headers={"Accept": "application/json", "If-Match": etag},
+                )
+                if put_resp.status_code != 200:
+                    try:
+                        body = put_resp.json()
+                    except ValueError:
+                        body = put_resp.text
+                    raise CheckmkAPIError("PUT", str(put_resp.url), put_resp.status_code, body)
+            else:
+                create_resp = await client.post(
+                    f"{base}/api/v1/domain-types/user_config/collections/all",
+                    json={
+                        "username": username,
+                        "fullname": "Wizard Automation User",
+                        "auth_option": {
+                            "auth_type": "automation",
+                            "secret": secret,
+                            "store_automation_secret": True,
+                        },
+                        # Matches CHECKMK_SETUP_CONFIGURATOR_PLAN.md's own stated
+                        # fallback: a scoped custom role is best practice, but
+                        # admin is acceptable for a single-operator setup tool —
+                        # there's no built-in role with the general folder/host/
+                        # discovery/activation permissions this wizard needs short
+                        # of admin.
+                        "roles": ["admin"],
+                    },
+                    headers={"Accept": "application/json"},
+                )
+                if create_resp.status_code not in (200, 201):
+                    try:
+                        body = create_resp.json()
+                    except ValueError:
+                        body = create_resp.text
+                    raise CheckmkAPIError("POST", str(create_resp.url), create_resp.status_code, body)
         except httpx.HTTPError as exc:
             raise CheckmkAPIError("GET/POST", login_url, 0, str(exc)) from exc
 

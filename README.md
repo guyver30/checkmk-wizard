@@ -61,7 +61,10 @@ fallback hint, since it can't tell the two situations apart on its own.
   `CMK_PASSWORD` was set to) — prompted for at startup. The wizard uses it
   to create the site's `automation` REST user itself over the API (the
   same `bootstrap_automation_user()` mechanism host-native mode uses right
-  after `omd create`), so there's no local secret file to read. Leave it
+  after `omd create`), so there's no local secret file to read. If
+  `CMK_REST_SECRET` is set in the worker env, the user is created — or an
+  existing one updated — with exactly that secret, which is never printed.
+  Leave it
   blank to skip this and provide an automation secret directly instead
   (e.g. fetched manually via `podman exec <checkmk-container> cat
   /omd/sites/<site>/var/check_mk/web/automation/automation.secret`, or one
