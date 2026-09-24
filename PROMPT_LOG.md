@@ -175,3 +175,10 @@
 ## 2026-09-16 (session start)
 
 - **2026-09-16 21:44** — `/bm:plan-phase 11.1` — plan Phase 11.1 (Dashboard Layout and Light Palette).
+
+## 2026-09-24 (session start)
+
+- **2026-09-24 07:49** — `/bm:resume-work` — restore context from previous session handoff.
+- **2026-09-24 07:51** — asked whether `podman exec checkmk omd rm dmc` is the right command to wipe the site before Phase 14.
+- **2026-09-24 07:52** — asked to read compose.yaml for volume name, and whether the pre-seeded automation secret todo is implemented.
+- **2026-09-24 07:54** — asked to implement the pre-seeded automation REST secret (CMK_REST_SECRET from env) so no manual copy is needed across containers.
