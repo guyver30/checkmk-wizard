@@ -81,7 +81,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- [Pre-seed fixed automation-user REST secret from env](.planning/todos/pending/2026-09-21-pre-seed-fixed-automation-user-rest-secret-from-env.md) — read `CMK_REST_SECRET` from env in `bootstrap_automation_user()` instead of generating+hand-copying; needs create-vs-update idempotency handling.
+None.
 
 ### Blockers/Concerns
 
@@ -103,6 +103,7 @@ Recent decisions affecting current work:
 | (no id) | Grant checkmk container NET_RAW for check_icmp (PING service RC 126 fix) | 2026-09-07 | ba45197 | [deploy/compose.yaml fix, no quick-task dir] |
 | 260907-nde | Document the PING/check_icmp two-part fix (cap_add NET_RAW + host net.ipv4.ping_group_range) in the Podman setup doc | 2026-09-07 | 599efcb | [260907-nde-document-the-ping-check-icmp-fix-in-the-](./quick/260907-nde-document-the-ping-check-icmp-fix-in-the-/) |
 | 260912-o7n | Fix three agent-registration bugs: receiver port omitted from --server, container-internal DNS name passed to remote targets, sudo missing from Linux manual instructions | 2026-09-12 | e7ea293 | [260912-o7n-fix-three-agent-registration-bugs-receiv](./quick/260912-o7n-fix-three-agent-registration-bugs-receiv/) |
+| 260924-azn | Pre-seed automation REST secret: wizard reads CMK_REST_SECRET from env, creates or updates the `automation` user to match, never prints an env-sourced secret; compose/.env.example/docs updated | 2026-09-24 | c06658a | [260924-azn-pre-seed-fixed-automation-user-rest-secr](./quick/260924-azn-pre-seed-fixed-automation-user-rest-secr/) |
 
 ## Deferred Items
 
