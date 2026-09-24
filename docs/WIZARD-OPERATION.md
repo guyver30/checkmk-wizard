@@ -435,6 +435,21 @@ automation secret, because none exists yet at this point:
    ("Administrator is acceptable for a single-operator setup tool") —
    there's no built-in role scoped for general folder/host/discovery/
    activation access short of admin.
+
+   **Pre-seeded secret path.** When the caller passes `secret=` (the wizard
+   passes the `CMK_REST_SECRET` env var from `deploy/.env` at both call
+   sites; empty counts as unset), that exact value replaces the generated
+   one and step 3 is preceded by `GET .../objects/user_config/automation`:
+   404 falls through to the `POST` create above, 200 takes the response
+   `ETag` and does `PUT .../objects/user_config/automation` with
+   `If-Match` and only `{auth_option: {auth_type: "automation", secret:
+   <supplied>, store_automation_secret: true}}` (same GET-ETag-PUT shape as
+   `change_cmkadmin_password()`), any other status raises
+   `CheckmkAPIError`. A probe is used instead of parsing the duplicate-user
+   error because that status code is not live-verified. The PUT update and
+   any Checkmk-side minimum-length rule for automation secrets are
+   unverified against a live site. Without `secret=` the behaviour is
+   unchanged: random secret, `POST` only.
 4. **Self-cleanup activation.** Step 3 is itself a pending WATO change
    attributed to `cmkadmin` (this session), not to the new `automation`
    user. Left un-activated, the first later call to
@@ -1498,8 +1513,10 @@ tests: `tests/test_api.py` (2 cases, respx `side_effect` simulating a
 - SSH password/private-key path lives only in the in-memory
   `SSHCredentials` dataclass for the duration of the run — never written to
   disk.
-- The Checkmk automation secret and generated cmkadmin password are printed
-  to the console (`rich` output) — visible in scrollback/terminal capture.
+- A generated Checkmk automation secret (only when `CMK_REST_SECRET` is
+  unset; an env-sourced secret is never printed) and the generated cmkadmin
+  password are printed to the console (`rich` output) — visible in
+  scrollback/terminal capture.
   On a fresh site, the operator can immediately replace the generated
   cmkadmin password (`_prompt_change_cmkadmin_password()`, added
   2026-08-26 — see Phase 1 above) — the new password is typed via
@@ -1528,10 +1545,13 @@ tests: `tests/test_api.py` (2 cases, respx `side_effect` simulating a
   receives a session cookie back — both over plain HTTP by default
   (`CheckmkConnection.proto` defaults to `"http"`), same exposure profile
   as every other REST call this wizard already makes locally to
-  `localhost`. It generates its own automation secret in memory
-  (`secrets.token_urlsafe(24)`) and never prints it — it's picked up from
-  the `automation.secret` file the create-user call writes to disk, same
-  path/mechanism as any other site-provisioned automation user.
+  `localhost`. With no `secret=` it generates its own automation secret in
+  memory (`secrets.token_urlsafe(24)`) and returns it; the wizard prints
+  that generated value once (`_print_automation_secret_created()`), and it
+  is also on disk in the `automation.secret` file the create-user call
+  writes, same path/mechanism as any other site-provisioned automation
+  user. A `CMK_REST_SECRET`-sourced secret is sent in the REST body (same
+  plain-HTTP exposure) but never printed.
 
 ---
 *Traced against commit implementing Phases 1–7 of the wizard, 2026-08-24.*
