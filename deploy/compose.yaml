@@ -21,6 +21,13 @@ services:
     environment:
       - CMK_SITE_ID=dmc
       - CMK_PASSWORD=cmkadmin
+      # Documented Checkmk container variable (docs.checkmk.com/latest/en/
+      # introduction_docker.html, "Additional environment variables"): the
+      # entrypoint runs `omd config set LIVESTATUS_TCP on` for the site
+      # when it is created. Without it a wiped/recreated checkmk_data volume
+      # comes back with Livestatus-over-TCP off (seen live 2026-09-24) and
+      # the poller and wizard's Livestatus checks fail until it is set by hand.
+      - CMK_LIVESTATUS_TCP=on
       - TZ=Asia/Singapore
     ports:
       - "8080:5000"     # Web UI

@@ -182,3 +182,6 @@
 - **2026-09-24 07:51** — asked whether `podman exec checkmk omd rm dmc` is the right command to wipe the site before Phase 14.
 - **2026-09-24 07:52** — asked to read compose.yaml for volume name, and whether the pre-seeded automation secret todo is implemented.
 - **2026-09-24 07:54** — asked to implement the pre-seeded automation REST secret (CMK_REST_SECRET from env) so no manual copy is needed across containers.
+- **2026-09-24 08:42** — asked which checkmk_data volume to delete (checkmk-stack_ vs deploy_ prefixed).
+- **2026-09-24 08:50** — pasted wizard startup output on fresh site (stopped at site-name prompt).
+- **2026-09-24 09:06** — Livestatus TCP is off after volume wipe/recreate; asked to make enabling LIVESTATUS_TCP automatic.

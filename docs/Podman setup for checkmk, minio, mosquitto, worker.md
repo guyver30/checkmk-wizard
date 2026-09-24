@@ -244,9 +244,9 @@ podman compose logs -f poller
 
 ## 5. Enable Livestatus-over-TCP (required for checkmk-wizard)
 
-checkmk-wizard's Phase 7 post-activation health check connects to the site's Livestatus port over **TCP**, not the local UNIX socket — that's what lets it run from the separate `worker` container instead of needing local filesystem access to `checkmk`'s `/omd/sites`. This has to be turned on once per site; it isn't on by default on a container-created site.
+checkmk-wizard's Phase 7 post-activation health check connects to the site's Livestatus port over **TCP**, not the local UNIX socket — that's what lets it run from the separate `worker` container instead of needing local filesystem access to `checkmk`'s `/omd/sites`. It isn't on by default on a container-created site, but `deploy/compose.yaml` sets the documented `CMK_LIVESTATUS_TCP=on` environment variable on the `checkmk` service (docs.checkmk.com/latest/en/introduction_docker.html, "Additional environment variables"), so the container's entrypoint enables it when it creates the site — including after you wipe and recreate the `checkmk_data` volume. **With the shipped `compose.yaml` there is nothing to do here.** Check it with `podman compose exec checkmk omd config dmc show LIVESTATUS_TCP` (expect `on`).
 
-Run this once, right after the site first comes up (a fresh `podman compose up`, or any time you delete/recreate the site inside the `checkmk` container):
+The manual steps below are only for a site that was created without that variable (an older `compose.yaml`, a site created by hand with `omd create`, or a non-compose setup). Run them once:
 
 ```bash
 podman compose exec checkmk omd stop dmc
@@ -258,7 +258,6 @@ podman compose exec checkmk omd start dmc
 
 This binds Livestatus on port **6557** by default (Checkmk's own default `LIVESTATUS_TCP_PORT`) — matching what checkmk-wizard already expects, so nothing else needs configuring. No `ports:` entry is needed in `compose.yaml` for this: containers on the same `cmk_net` bridge can already reach `checkmk:6557` directly by service name, without publishing the port to the host/LAN — and it should stay that way, since Livestatus's wire protocol has no authentication of its own and relies entirely on network-level isolation.
 
-*(There's also a documented `CMK_LIVESTATUS_TCP` boot-time environment variable for the official image that may let you skip this manual step — not verified here against this specific image/version, so the `omd stop`/`omd config`/`omd start` steps above are the confirmed way. If you try the env var, verify Phase 7 actually works end-to-end before relying on it.)*
 
 If you skip this step, checkmk-wizard still runs fine through Phase 6 — it just prints a warning at Phase 1 ("Could not reach Livestatus on checkmk:6557") and Phase 7's host-state table will fail at the very end of the run.
 
