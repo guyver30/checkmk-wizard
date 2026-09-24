@@ -532,6 +532,33 @@ What to expect, that's different from running it directly on a Checkmk host:
 
 Nothing here needs repeating on every run except §8.3 itself — dependencies (§8.2) and Livestatus TCP (§5) only need doing once (or again after `uv.lock` changes or a site recreation, respectively). checkmk-wizard also detects an already-provisioned `automation`/`agent_registration` user on re-runs and falls back to asking for its existing secret instead of failing (see the main [README.md](../README.md#prerequisites)).
 
+### 8.5. Starting over with a blank site
+
+To run the wizard against a genuinely fresh Checkmk site, remove **both** the Checkmk volume **and** the Mosquitto volume — deleting only the Checkmk one is not enough:
+
+- `checkmk_data` holds the site itself (hosts, folders, rules, tag groups, users, monitoring history). Removing it makes the container's entrypoint create a brand-new `dmc` site on the next start.
+- `mosquitto_data` holds the broker's **retained** messages, which is all the dashboard reads (`lan/devices/{id}/...`, `lan/devices/topology`). The poller only clears a device's retained topics when it sees that device disappear from a running site, so after a site wipe the old hosts stay on the dashboard as ghosts until the broker's volume is removed too.
+
+Run from `deploy/` (compose prefixes volume names with its project name — `deploy_` here; confirm with `podman volume ls` and, if unsure, `podman inspect checkmk --format '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{"\n"}}{{end}}'`):
+
+```bash
+podman compose down
+podman volume rm deploy_checkmk_data deploy_mosquitto_data
+podman compose up -d
+```
+
+Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's credentials and ACL are bind-mounted files (`mosquitto.passwd`, `mosquitto.acl`), so they survive the wipe.
+
+Then, on the fresh site:
+
+1. Make sure `deploy/.env` holds a `CMK_REST_SECRET` (any long random value, e.g. `openssl rand -base64 24`) **before** running the wizard. The wizard creates the `automation` user with that secret, so the worker and poller need no hand-copying afterwards. Restart the poller if it started before you set the value.
+2. Livestatus-over-TCP comes up on its own (`CMK_LIVESTATUS_TCP=on` in `compose.yaml`, see §5); check with `podman compose exec checkmk omd config dmc show LIVESTATUS_TCP`.
+3. Run the wizard (§8.3).
+4. Re-run the topology-editor provisioning script if you use the editable topology map: the `topology_editor` role and user lived in the deleted site.
+5. Hard-refresh the dashboard (Ctrl+Shift+R).
+
+Everything on the old site is gone after this, including the monitoring history (RRD data) — there is no undo.
+
 ---
 
 ## 9. Packaging the Worker as an Image

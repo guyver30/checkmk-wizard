@@ -185,3 +185,5 @@
 - **2026-09-24 08:42** — asked which checkmk_data volume to delete (checkmk-stack_ vs deploy_ prefixed).
 - **2026-09-24 08:50** — pasted wizard startup output on fresh site (stopped at site-name prompt).
 - **2026-09-24 09:06** — Livestatus TCP is off after volume wipe/recreate; asked to make enabling LIVESTATUS_TCP automatic.
+- **2026-09-24 09:10** — dashboard shows old hosts from the deleted site; asked why.
+- **2026-09-24 09:12** — asked to document that a fresh site requires removing both checkmk and mosquitto volumes.
