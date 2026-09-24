@@ -187,3 +187,6 @@
 - **2026-09-24 09:06** — Livestatus TCP is off after volume wipe/recreate; asked to make enabling LIVESTATUS_TCP automatic.
 - **2026-09-24 09:10** — dashboard shows old hosts from the deleted site; asked why.
 - **2026-09-24 09:12** — asked to document that a fresh site requires removing both checkmk and mosquitto volumes.
+- **2026-09-24 09:14** — dashboard still shows old hostnames and tagging after volume wipe; asked to diagnose.
+- **2026-09-24 09:15** — pasted diagnostics: mosquitto volume dated 2026-09-06 (not recreated), checkmk lists 18 hosts.
+- **2026-09-24 09:23** — `/bm:pause-work` — create handoff.
