@@ -237,3 +237,4 @@
 - **2026-09-25 14:40** — screenshot docs/e-link_status.png confirms the new agent-host detail page works (gauges, agent connected, uptime, chosen services, TCP port).
 - **2026-09-25 14:50** — drop the Output column in the TCP ports table.
 - **2026-09-25 16:05** — commit and go to next phase
+- **2026-09-25 16:05** — reconcile first
