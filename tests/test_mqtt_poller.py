@@ -2258,3 +2258,185 @@ def test_once_branch_degrades_when_folder_fetch_fails(monkeypatch):
     ):
         assert poller.main() == 0
     assert mock_query.call_args.kwargs["folders"] == {}
+
+
+# --- stale retained-topic sweep (quick 260925-b81) -----------------------------
+
+
+def _tombstones(mock_client):
+    return [c for c in mock_client.publish.call_args_list if c.kwargs.get("payload", "unset") is None]
+
+
+def _ghost_topics(device_id):
+    return {
+        f"lan/devices/{device_id}/status",
+        f"lan/devices/{device_id}/history",
+        f"lan/devices/{device_id}/services",
+        f"lan/devices/{device_id}/service_history",
+    }
+
+
+def test_reconcile_state_collects_retained_ids_from_per_device_topics():
+    retained = [
+        ("lan/devices/x/status", b"{}"),
+        ("lan/devices/y/services", b"[]"),
+        ("lan/devices/z/history", b"[]"),
+        ("lan/devices/w/service_history", b"[]"),
+        ("lan/devices/cleared/status", b""),
+        (poller.TOPIC_TOPOLOGY, b'{"devices": []}'),
+    ]
+
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+
+        def _subscribe(topic, qos=None):
+            if topic == poller.TOPIC_TOPOLOGY:
+                for msg_topic, payload in retained:
+                    mock_client.on_message(mock_client, None, _make_message(msg_topic, payload))
+
+        mock_client.subscribe.side_effect = _subscribe
+        state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
+
+    assert state.retained_ids == {"x", "y", "z", "w"}
+
+
+def test_reconcile_state_subscribes_topology_after_per_device_wildcards():
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+        poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
+
+    topics = [c.args[0] for c in mock_client.subscribe.call_args_list]
+    assert topics[-1] == poller.TOPIC_TOPOLOGY
+    for suffix in ("status", "history", "services", "service_history"):
+        assert f"lan/devices/+/{suffix}" in topics
+
+
+def test_run_cycle_sweep_clears_stale_ids_and_keeps_live_ones():
+    client = MagicMock()
+    state = _poller_state()
+    state.retained_ids = {"ghost", "live"}
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("live")], allow_stale_sweep=True)
+
+    tombstones = _tombstones(client)
+    assert {c.args[0] for c in tombstones} == _ghost_topics("ghost")
+    for call in tombstones:
+        assert call.kwargs["retain"] is True
+        assert call.kwargs["qos"] == 1
+    assert state.retained_ids == set()
+
+
+def test_run_cycle_sweep_keeps_every_live_id():
+    client = MagicMock()
+    state = _poller_state()
+    state.retained_ids = {"a", "b"}
+
+    poller.run_cycle(
+        client, _make_config(), state, [_snapshot("a"), _snapshot("b")], allow_stale_sweep=True
+    )
+
+    assert _tombstones(client) == []
+
+
+def test_run_cycle_sweep_gate_off_clears_nothing_and_keeps_ids():
+    client = MagicMock()
+    state = _poller_state()
+    state.retained_ids = {"ghost"}
+
+    poller.run_cycle(client, _make_config(), state, [])
+
+    assert _tombstones(client) == []
+    assert state.retained_ids == {"ghost"}
+
+
+def test_run_cycle_sweep_does_not_double_tombstone_previous_nodes():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+    state.retained_ids = {"a"}
+
+    poller.run_cycle(client, _make_config(), state, [], allow_stale_sweep=True)
+
+    topics = [c.args[0] for c in _tombstones(client)]
+    assert sorted(topics) == sorted(_ghost_topics("a"))
+    events = json.loads(_published(client, poller.TOPIC_EVENTS)[0].args[1])
+    assert [e["event"] for e in events if e["device_id"] == "a"] == ["removed"]
+
+
+def test_run_cycle_sweep_emits_no_removed_event_for_stale_ids():
+    client = MagicMock()
+    state = _poller_state()
+    state.retained_ids = {"ghost"}
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("live")], allow_stale_sweep=True)
+
+    events = json.loads(_published(client, poller.TOPIC_EVENTS)[0].args[1])
+    assert all(e["device_id"] != "ghost" for e in events)
+
+
+def _run_forever_one_cycle(*, patch_run_cycle, state=None, rest=None, devices=None):
+    """Run `run_forever` for exactly one cycle; `rest`/`devices` are patch kwargs."""
+    fake_client = MagicMock()
+    with (
+        patch.object(poller, "reconcile_state", return_value=state or _poller_state()),
+        patch.object(poller, "build_mqtt_client", return_value=fake_client),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_config", **(rest or {"return_value": {}})),
+        patch.object(poller, "query_devices", **(devices or {"return_value": []})),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
+        patch.object(poller.threading, "Event", return_value=_OneShotEvent()),
+        patch.object(poller.signal, "signal"),
+    ):
+        if patch_run_cycle:
+            with patch.object(poller, "run_cycle") as mock_run_cycle:
+                poller.run_forever(_make_config())
+            return fake_client, mock_run_cycle
+        poller.run_forever(_make_config())
+        return fake_client, None
+
+
+def test_run_forever_failed_livestatus_query_clears_nothing():
+    state = _poller_state()
+    state.retained_ids = {"ghost"}
+
+    client, _ = _run_forever_one_cycle(
+        patch_run_cycle=False,
+        state=state,
+        devices={"side_effect": poller.LivestatusError("boom")},
+    )
+
+    assert _tombstones(client) == []
+    assert state.retained_ids == {"ghost"}
+
+
+def test_run_forever_sweep_gate_rest_confirms_empty_site():
+    _, mock_run_cycle = _run_forever_one_cycle(patch_run_cycle=True)
+    assert mock_run_cycle.call_args.kwargs["allow_stale_sweep"] is True
+
+
+def test_run_forever_sweep_gate_off_when_rest_failed_and_livestatus_empty():
+    _, mock_run_cycle = _run_forever_one_cycle(
+        patch_run_cycle=True, rest={"side_effect": poller.RestError("boom")}
+    )
+    assert mock_run_cycle.call_args.kwargs["allow_stale_sweep"] is False
+
+
+def test_run_forever_sweep_gate_off_when_rest_reports_hosts_but_livestatus_empty():
+    host_config = {"h1": poller.HostConfigInfo()}
+    _, mock_run_cycle = _run_forever_one_cycle(
+        patch_run_cycle=True, rest={"return_value": host_config}
+    )
+    assert mock_run_cycle.call_args.kwargs["allow_stale_sweep"] is False
+
+
+def test_run_forever_sweep_gate_on_when_livestatus_returns_hosts_even_if_rest_failed():
+    _, mock_run_cycle = _run_forever_one_cycle(
+        patch_run_cycle=True,
+        rest={"side_effect": poller.RestError("boom")},
+        devices={"return_value": [_snapshot("a")]},
+    )
+    assert mock_run_cycle.call_args.kwargs["allow_stale_sweep"] is True
