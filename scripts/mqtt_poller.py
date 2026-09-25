@@ -1395,6 +1395,13 @@ class PollerState:
     # that reconciling the bounded history prevents a restart from
     # clobbering a good retained history with a one-entry array.
     service_history: dict[str, list[dict]] = field(default_factory=dict)
+    # 2026-09-25 (quick 260925-b81): device ids that had any non-empty
+    # retained per-device topic at startup. This can include ghosts that are
+    # NOT in the retained topology, which `previous_nodes` alone can never
+    # tombstone -- that is why rebuilding a Checkmk site used to need the
+    # mosquitto volume wiped too (docs section 8.5, commit 96e7182).
+    # `run_cycle` sweeps it once, behind `allow_stale_sweep`, then empties it.
+    retained_ids: set[str] = field(default_factory=set)
 
 
 def parse_topology_payload(payload: bytes) -> dict[str, dict]:
@@ -1539,6 +1546,10 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     bounded, self-correcting log gap, never a wrong tombstone or a wrong
     status.
 
+    The ids of every device with a retained `status`/`history`/`services`/
+    `service_history` topic are also collected into `retained_ids`, so
+    `run_cycle` can clear topics of hosts the site no longer has.
+
     Per-device status is deliberately NOT reconciled at all: it is
     republished fresh from live Livestatus every cycle (`run_cycle`), so
     it has no "previous" value worth recovering.
@@ -1563,10 +1574,24 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     events_result: list[bytes] = []
     history_payloads: dict[str, bytes] = {}
     service_history_payloads: dict[str, bytes] = {}
+    retained_ids: set[str] = set()
     topology_received = threading.Event()
 
     def on_message(client, userdata, msg):
         parts = msg.topic.split("/")
+        # A zero-length payload is an already-cleared topic, not a ghost.
+        # Only exact 4-segment per-device topics count (the 3-segment
+        # `lan/devices/topology` never matches), and only ids that
+        # `is_publishable_device_id` accepts (T-q260925-02).
+        if (
+            len(parts) == 4
+            and parts[0] == "lan"
+            and parts[1] == "devices"
+            and parts[3] in ("status", "history", "services", "service_history")
+            and msg.payload
+            and is_publishable_device_id(parts[2])
+        ):
+            retained_ids.add(parts[2])
         if msg.topic == TOPIC_TOPOLOGY:
             topology_result.append(msg.payload)
             topology_received.set()
@@ -1587,10 +1612,21 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     client.on_message = on_message
     try:
         client.connect(config.mqtt_host, config.mqtt_port, keepalive=30)
-        client.subscribe(TOPIC_TOPOLOGY, qos=1)
+        # The topology subscription is sent LAST on purpose. Mosquitto queues
+        # a subscription's retained messages when it handles that SUBSCRIBE,
+        # and packets on one connection are handled and delivered in order,
+        # so once the topology message arrives the earlier wildcards'
+        # retained messages have already been delivered and the
+        # `topology_received.wait` below doubles as a barrier for them.
+        # This is an assumption about broker ordering that has not been
+        # verified live. If it is wrong the failure is safe: a missed id is
+        # simply not swept, and a live host is never tombstoned.
         client.subscribe(TOPIC_EVENTS, qos=1)
+        client.subscribe("lan/devices/+/status", qos=1)
         client.subscribe("lan/devices/+/history", qos=1)
+        client.subscribe("lan/devices/+/services", qos=1)
         client.subscribe("lan/devices/+/service_history", qos=1)
+        client.subscribe(TOPIC_TOPOLOGY, qos=1)
         client.loop_start()
         topology_received.wait(timeout=config.reconcile_timeout_seconds)
     finally:
@@ -1612,6 +1648,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         events=events,
         since=utc_now_iso(),
         service_history=service_history,
+        retained_ids=retained_ids,
     )
 
 
@@ -1621,6 +1658,7 @@ def run_cycle(
     state: PollerState,
     snapshots: list[DeviceSnapshot],
     services: list[ServiceSnapshot] | None = None,
+    allow_stale_sweep: bool = False,
 ) -> None:
     """Run one poll cycle: publish status, detect changes, tombstone removals.
 
@@ -1647,6 +1685,13 @@ def run_cycle(
     per-service state transition appends one bounded entry to that
     device's `service_history`, republished once per cycle rather than
     once per transition.
+
+    `allow_stale_sweep` (2026-09-25, quick 260925-b81): when true, retained
+    per-device topics collected at startup (`state.retained_ids`) whose id is
+    in neither this cycle's snapshots nor `state.previous_nodes` are
+    tombstoned once, and `retained_ids` is then emptied. The caller sets it
+    only when the host list is confirmed (see the gate in `run_forever`);
+    when false, `retained_ids` is left intact for a later cycle.
     """
     now = utc_now_iso()
 
@@ -1717,6 +1762,24 @@ def run_cycle(
                 "to": None,
             }
         )
+
+    if allow_stale_sweep:
+        # Ids subtracted: current (live, must never be cleared) and previous
+        # (already handled by the removed loop above, avoids a double
+        # tombstone). No "removed" event is emitted: these are leftovers from
+        # an earlier site or poller run, not a host leaving this site, and
+        # dozens of events after a rebuild would flood the bounded feed.
+        stale_ids = state.retained_ids - current_ids - previous_ids
+        for device_id in sorted(stale_ids):
+            publish_tombstone(client, device_id)
+            state.last_status.pop(device_id, None)
+            state.history.pop(device_id, None)
+            state.previous_services.pop(device_id, None)
+            state.last_service_states.pop(device_id, None)
+            state.service_history.pop(device_id, None)
+            _logger.info("Cleared stale retained topics for absent host %s", device_id)
+        # The sweep runs once per process; `previous_nodes` tracks from here.
+        state.retained_ids = set()
 
     for device_id in added_ids:
         events_this_cycle.append(
@@ -1909,6 +1972,7 @@ def run_forever(config: PollerConfig) -> int:
         # crashes the loop. One REST GET now covers folder, map_position,
         # and unmanaged (13-01 VERDICT V-LABELS-IN-COLLECTION), replacing
         # the old folder-only `fetch_host_folders()` call.
+        rest_ok = False
         try:
             last_host_config = fetch_host_config(
                 rest_base_url,
@@ -1916,6 +1980,7 @@ def run_forever(config: PollerConfig) -> int:
                 config.cmk_rest_secret,
                 DEFAULT_REST_TIMEOUT_SECONDS,
             )
+            rest_ok = True
         except RestError as exc:
             _logger.warning("Reusing last known host-config map; REST refresh failed: %s", exc)
 
@@ -1948,7 +2013,23 @@ def run_forever(config: PollerConfig) -> int:
         except LivestatusError as exc:
             _logger.warning("Skipping cycle: %s", exc)
         else:
-            run_cycle(client, config, state, snapshots, services=services)
+            # Stale-topic sweep gate. A failed query never reaches here
+            # (LivestatusError skips the cycle). A non-empty snapshot list
+            # proves the site is up. An EMPTY successful result is ambiguous
+            # (real zero-host site vs. a core that has not loaded its config),
+            # so it is trusted only when this cycle's REST fetch succeeded
+            # and independently returned zero hosts; the reused
+            # `last_host_config` after a RestError is not confirmation. With
+            # CMK_REST_SECRET unset REST always fails, so an empty site simply
+            # never sweeps, which is the safe direction.
+            run_cycle(
+                client,
+                config,
+                state,
+                snapshots,
+                services=services,
+                allow_stale_sweep=bool(snapshots) or (rest_ok and not last_host_config),
+            )
         stop_event.wait(timeout=config.poll_interval_seconds)
 
     # Graceful stop must leave the same retained value the LWT would have
@@ -2060,6 +2141,7 @@ def main() -> int:
             # `fetch_host_config()` replaces `fetch_host_folders()` here too,
             # so this one-shot path also carries map_position/unmanaged.
             once_host_config: dict[str, HostConfigInfo] = {}
+            once_rest_ok = False
             try:
                 once_host_config = fetch_host_config(
                     cmk_rest_base_url(config),
@@ -2067,6 +2149,7 @@ def main() -> int:
                     config.cmk_rest_secret,
                     DEFAULT_REST_TIMEOUT_SECONDS,
                 )
+                once_rest_ok = True
             except RestError as exc:
                 _logger.warning("Host-config enrichment unavailable for this one-shot cycle: %s", exc)
             once_folders = {host_id: info.folder for host_id, info in once_host_config.items()}
@@ -2101,7 +2184,15 @@ def main() -> int:
             )
         except LivestatusError as exc:
             _logger.warning("Services query unavailable for this one-shot cycle: %s", exc)
-        run_cycle(client, config, state, snapshots, services=once_services)
+        # Same sweep gate as run_forever (see the comment there).
+        run_cycle(
+            client,
+            config,
+            state,
+            snapshots,
+            services=once_services,
+            allow_stale_sweep=bool(snapshots) or (once_rest_ok and not once_host_config),
+        )
         shutdown_mqtt_client(client)
         return 0
 
