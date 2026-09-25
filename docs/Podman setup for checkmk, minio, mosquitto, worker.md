@@ -214,6 +214,28 @@ never accidentally push someone else's unreviewed configuration change live.
 
 **Note on `CMK_REST_SECRET` (poller):** the `poller` service now makes an authenticated Checkmk REST call every poll cycle to read each host's folder, alongside its unauthenticated Livestatus query. `deploy/compose.yaml` ships `CMK_REST_USERNAME=automation` and interpolates `CMK_REST_SECRET` from `deploy/.env`, which is gitignored so the real secret never lands in a tracked file. You choose the secret yourself, up front: copy `deploy/.env.example` to `deploy/.env`, set `CMK_REST_SECRET` to a long random value (`uv run python -c "import secrets; print(secrets.token_urlsafe(24))"`) before `podman compose up`, and the wizard's Phase 1 (see §8.3) pushes that exact value into Checkmk as the `automation` user's secret — creating the user, or updating the secret of an existing one on a re-run. Both `worker` and `poller` read the same value from `deploy/.env`; run `podman compose up -d poller` after changing it. If you leave it empty, the wizard falls back to generating a random secret and printing it once, which you then copy into `deploy/.env` by hand. `CMK_REST_SECRET` defaults to empty rather than refusing to start compose: a forgotten or missing secret leaves folder enrichment degraded (empty `folder` on every device) rather than blocking the stack, because a hard `:?` guard would also block `checkmk` and `mosquitto` from starting on a first-time deployment — before the automation secret this variable demands can even exist. A *wrong* secret degrades the same way (empty `folder` on every device) — see §7. Like `CMK_PASSWORD` above, rotate it before exposing this stack beyond a trusted LAN.
 
+### Choosing the site name
+
+The site is created by the `checkmk` container's own entrypoint on its **first start** (empty `checkmk_data` volume), long before the wizard runs — and the worker has no `omd`, so the wizard cannot create or rename it. The name therefore has to be decided up front, or changed with `omd mv` afterwards.
+
+**Option 1 — choose it before the first start (recommended).** `deploy/compose.yaml` reads one variable, `CMK_SITE_ID` (default `dmc`), and uses it everywhere the site name appears: the `checkmk` service's `CMK_SITE_ID` and its `/omd/sites/<site>/tmp` tmpfs, the `worker`'s `CMK_SITE_ID`/`CMK_SITE`/`CMK_REST_API`, and the `poller`'s `CMK_SITE_ID`. Set it once in `deploy/.env` (see `deploy/.env.example`) or inline:
+
+```bash
+echo 'CMK_SITE_ID=mysite' >> deploy/.env      # or: CMK_SITE_ID=mysite podman compose up -d
+podman compose up -d
+```
+
+The wizard's site-name prompt is then pre-filled with `mysite`. Site names must start with a letter and be 1–16 letters/digits/underscores. Two things are not driven by this variable: the dashboard's `CHECKMK_SITE` constant (see §3 dashboard config) and the `podman compose exec checkmk omd ... dmc ...` commands in this doc — substitute your name.
+
+**Option 2 — rename an existing site.** If the stack already runs under the wrong name, rename from the host (not the wizard). Note that `omd mv` needs the site stopped:
+
+```bash
+podman compose exec checkmk omd stop dmc
+podman compose exec checkmk omd mv dmc mysite
+```
+
+Then set `CMK_SITE_ID=mysite` in `deploy/.env`, update the dashboard's `CHECKMK_SITE`, and recreate the containers (`podman compose up -d --force-recreate checkmk worker poller`). Otherwise the checkmk entrypoint's `omd start "$CMK_SITE_ID"` targets the old name and the `tmpfs` mount stays on the old path. Because it is easy to miss one of these places, on a disposable stack it is usually simpler to remove the `checkmk_data` volume (§8.5) and start again with Option 1. Existing agents registered against the old site keep their old URL/certs and must be re-registered after a rename.
+
 ---
 
 ## 4. Deployment
@@ -532,7 +554,7 @@ podman exec --interactive --tty automation-worker bash -c "cd /app/checkmk-wizar
 
 What to expect, that's different from running it directly on a Checkmk host:
 
-- **Phase 1 opens by announcing container mode** ("'omd' isn't on PATH — assuming this wizard is running in a separate container from Checkmk itself") and skips straight to a site-name prompt, pre-filled with `dmc` from the `CMK_SITE_ID` env var (§3) — just confirm it, or type a different name if you changed `CMK_SITE_ID` on the `checkmk` service.
+- **Phase 1 opens by announcing container mode** ("'omd' isn't on PATH — assuming this wizard is running in a separate container from Checkmk itself") and skips straight to a site-name prompt, pre-filled with `dmc` from the `CMK_SITE_ID` env var (§3) — just confirm it. The default follows `CMK_SITE_ID` from `deploy/.env` (see §3 "Choosing the site name"); the name has to match the site the `checkmk` container actually created — the wizard cannot rename it.
 - **Checkmk host/IP prompt:** pre-filled with `checkmk:5000` (`checkmk` is the service's hostname on `cmk_net`, which is what actually resolves to Checkmk from inside the `worker` container; `:5000` because the `checkmk` service serves its site on container port 5000 internally — see §3's compose file `ports: "8080:5000"` mapping, and the `worker` service's own `CMK_REST_API=http://checkmk:5000/...`) — just press Enter to accept it. The `:5000` is the web/REST port only; the Livestatus check on `checkmk:6557` (§5) is unaffected, so the following bullet still reads correctly. Only type a different host (with or without its own `:port`) if the Checkmk service is reachable under another name.
 - **Livestatus reachability check:** warns immediately if §5 wasn't done yet, and also when port 6557 accepts connections but answers only TLS (`LIVESTATUS_TCP_TLS` on) — fix it and re-run, or ignore and fix it before Phase 7.
 - **cmkadmin password prompt:** pre-filled from the `worker` container's own `CMK_PASSWORD` (§3) — press Enter to accept it. The wizard uses it once, over the REST API, to bootstrap the `automation` and `agent_registration` REST users itself — it's never stored anywhere by the wizard. The `automation` user is provisioned with the `CMK_REST_SECRET` from `deploy/.env` automatically (updated if it already exists) and that value is not printed. Clear it and leave it blank instead if you'd rather paste an automation secret directly (fetched via `podman compose exec checkmk cat /omd/sites/dmc/var/check_mk/web/automation/automation.secret`, for example).
