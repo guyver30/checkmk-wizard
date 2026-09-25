@@ -113,3 +113,15 @@ export function formatClock(isoString: string | null | undefined): string {
   const mm = String(date.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
 }
+
+export function formatDateTime(isoString: string | null | undefined): string {
+  // Local YYYY-MM-DD HH:MM:SS: year-first order is unambiguous across locales (toLocaleString
+  // flips D/M vs M/D), and local time matches formatClock's existing choice.
+  const parsed = Date.parse(isoString ?? "");
+  if (Number.isNaN(parsed)) {
+    return "unknown";
+  }
+  const date = new Date(parsed);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
+}
