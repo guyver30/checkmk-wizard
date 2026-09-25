@@ -197,6 +197,9 @@ for how it fits into the wider deployment. A React + TypeScript rewrite at `dash
 see [`dashboard-react/README.md`](dashboard-react/README.md)'s "Topology map and editing"
 section.
 
+Device-type icons are drop-in SVG files (file name = device type) — see
+[`docs/DEVICE-TYPE-ICONS.md`](docs/DEVICE-TYPE-ICONS.md).
+
 ## Project layout
 
 - `src/checkmk_wizard/api.py` — Checkmk REST API client (Phase 1, 2, 5-7)
