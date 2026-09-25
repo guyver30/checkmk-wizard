@@ -204,3 +204,4 @@
 - **2026-09-25 08:38** — approved: add LIVESTATUS_TCP_TLS off fix to compose and wizard (quick task).
 - **2026-09-25 08:43** — checked dashboard vs Checkmk GUI: 18 hosts, no ghosts.
 - **2026-09-25 08:45** — asked what the next phase is about.
+- **2026-09-25 08:48** — reported LIVESTATUS_TCP_TLS shows off after recreate.
