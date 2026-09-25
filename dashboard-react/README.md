@@ -145,6 +145,20 @@ A From / To filter above the list narrows the rows to an inclusive range:
   capped by the poller's `EVENTS_MAX_ENTRIES` (default 1000, about 160 KB when full), so the
   range can only reach as far back as the last 1000 events.
 
+## 5b. Device-type icons (drop-in)
+
+Every `dashboard-react/src/assets/icons/device-types/<device_type>.svg` is bundled at build time.
+The file name **is** the device type — the `tag_device_type` value from `device_types.json`
+(case-sensitive): `other`, `E-link`, `ACS`, `Multimedia`, `NetworkDevice`, `GroupController`.
+
+- **Change an icon:** overwrite that file, rebuild.
+- **Add an icon for a new type:** add the type to `device_types.json`, drop `<Type>.svg` in the
+  folder, rebuild. No code edit. (A type with no file falls back to `other.svg`, so keep that one.)
+- **SVG rules:** square `viewBox` (16×16 like the shipped ones), root `<svg fill="none">`, and
+  glyph paths filled with exactly `fill="#141414"` — the map swaps that colour per host state
+  (see `recoloredDataUri` in `src/lib/mapIcons.ts`). The sidebar tree uses the same file as a CSS
+  mask, so it follows the text colour. Multi-colour/gradient icons will not recolour.
+
 ## 6. Version pins and why
 
 - `tailwindcss` is pinned to the 3.x line. A bare `npm install tailwindcss` would grab v4,

@@ -4,7 +4,6 @@ import {
   effectiveState,
   stateClass,
   stateIcon,
-  deviceTypeIcon,
   isTagGroupMissing,
   formatRelativeTime,
   formatClock,
@@ -77,16 +76,6 @@ describe("stateIcon", () => {
 
   it("falls back to the UNKNOWN icon for an unrecognized state", () => {
     expect(stateIcon("bogus")).toBe("icon-question-circle-filled");
-  });
-});
-
-describe("deviceTypeIcon", () => {
-  it("maps a known device type to its icon class", () => {
-    expect(deviceTypeIcon("ACS")).toBe("icon-secured");
-  });
-
-  it("falls back to icon-circle for an unrecognized type", () => {
-    expect(deviceTypeIcon("bogus")).toBe("icon-circle");
   });
 });
 

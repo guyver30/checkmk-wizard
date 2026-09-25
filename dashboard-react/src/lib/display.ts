@@ -59,22 +59,6 @@ export function stateIcon(state: string | null | undefined): string {
   return (state && icons[state]) || icons.UNKNOWN;
 }
 
-export function deviceTypeIcon(deviceType: string | null | undefined): string {
-  // Locked icon CLASS NAME strings (UI-SPEC.md "Device-Type Iconography"). `unknown` gets
-  // the outline variant (icon-question-circle), distinct from the filled variant used for
-  // the UNKNOWN host state above -- it signals a missing tag group (D-16), not a category.
-  const icons: Record<string, string> = {
-    other: "icon-circle",
-    "E-link": "icon-api",
-    ACS: "icon-secured",
-    Multimedia: "icon-videocam",
-    NetworkDevice: "icon-internet",
-    GroupController: "icon-controls",
-    unknown: "icon-question-circle",
-  };
-  return (deviceType && icons[deviceType]) || "icon-circle";
-}
-
 export function isTagGroupMissing(devicePayload: DevicePayload | null | undefined): boolean {
   // D-16: device_type "unknown" means the Checkmk device_type tag group does not exist on
   // the site at all -- a site-configuration warning, never a device category.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STATE_HEX, deviceTypeSvg, recoloredDataUri, nodeVisual } from "./mapIcons";
+import { STATE_HEX, deviceTypeMaskUrl, deviceTypeSvg, recoloredDataUri, nodeVisual } from "./mapIcons";
 
 describe("STATE_HEX", () => {
   it("has the exact eight state hex values from 13-UI-SPEC.md's State palette table", () => {
@@ -32,6 +32,18 @@ describe("deviceTypeSvg", () => {
     expect(deviceTypeSvg(undefined)).toBe(deviceTypeSvg("nonsense"));
     expect(deviceTypeSvg("unknown")).toBe(deviceTypeSvg(undefined));
     expect(deviceTypeSvg("nonsense")).toBe(circleMarkup);
+  });
+});
+
+describe("drop-in icons", () => {
+  it("loads one icon per device_types.json entry, keyed by file name", () => {
+    const types = ["other", "E-link", "ACS", "Multimedia", "NetworkDevice", "GroupController"];
+    const markups = types.map((t) => deviceTypeSvg(t));
+    expect(new Set(markups).size).toBe(types.length);
+  });
+
+  it("deviceTypeMaskUrl wraps the recolored data URI in a CSS url()", () => {
+    expect(deviceTypeMaskUrl("ACS")).toMatch(/^url\("data:image\/svg\+xml;utf8,/);
   });
 });
 
