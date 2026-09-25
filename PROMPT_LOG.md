@@ -234,3 +234,5 @@
 - **2026-09-25 13:45** — (implemented) Phase 7 table lists all hosts.
 - **2026-09-25 13:55** — dashboard: remove the "Devices" menu (irrelevant now); host detail (agent hosts) should show only: gauges (cpu/mem/disk), SMART info if installed, whether checkmk agent is connected, only monitored services chosen in the wizard, TCP ports monitored, uptime.
 - **2026-09-25 14:20** — (implemented) Devices menu removed, agent host detail view.
+- **2026-09-25 14:40** — screenshot docs/e-link_status.png confirms the new agent-host detail page works (gauges, agent connected, uptime, chosen services, TCP port).
+- **2026-09-25 14:50** — drop the Output column in the TCP ports table.
