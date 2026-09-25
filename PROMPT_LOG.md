@@ -210,3 +210,4 @@
 - **2026-09-25 08:55** — decided: better to also wipe the event history whenever checkmk_data is wiped (update docs 8.5).
 - **2026-09-25 08:57** — podman compose down: automation-worker needs SIGKILL after 10s; asked about it.
 - **2026-09-25 09:00** — mosquitto volume wiped, events empty (ok). Before Phase 14: add KONE logo top-left (asked if I have it) and rename "Checkmk Live Dashboard" to "DMC digital live dashboard".
+- **2026-09-25 09:07** — asked about the 2 failing GroupingControls tests.

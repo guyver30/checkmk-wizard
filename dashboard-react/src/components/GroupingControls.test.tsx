@@ -1,7 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IndexRoute } from "../routes/IndexRoute";
 import { useAppStore } from "../store/useAppStore";
 import type { DevicePayload } from "../lib/types";
@@ -15,6 +15,17 @@ const INITIAL_STATE = useAppStore.getState();
 beforeEach(() => {
   useAppStore.setState(INITIAL_STATE, true);
   localStorage.clear();
+  // Bug fixed 2026-09-25: FRESH_TIMESTAMP is anchored to the hard-coded NOW_MS, but
+  // IndexRoute reads the real clock. Days after 2026-09-21 every device counted as stale,
+  // all groups tied on severity, and 'Order by severity' could not reorder anything (2 tests
+  // failed). Pin only Date so userEvent's timers keep running; the fix is test-side because
+  // the app was behaving correctly.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW_MS);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function threeGroupDevices(): Record<string, DevicePayload> {
