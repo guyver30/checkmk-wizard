@@ -229,3 +229,6 @@
 - **2026-09-25 13:00** — (implemented) CMK_PUBLIC_HOST.
 - **2026-09-25 13:10** — no host promoted as linux/windows (no agent), yet Phase 5 shows "at least one host being onboarded is remote" registration-address warning. Why?
 - **2026-09-25 13:15** — (fixed) registration-address check ignores non-agent hosts.
+- **2026-09-25 13:25** — pasted Phase 5-7 run for linux host e-linkWKS (public host shown, SSH/sudo, services, ufw, agent register, thresholds, discovery, activation, host UP); no comment/question attached.
+- **2026-09-25 13:35** — want Phase 7 to show state of all hosts being activated, not just the promoted host(s).
+- **2026-09-25 13:45** — (implemented) Phase 7 table lists all hosts.

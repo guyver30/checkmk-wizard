@@ -74,6 +74,7 @@ from checkmk_wizard.wizard import (
     phase1_site_bringup,
     phase2_folders,
     phase3_discovery,
+    phase7_activation,
     phase4_classification,
     phase5_onboarding,
     phase6_discovery,
@@ -3786,6 +3787,31 @@ def _mock_activation_routes():
     return respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
         return_value=Response(200, json={"id": "run1"})
     )
+
+
+@pytest.mark.asyncio
+async def test_phase7_state_table_lists_every_host_on_the_site(monkeypatch, tmp_path, capsys):
+    # 2026-09-25: the post-activation table used to list only hosts promoted
+    # in this run; it now covers every host on the site, marking this run's.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.livestatus.query_host_states",
+        lambda host, names: {"e-linkWKS": 0, "router": 1},
+    )
+    promoted = OnboardedHost(ip="192.168.97.130", hostname="e-linkWKS", folder="/", os_family="linux")
+    with respx.mock:
+        _mock_activation_routes()
+        _mock_list_hosts([_host("e-linkWKS", "192.168.97.130"), _host("router", "192.168.0.1", folder="/lan")])
+        respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"value": []})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase7_activation(client, CONN, [promoted])
+
+    out = capsys.readouterr().out
+    assert "router" in out and "DOWN" in out
+    assert "e-linkWKS" in out and "UP" in out
+    assert "✓" in out
 
 
 @pytest.mark.asyncio

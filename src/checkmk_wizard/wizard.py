@@ -2787,25 +2787,12 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
     if not await _activate_pending_changes(client, connection):
         return
 
-    if hosts:
-        # Livestatus (6557) is a different protocol/port than the REST/GUI
-        # port — always the bare host, never connection.port.
-        states = livestatus.query_host_states(connection.host, [h.hostname for h in hosts])
-        table = Table(title="Post-activation host state")
-        table.add_column("Host")
-        table.add_column("State")
-        for h in hosts:
-            state = states.get(h.hostname)
-            label = {0: "UP", 1: "DOWN", 2: "UNREACHABLE"}.get(state, "unknown")
-            table.add_row(h.hostname, label)
-        console.print(table)
-
-    # Pull the site's actual current host/folder configuration for the
-    # snapshot, not just a log of what this run touched — this is what the
-    # plan's "known good baseline... for diffing/disaster recovery" wording
-    # calls for. Scope note: this covers hosts and folders only, not rules,
-    # users, or other site-wide config — a partial config snapshot, not a
-    # full site backup.
+    # Pull the site's actual current host/folder configuration, not just a
+    # log of what this run touched — used for the state table below and for
+    # the snapshot, which is what the plan's "known good baseline... for
+    # diffing/disaster recovery" wording calls for. Scope note: this covers
+    # hosts and folders only, not rules, users, or other site-wide config —
+    # a partial config snapshot, not a full site backup.
     try:
         all_hosts = await client.list_hosts()
         all_folders = await client.list_folders()
@@ -2813,6 +2800,36 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
         console.print(f"[yellow]Could not export full host/folder snapshot: {exc}[/yellow]")
         all_hosts = None
         all_folders = None
+
+    # Every host on the site, not just the ones promoted this run (changed
+    # 2026-09-25) — the operator wants the whole picture after activation.
+    # Falls back to this run's hosts if the REST listing failed above.
+    this_run = {h.hostname for h in hosts}
+    rows = (
+        sorted(
+            (
+                (h["id"], (h.get("extensions") or {}).get("folder") or "/")
+                for h in all_hosts
+                if h.get("id")
+            ),
+            key=lambda row: (row[1], row[0]),
+        )
+        if all_hosts is not None
+        else [(h.hostname, h.folder) for h in hosts]
+    )
+    if rows:
+        # Livestatus (6557) is a different protocol/port than the REST/GUI
+        # port — always the bare host, never connection.port.
+        states = livestatus.query_host_states(connection.host, [name for name, _ in rows])
+        table = Table(title="Post-activation host state")
+        table.add_column("Host")
+        table.add_column("Folder")
+        table.add_column("State")
+        table.add_column("This run")
+        for name, folder in rows:
+            label = {0: "UP", 1: "DOWN", 2: "UNREACHABLE"}.get(states.get(name), "unknown")
+            table.add_row(name, folder, label, "✓" if name in this_run else "")
+        console.print(table)
 
     snapshot = {
         "generated_at": datetime.now(UTC).isoformat(),
