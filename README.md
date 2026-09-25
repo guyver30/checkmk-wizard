@@ -76,12 +76,17 @@ fallback hint, since it can't tell the two situations apart on its own.
   least-privilege account recommended for `cmk-agent-ctl register`) if no
   local secret is found for it either — falling back to reusing the
   general `automation` credential for registration if that also fails.
-- **Livestatus-over-TCP already enabled** on the target site — the wizard
-  can't turn this on remotely, and warns at startup if it can't reach it.
-  `deploy/compose.yaml` sets `CMK_LIVESTATUS_TCP=on` on the `checkmk`
-  service, so a site the container creates has it on automatically. For any
-  other setup, run `omd stop <site> && omd config <site> set LIVESTATUS_TCP
-  on && omd start <site>` on the Checkmk host/container.
+- **Livestatus-over-TCP enabled and plain text (`LIVESTATUS_TCP_TLS` off)**
+  on the target site — the wizard can't turn this on remotely, and warns at
+  startup if it can't reach it or if port 6557 answers only TLS. A fresh
+  Checkmk 2.4 site defaults to TLS on, which shows up as "Connection reset
+  by peer", the poller's "Malformed columns response", and an empty
+  dashboard. `deploy/compose.yaml` handles both: `CMK_LIVESTATUS_TCP=on`
+  plus the `deploy/checkmk-hooks/pre-start/` entrypoint hook that turns TLS
+  off. Host-native mode turns TCP on and TLS off itself. For any other
+  setup, run `omd stop <site>; omd config <site> set LIVESTATUS_TCP on;
+  omd config <site> set LIVESTATUS_TCP_TLS off; omd start <site>` on the
+  Checkmk host/container.
 
 **Both modes need:**
 
@@ -91,7 +96,7 @@ fallback hint, since it can't tell the two situations apart on its own.
   curl -LsSf https://astral.sh/uv/install.sh | sh
   ```
 - **Network access** to the Checkmk REST API and to the site's Livestatus
-  TCP port (6557 by default — host-native mode turns this on automatically
+  TCP port (6557 by default — host-native mode turns this on (plain text) automatically
   for any site it creates or reuses, for the Phase 7 host-state check),
   usually `localhost` for both in host-native mode, or the Checkmk
   container's hostname/IP in container mode, plus outbound access to
