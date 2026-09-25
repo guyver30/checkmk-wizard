@@ -53,7 +53,7 @@ fallback hint, since it can't tell the two situations apart on its own.
 - **`CMK_SITE_ID` set on the wizard's own container too** (matching
   whatever it's set to on the Checkmk container) — purely a convenience:
   it pre-fills the site-name prompt so you don't have to retype it, and
-  can still be overridden by typing a different name. There's no
+  can still be overridden by typing a different name (which must match an existing site — the wizard can't create or rename one from a worker). The bundled `deploy/compose.yaml` takes the site name from a single `CMK_SITE_ID` variable (default `dmc`, set it in `deploy/.env` before the first `podman compose up`); an existing site can be renamed with `omd mv` inside the checkmk container — see "Choosing the site name" in `docs/Podman setup for checkmk, minio, mosquitto, worker.md`. There's no
   network-based way for the wizard to discover site names on its own —
   every Checkmk REST endpoint is scoped under `/<site>/...`, so the name
   has to be known before anything can be queried.

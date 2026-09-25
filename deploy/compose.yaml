@@ -19,7 +19,7 @@ services:
     cap_add:
       - NET_RAW
     environment:
-      - CMK_SITE_ID=dmc
+      - CMK_SITE_ID=${CMK_SITE_ID:-dmc}
       - CMK_PASSWORD=cmkadmin
       # Documented Checkmk container variable (docs.checkmk.com/latest/en/
       # introduction_docker.html, "Additional environment variables"): the
@@ -51,7 +51,7 @@ services:
       # 2.4.0-latest tag's entrypoint matches branch 2.4.0.
       - ./checkmk-hooks/pre-start/10-livestatus-tcp-plaintext.sh:/docker-entrypoint.d/pre-start/10-livestatus-tcp-plaintext.sh:ro,z
     tmpfs:
-      - /omd/sites/dmc/tmp:rw,size=512M,mode=1777
+      - /omd/sites/${CMK_SITE_ID:-dmc}/tmp:rw,size=512M,mode=1777
     networks:
       - cmk_net
 
@@ -114,13 +114,13 @@ services:
       # that the repo lands in the worker container at /app/checkmk-wizard.
       - ../..:/app:z
     environment:
-      - CMK_REST_API=http://checkmk:5000/dmc/check_mk/api/1.0
-      - CMK_SITE=dmc
+      - CMK_REST_API=http://checkmk:5000/${CMK_SITE_ID:-dmc}/check_mk/api/1.0
+      - CMK_SITE=${CMK_SITE_ID:-dmc}
       # Same name/value as the checkmk service's own CMK_SITE_ID above —
       # checkmk-wizard reads this (if present) to pre-fill its site-name
       # prompt in container mode, since it has no local 'omd' to list
       # sites with and no network-based way to discover one either.
-      - CMK_SITE_ID=dmc
+      - CMK_SITE_ID=${CMK_SITE_ID:-dmc}
       # Same name/value as the checkmk service's own CMK_PASSWORD above —
       # checkmk-wizard reads this (if present) to pre-fill its cmkadmin
       # password prompt in container mode. Keep in sync with the checkmk
@@ -213,7 +213,7 @@ services:
       # (fixed 2026-09-11, see 10-REVIEW.md CR-01).
       - CMK_REST_HOST=checkmk
       - CMK_REST_PORT=5000
-      - CMK_SITE_ID=dmc
+      - CMK_SITE_ID=${CMK_SITE_ID:-dmc}
       - CMK_REST_USERNAME=automation
       - CMK_REST_SECRET=${CMK_REST_SECRET:-}
     networks:
