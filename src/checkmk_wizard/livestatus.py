@@ -2,9 +2,9 @@
 
 Connects to the site's Livestatus port over TCP — not the local UNIX
 socket — so the wizard can run from a different container/host than the
-Checkmk site itself. `site.enable_livestatus_tcp()` turns this on for
-every site the wizard creates or reuses. Uses the standard LQL text
-protocol: a query terminated by a blank line, response requested as CSV
+Checkmk site itself. `site.enable_livestatus_tcp()` turns this on (plain text,
+TLS off) for every site the wizard creates or reuses. Uses the standard
+LQL text protocol: a query terminated by a blank line, response requested as CSV
 via OutputFormat/ColumnHeaders headers.
 """
 

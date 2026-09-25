@@ -381,6 +381,27 @@ def _probe_livestatus_tcp(host: str, port: int = livestatus.DEFAULT_PORT, timeou
         return False
 
 
+def _livestatus_answers_plaintext(host: str, port: int = livestatus.DEFAULT_PORT, timeout: float = 2.0) -> bool:
+    """Whether host:port answers a plain-text LQL request.
+
+    A TLS listener (LIVESTATUS_TCP_TLS=on, the default for a new Checkmk
+    2.4 site) resets or ignores a plain LQL request. This distinguishes
+    "port open but TLS" from "port closed", which `_probe_livestatus_tcp`
+    cannot. Best-effort: any OSError (including ConnectionResetError and
+    TimeoutError) means "no plain-text reply".
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            sock.sendall(b"GET status\nColumns: program_version\n\n")
+            sock.shutdown(socket.SHUT_WR)
+            reply = b""
+            while chunk := sock.recv(4096):
+                reply += chunk
+    except OSError:
+        return False
+    return bool(reply.strip())
+
+
 async def phase1_site_bringup() -> CheckmkConnection:
     console.rule("[bold]Phase 1 — Site Bring-up")
 
@@ -506,6 +527,15 @@ async def phase1_site_bringup() -> CheckmkConnection:
                 "Phase 7's host-state check will fail unless this is turned on for the site "
                 f"(on the Checkmk host/container: `omd config {site_name} set LIVESTATUS_TCP on "
                 f"&& omd restart {site_name}`).[/yellow]"
+            )
+        elif not _livestatus_answers_plaintext(checkmk_host):
+            console.print(
+                f"[yellow]Livestatus on {checkmk_host}:{livestatus.DEFAULT_PORT} accepts connections but gives "
+                "no plain-text reply. The likely cause is LIVESTATUS_TCP_TLS being on (the default for a new "
+                "Checkmk 2.4 site); the poller and Phase 7 need it off. On the Checkmk host run: "
+                f"`podman exec checkmk su - {site_name} -c 'omd stop; omd config set LIVESTATUS_TCP_TLS off; "
+                "omd start'`, then `podman restart mqtt-poller`. The deploy/compose.yaml pre-start hook does "
+                "this automatically on the next checkmk container start.[/yellow]"
             )
 
         # No local file to read an existing 'automation' secret from — the
