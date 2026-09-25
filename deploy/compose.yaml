@@ -121,6 +121,12 @@ services:
       # prompt in container mode, since it has no local 'omd' to list
       # sites with and no network-based way to discover one either.
       - CMK_SITE_ID=${CMK_SITE_ID:-dmc}
+      # Address of the machine running Podman, as LAN hosts see it (set it
+      # in deploy/.env). checkmk-wizard shows it in Phase 5 as the
+      # address Linux/Windows agents register against — the worker can't
+      # discover it itself, since it only sees its own 10.89.x.x bridge
+      # address. Compose publishes 8000 (registration) and 6556 (pull) on it.
+      - CMK_PUBLIC_HOST=${CMK_PUBLIC_HOST:-}
       - MQTT_HOST=mosquitto
       - MQTT_PORT=1883
       - S3_ENDPOINT=http://minio:9000

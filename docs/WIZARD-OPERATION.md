@@ -911,6 +911,15 @@ itself is untouched, since it's still correct for the wizard's own local
 REST API calls to Checkmk (those run from wherever the wizard process is,
 not from the remote target).
 
+**Container mode (changed 2026-09-25):** the interface discovery above is
+skipped when `omd` isn't on PATH. In a `worker` container it can only find the
+container's own Podman-bridge address (`10.89.x.x`), which no LAN target can
+reach, so the wizard instead reads `CMK_PUBLIC_HOST` (the address of the machine
+running Podman, where compose publishes 8000/6556). If set, it is only
+displayed — no prompt — with a note that changing it means editing
+`CMK_PUBLIC_HOST` in `deploy/.env` and running `podman compose up -d worker`.
+If unset, a warning plus a free-text prompt (blank keeps `connection.host`).
+
 **Host create/update (`_create_or_update_host()`, `wizard.py:567-590`):**
 Both branches below go through this helper instead of calling
 `client.create_host()` directly. Phase 3 already staged every scanned IP
