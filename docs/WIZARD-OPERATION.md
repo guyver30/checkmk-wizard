@@ -1472,7 +1472,12 @@ a different mechanism than the plan's wording, but the same outcome
    discovery best-effort even if its own pre-activation fails — this one
    is the last chance to get changes live, so there's nothing left worth
    attempting after it fails here).
-2. If there are onboarded hosts, queries Livestatus directly:
+2. **Changed 2026-09-25: the table covers every host on the site**, not
+   only the ones promoted this run. The `list_hosts()`/`list_folders()` fetch
+   from step 3 now runs first, and the table lists each host with its folder,
+   state, and a ✓ in a "This run" column for hosts promoted in this run
+   (falling back to this run's hosts alone if that REST fetch fails). Queries
+   Livestatus directly:
    - Connects over **TCP** to `connection.host`, port 6557 by default
      (`livestatus.py:15,18`) — not the local UNIX socket. Phase 1 turns
      Livestatus-over-TCP on for every site the wizard creates or reuses
