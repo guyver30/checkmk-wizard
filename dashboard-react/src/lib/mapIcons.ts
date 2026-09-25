@@ -7,13 +7,6 @@
 // No DOM access, no broker connection, no browser storage, no network calls -- pure
 // functions only.
 
-import internetSvg from "../assets/icons/device-types/internet.svg?raw";
-import apiSvg from "../assets/icons/device-types/api.svg?raw";
-import securedSvg from "../assets/icons/device-types/secured.svg?raw";
-import videocamSvg from "../assets/icons/device-types/videocam.svg?raw";
-import controlsSvg from "../assets/icons/device-types/controls.svg?raw";
-import circleSvg from "../assets/icons/device-types/circle.svg?raw";
-
 // 13-UI-SPEC.md "State palette for map nodes" -- CRIT/UNREACH/DOWN share one hex (differentiated
 // by node border instead, see nodeVisual()); STALE shares PEND's hex (both neutral).
 export const STATE_HEX: Record<string, string> = {
@@ -27,19 +20,31 @@ export const STATE_HEX: Record<string, string> = {
   STALE: "#55555f",
 };
 
-// Same device_type keys as display.ts's deviceTypeIcon() -- "other" maps to circle.svg here,
-// same as its "icon-circle" fallback there.
-const DEVICE_TYPE_SVG: Record<string, string> = {
-  other: circleSvg,
-  "E-link": apiSvg,
-  ACS: securedSvg,
-  Multimedia: videocamSvg,
-  NetworkDevice: internetSvg,
-  GroupController: controlsSvg,
-};
+// Drop-in device-type icons: every `assets/icons/device-types/<device_type>.svg` is picked up at
+// build time, and the file name (minus `.svg`, case-sensitive) IS the `tag_device_type` value
+// from device_types.json. Adding or replacing an icon is a file drop -- no code edit. `other.svg`
+// is the fallback for missing/unknown types, so it must exist.
+const ICON_MODULES = import.meta.glob("../assets/icons/device-types/*.svg", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
+
+const DEVICE_TYPE_SVG: Record<string, string> = Object.fromEntries(
+  Object.entries(ICON_MODULES).map(([path, markup]) => [
+    path.slice(path.lastIndexOf("/") + 1, -".svg".length),
+    markup,
+  ]),
+);
 
 export function deviceTypeSvg(deviceType: string | null | undefined): string {
-  return (deviceType && DEVICE_TYPE_SVG[deviceType]) || circleSvg;
+  return (deviceType && DEVICE_TYPE_SVG[deviceType]) || DEVICE_TYPE_SVG.other;
+}
+
+// CSS `mask-image` value for DOM surfaces (sidebar tree): the glyph takes the surrounding text
+// color via `background-color: currentColor`, so it needs no per-state recoloring.
+export function deviceTypeMaskUrl(deviceType: string | null | undefined): string {
+  return `url("${recoloredDataUri(deviceTypeSvg(deviceType), "#000000")}")`;
 }
 
 export function recoloredDataUri(svgMarkup: string, hexColor: string): string {

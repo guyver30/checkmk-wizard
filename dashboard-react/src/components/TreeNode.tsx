@@ -7,6 +7,7 @@
 // stateMapping.badgeForState, never a second colour table.
 
 import { Link } from "react-router";
+import { deviceTypeMaskUrl } from "../lib/mapIcons";
 import { badgeForState } from "../lib/stateMapping";
 import type { TreeGroupNode } from "../lib/treeModel";
 import { StateBadgeForState } from "./StateBadge";
@@ -87,7 +88,19 @@ export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
                   to={`/details?id=${encodeURIComponent(device.id)}`}
                   className="flex items-center gap-2 py-1.5 pr-3 text-sm hover:bg-bg-subtle-hover"
                 >
-                  <span className={device.typeIcon} aria-hidden />
+                  <span
+                    aria-hidden
+                    data-device-type={device.deviceType ?? "other"}
+                    className="inline-block h-4 w-4 shrink-0 bg-current"
+                    style={{
+                      maskImage: deviceTypeMaskUrl(device.deviceType),
+                      WebkitMaskImage: deviceTypeMaskUrl(device.deviceType),
+                      maskSize: "contain",
+                      WebkitMaskSize: "contain",
+                      maskRepeat: "no-repeat",
+                      WebkitMaskRepeat: "no-repeat",
+                    }}
+                  />
                   {device.tagGroupMissing && (
                     <span
                       role="img"

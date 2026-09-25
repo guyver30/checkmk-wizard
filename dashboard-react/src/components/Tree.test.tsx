@@ -123,7 +123,7 @@ describe("Tree", () => {
     await user.click(acsButton);
     const acsRow = screen.getByText("acs1").closest('[role="treeitem"]');
     expect(acsRow).not.toBeNull();
-    expect(acsRow!.querySelector(".icon-secured")).toBeInTheDocument();
+    expect(acsRow!.querySelector('[data-device-type="ACS"]')).toBeInTheDocument();
     expect(within(acsRow as HTMLElement).getByText("OK")).toBeInTheDocument();
   });
 

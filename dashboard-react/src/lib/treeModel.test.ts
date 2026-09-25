@@ -56,7 +56,7 @@ describe("buildTree", () => {
     });
   });
 
-  it("each device node carries id, label, state, stale and typeIcon", () => {
+  it("each device node carries id, label, state, stale and deviceType", () => {
     const devices: Record<string, DevicePayload> = {
       h1: { id: "h1", alias: "Front Door", device_type: "ACS", state: "WARN", timestamp: FRESH_TIMESTAMP },
     };
@@ -67,7 +67,7 @@ describe("buildTree", () => {
       label: "Front Door",
       state: "WARN",
       stale: false,
-      typeIcon: "icon-secured",
+      deviceType: "ACS",
       tagGroupMissing: false,
     });
   });

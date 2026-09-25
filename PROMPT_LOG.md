@@ -238,3 +238,6 @@
 - **2026-09-25 14:50** — drop the Output column in the TCP ports table.
 - **2026-09-25 16:05** — commit and go to next phase
 - **2026-09-25 16:05** — reconcile first
+- **2026-09-25 16:06** — /bm:discuss-phase 14
+- **2026-09-25 16:08** — before phase 14: where to upload SVGs for device types so the map shows them, and how to tag them to device types
+- **2026-09-25 18:14** — make device-type icons drop-in, as simple as possible to add/change an icon for a device type
