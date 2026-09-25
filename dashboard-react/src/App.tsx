@@ -15,7 +15,8 @@ function AppNav() {
 
   return (
     <NavBar
-      appName="Checkmk Live Dashboard"
+      appName="DMC digital live dashboard"
+      logo={<img src="/kone-logo.png" alt="KONE" className="h-6 w-auto rounded-sm" />}
       items={[
         { id: "overview", label: "Overview", active: location.pathname === "/", onClick: () => navigate("/") },
         {
