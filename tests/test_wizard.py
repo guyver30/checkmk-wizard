@@ -319,7 +319,7 @@ async def test_phase1_container_mode_bootstraps_automation_user_via_cmkadmin_pas
     user via REST (bootstrap_automation_user) and uses its returned secret
     directly — never falling back to a local file read."""
     monkeypatch.delenv("CMK_REST_SECRET", raising=False)
-    answers = iter(["dmc", "checkmk", "cmkadmin-pw"])
+    answers = iter(["dmc", "checkmk", "cmkadmin-pw", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -362,7 +362,7 @@ async def test_phase1_container_mode_bootstraps_automation_user_via_cmkadmin_pas
 
 
 async def _run_container_phase1_capturing_secret_kwarg(monkeypatch, returned_secret):
-    answers = iter(["dmc", "checkmk", "cmkadmin-pw"])
+    answers = iter(["dmc", "checkmk", "cmkadmin-pw", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -392,6 +392,53 @@ async def _run_container_phase1_capturing_secret_kwarg(monkeypatch, returned_sec
         )
         connection = await phase1_site_bringup()
     return connection, seen
+
+
+@pytest.mark.asyncio
+async def test_phase1_container_mode_can_change_cmkadmin_password_before_bootstrap(monkeypatch):
+    """Container mode used to bootstrap with whatever CMK_PASSWORD the compose
+    file set (a well-known default). Accepting the change prompt must PUT the
+    new password via change_cmkadmin_password and then bootstrap with the NEW
+    one, since the old one no longer logs in."""
+    monkeypatch.delenv("CMK_REST_SECRET", raising=False)
+    answers = iter(["dmc", "checkmk", "cmkadmin", True, "N3wSecure!Pass", "N3wSecure!Pass"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+
+    changed = []
+
+    async def fake_change(host, site_name, current, new, **kwargs):
+        changed.append((host, site_name, current, new))
+
+    monkeypatch.setattr("checkmk_wizard.wizard.change_cmkadmin_password", fake_change)
+
+    async def fake_bootstrap(host, site_name, cmkadmin_password, **kwargs):
+        assert cmkadmin_password == "N3wSecure!Pass"
+        return "freshly-generated-secret"
+
+    monkeypatch.setattr("checkmk_wizard.wizard.bootstrap_automation_user", fake_bootstrap)
+
+    async def fake_registration_bootstrap_unavailable(*args, **kwargs):
+        raise CheckmkAPIError("PUT", "url", 500, "not exercised by this test")
+
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.bootstrap_agent_registration_secret", fake_registration_bootstrap_unavailable
+    )
+
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard.site.get_site_credentials", lambda site_name, automation_user="automation": None
+    )
+    with respx.mock:
+        respx.get("http://checkmk/dmc/check_mk/api/v1/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        await phase1_site_bringup()
+
+    assert changed == [("checkmk", "dmc", "cmkadmin", "N3wSecure!Pass")]
 
 
 @pytest.mark.asyncio
@@ -437,7 +484,7 @@ async def test_phase1_container_mode_falls_back_when_bootstrap_fails(monkeypatch
     """If bootstrap_automation_user() fails (e.g. the user already exists
     from a previous run), container mode falls back to a local file read
     (or, failing that, the manual secret prompt) instead of aborting."""
-    answers = iter(["dmc", "checkmk", "cmkadmin-pw"])
+    answers = iter(["dmc", "checkmk", "cmkadmin-pw", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -481,7 +528,7 @@ async def test_phase1_container_mode_resets_agent_registration_secret_via_cmkadm
     """When no local 'agent_registration' secret is found, container mode
     resets it via REST using the same cmkadmin password, rather than
     falling back to reusing the general 'automation' credential."""
-    answers = iter(["dmc", "checkmk", "cmkadmin-pw"])
+    answers = iter(["dmc", "checkmk", "cmkadmin-pw", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -521,7 +568,7 @@ async def test_phase1_container_mode_threads_explicit_rest_port(monkeypatch):
     calls must receive port=5000, `connection.host`/`connection.port` must
     split the answer into its bare/port parts, and the Livestatus probe
     (a different protocol/port) must still receive the bare host only."""
-    answers = iter(["dmc", "checkmk:5000", "cmkadmin-pw"])
+    answers = iter(["dmc", "checkmk:5000", "cmkadmin-pw", False])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)

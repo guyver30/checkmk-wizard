@@ -247,16 +247,23 @@ class WizardState:
 
 
 async def _prompt_change_cmkadmin_password(
-    checkmk_host: str, site_name: str, current_password: str, checkmk_port: int | None = None
+    checkmk_host: str,
+    site_name: str,
+    current_password: str,
+    checkmk_port: int | None = None,
+    reason: str = "the one above was randomly generated",
 ) -> str:
-    """Offer to replace the randomly-generated cmkadmin password with one
-    the operator chooses. Returns whichever password is in effect
-    afterwards (the new one on success, the original if declined or
-    cancelled) — the caller needs this to keep bootstrapping with cmkadmin's
-    *current* password.
+    """Offer to replace the current cmkadmin password with one the operator
+    chooses. Returns whichever password is in effect afterwards (the new
+    one on success, the original if declined or cancelled) — the caller
+    needs this to keep bootstrapping with cmkadmin's *current* password.
+
+    `reason` completes the "(recommended — ...)" hint: a wizard-created
+    site has a random password, while a container-mode site carries
+    whatever CMK_PASSWORD the compose file set (often the shipped default).
     """
     change = await questionary.confirm(
-        "Change the cmkadmin password now? (recommended — the one above was randomly generated)",
+        f"Change the cmkadmin password now? (recommended — {reason})",
         default=True,
     ).ask_async()
     if not change:
@@ -562,6 +569,24 @@ async def phase1_site_bringup() -> CheckmkConnection:
             default=cmk_password_default,
         ).ask_async()
         if cmkadmin_password:
+            # Container mode has no wizard-generated password, so offer the
+            # same REST-based change (change_cmkadmin_password) against the
+            # password just entered — typically the compose CMK_PASSWORD
+            # default. The new value is used for the bootstrap below.
+            old_password = cmkadmin_password
+            cmkadmin_password = await _prompt_change_cmkadmin_password(
+                checkmk_host,
+                site_name,
+                cmkadmin_password,
+                checkmk_port,
+                reason="the compose file's CMK_PASSWORD is a well-known default",
+            )
+            if cmkadmin_password != old_password and cmk_password_default:
+                console.print(
+                    "[yellow]Update CMK_PASSWORD on the checkmk and worker services "
+                    "(compose.yaml) if you want the prompt above pre-filled with the new "
+                    "value next run — Checkmk itself only reads it on first site creation.[/yellow]"
+                )
             try:
                 # With env_secret set, an existing 'automation' user is
                 # updated to that secret rather than rejected, so the

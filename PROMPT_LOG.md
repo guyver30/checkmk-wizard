@@ -215,3 +215,4 @@
 - **2026-09-25 09:10** — chose to raise EVENTS_MAX_ENTRIES to 1000 for the event-history date filter.
 - **2026-09-25 10:42** — testing wizard myself; step 1: it asks to connect to site 'dmc' (from podman compose); want to be able to rename/change the site name in the wizard.
 - **2026-09-25 10:47** — go with option 1 (CMK_SITE_ID=${CMK_SITE_ID:-dmc} in compose, single source), and document both option 1 and option 2 (omd mv).
+- **2026-09-25 10:55** — default cmkadmin password comes from compose (CMK_PASSWORD); want the wizard to be able to change it (via API?).
