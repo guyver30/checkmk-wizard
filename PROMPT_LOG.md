@@ -242,3 +242,4 @@
 - **2026-09-25 16:08** — before phase 14: where to upload SVGs for device types so the map shows them, and how to tag them to device types
 - **2026-09-25 18:14** — make device-type icons drop-in, as simple as possible to add/change an icon for a device type
 - **2026-09-25 18:18** — document the icon drop-in clearly; where is device_types.json?
+- **2026-09-25 21:29** — /bm:pause-work

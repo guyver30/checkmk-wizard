@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-25T13:29:09.530Z",
+  "phase": "14",
+  "phase_name": "Fleet Intelligence",
+  "phase_dir": ".planning/phases/14-fleet-intelligence (not yet created)",
+  "plan": 0,
+  "task": 0,
+  "total_tasks": 0,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": 1, "name": "Reconcile STATE.md after Phase 13; retire stale checkpoint", "status": "done", "commit": "HEAD~5"},
+    {"id": 2, "name": "quick 260925-pc7 drop-in device-type icons", "status": "done", "commit": "a427d92"},
+    {"id": 3, "name": "docs/DEVICE-TYPE-ICONS.md guide", "status": "done", "commit": "dc7d074"},
+    {"id": 4, "name": "discuss-phase 14", "status": "in_progress", "progress": "context loaded, gray-area question interrupted by user before any answer"}
+  ],
+  "remaining_tasks": [
+    {"id": 5, "name": "Finish /bm:discuss-phase 14 (write 14-CONTEXT.md)", "status": "not_started"},
+    {"id": 6, "name": "plan-phase 14 (requirements are TBD in REQUIREMENTS.md)", "status": "not_started"}
+  ],
+  "blockers": [],
+  "human_actions_pending": [
+    {"action": "Send the new SVG icons (and which device type each is for) or drop them into dashboard-react/src/assets/icons/device-types/<device_type>.svg, then rebuild/redeploy the dashboard", "context": "icons are bundled at build time", "blocking": false},
+    {"action": "Sync deployment host to latest commits, podman compose up -d, confirm dashboard shows only the 18 current hosts (carried over from the retired checkpoint)", "context": "CMK_LIVESTATUS_TCP=on missing on host compose.yaml", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "Icons drop-in: file name = device type, import.meta.glob; sidebar uses CSS mask of same SVG; 'unknown' now falls back to other.svg", "rationale": "simplest add/change flow for operator", "phase": "quick"}
+  ],
+  "uncommitted_files": ["PROMPT_LOG.md"],
+  "next_action": "Re-run /bm:discuss-phase 14 and ask the gray-area selection (scope slicing, impact & root-cause model, history store & Grafana, prediction & AI narration)",
+  "context_notes": "Phase 14 bundles 7 features and has 4 open blocking decisions in ROADMAP.md (data egress for narration, Raw edition fixed, retention, Grafana audience). Likely needs scope slicing first."
+}
