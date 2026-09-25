@@ -1738,34 +1738,91 @@ async def test_phase4_rejects_out_of_range_port(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_phase4_prompts_device_type_and_offers_configured_choices(monkeypatch, tmp_path):
-    # The device-type select must offer exactly _load_device_types()'s
-    # return value, in order — this is what makes D-05 real (a site-
-    # specific taxonomy, not a hardcoded list).
+async def test_phase4_promoted_host_gets_device_type_from_shared_screen(monkeypatch, tmp_path):
+    # 2026-09-25: promotion no longer asks "Device type for X" per host. The
+    # promoted host appears (marked new) in the same number-key screen as
+    # onboarded hosts, and the choice is stored on the OnboardedHost for
+    # Phase 5 — nothing is written over REST for a host that doesn't exist
+    # under its final name yet.
     path = tmp_path / "device_types.json"
     path.write_text(json.dumps(["other", "ACS", "Multimedia"]))
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
+    seen = []
+
+    async def screen(folder, candidates, device_types):
+        seen.append([(c.name, c.promoted is not None) for c in candidates])
+        selection = RetagSelection(candidates=candidates, device_types=device_types)
+        selection.pending["pinghost"] = "ACS"
+        return "apply", selection
+
+    monkeypatch.setattr("checkmk_wizard.wizard._run_retag_screen", screen)
 
     scanned = ScannedHost(ip="10.0.0.13", open_ports=[], folder="/")
-    answers = iter([[scanned], "10.0.0.13", "ping", "", "ACS", ""])
-    offered_choices = []
-    original_select = questionary.select
-
-    def capturing_select(message, choices=None, **kwargs):
-        if "Device type for" in message:
-            offered_choices.append([c.value for c in choices])
-        return original_select(message, choices=choices, **kwargs)
-
-    monkeypatch.setattr(questionary, "select", capturing_select)
+    # promote, hostname, method, ports, alias | tag now?, folder
+    answers = iter([[scanned], "pinghost", "ping", "", "", True, "/"])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
 
     monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
 
-    onboarded = await phase4_classification([scanned])
-    assert offered_choices == [["other", "ACS", "Multimedia"]]
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200,
+                json={"value": [{"id": "10.0.0.13", "extensions": {"folder": "/", "attributes": {}}}]},
+            )
+        )
+        put = respx.put(url__regex=rf"{BASE}/objects/host_config/.*").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            onboarded = await phase4_classification([scanned], client, CONN)
+
+    assert seen == [[("pinghost", True)]]  # the IP placeholder is not offered separately
     assert onboarded[0].device_type == "ACS"
+    assert not put.called
+
+
+@pytest.mark.asyncio
+async def test_phase4_unpromoted_host_can_still_be_tagged(monkeypatch, tmp_path):
+    # Choosing to promote nothing used to jump straight to Phase 5, leaving
+    # scanned/pending hosts untaggable. They now appear in the same screen
+    # and are written over REST like any onboarded host.
+    path = tmp_path / "device_types.json"
+    path.write_text(json.dumps(["other", "ACS"]))
+    monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
+    monkeypatch.setattr("checkmk_wizard.wizard._activate_pending_changes", _fake_activate_always_true)
+    monkeypatch.setattr(
+        "checkmk_wizard.wizard._run_retag_screen", _screen_returning("apply", {"10.0.0.20": "ACS"})
+    )
+
+    scanned = ScannedHost(ip="10.0.0.20", open_ports=[], folder="/")
+    # promote nobody | tag now?, folder, "also set aliases?"
+    answers = iter([[], True, "/", False])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(
+                200,
+                json={"value": [{"id": "10.0.0.20", "extensions": {"folder": "/", "attributes": {"ipaddress": "10.0.0.20"}}}]},
+            )
+        )
+        respx.get(f"{BASE}/objects/host_config/10.0.0.20").mock(
+            return_value=Response(
+                200, json={"extensions": {"attributes": {"ipaddress": "10.0.0.20"}}}, headers={"ETag": "e1"}
+            )
+        )
+        put = respx.put(f"{BASE}/objects/host_config/10.0.0.20").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            onboarded = await phase4_classification([scanned], client, CONN)
+
+    assert onboarded == []
+    assert json.loads(put.calls.last.request.content)["attributes"][f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"] == "ACS"
 
 
 @pytest.mark.asyncio
@@ -1775,8 +1832,8 @@ async def test_phase4_blank_alias_yields_none(monkeypatch, tmp_path):
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
 
     scanned = ScannedHost(ip="10.0.0.14", open_ports=[], folder="/")
-    # promote, hostname, os_family, expected_open_ports, device_type, alias
-    answers = iter([[scanned], "10.0.0.14", "ping", "", "other", ""])
+    # promote, hostname, os_family, expected_open_ports, alias
+    answers = iter([[scanned], "10.0.0.14", "ping", "", ""])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)
@@ -1794,8 +1851,8 @@ async def test_phase4_alias_answer_is_stripped(monkeypatch, tmp_path):
     monkeypatch.setattr("checkmk_wizard.wizard._DEVICE_TYPES_PATH", path)
 
     scanned = ScannedHost(ip="10.0.0.15", open_ports=[], folder="/")
-    # promote, hostname, os_family, expected_open_ports, device_type, alias
-    answers = iter([[scanned], "10.0.0.15", "ping", "", "other", "  rack-2 door  "])
+    # promote, hostname, os_family, expected_open_ports, alias
+    answers = iter([[scanned], "10.0.0.15", "ping", "", "  rack-2 door  "])
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return next(answers)

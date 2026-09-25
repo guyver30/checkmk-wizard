@@ -649,9 +649,27 @@ Purely interactive — **no fingerprinting, and (changed 2026-08-25) no
 folder prompt** — each host's folder is already known from which Phase 2
 folder-subnet scan found it (`/` for the flat-fallback case).
 
-### Bulk retag of already-onboarded hosts (added 2026-09-12, TAG-04)
+### Bulk device-type screen (added 2026-09-12, TAG-04; moved 2026-09-25)
 
-Before the promotion flow below, the phase offers to retag hosts that are
+**Changed 2026-09-25: this screen is now the one place device types are
+assigned, and it runs *after* the per-host promotion prompts.** Promotion
+still asks hostname, monitoring method, SNMP details, expected-open ports and
+alias per host, but no longer a per-host "Device type for X" question. The
+screen below then lists, together: hosts being promoted in this run (shown as
+`name (new)`; the chosen type is stored on the host and applied when Phase 5
+creates it — no REST write yet), scanned/pending hosts the operator chose
+*not* to promote (written over REST like any other host), and already-onboarded
+hosts. It runs even when nothing was promoted, so unpromoted hosts can still be
+tagged. The confirm defaults to yes when hosts are being promoted, no
+otherwise. Only the promoted hosts' IPs and new hostnames are excluded from the
+REST list (they'd be double-listed). Skipped when the device-type tag group
+couldn't be provisioned; promoted hosts then keep `other`.
+
+The rest of this section describes the screen itself; its original text
+predates the reorder ("before the promotion flow", "hosts this run just
+scanned are excluded").
+
+Originally the phase offered to retag hosts that are
 already onboarded. **Every onboarded host is offered, whatever it is
 currently tagged as** (changed 2026-09-12) — correcting a host tagged
 *wrongly* matters as much as tagging one that was never tagged, and the

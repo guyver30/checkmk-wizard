@@ -869,6 +869,11 @@ class RetagCandidate:
     folder: str
     device_type: str | None
     alias: str | None
+    # Set for a host being promoted in this same Phase 4 run (2026-09-25):
+    # it does not exist in Checkmk under its final name yet, so the chosen
+    # type is stored on the OnboardedHost (Phase 5 creates it with the tag)
+    # instead of being written over REST.
+    promoted: OnboardedHost | None = None
 
 
 def _retaggable_hosts(
@@ -1209,9 +1214,18 @@ async def _prompt_optional_aliases(
 
 
 async def _retag_existing_hosts(
-    client: CheckmkClient | None, connection: CheckmkConnection | None, *, exclude_names: set[str]
+    client: CheckmkClient | None,
+    connection: CheckmkConnection | None,
+    *,
+    exclude_names: set[str],
+    promoting: list[OnboardedHost] | None = None,
 ) -> None:
-    """Bulk retag of already-onboarded hosts (TAG-04). Locked to run inside
+    """Bulk device-type screen (TAG-04), the single place device types are
+    assigned in Phase 4 (2026-09-25): hosts being promoted in this run
+    (`promoting`), scanned/pending hosts the operator chose not to promote,
+    and already-onboarded hosts all appear in the same list.
+
+    Bulk retag of already-onboarded hosts (TAG-04). Locked to run inside
     Phase 4, not a startup menu or a command-line switch (D-01) — both were
     offered to the operator and explicitly rejected.
 
@@ -1240,24 +1254,35 @@ async def _retag_existing_hosts(
         # may already have written some folders, and the list the operator
         # sees must reflect that instead of replaying stale device types.
         candidates = _retaggable_hosts(hosts, exclude_names)
+        candidates.extend(
+            RetagCandidate(
+                name=h.hostname, folder=h.folder, device_type=h.device_type, alias=h.alias, promoted=h
+            )
+            for h in promoting or []
+        )
         if not candidates:
-            console.print("[dim]No already-onboarded hosts to retag.[/dim]")
+            console.print("[dim]No hosts to tag.[/dim]")
             break
 
-        table = Table(title="Already-onboarded hosts")
+        table = Table(title="Hosts to tag")
         table.add_column("Host")
         table.add_column("Folder")
         table.add_column("Device type")
         for c in candidates:
-            table.add_row(c.name, c.folder, c.device_type or f"{device_types[0]} (implicit)")
+            table.add_row(
+                f"{c.name} (new)" if c.promoted else c.name,
+                c.folder,
+                c.device_type or f"{device_types[0]} (implicit)",
+            )
         console.print(table)
 
         # Declining is a first-class outcome (D-01), not a failure path —
         # no warning colour, no retry. A run with no onboarded hosts never
         # reaches here at all (the branch above returns first).
         proceed = await questionary.confirm(
-            f"{len(candidates)} already-onboarded host(s) can be retagged. Do that now?",
-            default=False,
+            f"{len(candidates)} host(s) can be given a device type (hosts being promoted "
+            "are marked (new)). Do that now?",
+            default=bool(promoting),
         ).ask_async()
         if not proceed:
             console.print("[dim]Leaving device types as they are — nothing was written.[/dim]")
@@ -1310,6 +1335,10 @@ async def _retag_existing_hosts(
             else:
                 retagged: list[RetagCandidate] = []
                 for candidate, new_device_type in changes:
+                    if candidate.promoted is not None:
+                        candidate.promoted.device_type = new_device_type
+                        console.print(f"  {candidate.name}: {new_device_type} (applied when onboarded in Phase 5)")
+                        continue
                     if await _write_host_attributes(
                         client, candidate.name, {attribute_key: new_device_type}
                     ):
@@ -1633,24 +1662,16 @@ async def phase4_classification(
     """
     console.rule("[bold]Phase 4 — Host Classification")
 
-    if client is not None and connection is not None and tag_group_available:
-        # phase3_discovery stages every scanned IP as a bare host named
-        # after the IP, so without this exclusion every host this run just
-        # discovered would appear as a retag candidate and be offered for
-        # retagging seconds before the promotion flow below tags it
-        # properly.
-        await _retag_existing_hosts(client, connection, exclude_names={r.ip for r in scan_results})
-
     console.print("No automatic fingerprinting — pick which IPs to promote to named hosts.")
 
     choices = [
         questionary.Choice(f"{r.ip} [{r.folder}] (ports: {r.open_ports})", value=r) for r in scan_results
     ]
-    if not choices:
+    selected: list[ScannedHost] = []
+    if choices:
+        selected = await questionary.checkbox("Promote which hosts?", choices=choices).ask_async() or []
+    else:
         console.print("No scanned hosts to promote.")
-        return []
-
-    selected = await questionary.checkbox("Promote which hosts?", choices=choices).ask_async()
 
     onboarded: list[OnboardedHost] = []
     for scanned in selected:
@@ -1713,15 +1734,6 @@ async def phase4_classification(
                 expected_open_ports = candidate_ports
                 break
 
-        # Choices come from the config loader, not a literal list, so the
-        # taxonomy stays site-specific (D-05) — a hardcoded list would need
-        # a code change per site. No validation loop needed: the operator
-        # cannot type a free-form answer.
-        device_type = await questionary.select(
-            f"Device type for {hostname}:",
-            choices=[questionary.Choice(dt, value=dt) for dt in _load_device_types()],
-        ).ask_async()
-
         # Blank means "use the hostname" (D-09) — mirrors the blank-means-
         # skip handling the expected_open_ports prompt above already uses.
         raw_alias = (
@@ -1740,9 +1752,20 @@ async def phase4_classification(
                 snmp_version=snmp_version,
                 snmp_community=snmp_community,
                 expected_open_ports=expected_open_ports,
-                device_type=device_type,
                 alias=alias,
             )
+        )
+
+    # Device types are assigned in one shared screen instead of a per-host
+    # prompt (2026-09-25): promoted hosts, hosts the operator chose not to
+    # promote, and already-onboarded hosts, all in the same list. Runs even
+    # when nothing was promoted, so unpromoted hosts can still be tagged.
+    if client is not None and connection is not None and tag_group_available:
+        await _retag_existing_hosts(
+            client,
+            connection,
+            exclude_names={r.ip for r in selected} | {h.hostname for h in onboarded},
+            promoting=onboarded,
         )
     return onboarded
 
