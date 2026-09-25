@@ -648,10 +648,12 @@ def test_split_checkmk_host_port_raises_on_malformed_input(raw_value):
 
 
 @pytest.mark.asyncio
-async def test_phase1_container_mode_prefills_host_and_cmkadmin_from_cmk_password(monkeypatch):
+async def test_phase1_container_mode_prefills_host_but_not_cmkadmin(monkeypatch):
     # Regression test: `localhost` doesn't reach the checkmk container from
     # the worker container, and operators previously had to retype a
-    # cmkadmin password the environment already knew via CMK_PASSWORD.
+    # cmkadmin password. The password itself is deliberately NOT pre-filled
+    # (even with CMK_PASSWORD set): the prompt text states the 'cmkadmin'
+    # default instead, since the operator may have changed it on a prior run.
     monkeypatch.setenv("CMK_PASSWORD", "compose-pw")
 
     recorded_defaults = {}
@@ -698,11 +700,12 @@ async def test_phase1_container_mode_prefills_host_and_cmkadmin_from_cmk_passwor
     # "checkmk:5000" (not just "checkmk") is the container-mode default —
     # the check-mk-raw image serves REST/GUI on 5000 internally.
     assert recorded_defaults[host_prompt] == "checkmk:5000"
-    assert recorded_defaults[cmkadmin_prompt] == "compose-pw"
+    assert not recorded_defaults[cmkadmin_prompt]
+    assert "compose default 'cmkadmin'" in cmkadmin_prompt
 
 
 @pytest.mark.asyncio
-async def test_phase1_container_mode_cmkadmin_default_blank_when_cmk_password_unset(monkeypatch):
+async def test_phase1_container_mode_cmkadmin_blank_answer_skips_bootstrap(monkeypatch):
     # Hermetic against a developer machine that happens to export
     # CMK_PASSWORD: with it unset, the cmkadmin prompt's default must be
     # blank, and pressing Enter (blank answer) must still take the
@@ -743,7 +746,7 @@ async def test_phase1_container_mode_cmkadmin_default_blank_when_cmk_password_un
         connection = await phase1_site_bringup()
 
     cmkadmin_prompt = next(p for p in recorded_defaults if p.startswith("cmkadmin password"))
-    assert recorded_defaults[cmkadmin_prompt] == ""
+    assert not recorded_defaults[cmkadmin_prompt]
     assert connection.secret == "local-secret"
 
 

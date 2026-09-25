@@ -58,14 +58,15 @@ fallback hint, since it can't tell the two situations apart on its own.
   every Checkmk REST endpoint is scoped under `/<site>/...`, so the name
   has to be known before anything can be queried.
 - **The `cmkadmin` password** (whatever the Checkmk container's own
-  `CMK_PASSWORD` was set to) — prompted for at startup, followed by an
-  offer (default yes) to change it: the compose default `cmkadmin` is
-  well-known, so the wizard sets a new one over the REST API
-  (`change_cmkadmin_password()`, same as host-native mode does for its
-  generated password; Checkmk's password policy applies) and uses the new
-  password for everything below. Checkmk only reads `CMK_PASSWORD` when it
-  first creates the site, so update it in `compose.yaml` yourself if you
-  want the prompt pre-filled with the new value next run. The wizard uses it
+  `CMK_PASSWORD` was set to) — prompted for at startup, never pre-filled;
+  the prompt says that on a freshly created site whose password was never
+  changed it is the compose default `cmkadmin`. It is followed by an offer
+  (default yes) to change it: since that default is well-known, the wizard
+  sets a new one over the REST API (`change_cmkadmin_password()`, same as
+  host-native mode does for its generated password; Checkmk's password
+  policy applies) and uses the new password for everything below.
+  `compose.yaml` keeps `CMK_PASSWORD=cmkadmin` and needs no update (Checkmk
+  only reads it when it first creates the site). The wizard uses it
   to create the site's `automation` REST user itself over the API (the
   same `bootstrap_automation_user()` mechanism host-native mode uses right
   after `omd create`), so there's no local secret file to read. If
