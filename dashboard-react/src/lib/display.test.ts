@@ -8,6 +8,7 @@ import {
   isTagGroupMissing,
   formatRelativeTime,
   formatClock,
+  formatDateTime,
 } from "./display";
 
 describe("displayName", () => {
@@ -104,5 +105,23 @@ describe("formatClock", () => {
 
   it("returns 'unknown' for an unparseable string", () => {
     expect(formatClock("not-a-date")).toBe("unknown");
+  });
+});
+
+describe("formatDateTime", () => {
+  it("formats a valid ISO string as local YYYY-MM-DD HH:MM:SS", () => {
+    const iso = "2026-09-21T05:07:09Z";
+    const d = new Date(iso);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const expected = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    expect(formatDateTime(iso)).toBe(expected);
+    expect(formatDateTime(iso)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  });
+
+  it("returns 'unknown' for missing or unparseable input", () => {
+    expect(formatDateTime(undefined)).toBe("unknown");
+    expect(formatDateTime(null)).toBe("unknown");
+    expect(formatDateTime("")).toBe("unknown");
+    expect(formatDateTime("not-a-date")).toBe("unknown");
   });
 });
