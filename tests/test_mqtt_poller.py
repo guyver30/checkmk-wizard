@@ -311,7 +311,7 @@ def test_poller_config_from_env_defaults_with_empty_environment(monkeypatch):
     config = poller.PollerConfig.from_env()
     assert config.poll_interval_seconds == 60
     assert config.history_max_entries == 20
-    assert config.events_max_entries == 50
+    assert config.events_max_entries == 1000
     assert config.livestatus_port == 6557
     assert config.mqtt_port == 1883
     assert config.reconcile_timeout_seconds == 5.0
