@@ -104,6 +104,7 @@ None.
 | 260907-nde | Document the PING/check_icmp two-part fix (cap_add NET_RAW + host net.ipv4.ping_group_range) in the Podman setup doc | 2026-09-07 | 599efcb | [260907-nde-document-the-ping-check-icmp-fix-in-the-](./quick/260907-nde-document-the-ping-check-icmp-fix-in-the-/) |
 | 260912-o7n | Fix three agent-registration bugs: receiver port omitted from --server, container-internal DNS name passed to remote targets, sudo missing from Linux manual instructions | 2026-09-12 | e7ea293 | [260912-o7n-fix-three-agent-registration-bugs-receiv](./quick/260912-o7n-fix-three-agent-registration-bugs-receiv/) |
 | 260924-azn | Pre-seed automation REST secret: wizard reads CMK_REST_SECRET from env, creates or updates the `automation` user to match, never prints an env-sourced secret; compose/.env.example/docs updated | 2026-09-24 | c06658a | [260924-azn-pre-seed-fixed-automation-user-rest-secr](./quick/260924-azn-pre-seed-fixed-automation-user-rest-secr/) |
+| 260925-b81 | Poller sweeps stale retained lan/devices/* topics at startup (gated on a trustworthy Checkmk answer), so a Checkmk site rebuild no longer needs the mosquitto volume wipe; docs 8.5 updated | 2026-09-25 | 23cb9c6 | [260925-b81-poller-stale-retained-topic-cleanup](./quick/260925-b81-poller-stale-retained-topic-cleanup/) |
 
 ## Deferred Items
 

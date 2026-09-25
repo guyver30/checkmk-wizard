@@ -190,3 +190,8 @@
 - **2026-09-24 09:14** — dashboard still shows old hostnames and tagging after volume wipe; asked to diagnose.
 - **2026-09-24 09:15** — pasted diagnostics: mosquitto volume dated 2026-09-06 (not recreated), checkmk lists 18 hosts.
 - **2026-09-24 09:23** — `/bm:pause-work` — create handoff.
+
+## 2026-09-25 (session start)
+
+- **2026-09-25 08:04** — `/bm:resume-work` — restore context from previous session handoff.
+- **2026-09-25 08:04** — chose option 2: poller stale-retained-topic cleanup as a quick task.
