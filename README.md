@@ -205,3 +205,8 @@ section.
 - `src/checkmk_wizard/remote.py` — SSH firewall check/fix and agent install (Phase 5.1/5.2)
 - `src/checkmk_wizard/livestatus.py` — post-activation host state check (Phase 7)
 - `src/checkmk_wizard/wizard.py` — interactive orchestration of all phases
+  Phase 3 also picks up hosts that are already in Checkmk but never promoted
+  (found by a folder's daily network scan, or left by an earlier run) so
+  Phase 4 can offer them; the scan is mandatory on a new site and defaults
+  to "yes" on an existing site only when you just added a folder with a
+  subnet. Promoted hosts carry the label `cmk_wizard=onboarded`.

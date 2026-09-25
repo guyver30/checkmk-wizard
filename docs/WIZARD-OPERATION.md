@@ -576,7 +576,35 @@ that folder**, instead of a single subnet always staged at root
 regardless of Phase 2. Falls back to exactly the original single-CIDR
 flow when Phase 2 produced no folder/subnet pairs.
 
-**Changed 2026-09-12: the scan is optional.** The phase opens with
+**Changed 2026-09-25: Phase 3 now returns "hosts to promote", not only
+"hosts this run scanned".** It first lists the site's hosts
+(`client.list_hosts()`, best-effort) and finds the *pending* ones
+(`_pending_hosts()`): hosts named after their own IP, without the
+`cmk_wizard=onboarded` label Phase 5 stamps on every host it promotes, and
+with no explicit agent/SNMP setup (absent tags are folder-inherited, and the
+wizard's folders default to no-agent/no-snmp). These are placeholders left by
+an earlier or aborted run, plus hosts a folder's daily Checkmk network scan
+found since. Then:
+
+- **New site (no hosts at all):** no question — the scan is required (Phase 2
+  subnets, else a CIDR prompt).
+- **Existing site:** "Scan the network for new hosts now?" defaults to yes
+  only if Phase 2 just added a folder with a subnet, otherwise no.
+  Declining returns the pending hosts (not an empty list), so Phase 4 still
+  offers them for promotion.
+- When scanning, an IP that is already pending keeps the scan's port data
+  but is not staged again, and an IP that already belongs to an onboarded
+  host under another name is skipped instead of creating a duplicate
+  placeholder.
+- The count of pending hosts is printed ("N unpromoted host(s) already in
+  Checkmk").
+- Caveat: a host promoted by an older wizard version has no marker, so an
+  IP-named, agent-less one appears as pending once. Promoting a
+  daily-scan host replaces its attributes (the scan's `tag_criticality =
+  offline` is not carried over), i.e. promotion starts monitoring it.
+
+**Changed 2026-09-12: the scan is optional (superseded above for new
+sites).** The phase used to open with
 "Scan the network for hosts now? (No = skip to Phase 4, e.g. to retag hosts
 that are already onboarded)", defaulting to yes. Declining returns an empty
 `scan_results` list immediately — no sweep, and no placeholder hosts staged

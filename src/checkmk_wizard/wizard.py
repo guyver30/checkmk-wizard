@@ -51,6 +51,12 @@ _SMARTMONTOOLS_DIR = Path(__file__).resolve().parents[2] / "docs" / "smart"
 # the literal `tag_device_type` string.
 DEVICE_TYPE_TAG_GROUP_ID = "device_type"
 
+# Host label Phase 5 stamps on every host it promotes (2026-09-25). Phase 3
+# uses its absence to tell "still an unpromoted placeholder" (staged by this
+# wizard, or created by a folder's daily Checkmk network scan) from a
+# promoted host that merely kept its IP as hostname.
+WIZARD_MARKER_LABELS = {"cmk_wizard": "onboarded"}
+
 # device_types.json ships inside the repo checkout, not the installed
 # package, since this wizard is run via `uv run` from a checkout rather
 # than installed as a distributed wheel — same resolution shape as
@@ -755,8 +761,8 @@ def _load_device_types() -> list[str]:
 
 
 def _device_type_and_alias_attributes(h: OnboardedHost, *, tag_group_available: bool = True) -> dict:
-    """Build the device-type tag (and optional alias) fragment shared by
-    every Phase 5 host-creation/update branch (snmp, ping, agent), so the
+    """Build the device-type tag, optional alias and wizard marker label
+    fragment shared by every Phase 5 host-creation/update branch (snmp, ping, agent), so the
     `tag_<group_id>` key is derived from DEVICE_TYPE_TAG_GROUP_ID exactly
     once rather than repeated as a literal at each call site.
 
@@ -775,7 +781,7 @@ def _device_type_and_alias_attributes(h: OnboardedHost, *, tag_group_available: 
     skip the tag" keeps this file's warn-and-continue convention and still
     applies `alias`, which does not depend on the tag group.
     """
-    attrs: dict = {}
+    attrs: dict = {"labels": dict(WIZARD_MARKER_LABELS)}
     if tag_group_available:
         attrs[f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"] = h.device_type
     if h.alias:
@@ -1448,28 +1454,79 @@ async def phase2_folders(client: CheckmkClient) -> tuple[dict[str, str | None], 
 # ── Phase 3: Network discovery ──────────────────────────────────────────
 
 
+def _pending_hosts(hosts: list[dict[str, Any]]) -> list[ScannedHost]:
+    """Hosts already in Checkmk that were never promoted: named after their
+    own IP, carrying no wizard marker label, and not explicitly set up for
+    agent/SNMP monitoring (an absent tag is folder-inherited — the wizard's
+    folders default to no-agent/no-snmp). These are Phase 3's own staged
+    placeholders from an earlier or aborted run, plus hosts a folder's daily
+    Checkmk network scan added since — either way Phase 4 should offer them
+    for promotion. Caveat: a host promoted by an older wizard version has no
+    marker, so an IP-named ping/SNMP-less one shows up here once.
+    """
+    pending: list[ScannedHost] = []
+    for h in hosts:
+        name = h.get("id")
+        extensions = h.get("extensions") or {}
+        attributes = extensions.get("attributes") or {}
+        if not name or attributes.get("ipaddress") != name:
+            continue
+        if (attributes.get("labels") or {}).get("cmk_wizard") == WIZARD_MARKER_LABELS["cmk_wizard"]:
+            continue
+        if attributes.get("tag_agent") not in (None, "no-agent"):
+            continue
+        if attributes.get("tag_snmp_ds") not in (None, "no-snmp"):
+            continue
+        pending.append(ScannedHost(ip=name, open_ports=[], folder=extensions.get("folder") or "/"))
+    return pending
+
+
 async def phase3_discovery(client: CheckmkClient, folder_subnets: dict[str, str | None]) -> list[ScannedHost]:
     """Scan each Phase 2 folder's subnet directly into that folder. Falls
     back to a single flat scan into the root folder when Phase 2 defined
     no folders (skipped, or every folder's subnet was left blank) —
     matches the wizard's original single-CIDR-prompt behavior.
+
+    Reworked 2026-09-25: the result is "hosts to promote", not just "hosts
+    this run scanned". It also includes pending hosts already in Checkmk
+    (`_pending_hosts`: an earlier run's placeholders, or hosts a folder's
+    daily network scan found since). Scanning is mandatory on a site with
+    no hosts at all (nothing else could feed Phase 4), and on an existing
+    site defaults to "yes" only when Phase 2 just added a folder with a
+    subnet — declining then still returns the pending hosts instead of
+    ending the run with nothing to promote.
     """
     console.rule("[bold]Phase 3 — Network Discovery (custom async scanner)")
 
-    # Scanning is optional because the wizard is also run against a site
-    # that is already built out: re-scanning a network whose hosts are
-    # already onboarded costs minutes and stages every live IP as a
-    # duplicate placeholder host, when the operator only came back to
-    # retag existing hosts in Phase 4 (TAG-04). Declining returns no
-    # scanned hosts, which Phase 4 already handles — it runs the retag
-    # flow and then reports there is nothing to promote.
-    if not await questionary.confirm(
-        "Scan the network for hosts now? (No = skip to Phase 4, e.g. to retag hosts "
-        "that are already onboarded)",
-        default=True,
+    # Best-effort like every other lookup here: if the host list can't be
+    # read, fall back to the pre-rework behaviour (optional scan, no
+    # pending hosts) rather than aborting the run.
+    existing_hosts: list[dict[str, Any]] | None
+    try:
+        existing_hosts = await client.list_hosts()
+    except CheckmkAPIError as exc:
+        console.print(f"[yellow]could not list existing hosts: {exc}[/yellow]")
+        existing_hosts = None
+    pending = _pending_hosts(existing_hosts or [])
+    pending_ips = {p.ip for p in pending}
+    known_ips = {
+        (h.get("extensions") or {}).get("attributes", {}).get("ipaddress") for h in existing_hosts or []
+    } - pending_ips - {None}
+    if pending:
+        console.print(
+            f"[bold]{len(pending)} unpromoted host(s) already in Checkmk[/bold] (left by an earlier "
+            "run or found by a folder's daily network scan) — they will be offered for promotion in Phase 4."
+        )
+
+    if existing_hosts is not None and not existing_hosts:
+        console.print("New site — no hosts yet, so the network scan is required.")
+    elif not await questionary.confirm(
+        "Scan the network for new hosts now? (No = skip to Phase 4 to retag or promote "
+        "hosts already in Checkmk)",
+        default=any(folder_subnets.values()),
     ).ask_async():
         console.print("[dim]Skipping the network scan — no new hosts will be discovered.[/dim]")
-        return []
+        return pending
 
     scans: list[tuple[str, str]] = [(folder, cidr) for folder, cidr in folder_subnets.items() if cidr]
     skipped_folders = [folder for folder, cidr in folder_subnets.items() if not cidr]
@@ -1511,6 +1568,17 @@ async def phase3_discovery(client: CheckmkClient, folder_subnets: dict[str, str 
             results = await scan_network(cidr, ports=ports, on_progress=on_progress)
 
         for r in results:
+            if r.ip in known_ips:
+                # Already an onboarded host under another name (or a
+                # different folder's entry) — staging it again would only
+                # create a duplicate placeholder.
+                continue
+            if r.ip in pending_ips:
+                # Already staged — keep the scan's port data, but under
+                # the folder the host really lives in.
+                folder_of = next(p.folder for p in pending if p.ip == r.ip)
+                all_results.append(ScannedHost(ip=r.ip, open_ports=r.open_ports, folder=folder_of))
+                continue
             all_results.append(ScannedHost(ip=r.ip, open_ports=r.open_ports, folder=folder))
             try:
                 # Explicit here (not just relying on the folder default set
@@ -1525,6 +1593,9 @@ async def phase3_discovery(client: CheckmkClient, folder_subnets: dict[str, str 
                 )
             except CheckmkAPIError as exc:
                 console.print(f"[yellow]Could not stage {r.ip}: {exc}[/yellow]")
+
+    seen_ips = {sh.ip for sh in all_results}
+    all_results.extend(p for p in pending if p.ip not in seen_ips)
 
     table = Table(title="Discovered hosts")
     table.add_column("IP")
