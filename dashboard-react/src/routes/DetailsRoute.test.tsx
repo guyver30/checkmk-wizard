@@ -220,6 +220,8 @@ describe("DetailsRoute", () => {
     expect(screen.getByText("Up since Sep 20, uptime: 5 days")).toBeInTheDocument();
     expect(screen.getByText("Systemd Service ssh")).toBeInTheDocument();
     expect(screen.getByText("TCP Port 22 (expected open)")).toBeInTheDocument();
+    // Only the services table has an Output column; the TCP-port table does not.
+    expect(screen.getAllByRole("columnheader", { name: "Output" })).toHaveLength(1);
     expect(screen.queryByText("Interface 2")).not.toBeInTheDocument();
     expect(screen.queryByText("PING")).not.toBeInTheDocument();
     expect(screen.queryByText("History")).not.toBeInTheDocument();

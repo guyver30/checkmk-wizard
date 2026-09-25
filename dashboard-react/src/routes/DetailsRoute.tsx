@@ -23,6 +23,16 @@ const NO_ADDITIONAL_SERVICES_TEXT = "No additional services.";
 const NO_CHOSEN_SERVICES_TEXT = "No services were selected for monitoring in the wizard.";
 const NO_HISTORY_TEXT = "No recent transitions for this device.";
 
+// The TCP-port check reports no output text, so that table drops the Output column.
+const PORT_COLUMNS: TableColumn<ServiceEntry>[] = [
+  { key: "service", header: "Service", render: (row) => row.description },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => <StateBadgeForState state={row.state ?? "UNKNOWN"} />,
+  },
+];
+
 const SERVICE_COLUMNS: TableColumn<ServiceEntry>[] = [
   { key: "service", header: "Service", render: (row) => row.description },
   {
@@ -228,7 +238,7 @@ export function DetailsRoute() {
         {ports.length > 0 && (
           <section className="mt-3">
             <h2 className="text-sm font-semibold">TCP ports</h2>
-            <Table columns={SERVICE_COLUMNS} rows={ports} rowKey={(row) => row.description ?? ""} />
+            <Table columns={PORT_COLUMNS} rows={ports} rowKey={(row) => row.description ?? ""} />
           </section>
         )}
       </main>
