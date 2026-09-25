@@ -244,14 +244,24 @@ podman compose logs -f poller
 
 ## 5. Enable Livestatus-over-TCP (required for checkmk-wizard)
 
-checkmk-wizard's Phase 7 post-activation health check connects to the site's Livestatus port over **TCP**, not the local UNIX socket — that's what lets it run from the separate `worker` container instead of needing local filesystem access to `checkmk`'s `/omd/sites`. It isn't on by default on a container-created site, but `deploy/compose.yaml` sets the documented `CMK_LIVESTATUS_TCP=on` environment variable on the `checkmk` service (docs.checkmk.com/latest/en/introduction_docker.html, "Additional environment variables"), so the container's entrypoint enables it when it creates the site — including after you wipe and recreate the `checkmk_data` volume. **With the shipped `compose.yaml` there is nothing to do here.** Check it with `podman compose exec checkmk omd config dmc show LIVESTATUS_TCP` (expect `on`).
+checkmk-wizard's Phase 7 post-activation health check connects to the site's Livestatus port over **TCP**, not the local UNIX socket — that's what lets it run from the separate `worker` container instead of needing local filesystem access to `checkmk`'s `/omd/sites`. It isn't on by default on a container-created site, but `deploy/compose.yaml` sets the documented `CMK_LIVESTATUS_TCP=on` environment variable on the `checkmk` service (docs.checkmk.com/latest/en/introduction_docker.html, "Additional environment variables"), so the container's entrypoint enables it when it creates the site — including after you wipe and recreate the `checkmk_data` volume.
+
+`CMK_LIVESTATUS_TCP=on` only turns TCP on; it does not touch TLS. A fresh Checkmk 2.4 site defaults to `LIVESTATUS_TCP_TLS=on`, and xinetd then sends port 6557 to `live-tls`, which plain-LQL clients (the poller and the wizard) cannot speak: they see "Connection reset by peer", the poller exits with "Malformed columns response", and the dashboard shows "connected" but stays empty. The shipped `compose.yaml` therefore also mounts a pre-start entrypoint hook (`deploy/checkmk-hooks/pre-start/10-livestatus-tcp-plaintext.sh`) that sets `LIVESTATUS_TCP_TLS off` before every site start, so it also repairs an existing site on the next container restart. This is not a documented environment variable; it was verified from the image's entrypoint source (`docker_image/docker-entrypoint.sh`, `exec_hook pre-start`). The hook must keep its executable bit, or the entrypoint skips it; keep that in mind if you copy the file elsewhere. **The shipped `compose.yaml` sets both automatically, so no manual step is needed.** Check it with:
+
+```bash
+podman compose exec checkmk omd config dmc show LIVESTATUS_TCP       # expect: on
+podman compose exec checkmk omd config dmc show LIVESTATUS_TCP_TLS   # expect: off
+podman compose exec checkmk ls -l /omd/sites/dmc/tmp/run/live-tcp     # should point at `live`, not `live-tls`
+```
 
 The manual steps below are only for a site that was created without that variable (an older `compose.yaml`, a site created by hand with `omd create`, or a non-compose setup). Run them once:
 
 ```bash
 podman compose exec checkmk omd stop dmc
 podman compose exec checkmk omd config dmc set LIVESTATUS_TCP on
+podman compose exec checkmk omd config dmc set LIVESTATUS_TCP_TLS off
 podman compose exec checkmk omd start dmc
+podman restart mqtt-poller
 ```
 
 `omd config ... set` refuses to change config variables while the site is running — it errors with `Cannot change config variables while site is running.` — which is why the site is stopped first and then *started* rather than left running and restarted afterward. A site freshly brought up by §4's `podman compose up -d` is already running when you reach this step, so the stop is always needed, not situational. Stopping the site for this loses nothing: flipping `LIVESTATUS_TCP` is a config change, not a code change or a data wipe, so the site's monitoring data, hosts, and history all live in the `checkmk_data` volume and survive the stop/start untouched.
@@ -259,7 +269,7 @@ podman compose exec checkmk omd start dmc
 This binds Livestatus on port **6557** by default (Checkmk's own default `LIVESTATUS_TCP_PORT`) — matching what checkmk-wizard already expects, so nothing else needs configuring. No `ports:` entry is needed in `compose.yaml` for this: containers on the same `cmk_net` bridge can already reach `checkmk:6557` directly by service name, without publishing the port to the host/LAN — and it should stay that way, since Livestatus's wire protocol has no authentication of its own and relies entirely on network-level isolation.
 
 
-If you skip this step, checkmk-wizard still runs fine through Phase 6 — it just prints a warning at Phase 1 ("Could not reach Livestatus on checkmk:6557") and Phase 7's host-state table will fail at the very end of the run.
+If you skip this step, checkmk-wizard still runs fine through Phase 6 — it just prints a warning at Phase 1 ("Could not reach Livestatus on checkmk:6557", or, when the port is open but answers only TLS, "accepts connections but gives no plain-text reply" with the exact `omd config ... LIVESTATUS_TCP_TLS off` fix) and Phase 7's host-state table will fail at the very end of the run.
 
 ---
 
@@ -524,7 +534,7 @@ What to expect, that's different from running it directly on a Checkmk host:
 
 - **Phase 1 opens by announcing container mode** ("'omd' isn't on PATH — assuming this wizard is running in a separate container from Checkmk itself") and skips straight to a site-name prompt, pre-filled with `dmc` from the `CMK_SITE_ID` env var (§3) — just confirm it, or type a different name if you changed `CMK_SITE_ID` on the `checkmk` service.
 - **Checkmk host/IP prompt:** pre-filled with `checkmk:5000` (`checkmk` is the service's hostname on `cmk_net`, which is what actually resolves to Checkmk from inside the `worker` container; `:5000` because the `checkmk` service serves its site on container port 5000 internally — see §3's compose file `ports: "8080:5000"` mapping, and the `worker` service's own `CMK_REST_API=http://checkmk:5000/...`) — just press Enter to accept it. The `:5000` is the web/REST port only; the Livestatus check on `checkmk:6557` (§5) is unaffected, so the following bullet still reads correctly. Only type a different host (with or without its own `:port`) if the Checkmk service is reachable under another name.
-- **Livestatus reachability check:** warns immediately if §5 wasn't done yet — fix it and re-run, or ignore and fix it before Phase 7.
+- **Livestatus reachability check:** warns immediately if §5 wasn't done yet, and also when port 6557 accepts connections but answers only TLS (`LIVESTATUS_TCP_TLS` on) — fix it and re-run, or ignore and fix it before Phase 7.
 - **cmkadmin password prompt:** pre-filled from the `worker` container's own `CMK_PASSWORD` (§3) — press Enter to accept it. The wizard uses it once, over the REST API, to bootstrap the `automation` and `agent_registration` REST users itself — it's never stored anywhere by the wizard. The `automation` user is provisioned with the `CMK_REST_SECRET` from `deploy/.env` automatically (updated if it already exists) and that value is not printed. Clear it and leave it blank instead if you'd rather paste an automation secret directly (fetched via `podman compose exec checkmk cat /omd/sites/dmc/var/check_mk/web/automation/automation.secret`, for example).
 - **Phase 3 network scanning / Phase 5 SSH onboarding** reach out to your actual LAN from the `worker` container over `cmk_net`'s bridge (outbound NAT) — same subnets/targets you'd scan and SSH into from any other host on that network, no extra container networking config needed.
 
@@ -556,7 +566,7 @@ Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's credent
 Then, on the fresh site:
 
 1. Make sure `deploy/.env` holds a `CMK_REST_SECRET` (any long random value, e.g. `openssl rand -base64 24`) **before** running the wizard. The wizard creates the `automation` user with that secret, so the worker and poller need no hand-copying afterwards. Restart the poller if it started before you set the value.
-2. Livestatus-over-TCP comes up on its own (`CMK_LIVESTATUS_TCP=on` in `compose.yaml`, see §5); check with `podman compose exec checkmk omd config dmc show LIVESTATUS_TCP`.
+2. Livestatus-over-TCP comes up on its own, in plain text (`CMK_LIVESTATUS_TCP=on` plus the pre-start hook in `compose.yaml`, see §5); check with `podman compose exec checkmk omd config dmc show LIVESTATUS_TCP` (expect `on`) and `podman compose exec checkmk omd config dmc show LIVESTATUS_TCP_TLS` (expect `off`).
 3. Run the wizard (§8.3).
 4. Re-run the topology-editor provisioning script if you use the editable topology map: the `topology_editor` role and user lived in the deleted site.
 5. Hard-refresh the dashboard (Ctrl+Shift+R).

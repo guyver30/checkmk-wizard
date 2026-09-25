@@ -135,31 +135,68 @@ def site_running(site: str) -> bool:
     return result.returncode != 2
 
 
-def enable_livestatus_tcp(site: str) -> None:
-    """Turn on Livestatus-over-TCP for this site.
+def livestatus_tcp_tls_enabled(site: str) -> bool:
+    """Whether Livestatus-over-TCP is wrapped in TLS for this site.
 
-    Required unconditionally: the wizard's Phase 7 health check
-    (`livestatus.query_host_states()`) connects over TCP, not the site's
-    local UNIX socket, so it can run from a different container/host than
-    Checkmk itself. Restarts the site if it was already running, since
-    this setting only takes effect on daemon (re)start — a plain `omd
-    start` on an already-running site is a no-op and won't pick it up.
+    Empty output (an older Checkmk without the option) counts as not enabled.
     """
-    if livestatus_tcp_enabled(site):
-        return
-    was_running = site_running(site)
     result = subprocess.run(
-        ["omd", "config", site, "set", "LIVESTATUS_TCP", "on"],
+        ["omd", "config", site, "show", "LIVESTATUS_TCP_TLS"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() == "on"
+
+
+def _omd_config_set(site: str, variable: str, value: str) -> None:
+    result = subprocess.run(
+        ["omd", "config", site, "set", variable, value],
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode != 0:
-        raise SiteBootstrapError(f"omd config set LIVESTATUS_TCP failed:\n{result.stdout}{result.stderr}".strip())
+        raise SiteBootstrapError(f"omd config set {variable} failed:\n{result.stdout}{result.stderr}".strip())
+
+
+def enable_livestatus_tcp(site: str) -> None:
+    """Ensure Livestatus-over-TCP is on and plain text (TLS off) for this site.
+
+    Required unconditionally: the wizard's Phase 7 health check
+    (`livestatus.query_host_states()`) and scripts/mqtt_poller.py connect
+    over TCP, not the site's local UNIX socket, so they can run from a
+    different container/host than Checkmk itself. Both speak plain LQL, so
+    LIVESTATUS_TCP_TLS must be off.
+
+    Bug fixed 2026-09-25: a fresh Checkmk 2.4 site defaults to
+    LIVESTATUS_TCP_TLS=on, which makes `tmp/run/live-tcp` a symlink to
+    `live-tls`; plain LQL clients then got "Connection reset by peer" and
+    the poller failed with "Malformed columns response".
+
+    `omd config set` refuses to run on a running site ("Cannot change
+    config variables while site is running."), so a running site is
+    stopped first and started again afterwards (in `finally`, so a failed
+    set never leaves it down). The earlier set-then-`omd restart` order
+    could never have worked on a running site.
+    """
+    need_tcp = not livestatus_tcp_enabled(site)
+    need_tls_off = livestatus_tcp_tls_enabled(site)
+    if not need_tcp and not need_tls_off:
+        return
+    was_running = site_running(site)
     if was_running:
-        restart = subprocess.run(["omd", "restart", site], capture_output=True, text=True, check=False)
-        if restart.returncode != 0 and "failed" in restart.stdout.lower():
-            raise SiteBootstrapError(f"omd restart failed:\n{restart.stdout}{restart.stderr}".strip())
+        stop = subprocess.run(["omd", "stop", site], capture_output=True, text=True, check=False)
+        if stop.returncode != 0 and "failed" in stop.stdout.lower():
+            raise SiteBootstrapError(f"omd stop failed:\n{stop.stdout}{stop.stderr}".strip())
+    try:
+        if need_tcp:
+            _omd_config_set(site, "LIVESTATUS_TCP", "on")
+        if need_tls_off:
+            _omd_config_set(site, "LIVESTATUS_TCP_TLS", "off")
+    finally:
+        if was_running:
+            start_site(site)
 
 
 def remove_site(site: str) -> str:

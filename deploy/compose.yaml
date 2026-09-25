@@ -27,6 +27,8 @@ services:
       # when it is created. Without it a wiped/recreated checkmk_data volume
       # comes back with Livestatus-over-TCP off (seen live 2026-09-24) and
       # the poller and wizard's Livestatus checks fail until it is set by hand.
+      # It does NOT cover LIVESTATUS_TCP_TLS (no such variable exists); see
+      # the pre-start hook mounted under `volumes:` below.
       - CMK_LIVESTATUS_TCP=on
       - TZ=Asia/Singapore
     ports:
@@ -36,6 +38,18 @@ services:
     volumes:
       - checkmk_data:/omd/sites
       - /etc/localtime:/etc/localtime:ro
+      # Bug fixed 2026-09-25: a fresh 2.4 site defaults to LIVESTATUS_TCP_TLS=on,
+      # which makes port 6557 speak TLS only and breaks the plain-LQL poller and
+      # wizard. The docker docs list no env var for it, so this pre-start hook
+      # turns it off. Verified from the entrypoint source (Checkmk/checkmk,
+      # branch 2.4.0, docker_image/docker-entrypoint.sh): pre-start hooks run as
+      # root before `omd start`, with the site stopped, on every container start
+      # (so it also repairs an already-created site). Not verified: (a) whether
+      # the image ships its own files in /docker-entrypoint.d/pre-start/ (hence
+      # a single-file mount, not the directory); (b) whether the entrypoint
+      # runs under `set -e` (hence the hook always exits 0); (c) that the
+      # 2.4.0-latest tag's entrypoint matches branch 2.4.0.
+      - ./checkmk-hooks/pre-start/10-livestatus-tcp-plaintext.sh:/docker-entrypoint.d/pre-start/10-livestatus-tcp-plaintext.sh:ro,z
     tmpfs:
       - /omd/sites/dmc/tmp:rw,size=512M,mode=1777
     networks:
