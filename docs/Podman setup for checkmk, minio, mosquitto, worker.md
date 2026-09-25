@@ -544,20 +544,24 @@ Nothing here needs repeating on every run except §8.3 itself — dependencies (
 
 ### 8.5. Starting over with a blank site
 
-To run the wizard against a genuinely fresh Checkmk site, remove the Checkmk volume. Removing the Mosquitto volume is optional:
+To run the wizard against a genuinely fresh Checkmk site, remove the Checkmk volume **and** the Mosquitto volume (the second is recommended, see below):
 
 - `checkmk_data` holds the site itself (hosts, folders, rules, tag groups, users, monitoring history). Removing it makes the container's entrypoint create a brand-new `dmc` site on the next start.
-- `mosquitto_data` holds the broker's **retained** messages, which is all the dashboard reads (`lan/devices/{id}/...`, `lan/devices/topology`). On startup the poller reads every retained `lan/devices/{id}/*` topic and clears the ones whose host is not on the site. This happens on its first cycle that has a confirmed host list: either Livestatus returned hosts, or Livestatus returned none and the REST API confirmed zero configured hosts (which needs `CMK_REST_SECRET`). So old hosts disappear from the dashboard without touching the broker volume. Removing `mosquitto_data` is still worth doing if you also want the old site's `lan/events/recent` feed and per-device history gone; the sweep does not rewrite the global events feed.
+- `mosquitto_data` holds the broker's **retained** messages, which is all the dashboard reads (`lan/devices/{id}/...`, `lan/devices/topology`). On startup the poller reads every retained `lan/devices/{id}/*` topic and clears the ones whose host is not on the site. This happens on its first cycle that has a confirmed host list: either Livestatus returned hosts, or Livestatus returned none and the REST API confirmed zero configured hosts (which needs `CMK_REST_SECRET`). So old hosts disappear from the dashboard without touching the broker volume. The sweep does not rewrite the global `lan/events/recent` feed, though, and after a poller restart the old hosts' `removed` events carry no previous state (`from`/`to` both empty), so the dashboard's history lists them as "unknown → unknown". Remove `mosquitto_data` together with `checkmk_data` so the old site's event history goes with it.
 
 Run from `deploy/` (compose prefixes volume names with its project name — `deploy_` here; confirm with `podman volume ls` and, if unsure, `podman inspect checkmk --format '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{"\n"}}{{end}}'`):
 
 ```bash
 podman compose down
-podman volume rm deploy_checkmk_data
+podman volume rm deploy_checkmk_data deploy_mosquitto_data
 podman compose up -d
 ```
 
-To also clear the broker's old events feed and history, remove `deploy_mosquitto_data` in the same `podman volume rm` command (optional).
+If you only want to clear the events feed and keep everything else in the broker, publish an empty retained message instead (the poller rebuilds the feed from empty):
+
+```bash
+podman exec mosquitto mosquitto_pub -h localhost -u poller -P '<poller password>' -t lan/events/recent -r -n
+```
 
 If you rebuilt Checkmk **without** a full `podman compose down`, the poller kept running. The sweep runs only at poller startup, so run `podman compose restart poller` (poller restart) afterwards.
 

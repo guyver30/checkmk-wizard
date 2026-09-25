@@ -205,3 +205,6 @@
 - **2026-09-25 08:43** — checked dashboard vs Checkmk GUI: 18 hosts, no ghosts.
 - **2026-09-25 08:45** — asked what the next phase is about.
 - **2026-09-25 08:48** — reported LIVESTATUS_TCP_TLS shows off after recreate.
+- **2026-09-25 08:49** — asked for the steps to wipe the checkmk_data volume.
+- **2026-09-25 08:53** — TLS off + TCP on verified on blank site; dashboard now shows no hosts but history lists old hosts unknown -> unknown.
+- **2026-09-25 08:55** — decided: better to also wipe the event history whenever checkmk_data is wiped (update docs 8.5).
