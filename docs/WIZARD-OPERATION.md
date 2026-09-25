@@ -108,7 +108,10 @@ Checkmk are simply re-detected or re-created).
      `CMK_PASSWORD` was set to), pre-filled from the wizard's own
      `CMK_PASSWORD` env var when set (`os.environ.get("CMK_PASSWORD", "")`,
      mirroring the `CMK_SITE_ID` pre-fill above) so pressing Enter accepts
-     it — there's no local automation-secret file
+     it. Right after, `_prompt_change_cmkadmin_password()` offers (default
+     yes) to change that password via `change_cmkadmin_password()` (REST
+     user-edit, same helper `_create_fresh_site()` uses), and the *new*
+     password is what's passed on to the steps below. There's no local automation-secret file
      to read, so if given, it's used to call `bootstrap_automation_user()`
      (`api.py:316-460`, the same mechanism `_create_fresh_site()` uses right
      after `omd create` — see step 4 below) and the **returned secret is
