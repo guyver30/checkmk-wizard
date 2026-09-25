@@ -2162,6 +2162,35 @@ async def _resolve_agent_registration_server(hosts: list[OnboardedHost], checkmk
         # machine) — `checkmk_host` is actually correct here, nothing to fix.
         return checkmk_host
 
+    if not site.omd_installed():
+        # Container mode (2026-09-25): the wizard runs in the worker
+        # container, so `_local_ipv4_addresses()` would only find the
+        # container's own Podman-bridge address (10.89.x.x) — unreachable
+        # from a LAN target. What a target needs is the Podman *host's*
+        # address, since compose publishes the agent receiver (8000) and
+        # agent pull (6556) there. The operator fixes it once, in
+        # deploy/.env, before the stack starts.
+        public_host = os.environ.get("CMK_PUBLIC_HOST", "").strip()
+        if public_host:
+            console.print(
+                f"Linux/Windows hosts will register against [bold]{public_host}[/bold] "
+                "(CMK_PUBLIC_HOST). To change it, edit CMK_PUBLIC_HOST in deploy/.env and "
+                "recreate the worker (`podman compose up -d worker`)."
+            )
+            return public_host
+        console.print(
+            f"[yellow]Remote hosts can't reach this Checkmk server through '{checkmk_host}', and "
+            "CMK_PUBLIC_HOST isn't set. Set it in deploy/.env to the address of the machine "
+            "running Podman (the one publishing ports 8000 and 6556) to skip this prompt.[/yellow]"
+        )
+        typed = (
+            await questionary.text(
+                "Address of the Podman host that Linux/Windows hosts should register against "
+                f"(blank to keep using '{checkmk_host}' anyway):"
+            ).ask_async()
+        ).strip()
+        return typed or checkmk_host
+
     console.print(
         f"[yellow]This Checkmk site is configured to be reached at '{checkmk_host}', but at least one "
         "host being onboarded is remote — a remote target can't reach this server back through "

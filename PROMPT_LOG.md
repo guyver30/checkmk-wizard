@@ -224,3 +224,6 @@
 - **2026-09-25 12:05** — promotion asks device type per host, but retag uses a full list with number keys; inconsistent. After Phase 4 goes to Phase 5 and remaining (non-promoted) hosts cannot be tagged.
 - **2026-09-25 12:12** — chose option A: one shared number-key device-type screen for promoted + unselected pending + onboarded hosts; drop per-host device-type prompt.
 - **2026-09-25 12:30** — (implemented) option A shared device-type screen.
+- **2026-09-25 12:40** — Phase 5 asks which address Linux/Windows hosts should use to reach the Checkmk server, offering 10.89.1.68 — where does that IP come from?
+- **2026-09-25 12:50** — implement CMK_PUBLIC_HOST in compose/.env (prefilled before start); Phase 5 just shows it (container mode); tell user to change it in .env if IP needs changing.
+- **2026-09-25 13:00** — (implemented) CMK_PUBLIC_HOST.

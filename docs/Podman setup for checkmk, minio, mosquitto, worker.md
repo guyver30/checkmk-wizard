@@ -151,6 +151,8 @@ A few things worth knowing that aren't obvious just from reading those files:
 
 **Note on `CMK_PASSWORD`:** this sets the initial `cmkadmin` login password, and only when Checkmk first creates the site. checkmk-wizard's container mode asks for it at Phase 1 (it is not pre-filled — the prompt tells you the default is `cmkadmin` on a fresh site) so it can bootstrap the site's `automation`/`agent_registration` REST users itself (see §8.3), then offers to change it via the REST API. Keep `cmkadmin` here as the shipped default; there is no need to edit this file after changing the password in the wizard.
 
+**Note on `CMK_PUBLIC_HOST`:** set this in `deploy/.env` (see `deploy/.env.example`) to the address of the machine running Podman, as your LAN hosts reach it (e.g. `192.168.1.20`) — the one publishing ports 8000 (agent registration) and 6556 (agent pull). The `worker` passes it to checkmk-wizard, whose Phase 5 shows it as the address Linux/Windows agents register against (`cmk-agent-ctl register --server <address>:8000`) instead of asking. The worker can't discover it itself: it only sees its own `10.89.x.x` bridge address, which LAN hosts can't reach. If it needs to change, edit it in `deploy/.env` and run `podman compose up -d worker`. Left empty, the wizard warns and asks for the address by hand.
+
 **Note on `dashboard/js/config.js` (dashboard, Phase 11):** the `dashboard` service (§6) has no
 server-side process and no `environment:` block of its own — every per-deployment setting a
 browser-served static site needs instead lives in this one classic script, loaded before every

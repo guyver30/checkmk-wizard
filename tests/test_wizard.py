@@ -2998,6 +2998,7 @@ async def test_resolve_agent_registration_server_bare_hostname_triggers_prompt(m
     # internal DNS name `checkmk`, which the old loopback-only guard let
     # through into --server, where no LAN target can resolve it.
     monkeypatch.setattr("checkmk_wizard.wizard._local_ipv4_addresses", lambda: ["192.168.1.10"])
+    monkeypatch.setattr("checkmk_wizard.wizard.site.omd_installed", lambda: True)  # host mode
 
     async def fake_ask(self, patch_stdout=False, kbi_msg=""):
         return "192.168.1.10"
@@ -3006,6 +3007,43 @@ async def test_resolve_agent_registration_server_bare_hostname_triggers_prompt(m
 
     hosts = [OnboardedHost(ip="10.0.0.5", hostname="test-linux", folder="/", os_family="linux")]
     assert await _resolve_agent_registration_server(hosts, "checkmk") == "192.168.1.10"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_container_mode_uses_cmk_public_host(monkeypatch):
+    # Container mode: the worker only sees its own Podman-bridge address, so
+    # interface discovery must not run at all and nothing is prompted — the
+    # operator sets CMK_PUBLIC_HOST in deploy/.env.
+    monkeypatch.setattr("checkmk_wizard.wizard.site.omd_installed", lambda: False)
+    monkeypatch.setenv("CMK_PUBLIC_HOST", " 192.168.1.20 ")
+
+    def fail(*args, **kwargs):
+        raise AssertionError("must not discover interfaces or prompt in container mode with CMK_PUBLIC_HOST")
+
+    monkeypatch.setattr("checkmk_wizard.wizard._local_ipv4_addresses", fail)
+    monkeypatch.setattr(questionary.Question, "ask_async", fail)
+
+    hosts = [OnboardedHost(ip="10.0.0.5", hostname="test-linux", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "checkmk") == "192.168.1.20"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_registration_server_container_mode_without_public_host_prompts_text(monkeypatch):
+    monkeypatch.setattr("checkmk_wizard.wizard.site.omd_installed", lambda: False)
+    monkeypatch.delenv("CMK_PUBLIC_HOST", raising=False)
+
+    def fail(*args, **kwargs):
+        raise AssertionError("container-local addresses must not be offered")
+
+    monkeypatch.setattr("checkmk_wizard.wizard._local_ipv4_addresses", fail)
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return "192.168.1.30"
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    hosts = [OnboardedHost(ip="10.0.0.5", hostname="test-linux", folder="/", os_family="linux")]
+    assert await _resolve_agent_registration_server(hosts, "checkmk") == "192.168.1.30"
 
 
 def test_print_linux_manual_includes_sudo(capsys, monkeypatch):
