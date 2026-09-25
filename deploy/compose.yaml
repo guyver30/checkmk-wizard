@@ -186,7 +186,7 @@ services:
       - POLL_INTERVAL_SECONDS=60
       - RECONCILE_TIMEOUT_SECONDS=5
       - HISTORY_MAX_ENTRIES=20
-      - EVENTS_MAX_ENTRIES=50
+      - EVENTS_MAX_ENTRIES=1000
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
       # Phase 10 (D-03/D-04): the poller's folder-lookup REST call.

@@ -61,7 +61,8 @@ The remaining constants in `src/lib/config.ts`:
 - `POLL_INTERVAL_SECONDS` / `STALENESS_FACTOR` — must be kept in step with
   `scripts/mqtt_poller.py`'s own defaults; a mismatch would make staleness flip at the wrong
   time.
-- `HISTORY_MAX_ENTRIES` — bounds the event-history list.
+- `HISTORY_MAX_ENTRIES` — mirrors the poller's per-device history bound (20); it does not
+  bound the global event feed (see "Event history" below).
 - `CHECKMK_SITE` — the Checkmk site name used to build deep links.
 - `TOPOLOGY_EDITOR_SECRET` — ships as the literal placeholder `<TOPOLOGY_EDITOR_SECRET>`.
   Unlike `WS_USERNAME`/`WS_PASSWORD`, this credential is WRITE-capable: it edits/adds
@@ -117,6 +118,23 @@ both go live.
 Edit mode also has a 5-minute idle auto-exit: if the toggle is left on with no interaction, it
 switches itself off and shows a one-time notice, so a browser tab left open overnight doesn't
 sit in a writable state indefinitely.
+
+## 5a. Event history
+
+The centre-bottom pane lists state-change events newest-first. Each row shows the event's
+local date and time as `YYYY-MM-DD HH:MM:SS` (the raw ISO value is on the `<time>` element's
+`datetime` attribute).
+
+A From / To filter above the list narrows the rows to an inclusive range:
+
+- Either bound may be left empty (open-ended). To includes its whole minute, since the
+  `datetime-local` input has minute granularity.
+- A From later than To shows an inline error and leaves the list unfiltered.
+- Clear resets both bounds; when events exist but none match, the pane says "No events in
+  this range" (distinct from "No recent events" for an empty feed).
+- Filtering is client-side only, over the retained `lan/events/recent` array. That array is
+  capped by the poller's `EVENTS_MAX_ENTRIES` (default 1000, about 160 KB when full), so the
+  range can only reach as far back as the last 1000 events.
 
 ## 6. Version pins and why
 
