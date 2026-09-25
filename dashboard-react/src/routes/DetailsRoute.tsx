@@ -2,6 +2,7 @@ import { useSearchParams } from "react-router";
 import { Badge, ProgressCircle, Table } from "kone-design-system";
 import type { BadgeColor, ProgressColor, TableColumn } from "kone-design-system";
 import { gaugeColor, otherMountsLabel, smartBadge } from "../lib/gauges";
+import { classifyAgentServices } from "../lib/agentDetail";
 import { compareServices } from "../lib/serviceSort";
 import { displayName, formatClock } from "../lib/display";
 import { StateBadge, StateBadgeForState } from "../components/StateBadge";
@@ -19,6 +20,7 @@ const NO_METRICS_TEXT = "No agent metrics available for this device.";
 const SERVICES_NOT_ARRIVED_TEXT =
   "Service data has not arrived yet — it should appear within one poll cycle.";
 const NO_ADDITIONAL_SERVICES_TEXT = "No additional services.";
+const NO_CHOSEN_SERVICES_TEXT = "No services were selected for monitoring in the wizard.";
 const NO_HISTORY_TEXT = "No recent transitions for this device.";
 
 const SERVICE_COLUMNS: TableColumn<ServiceEntry>[] = [
@@ -122,6 +124,117 @@ export function DetailsRoute() {
       </div>
     ) : undefined;
 
+  const gauges = (
+    hasAnyGauge ? (
+          <section className="bg-bg-surface rounded-lg shadow-card p-6">
+            <div className="flex flex-row flex-wrap items-start justify-center gap-8">
+              {isPercent(device.cpu_percent) && (
+                <div className="flex flex-col items-center gap-2" aria-label="CPU utilisation">
+                  <span className="relative inline-flex">
+                    <ProgressCircle
+                      value={device.cpu_percent}
+                      color={gaugeColor(device.cpu_percent, device.cpu_warn, device.cpu_crit)}
+                      size={96}
+                      strokeWidth={8}
+                      showValue={false}
+                    />
+                    <GaugeValue percent={device.cpu_percent} />
+                  </span>
+                  <span className="text-sm font-semibold">CPU</span>
+                </div>
+              )}
+              {isPercent(device.ram_percent) && (
+                <div className="flex flex-col items-center gap-2" aria-label="Memory used">
+                  <span className="relative inline-flex">
+                    <ProgressCircle
+                      value={device.ram_percent}
+                      color={gaugeColor(device.ram_percent, device.ram_warn, device.ram_crit)}
+                      size={96}
+                      strokeWidth={8}
+                      showValue={false}
+                    />
+                    <GaugeValue percent={device.ram_percent} />
+                  </span>
+                  <span className="text-sm font-semibold">RAM</span>
+                </div>
+              )}
+              {isPercent(device.disk_percent) && (
+                <div className="flex flex-col items-center gap-2" aria-label="Disk used">
+                  <span className="relative inline-flex">
+                    <ProgressCircle
+                      value={device.disk_percent}
+                      color={gaugeColor(device.disk_percent, device.disk_warn, device.disk_crit)}
+                      size={96}
+                      strokeWidth={8}
+                      showValue={false}
+                    />
+                    <GaugeValue percent={device.disk_percent} />
+                  </span>
+                  <span className="text-sm font-semibold">Disk</span>
+                  {diskExtra}
+                </div>
+              )}
+            </div>
+          </section>
+        ) : (
+          <p>{NO_METRICS_TEXT}</p>
+        )
+  );
+
+  // Agent hosts get the focused view (2026-09-25): gauges, SMART (inside the disk gauge),
+  // agent connection, uptime, the services chosen in the wizard and the monitored TCP ports
+  // -- no generic service table and no history. Hosts without an agent keep the full view.
+  const agent = services ? classifyAgentServices(services) : undefined;
+  if (agent?.isAgentHost) {
+    const chosen = agent.chosenServices.slice().sort(compareServices);
+    const ports = agent.tcpPorts.slice().sort(compareServices);
+    return (
+      <main className="px-4">
+        <div className="flex items-center gap-2">
+          <h1 className="text-xl font-semibold">{displayName(device)}</h1>
+          <StateBadge device={device} />
+        </div>
+
+        {gauges}
+
+        <section className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+          <span className="flex items-center gap-2">
+            <span className="font-semibold">Checkmk agent</span>
+            {agent.agentConnected === null ? (
+              <Badge variant="soft" color="neutral">Unknown</Badge>
+            ) : (
+              <Badge variant="soft" color={agent.agentConnected ? "success" : "danger"}>
+                {agent.agentConnected ? "Connected" : "Not connected"}
+              </Badge>
+            )}
+          </span>
+          {agent.uptime && (
+            <span className="flex items-center gap-2">
+              <span className="font-semibold">Uptime</span>
+              <span>{agent.uptime.plugin_output}</span>
+            </span>
+          )}
+        </section>
+
+        <section className="mt-3">
+          <h2 className="text-sm font-semibold">Monitored services</h2>
+          {chosen.length === 0 ? (
+            <p className="text-sm text-fg-tertiary">{NO_CHOSEN_SERVICES_TEXT}</p>
+          ) : (
+            <Table columns={SERVICE_COLUMNS} rows={chosen} rowKey={(row) => row.description ?? ""} />
+          )}
+        </section>
+
+        {ports.length > 0 && (
+          <section className="mt-3">
+            <h2 className="text-sm font-semibold">TCP ports</h2>
+            <Table columns={SERVICE_COLUMNS} rows={ports} rowKey={(row) => row.description ?? ""} />
+          </section>
+        )}
+      </main>
+    );
+  }
+
   // Copied before sorting -- sorting the store's array in place would mutate shared state,
   // the exact hazard EventHistory.tsx's dated slice().reverse() comment documents.
   const sortedServices = (services ?? []).slice().sort(compareServices);
@@ -137,60 +250,7 @@ export function DetailsRoute() {
         <StateBadge device={device} />
       </div>
 
-      {hasAnyGauge ? (
-        <section className="bg-bg-surface rounded-lg shadow-card p-6">
-          <div className="flex flex-row flex-wrap items-start justify-center gap-8">
-            {isPercent(device.cpu_percent) && (
-              <div className="flex flex-col items-center gap-2" aria-label="CPU utilisation">
-                <span className="relative inline-flex">
-                  <ProgressCircle
-                    value={device.cpu_percent}
-                    color={gaugeColor(device.cpu_percent, device.cpu_warn, device.cpu_crit)}
-                    size={96}
-                    strokeWidth={8}
-                    showValue={false}
-                  />
-                  <GaugeValue percent={device.cpu_percent} />
-                </span>
-                <span className="text-sm font-semibold">CPU</span>
-              </div>
-            )}
-            {isPercent(device.ram_percent) && (
-              <div className="flex flex-col items-center gap-2" aria-label="Memory used">
-                <span className="relative inline-flex">
-                  <ProgressCircle
-                    value={device.ram_percent}
-                    color={gaugeColor(device.ram_percent, device.ram_warn, device.ram_crit)}
-                    size={96}
-                    strokeWidth={8}
-                    showValue={false}
-                  />
-                  <GaugeValue percent={device.ram_percent} />
-                </span>
-                <span className="text-sm font-semibold">RAM</span>
-              </div>
-            )}
-            {isPercent(device.disk_percent) && (
-              <div className="flex flex-col items-center gap-2" aria-label="Disk used">
-                <span className="relative inline-flex">
-                  <ProgressCircle
-                    value={device.disk_percent}
-                    color={gaugeColor(device.disk_percent, device.disk_warn, device.disk_crit)}
-                    size={96}
-                    strokeWidth={8}
-                    showValue={false}
-                  />
-                  <GaugeValue percent={device.disk_percent} />
-                </span>
-                <span className="text-sm font-semibold">Disk</span>
-                {diskExtra}
-              </div>
-            )}
-          </div>
-        </section>
-      ) : (
-        <p>{NO_METRICS_TEXT}</p>
-      )}
+      {gauges}
 
       <section className="mt-3">
         {services === undefined ? (

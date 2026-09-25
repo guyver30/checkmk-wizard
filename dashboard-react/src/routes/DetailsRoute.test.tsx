@@ -192,6 +192,56 @@ describe("DetailsRoute", () => {
     expect(screen.getByText("CRIT - not running")).toBeInTheDocument();
   });
 
+  it("shows only the focused agent view for an agent host", () => {
+    act(() => {
+      useAppStore.getState().handleMessage(
+        "lan/devices/web1/status",
+        encode({ id: "web1", state: "OK", cpu_percent: 10, ram_percent: 20, disk_percent: 30 }),
+      );
+      useAppStore.getState().handleMessage(
+        "lan/devices/web1/services",
+        encode([
+          { description: "Check_MK Agent", state: "OK", plugin_output: "Version: 2.4.0p35" },
+          { description: "Check_MK", state: "OK", plugin_output: "Success" },
+          { description: "Uptime", state: "OK", plugin_output: "Up since Sep 20, uptime: 5 days" },
+          { description: "Systemd Service ssh", state: "OK", plugin_output: "Running" },
+          { description: "TCP Port 22 (expected open)", state: "OK", plugin_output: "TCP OK" },
+          { description: "Interface 2", state: "OK", plugin_output: "should not be shown" },
+          { description: "PING", state: "OK", plugin_output: "should not be shown either" },
+        ]),
+      );
+      useAppStore.getState().handleMessage(
+        "lan/devices/web1/history",
+        encode([{ from: "OK", to: "CRIT", timestamp: "2026-09-25T10:00:00Z" }]),
+      );
+    });
+    renderAt("/details?id=web1");
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByText("Up since Sep 20, uptime: 5 days")).toBeInTheDocument();
+    expect(screen.getByText("Systemd Service ssh")).toBeInTheDocument();
+    expect(screen.getByText("TCP Port 22 (expected open)")).toBeInTheDocument();
+    expect(screen.queryByText("Interface 2")).not.toBeInTheDocument();
+    expect(screen.queryByText("PING")).not.toBeInTheDocument();
+    expect(screen.queryByText("History")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("progressbar")).toHaveLength(3);
+  });
+
+  it("shows 'Not connected' when the agent connection check is not OK", () => {
+    act(() => {
+      useAppStore.getState().handleMessage("lan/devices/web1/status", encode({ id: "web1", state: "CRIT" }));
+      useAppStore.getState().handleMessage(
+        "lan/devices/web1/services",
+        encode([
+          { description: "Check_MK Agent", state: "OK", plugin_output: "" },
+          { description: "Check_MK", state: "CRIT", plugin_output: "Timeout" },
+        ]),
+      );
+    });
+    renderAt("/details?id=web1");
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByText("No services were selected for monitoring in the wizard.")).toBeInTheDocument();
+  });
+
   it("shows the not-yet-arrived and empty-list service copy at the right times", () => {
     act(() => {
       useAppStore.getState().handleMessage("lan/devices/web1/status", encode({ id: "web1", state: "OK" }));

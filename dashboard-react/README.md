@@ -89,6 +89,15 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
   rest of the dashboard, updated in place as MQTT messages arrive.
 - Edges are drawn parent→child from each host's Checkmk `parents` attribute.
 - Clicking a node opens its detail page (`/details?id=...`).
+  - **Agent hosts** (those with a `Check_MK Agent` service) get a focused page: the CPU/RAM/disk
+    gauges (with the SMART badge if installed), whether the Checkmk agent is connected (the
+    `Check_MK` service state), uptime (the `Uptime` service), only the services chosen in the
+    wizard (`Systemd Service <unit>` / `Service <name>` rows) and the monitored TCP ports
+    (`TCP Port <N> (expected open)`). Those Checkmk service names are the 2.4 defaults and were
+    not live-verified — they are constants in `src/lib/agentDetail.ts`.
+  - Other hosts (SNMP/ping) keep the full page: the service table and state history.
+  - The nav bar has only **Overview**; the old placeholder "Devices" page was removed
+    (2026-09-25).
 - A saved position (`map_position`, a Checkmk host label written by edit mode) is applied only
   the first time a node appears on the map; positions are never re-applied to a node a viewer
   has since dragged locally, and the map never moves a node out from under someone looking at
