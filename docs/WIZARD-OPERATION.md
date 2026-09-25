@@ -105,10 +105,9 @@ Checkmk are simply re-detected or re-created).
 
      **Credential bootstrap (`wizard.py:386-400`):** prompts for the
      `cmkadmin` password (whatever the Checkmk container's own
-     `CMK_PASSWORD` was set to), pre-filled from the wizard's own
-     `CMK_PASSWORD` env var when set (`os.environ.get("CMK_PASSWORD", "")`,
-     mirroring the `CMK_SITE_ID` pre-fill above) so pressing Enter accepts
-     it. Right after, `_prompt_change_cmkadmin_password()` offers (default
+     `CMK_PASSWORD` was set to), **not** pre-filled — the prompt text
+     just says that a freshly created, never-changed site uses the compose
+     default `cmkadmin`. Right after, `_prompt_change_cmkadmin_password()` offers (default
      yes) to change that password via `change_cmkadmin_password()` (REST
      user-edit, same helper `_create_fresh_site()` uses), and the *new*
      password is what's passed on to the steps below. There's no local automation-secret file

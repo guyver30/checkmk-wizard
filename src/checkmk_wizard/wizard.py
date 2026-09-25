@@ -260,7 +260,7 @@ async def _prompt_change_cmkadmin_password(
 
     `reason` completes the "(recommended — ...)" hint: a wizard-created
     site has a random password, while a container-mode site carries
-    whatever CMK_PASSWORD the compose file set (often the shipped default).
+    whatever CMK_PASSWORD the compose file set (the shipped default is 'cmkadmin').
     """
     change = await questionary.confirm(
         f"Change the cmkadmin password now? (recommended — {reason})",
@@ -551,42 +551,28 @@ async def phase1_site_bringup() -> CheckmkConnection:
         # the 'automation' user itself via REST, the same mechanism
         # _create_fresh_site() below uses for a wizard-created site.
         #
-        # Pre-filled from the same CMK_PASSWORD env var the Checkmk
-        # container's own entrypoint uses (mirroring the CMK_SITE_ID
-        # pre-fill above) — safe because the prompt stays masked
-        # (questionary.password) and the value is never persisted, only
-        # sent once over REST to bootstrap_automation_user().
-        cmk_password_default = os.environ.get("CMK_PASSWORD", "")
-        cmkadmin_password_message = (
-            "cmkadmin password (defaulted from the CMK_PASSWORD env var — leave "
-            "blank to skip and provide an automation secret directly instead):"
-            if cmk_password_default
-            else "cmkadmin password (set when the Checkmk container was created — leave "
-            "blank to skip and provide an automation secret directly instead):"
-        )
+        # Deliberately NOT pre-filled from CMK_PASSWORD: the wizard's own
+        # container doesn't carry it, and the operator may already have
+        # changed it here on an earlier run. The prompt just states the
+        # first-start default (deploy/compose.yaml ships cmkadmin/cmkadmin).
         cmkadmin_password = await questionary.password(
-            cmkadmin_password_message,
-            default=cmk_password_default,
+            "cmkadmin password — if the site was just created and the password was never "
+            "changed, it is the compose default 'cmkadmin' (leave blank to skip and "
+            "provide an automation secret directly instead):"
         ).ask_async()
         if cmkadmin_password:
             # Container mode has no wizard-generated password, so offer the
             # same REST-based change (change_cmkadmin_password) against the
-            # password just entered — typically the compose CMK_PASSWORD
-            # default. The new value is used for the bootstrap below.
-            old_password = cmkadmin_password
+            # password just entered — typically the compose default 'cmkadmin'.
+            # The new value is used for the bootstrap below; Checkmk only reads
+            # CMK_PASSWORD on first site creation, so compose needs no update.
             cmkadmin_password = await _prompt_change_cmkadmin_password(
                 checkmk_host,
                 site_name,
                 cmkadmin_password,
                 checkmk_port,
-                reason="the compose file's CMK_PASSWORD is a well-known default",
+                reason="'cmkadmin' is a well-known default",
             )
-            if cmkadmin_password != old_password and cmk_password_default:
-                console.print(
-                    "[yellow]Update CMK_PASSWORD on the checkmk and worker services "
-                    "(compose.yaml) if you want the prompt above pre-filled with the new "
-                    "value next run — Checkmk itself only reads it on first site creation.[/yellow]"
-                )
             try:
                 # With env_secret set, an existing 'automation' user is
                 # updated to that secret rather than rejected, so the
