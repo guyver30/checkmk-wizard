@@ -219,3 +219,8 @@
 - **2026-09-25 11:05** — keep default cmkadmin psw in compose.yaml, but do not prefill it in the wizard; instead tell the user the default is 'cmkadmin' if site was just created and psw unchanged, then ask if it should be changed; no need to update compose.yaml with the new psw.
 - **2026-09-25 11:20** — phase 3: choosing "no" makes wizard exit without scanning, leaving folders with daily network scan. Want flow by case: (1) new site: folders+subnet scan then tag/name/promote; (2) existing site: optional new folders, then retag/name/promote existing hosts; (3) existing site where daily folder scan found new devices — what to do?
 - **2026-09-25 11:30** — approved discovery flow: Phase 3 collects pending placeholders (IP-named, inert, no marker label) from Checkmk plus own scan; marker label added by Phase 5 on promoted hosts; new site = mandatory scan; existing site scan default yes only if folders just added.
+- **2026-09-25 11:50** — double check: tagging/retagging and promoting (snmp/agent/ping) always available regardless of initial condition (new site, existing site, existing site with new hosts)? do not want to launch wizard 2-3 times for one full flow.
+- **2026-09-25 11:55** — no need to look at gaps 1/2 (monitoring-method change, manual host add).
+- **2026-09-25 12:05** — promotion asks device type per host, but retag uses a full list with number keys; inconsistent. After Phase 4 goes to Phase 5 and remaining (non-promoted) hosts cannot be tagged.
+- **2026-09-25 12:12** — chose option A: one shared number-key device-type screen for promoted + unselected pending + onboarded hosts; drop per-host device-type prompt.
+- **2026-09-25 12:30** — (implemented) option A shared device-type screen.
