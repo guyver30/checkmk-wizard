@@ -109,6 +109,7 @@ None.
 | 260925-cqn | Event history shows date+time per row and gains a From/To datetime-local range filter with Clear and a distinct empty state; EVENTS_MAX_ENTRIES raised 50 -> 1000 (payload measured 161000 bytes; broker/client limits checked, live end-to-end publish not tested) | 2026-09-25 | d16d1a0 | [260925-cqn-event-history-date-time-display-and-date](./quick/260925-cqn-event-history-date-time-display-and-date/) |
 | 260925-jah | Rework Phase 3 discovery: mandatory scan on new site, pending (unpromoted) hosts from Checkmk merged into Phase 4, scan default only when folders just added, cmk_wizard=onboarded marker label | 2026-09-25 | d8f02b3 | [260925-jah-rework-phase-3-discovery-mandatory-scan-](./quick/260925-jah-rework-phase-3-discovery-mandatory-scan-/) |
 | 260925-k2x | Phase 4: one shared number-key device-type screen for promoted, unpromoted and onboarded hosts; per-host device-type prompt removed | 2026-09-25 | b605612 | [260925-k2x-shared-device-type-screen](./quick/260925-k2x-shared-device-type-screen/) |
+| 260925-m4p | Container mode: agent registration address from CMK_PUBLIC_HOST (compose worker env, deploy/.env) instead of container-local interface discovery | 2026-09-25 | 4afda04 | [260925-m4p-cmk-public-host](./quick/260925-m4p-cmk-public-host/) |
 
 ## Deferred Items
 
