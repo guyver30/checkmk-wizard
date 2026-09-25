@@ -1,11 +1,11 @@
-// One row in the centre-bottom event history pane. Ports the time / device-name / from→to
+// One row in the centre-bottom event history pane. Ports the date+time / device-name / from→to
 // structure of dashboard/js/render-shell.js's eventRowElement() into a component, applying
 // D-35's full rule for the device column: prefer the alias (displayName), fall back to the
 // raw device_id, middle-truncate whatever that produced, and always keep the untruncated
 // value one hover (or `title`) away.
 
 import { Tooltip } from "kone-design-system";
-import { displayName, formatClock } from "../lib/display";
+import { displayName, formatDateTime } from "../lib/display";
 import { middleTruncate } from "../lib/truncate";
 import type { DevicePayload, EventEntry } from "../lib/types";
 import { StateBadgeForState } from "./StateBadge";
@@ -30,9 +30,9 @@ export function EventRow({ entry, device, labelBudget = DEFAULT_LABEL_BUDGET }: 
 
   return (
     <div className="flex items-center gap-2 py-1.5 text-sm">
-      <span className="shrink-0 font-mono text-xs text-fg-tertiary">
-        {formatClock(entry?.timestamp)}
-      </span>
+      <time dateTime={entry?.timestamp ?? undefined} className="shrink-0 font-mono text-xs text-fg-tertiary">
+        {formatDateTime(entry?.timestamp)}
+      </time>
       <Tooltip content={rawLabel} position="top">
         <span className="min-w-0 flex-1 truncate text-fg-primary" title={rawLabel}>
           {truncatedLabel}

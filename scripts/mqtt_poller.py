@@ -57,7 +57,9 @@ DEFAULT_LIVESTATUS_PORT = 6557
 DEFAULT_MQTT_PORT = 1883
 DEFAULT_POLL_INTERVAL_SECONDS = 60
 DEFAULT_HISTORY_MAX_ENTRIES = 20
-DEFAULT_EVENTS_MAX_ENTRIES = 50
+# 2026-09-25: raised from 50 by operator decision so the dashboard's date-range
+# filter has days of history to work with (~160 KB retained payload at 1000).
+DEFAULT_EVENTS_MAX_ENTRIES = 1000
 # Phase 12 (D-14): bounds `lan/devices/{id}/service_history`, the same
 # convention as DEFAULT_HISTORY_MAX_ENTRIES above but on its own topic and
 # its own env var (SERVICE_HISTORY_MAX_ENTRIES) so the two bounded logs'
