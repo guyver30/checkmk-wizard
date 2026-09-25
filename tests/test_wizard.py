@@ -3010,6 +3010,21 @@ async def test_resolve_agent_registration_server_bare_hostname_triggers_prompt(m
 
 
 @pytest.mark.asyncio
+async def test_resolve_agent_registration_server_ignores_hosts_without_an_agent(monkeypatch):
+    # Regression: promoting only ping/SNMP hosts (no agent to register) must
+    # not trigger the "host being onboarded is remote" warning or any prompt.
+    def fail(*args, **kwargs):
+        raise AssertionError("no agent host -> no prompt")
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fail)
+    hosts = [
+        OnboardedHost(ip="192.168.0.1", hostname="router", folder="/", os_family="ping"),
+        OnboardedHost(ip="192.168.0.2", hostname="sw", folder="/", os_family="snmp"),
+    ]
+    assert await _resolve_agent_registration_server(hosts, "checkmk") == "checkmk"
+
+
+@pytest.mark.asyncio
 async def test_resolve_agent_registration_server_container_mode_uses_cmk_public_host(monkeypatch):
     # Container mode: the worker only sees its own Podman-bridge address, so
     # interface discovery must not run at all and nothing is prompted — the

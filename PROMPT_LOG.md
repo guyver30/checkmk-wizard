@@ -227,3 +227,5 @@
 - **2026-09-25 12:40** — Phase 5 asks which address Linux/Windows hosts should use to reach the Checkmk server, offering 10.89.1.68 — where does that IP come from?
 - **2026-09-25 12:50** — implement CMK_PUBLIC_HOST in compose/.env (prefilled before start); Phase 5 just shows it (container mode); tell user to change it in .env if IP needs changing.
 - **2026-09-25 13:00** — (implemented) CMK_PUBLIC_HOST.
+- **2026-09-25 13:10** — no host promoted as linux/windows (no agent), yet Phase 5 shows "at least one host being onboarded is remote" registration-address warning. Why?
+- **2026-09-25 13:15** — (fixed) registration-address check ignores non-agent hosts.

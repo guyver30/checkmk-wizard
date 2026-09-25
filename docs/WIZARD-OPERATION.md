@@ -911,6 +911,11 @@ itself is untouched, since it's still correct for the wizard's own local
 REST API calls to Checkmk (those run from wherever the wizard process is,
 not from the remote target).
 
+**Only agent hosts count (fixed 2026-09-25):** the "at least one host being
+onboarded is remote" check considers just `linux`/`windows` hosts — snmp/ping
+hosts never register, so a run promoting only those gets no warning and no
+prompt.
+
 **Container mode (changed 2026-09-25):** the interface discovery above is
 skipped when `omd` isn't on PATH. In a `worker` container it can only find the
 container's own Podman-bridge address (`10.89.x.x`), which no LAN target can
