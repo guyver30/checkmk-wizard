@@ -107,6 +107,7 @@ None.
 | 260925-b81 | Poller sweeps stale retained lan/devices/* topics at startup (gated on a trustworthy Checkmk answer), so a Checkmk site rebuild no longer needs the mosquitto volume wipe; docs 8.5 updated | 2026-09-25 | 23cb9c6 | [260925-b81-poller-stale-retained-topic-cleanup](./quick/260925-b81-poller-stale-retained-topic-cleanup/) |
 | 260925-bzz | Turn LIVESTATUS_TCP_TLS off on fresh sites: compose pre-start hook (single-file mount), wizard host-mode stop/set/start and container-mode symptom probe + manual command; docs corrected. Hook not yet run on a real container | 2026-09-25 | 9a66de4 | [260925-bzz-turn-livestatus-tcp-tls-off-in-compose-a](./quick/260925-bzz-turn-livestatus-tcp-tls-off-in-compose-a/) |
 | 260925-cqn | Event history shows date+time per row and gains a From/To datetime-local range filter with Clear and a distinct empty state; EVENTS_MAX_ENTRIES raised 50 -> 1000 (payload measured 161000 bytes; broker/client limits checked, live end-to-end publish not tested) | 2026-09-25 | d16d1a0 | [260925-cqn-event-history-date-time-display-and-date](./quick/260925-cqn-event-history-date-time-display-and-date/) |
+| 260925-jah | Rework Phase 3 discovery: mandatory scan on new site, pending (unpromoted) hosts from Checkmk merged into Phase 4, scan default only when folders just added, cmk_wizard=onboarded marker label | 2026-09-25 | d8f02b3 | [260925-jah-rework-phase-3-discovery-mandatory-scan-](./quick/260925-jah-rework-phase-3-discovery-mandatory-scan-/) |
 
 ## Deferred Items
 
