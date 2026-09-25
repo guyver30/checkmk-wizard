@@ -2157,9 +2157,15 @@ async def _resolve_agent_registration_server(hosts: list[OnboardedHost], checkmk
     """
     if not _unusable_from_remote_target(checkmk_host):
         return checkmk_host
-    if not any(not _looks_loopback(h.ip) for h in hosts):
-        # Every target is loopback too (e.g. testing entirely on this same
-        # machine) — `checkmk_host` is actually correct here, nothing to fix.
+    # Only agent hosts ever register (snmp/ping hosts have no agent), so
+    # only they matter here. Bug fixed 2026-09-25: this used to look at every
+    # host being onboarded, so a run promoting only ping/SNMP hosts still
+    # warned "at least one host being onboarded is remote" and asked for an
+    # address nothing would use.
+    if not any(h.os_family in ("linux", "windows") and not _looks_loopback(h.ip) for h in hosts):
+        # No remote agent host (none at all, or all loopback, e.g. testing
+        # entirely on this same machine) — `checkmk_host` is actually
+        # correct here, nothing to fix.
         return checkmk_host
 
     if not site.omd_installed():
