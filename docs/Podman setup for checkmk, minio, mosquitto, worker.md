@@ -348,7 +348,7 @@ The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these t
 | `lan/events/recent` | Only on any device's state transition, or a device add/remove | 1 | true | Full bounded array (max `EVENTS_MAX_ENTRIES`) of `{timestamp, device_id, event, from, to}` |
 | `lan/poller/status` | Birth (on connect), heartbeat (every poll cycle), and LWT (on ungraceful disconnect) or graceful stop | 1 | true | `{status, since, last_poll, device_count}` (birth/heartbeat) or `{status: "offline"}` (LWT/graceful stop) |
 
-A removed device is tombstoned by publishing an empty retained payload to its `status`, `history`, `services` and `service_history` topics.
+A removed device is tombstoned by publishing an empty retained payload to its `status`, `history`, `services` and `service_history` topics. On startup the poller also tombstones, the same way, any retained per-device topic whose host is absent from the site; this is gated so that a failed or unconfirmed-empty Livestatus query never clears anything, and it adds no `removed` event.
 
 `folder` is a generic location/group label derived from the host's Checkmk folder — whatever grouping the operator chose in the wizard's Phase 2 (a VLAN, a physical location, a site, etc.). It is read from Checkmk's REST folder association (`fetch_host_folders()` in `scripts/mqtt_poller.py`), not parsed from a filesystem path — see §3's "First-time credential setup" for the credential this requires. `alias` is Checkmk's native host alias, set optionally through the wizard's Phase 4 prompt; it is empty for any host without one.
 
@@ -534,18 +534,22 @@ Nothing here needs repeating on every run except §8.3 itself — dependencies (
 
 ### 8.5. Starting over with a blank site
 
-To run the wizard against a genuinely fresh Checkmk site, remove **both** the Checkmk volume **and** the Mosquitto volume — deleting only the Checkmk one is not enough:
+To run the wizard against a genuinely fresh Checkmk site, remove the Checkmk volume. Removing the Mosquitto volume is optional:
 
 - `checkmk_data` holds the site itself (hosts, folders, rules, tag groups, users, monitoring history). Removing it makes the container's entrypoint create a brand-new `dmc` site on the next start.
-- `mosquitto_data` holds the broker's **retained** messages, which is all the dashboard reads (`lan/devices/{id}/...`, `lan/devices/topology`). The poller only clears a device's retained topics when it sees that device disappear from a running site, so after a site wipe the old hosts stay on the dashboard as ghosts until the broker's volume is removed too.
+- `mosquitto_data` holds the broker's **retained** messages, which is all the dashboard reads (`lan/devices/{id}/...`, `lan/devices/topology`). On startup the poller reads every retained `lan/devices/{id}/*` topic and clears the ones whose host is not on the site. This happens on its first cycle that has a confirmed host list: either Livestatus returned hosts, or Livestatus returned none and the REST API confirmed zero configured hosts (which needs `CMK_REST_SECRET`). So old hosts disappear from the dashboard without touching the broker volume. Removing `mosquitto_data` is still worth doing if you also want the old site's `lan/events/recent` feed and per-device history gone; the sweep does not rewrite the global events feed.
 
 Run from `deploy/` (compose prefixes volume names with its project name — `deploy_` here; confirm with `podman volume ls` and, if unsure, `podman inspect checkmk --format '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{"\n"}}{{end}}'`):
 
 ```bash
 podman compose down
-podman volume rm deploy_checkmk_data deploy_mosquitto_data
+podman volume rm deploy_checkmk_data
 podman compose up -d
 ```
+
+To also clear the broker's old events feed and history, remove `deploy_mosquitto_data` in the same `podman volume rm` command (optional).
+
+If you rebuilt Checkmk **without** a full `podman compose down`, the poller kept running. The sweep runs only at poller startup, so run `podman compose restart poller` (poller restart) afterwards.
 
 Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's credentials and ACL are bind-mounted files (`mosquitto.passwd`, `mosquitto.acl`), so they survive the wipe.
 
