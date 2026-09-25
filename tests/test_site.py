@@ -132,45 +132,106 @@ def test_site_running_false_when_fully_stopped():
         assert site.site_running("mysite") is False
 
 
-def test_enable_livestatus_tcp_noop_when_already_enabled():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = subprocess.CompletedProcess([], 0, stdout="on\n")
+def _cp(rc=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess([], rc, stdout=stdout, stderr=stderr)
+
+
+def _cmds(mock_run):
+    return [c.args[0] for c in mock_run.call_args_list]
+
+
+def test_livestatus_tcp_tls_enabled_true_only_for_on():
+    with patch("subprocess.run", return_value=_cp(stdout="on\n")) as mock_run:
+        assert site.livestatus_tcp_tls_enabled("mysite") is True
+    assert mock_run.call_args.args[0] == ["omd", "config", "mysite", "show", "LIVESTATUS_TCP_TLS"]
+    with patch("subprocess.run", return_value=_cp(stdout="off\n")):
+        assert site.livestatus_tcp_tls_enabled("mysite") is False
+    # Older Checkmk without the option prints nothing.
+    with patch("subprocess.run", return_value=_cp(stdout="")):
+        assert site.livestatus_tcp_tls_enabled("mysite") is False
+
+
+def test_enable_livestatus_tcp_noop_when_already_enabled_and_tls_off():
+    responses = [_cp(stdout="on\n"), _cp(stdout="off\n")]  # show TCP, show TLS
+    with patch("subprocess.run", side_effect=responses) as mock_run:
         site.enable_livestatus_tcp("mysite")
-    mock_run.assert_called_once()  # only the "show" check, no "set" or restart
+    assert mock_run.call_count == 2  # only the two "show" checks, no set/stop/start
 
 
 def test_enable_livestatus_tcp_sets_config_when_stopped_and_does_not_restart():
     responses = [
-        subprocess.CompletedProcess([], 0, stdout="off\n"),  # show
-        subprocess.CompletedProcess([], 2),  # status: fully stopped
-        subprocess.CompletedProcess([], 0, stdout="OK\n"),  # set
-    ]
-    with patch("subprocess.run", side_effect=responses) as mock_run:
-        site.enable_livestatus_tcp("mysite")
-    assert mock_run.call_count == 3
-    set_call = mock_run.call_args_list[2]
-    assert set_call.args[0] == ["omd", "config", "mysite", "set", "LIVESTATUS_TCP", "on"]
-
-
-def test_enable_livestatus_tcp_restarts_when_already_running():
-    responses = [
-        subprocess.CompletedProcess([], 0, stdout="off\n"),  # show
-        subprocess.CompletedProcess([], 0),  # status: running
-        subprocess.CompletedProcess([], 0, stdout="OK\n"),  # set
-        subprocess.CompletedProcess([], 0, stdout="Restarting...OK\n"),  # restart
+        _cp(stdout="off\n"),  # show TCP
+        _cp(stdout="off\n"),  # show TLS
+        _cp(2),  # status: fully stopped
+        _cp(stdout="OK\n"),  # set TCP
     ]
     with patch("subprocess.run", side_effect=responses) as mock_run:
         site.enable_livestatus_tcp("mysite")
     assert mock_run.call_count == 4
-    restart_call = mock_run.call_args_list[3]
-    assert restart_call.args[0] == ["omd", "restart", "mysite"]
+    assert _cmds(mock_run)[3] == ["omd", "config", "mysite", "set", "LIVESTATUS_TCP", "on"]
+
+
+def test_enable_livestatus_tcp_stops_sets_then_starts_when_running():
+    # Regression: `omd config set` refuses to run on a running site ("Cannot
+    # change config variables while site is running."); the old code set the
+    # value and only then ran `omd restart`, so it could not work.
+    responses = [
+        _cp(stdout="off\n"),  # show TCP
+        _cp(stdout="on\n"),  # show TLS
+        _cp(0),  # status: running
+        _cp(stdout="Stopping...OK\n"),  # stop
+        _cp(stdout="OK\n"),  # set TCP
+        _cp(stdout="OK\n"),  # set TLS off
+        _cp(stdout="Starting...OK\n"),  # start
+    ]
+    with patch("subprocess.run", side_effect=responses) as mock_run:
+        site.enable_livestatus_tcp("mysite")
+    assert _cmds(mock_run)[3:] == [
+        ["omd", "stop", "mysite"],
+        ["omd", "config", "mysite", "set", "LIVESTATUS_TCP", "on"],
+        ["omd", "config", "mysite", "set", "LIVESTATUS_TCP_TLS", "off"],
+        ["omd", "start", "mysite"],
+    ]
+
+
+def test_enable_livestatus_tcp_turns_tls_off_when_tcp_already_on_and_stopped():
+    # Regression 2026-09-25: a fresh 2.4 site defaulted to LIVESTATUS_TCP_TLS=on,
+    # `live-tcp` pointed at `live-tls`, the poller got "Connection reset by
+    # peer" / "Malformed columns response" and the dashboard sat empty.
+    responses = [
+        _cp(stdout="on\n"),  # show TCP
+        _cp(stdout="on\n"),  # show TLS
+        _cp(2),  # status: fully stopped
+        _cp(stdout="OK\n"),  # set TLS off
+    ]
+    with patch("subprocess.run", side_effect=responses) as mock_run:
+        site.enable_livestatus_tcp("mysite")
+    assert _cmds(mock_run)[3:] == [["omd", "config", "mysite", "set", "LIVESTATUS_TCP_TLS", "off"]]
+
+
+def test_enable_livestatus_tcp_starts_site_again_even_when_set_fails():
+    responses = [
+        _cp(stdout="off\n"),  # show TCP
+        _cp(stdout="off\n"),  # show TLS
+        _cp(0),  # status: running
+        _cp(stdout="Stopping...OK\n"),  # stop
+        _cp(1, stderr="unknown variable"),  # set fails
+        _cp(stdout="Starting...OK\n"),  # start (finally)
+    ]
+    with (
+        patch("subprocess.run", side_effect=responses) as mock_run,
+        pytest.raises(site.SiteBootstrapError, match="unknown variable"),
+    ):
+        site.enable_livestatus_tcp("mysite")
+    assert _cmds(mock_run)[-1] == ["omd", "start", "mysite"]
 
 
 def test_enable_livestatus_tcp_raises_when_set_fails():
     responses = [
-        subprocess.CompletedProcess([], 0, stdout="off\n"),  # show
-        subprocess.CompletedProcess([], 2),  # status: fully stopped
-        subprocess.CompletedProcess([], 1, stdout="", stderr="unknown variable"),  # set fails
+        _cp(stdout="off\n"),  # show TCP
+        _cp(stdout="off\n"),  # show TLS
+        _cp(2),  # status: fully stopped
+        _cp(1, stderr="unknown variable"),  # set fails
     ]
     with patch("subprocess.run", side_effect=responses):
         with pytest.raises(site.SiteBootstrapError, match="unknown variable"):

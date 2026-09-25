@@ -49,6 +49,7 @@ from checkmk_wizard.wizard import (
     _establish_ssh_access,
     _expected_open_ports_by_hostname,
     _format_device_type_legend,
+    _livestatus_answers_plaintext,
     _load_device_types,
     _looks_loopback,
     _missing_expected_services,
@@ -152,6 +153,65 @@ def test_probe_livestatus_tcp_false_when_connection_refused(monkeypatch):
     assert _probe_livestatus_tcp("checkmk") is False
 
 
+class _FakeLqlSocket:
+    """Stand-in for the socket `socket.create_connection` returns."""
+
+    def __init__(self, recv_results):
+        self._recv_results = list(recv_results)
+        self.sent = b""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def sendall(self, data):
+        self.sent += data
+
+    def shutdown(self, how):
+        pass
+
+    def recv(self, n):
+        result = self._recv_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def _patch_lql_socket(monkeypatch, recv_results):
+    fake = _FakeLqlSocket(recv_results)
+    monkeypatch.setattr("checkmk_wizard.wizard.socket.create_connection", lambda *a, **k: fake)
+    return fake
+
+
+def test_livestatus_answers_plaintext_true_on_lql_reply(monkeypatch):
+    fake = _patch_lql_socket(monkeypatch, [b"2.4.0p35\n", b""])
+    assert _livestatus_answers_plaintext("checkmk") is True
+    assert fake.sent.startswith(b"GET status\n")
+
+
+def test_livestatus_answers_plaintext_false_when_connection_reset(monkeypatch):
+    # Regression 2026-09-25: a TLS-only Livestatus listener resets a plain LQL
+    # request ("Connection reset by peer"), which the bare TCP-connect probe
+    # reported as healthy.
+    _patch_lql_socket(monkeypatch, [ConnectionResetError("reset by peer")])
+    assert _livestatus_answers_plaintext("checkmk") is False
+
+
+def test_livestatus_answers_plaintext_false_on_empty_reply(monkeypatch):
+    _patch_lql_socket(monkeypatch, [b""])
+    assert _livestatus_answers_plaintext("checkmk") is False
+
+
+def test_livestatus_answers_plaintext_false_when_connect_fails(monkeypatch):
+    def refuse(*a, **k):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.socket.create_connection", refuse)
+    assert _livestatus_answers_plaintext("checkmk") is False
+
+
 def _mock_container_mode_omd_calls(monkeypatch):
     """Shared setup for container-mode tests: no local 'omd', Livestatus
     probe fails harmlessly (irrelevant to these tests), and create_site/
@@ -216,6 +276,41 @@ async def test_phase1_container_mode_skips_omd_and_connects_over_rest(monkeypatc
     assert connection.site == "dmc"
     assert connection.username == "automation"
     assert connection.secret == "s3cret"
+
+
+@pytest.mark.asyncio
+async def test_phase1_container_mode_warns_when_livestatus_answers_only_tls(monkeypatch, capsys):
+    """Regression 2026-09-25: a fresh Checkmk 2.4 site had LIVESTATUS_TCP_TLS=on,
+    so port 6557 accepted connections but reset plain LQL. Phase 1 must warn
+    with the exact fix and still return a connection."""
+    answers = iter(["dmc", "checkmk", ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+    monkeypatch.setattr("checkmk_wizard.wizard._probe_livestatus_tcp", lambda *a, **k: True)
+    monkeypatch.setattr("checkmk_wizard.wizard._livestatus_answers_plaintext", lambda *a, **k: False)
+
+    def fake_get_site_credentials(site_name, automation_user="automation"):
+        from checkmk_wizard.site import SiteCredentials
+
+        return SiteCredentials(site=site_name, automation_user="automation", automation_secret="s3cret")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.site.get_site_credentials", fake_get_site_credentials)
+
+    base_url = "http://checkmk/dmc/check_mk/api/v1"
+    with respx.mock:
+        respx.get(f"{base_url}/version").mock(
+            return_value=Response(200, json={"versions": {"checkmk": "2.4.0p35"}})
+        )
+        connection = await phase1_site_bringup()
+
+    assert connection.site == "dmc"
+    out = " ".join(capsys.readouterr().out.split())
+    assert "LIVESTATUS_TCP_TLS off" in out
+    assert "podman exec checkmk su - dmc -c 'omd stop; omd config set LIVESTATUS_TCP_TLS off; omd start'" in out
 
 
 @pytest.mark.asyncio
