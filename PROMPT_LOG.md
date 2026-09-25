@@ -195,3 +195,12 @@
 
 - **2026-09-25 08:04** — `/bm:resume-work` — restore context from previous session handoff.
 - **2026-09-25 08:04** — chose option 2: poller stale-retained-topic cleanup as a quick task.
+- **2026-09-25 08:16** — dashboard says connected but shows no devices/history/map; asked to re-test (suspect breakage).
+- **2026-09-25 08:17** — asked what deploy_poller_1 is (does not exist).
+- **2026-09-25 08:19** — pasted poller logs: Livestatus probe fails (Malformed columns response from checkmk:6557), poller exits.
+- **2026-09-25 08:22** — pasted Livestatus diagnostics: unix socket OK, TCP on, xinetd started; TCP query returns empty.
+- **2026-09-25 08:29** — omd shows LIVESTATUS_TCP_TLS on; asked who set it on and whether the compose LIVESTATUS_TCP change caused it.
+- **2026-09-25 08:30** — confirmed live-tcp now -> live; dashboard is back.
+- **2026-09-25 08:38** — approved: add LIVESTATUS_TCP_TLS off fix to compose and wizard (quick task).
+- **2026-09-25 08:43** — checked dashboard vs Checkmk GUI: 18 hosts, no ghosts.
+- **2026-09-25 08:45** — asked what the next phase is about.

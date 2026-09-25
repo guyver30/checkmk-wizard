@@ -105,6 +105,7 @@ None.
 | 260912-o7n | Fix three agent-registration bugs: receiver port omitted from --server, container-internal DNS name passed to remote targets, sudo missing from Linux manual instructions | 2026-09-12 | e7ea293 | [260912-o7n-fix-three-agent-registration-bugs-receiv](./quick/260912-o7n-fix-three-agent-registration-bugs-receiv/) |
 | 260924-azn | Pre-seed automation REST secret: wizard reads CMK_REST_SECRET from env, creates or updates the `automation` user to match, never prints an env-sourced secret; compose/.env.example/docs updated | 2026-09-24 | c06658a | [260924-azn-pre-seed-fixed-automation-user-rest-secr](./quick/260924-azn-pre-seed-fixed-automation-user-rest-secr/) |
 | 260925-b81 | Poller sweeps stale retained lan/devices/* topics at startup (gated on a trustworthy Checkmk answer), so a Checkmk site rebuild no longer needs the mosquitto volume wipe; docs 8.5 updated | 2026-09-25 | 23cb9c6 | [260925-b81-poller-stale-retained-topic-cleanup](./quick/260925-b81-poller-stale-retained-topic-cleanup/) |
+| 260925-bzz | Turn LIVESTATUS_TCP_TLS off on fresh sites: compose pre-start hook (single-file mount), wizard host-mode stop/set/start and container-mode symptom probe + manual command; docs corrected. Hook not yet run on a real container | 2026-09-25 | 9a66de4 | [260925-bzz-turn-livestatus-tcp-tls-off-in-compose-a](./quick/260925-bzz-turn-livestatus-tcp-tls-off-in-compose-a/) |
 
 ## Deferred Items
 
