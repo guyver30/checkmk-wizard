@@ -3,7 +3,6 @@ import { BrowserRouter, Route, Routes, useLocation, useNavigate } from "react-ro
 import { NavBar } from "kone-design-system";
 import { ConnectionIndicator } from "./components/ConnectionIndicator";
 import { DetailsRoute } from "./routes/DetailsRoute";
-import { DevicesRoute } from "./routes/DevicesRoute";
 import { IndexRoute } from "./routes/IndexRoute";
 import { connect } from "./store/mqttClient";
 
@@ -19,12 +18,6 @@ function AppNav() {
       logo={<img src="/kone-logo.png" alt="KONE" className="h-6 w-auto rounded-sm" />}
       items={[
         { id: "overview", label: "Overview", active: location.pathname === "/", onClick: () => navigate("/") },
-        {
-          id: "devices",
-          label: "Devices",
-          active: location.pathname === "/devices",
-          onClick: () => navigate("/devices"),
-        },
       ]}
       actions={<ConnectionIndicator />}
     />
@@ -47,7 +40,6 @@ function App() {
       <AppNav />
       <Routes>
         <Route path="/" element={<IndexRoute />} />
-        <Route path="/devices" element={<DevicesRoute />} />
         <Route path="/details" element={<DetailsRoute />} />
         <Route path="*" element={<IndexRoute />} />
       </Routes>

@@ -232,3 +232,5 @@
 - **2026-09-25 13:25** — pasted Phase 5-7 run for linux host e-linkWKS (public host shown, SSH/sudo, services, ufw, agent register, thresholds, discovery, activation, host UP); no comment/question attached.
 - **2026-09-25 13:35** — want Phase 7 to show state of all hosts being activated, not just the promoted host(s).
 - **2026-09-25 13:45** — (implemented) Phase 7 table lists all hosts.
+- **2026-09-25 13:55** — dashboard: remove the "Devices" menu (irrelevant now); host detail (agent hosts) should show only: gauges (cpu/mem/disk), SMART info if installed, whether checkmk agent is connected, only monitored services chosen in the wizard, TCP ports monitored, uptime.
+- **2026-09-25 14:20** — (implemented) Devices menu removed, agent host detail view.
