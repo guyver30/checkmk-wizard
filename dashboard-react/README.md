@@ -147,12 +147,14 @@ A From / To filter above the list narrows the rows to an inclusive range:
 
 ## 5b. Device-type icons (drop-in)
 
+Full guide: [`docs/DEVICE-TYPE-ICONS.md`](../docs/DEVICE-TYPE-ICONS.md). Summary:
+
 Every `dashboard-react/src/assets/icons/device-types/<device_type>.svg` is bundled at build time.
 The file name **is** the device type — the `tag_device_type` value from `device_types.json`
 (case-sensitive): `other`, `E-link`, `ACS`, `Multimedia`, `NetworkDevice`, `GroupController`.
 
 - **Change an icon:** overwrite that file, rebuild.
-- **Add an icon for a new type:** add the type to `device_types.json`, drop `<Type>.svg` in the
+- **Add an icon for a new type:** add the type to `device_types.json` (repo root; keep `other` first), drop `<Type>.svg` in the
   folder, rebuild. No code edit. (A type with no file falls back to `other.svg`, so keep that one.)
 - **SVG rules:** square `viewBox` (16×16 like the shipped ones), root `<svg fill="none">`, and
   glyph paths filled with exactly `fill="#141414"` — the map swaps that colour per host state
