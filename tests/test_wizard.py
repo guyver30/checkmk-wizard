@@ -62,6 +62,7 @@ from checkmk_wizard.wizard import (
     _prompt_new_site_name,
     _prompt_threshold_levels,
     _resolve_agent_registration_server,
+    _pending_hosts,
     _retag_existing_hosts,
     _retaggable_hosts,
     _run_retag_screen,
@@ -978,6 +979,7 @@ async def test_phase3_stages_hosts_inert(monkeypatch):
     monkeypatch.setattr("checkmk_wizard.wizard.scan_network", fake_scan_network)
 
     with respx.mock:
+        _mock_list_hosts([_host("sw1", "10.9.9.9", tag_agent="cmk-agent", labels=_MARKER)])
         create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
             return_value=Response(200, json={})
         )
@@ -986,6 +988,144 @@ async def test_phase3_stages_hosts_inert(monkeypatch):
 
     body = json.loads(create_route.calls.last.request.content)
     assert body["attributes"] == {"ipaddress": "10.0.0.50", "tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"}
+
+
+_MARKER = {"cmk_wizard": "onboarded"}
+
+
+def _host(name, ip, *, folder="/", **attributes):
+    return {"id": name, "extensions": {"folder": folder, "attributes": {"ipaddress": ip, **attributes}}}
+
+
+def _mock_list_hosts(hosts):
+    respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+        return_value=Response(200, json={"value": hosts})
+    )
+
+
+def test_pending_hosts_detection():
+    # Guards the Phase 3 rework: only IP-named, unmarked, inert hosts are
+    # "pending". A promoted host that kept its IP as hostname carries the
+    # marker label, so it must NOT come back for promotion on every run.
+    hosts = [
+        _host("10.0.0.5", "10.0.0.5", folder="/vlan10", tag_criticality="offline"),  # daily-scan find
+        _host("10.0.0.6", "10.0.0.6", tag_agent="no-agent", tag_snmp_ds="no-snmp"),  # staged placeholder
+        _host("10.0.0.7", "10.0.0.7", labels=_MARKER, tag_agent="no-agent", tag_snmp_ds="no-snmp"),  # promoted ping
+        _host("10.0.0.8", "10.0.0.8", tag_agent="cmk-agent"),  # real agent host
+        _host("web1", "10.0.0.9"),  # named host
+    ]
+    assert [(p.ip, p.folder) for p in _pending_hosts(hosts)] == [("10.0.0.5", "/vlan10"), ("10.0.0.6", "/")]
+
+
+@pytest.mark.asyncio
+async def test_phase3_new_site_scan_is_mandatory_without_prompt(monkeypatch):
+    # Only the ports prompt is answered: an empty site must not be asked
+    # "scan now?" at all (declining used to end the run with nothing).
+    answers = iter([""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    async def fake_scan_network(cidr, ports=None, on_progress=None):
+        return [HostScanResult(ip="10.0.0.50", open_ports=[22])]
+
+    monkeypatch.setattr("checkmk_wizard.wizard.scan_network", fake_scan_network)
+    with respx.mock:
+        _mock_list_hosts([])
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            results = await phase3_discovery(client, {"/vlan10": "10.0.0.0/24"})
+
+    assert [r.ip for r in results] == ["10.0.0.50"]
+
+
+@pytest.mark.asyncio
+async def test_phase3_declined_scan_still_returns_pending_hosts(monkeypatch):
+    # Case 3: the folder's daily Checkmk scan added a host since the last
+    # wizard run; declining our own scan must still offer it for promotion.
+    prompts = []
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        prompts.append(self)
+        return False
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    with respx.mock:
+        _mock_list_hosts(
+            [
+                _host("sw1", "10.0.0.2", tag_agent="cmk-agent", labels=_MARKER),
+                _host("10.0.0.77", "10.0.0.77", folder="/vlan10", tag_criticality="offline"),
+            ]
+        )
+        async with CheckmkClient(CONN) as client:
+            results = await phase3_discovery(client, {})
+
+    assert [(r.ip, r.folder) for r in results] == [("10.0.0.77", "/vlan10")]
+    assert len(prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_phase3_scan_default_follows_new_folder_subnets(monkeypatch):
+    defaults = []
+    real_confirm = questionary.confirm
+
+    def spy_confirm(message, *args, **kwargs):
+        defaults.append(kwargs.get("default"))
+        return real_confirm(message, *args, **kwargs)
+
+    monkeypatch.setattr(questionary, "confirm", spy_confirm)
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return False
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    with respx.mock:
+        _mock_list_hosts([_host("sw1", "10.0.0.2", tag_agent="cmk-agent", labels=_MARKER)])
+        async with CheckmkClient(CONN) as client:
+            await phase3_discovery(client, {})
+            await phase3_discovery(client, {"/vlan10": "10.0.0.0/24"})
+            await phase3_discovery(client, {"/vlan10": None})
+
+    assert defaults == [False, True, False]
+
+
+@pytest.mark.asyncio
+async def test_phase3_scan_does_not_restage_pending_or_known_ips(monkeypatch):
+    answers = iter([True, ""])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    async def fake_scan_network(cidr, ports=None, on_progress=None):
+        return [
+            HostScanResult(ip="10.0.0.77", open_ports=[22]),  # pending: keep scan's ports, no re-create
+            HostScanResult(ip="10.0.0.2", open_ports=[443]),  # already onboarded as sw1: skip entirely
+            HostScanResult(ip="10.0.0.99", open_ports=[80]),  # new: staged
+        ]
+
+    monkeypatch.setattr("checkmk_wizard.wizard.scan_network", fake_scan_network)
+    with respx.mock:
+        _mock_list_hosts(
+            [
+                _host("sw1", "10.0.0.2", tag_agent="cmk-agent", labels=_MARKER),
+                _host("10.0.0.77", "10.0.0.77", folder="/vlan10"),
+            ]
+        )
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            results = await phase3_discovery(client, {"/vlan20": "10.0.0.0/24"})
+
+    assert {(r.ip, r.folder, tuple(r.open_ports)) for r in results} == {
+        ("10.0.0.77", "/vlan10", (22,)),
+        ("10.0.0.99", "/vlan20", (80,)),
+    }
+    assert [json.loads(c.request.content)["host_name"] for c in create_route.calls] == ["10.0.0.99"]
 
 
 @pytest.mark.asyncio
@@ -1012,6 +1152,7 @@ async def test_phase5_agent_host_sets_no_snmp(monkeypatch):
         "tag_agent": "cmk-agent",
         "tag_snmp_ds": "no-snmp",
         "tag_device_type": "other",
+        "labels": {"cmk_wizard": "onboarded"},
     }
 
 
@@ -1043,6 +1184,7 @@ async def test_phase5_ping_host_sets_no_agent_no_snmp(monkeypatch):
         "tag_agent": "no-agent",
         "tag_snmp_ds": "no-snmp",
         "tag_device_type": "other",
+        "labels": {"cmk_wizard": "onboarded"},
     }
 
 
