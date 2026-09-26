@@ -104,3 +104,11 @@ None — no external service configuration required. The deployment doc for laun
 ---
 *Phase: 14-fleet-intelligence*
 *Completed: 2026-09-26*
+
+## Self-Check: PASSED
+
+All created/modified files verified present (`useKioskRotation.ts`, `useKioskRotation.test.ts`,
+`KioskView.tsx`, `KioskView.test.tsx`, `App.tsx`, `App.test.tsx`, `index.css`); all six commits
+(`bbf48d9`, `a2eaa6b`, `6311ded`, `35fa681`, `77ee9a9`, `3b35de2`) verified present in
+`git log --oneline --all`; full `npm test` suite 432/432 passed, `npm run typecheck` exit 0,
+`npm run lint` exit 0 (5 pre-existing warnings only, no new ones), `npm run build` exit 0.
