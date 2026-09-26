@@ -1,0 +1,43 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-26T13:14:29.693Z",
+  "phase": "14",
+  "phase_name": "fleet-intelligence",
+  "phase_dir": ".planning/phases/14-fleet-intelligence",
+  "plan": 9,
+  "task": 2,
+  "total_tasks": 2,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": 1, "name": "14-01 poller root-cause incident engine", "status": "done", "commit": "a6b80ef"},
+    {"id": 2, "name": "14-02 dashboard incident data layer", "status": "done", "commit": "3fc67e5"},
+    {"id": 3, "name": "14-03 dimmed consequence treatment (tree + map)", "status": "done", "commit": "f0e5db5"},
+    {"id": 4, "name": "14-04 incident card list + live dimming", "status": "done", "commit": "8ada2c2"},
+    {"id": 5, "name": "14-05 incident docs + D-06 live gate (approved) + demo runbook", "status": "done", "commit": "e64603a"},
+    {"id": 6, "name": "14-06 kiosk/wall mode", "status": "done", "commit": "ee572e2"},
+    {"id": 7, "name": "14-07 poller criticality/depends_on label read path", "status": "done", "commit": "76cb6b7"},
+    {"id": 8, "name": "14-08 criticality & dependency editor", "status": "done", "commit": "bc11a1b"},
+    {"id": 9, "name": "14-09 Task 1: document labels + kiosk mode", "status": "done", "commit": "63e662e"},
+    {"id": 10, "name": "14-09 Task 2: live verification (checkpoint:human-verify)", "status": "in_progress", "progress": "partial SUMMARY status: paused committed (1a7d920); operator steps presented, awaiting result"}
+  ],
+  "remaining_tasks": [
+    {"id": 10, "name": "14-09 Task 2: operator runs live steps 1-7, then continuation agent finalizes 14-09-SUMMARY", "status": "not_started"},
+    {"id": 11, "name": "execute-phase tail: roadmap tick for 14-09, code_review_gate, regression_gate, verify_phase_goal (bm-verifier), update_roadmap (phase.complete), update_project_md", "status": "not_started"},
+    {"id": 12, "name": "Quick task after Phase 14: topology map grid/snap + edge-direction hint (todo 2026-09-26-topology-map-grid-snap-and-edge-hint.md)", "status": "not_started"}
+  ],
+  "blockers": [
+    {"description": "14-09 Task 2 is a blocking human-verify checkpoint requiring the live deployment", "type": "human_action", "workaround": "none - operator must run steps"}
+  ],
+  "human_actions_pending": [
+    {"action": "Pull main on 192.168.97.129, restart poller, run 14-09 live steps 1-7 (editor, service tier, depends_on + remove prompt, 10+ depends_on long-label check in Checkmk, lan/devices/topology keys, worst-affected 'high' on dependency outage, /?kiosk=1), reply 'approved' or report failures (step 4: exact stored depends_on label)", "context": "Steps are listed in .planning/phases/14-fleet-intelligence/14-09-SUMMARY.md under CHECKPOINT REACHED", "blocking": true}
+  ],
+  "decisions": [
+    {"decision": "Keep edge arrows parent->child and add an edit-mode hint; grid+snap done as /bm:quick after Phase 14", "rationale": "Conventional topology direction; 14-08 edited TopologyMap.tsx so earlier work would collide", "phase": "14"},
+    {"decision": "Fixed stale mapIcons test assertions in 14-03 (icons replaced in c4c8f42, tests outdated)", "rationale": "Pre-existing failures, file already in 14-03 scope", "phase": "14"},
+    {"decision": "Fixed map opacity persisting after incident close (51d50df): nodeVisual always sets opacity", "rationale": "vis-network nodes.update merges; omitted keys never reset", "phase": "14"},
+    {"decision": "Demo screenshots in docs/*.png stay uncommitted and out of the runbook", "rationale": "Operator request; hosts_up.png shows the since-fixed fade bug", "phase": "14"}
+  ],
+  "uncommitted_files": ["PROMPT_LOG.md", "docs/host_service_menu.png", "docs/hosts_down.png", "docs/hosts_down2.png", "docs/hosts_up.png"],
+  "next_action": "Ask operator for 14-09 live-verification result; on 'approved' spawn a sequential bm-executor continuation to finalize 14-09-SUMMARY (status complete), then run the execute-phase tail (tracking, code review, regression, verifier, phase.complete)",
+  "context_notes": "All 8 prior plans merged on main; post-merge gates last green at 4db7cec: 556 Python, 467/467 dashboard, typecheck clean. Poller<->dashboard label contract cross-checked (keys, tiers, ; = , separators, service-name :;= rejected both sides). Live env: Checkmk 2.4.0p36.cre site dmc on deploy host (podman), dashboard via npm run dev on 192.168.97.129:5173 proxying /checkmk-api; topology_editor was re-provisioned after a site rebuild. Faking states: use Livestatus cmk() helper in docs/Incident demo with fake check results.md, not GUI fakes."
+}
