@@ -350,7 +350,7 @@ Plans:
 
 **Honest caveat to carry**: a projection is only as good as its history. Disk-fill dates are credible almost immediately; a drive-failure date is not credible until the drive has been watched for months. Promising it sooner is the one thing that would undermine the rest.
 
-**Plans:** 6/9 plans executed
+**Plans:** 8/9 plans executed
 
 Plans:
 
@@ -374,8 +374,8 @@ Plans:
 
 **Wave 5** *(blocked on 14-05)*
 
-- [ ] 14-07-PLAN.md — Poller carries criticality / service_criticality / depends_on labels to every viewer (PLR-16)
-- [ ] 14-08-PLAN.md — Criticality & dependency editor in edit mode, label writes via the single Apply flow (DASH-16)
+- [x] 14-07-PLAN.md — Poller carries criticality / service_criticality / depends_on labels to every viewer (PLR-16)
+- [x] 14-08-PLAN.md — Criticality & dependency editor in edit mode, label writes via the single Apply flow (DASH-16)
 
 **Wave 6** *(blocked on 14-06, 14-07, 14-08)*
 
