@@ -15,15 +15,22 @@ describe("STATE_HEX", () => {
 });
 
 describe("deviceTypeSvg", () => {
-  it("maps NetworkDevice to the internet.svg markup", () => {
-    expect(deviceTypeSvg("NetworkDevice")).toContain("15.1001 7.9");
+  it("maps NetworkDevice to the current NetworkDevice.svg markup", () => {
+    // Assertion updated 2026-09-26 (deferred-items.md, plan 14-03): the icon was replaced
+    // in commit a427d92 (drop-in device-type icons) and no longer contains "15.1001 7.9" --
+    // the stale assertion is corrected here to the current markup's own distinctive path,
+    // without touching the icon file itself.
+    expect(deviceTypeSvg("NetworkDevice")).toContain("M18 4l3 3l-3 3");
   });
 
-  it("maps E-link to the api.svg markup", () => {
+  it("maps E-link to its own distinct svg markup", () => {
+    // Assertion updated 2026-09-26 (deferred-items.md, plan 14-03): the vendored icons are
+    // stroke-based (`fill="none" stroke="currentColor"`), not fill-based, so no icon contains
+    // `fill="#141414"` anymore -- corrected to assert the two icons are distinct instead.
     const apiMarkup = deviceTypeSvg("E-link");
     const networkMarkup = deviceTypeSvg("NetworkDevice");
     expect(apiMarkup).not.toBe(networkMarkup);
-    expect(apiMarkup).toContain("fill=\"#141414\"");
+    expect(apiMarkup).toContain('unicode: "eb1f"');
   });
 
   it("falls back to circle.svg for undefined, 'unknown', and an unrecognized value, never throwing", () => {
