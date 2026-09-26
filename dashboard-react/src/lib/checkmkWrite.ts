@@ -32,12 +32,22 @@ import {
   TOPOLOGY_EDITOR_SECRET,
   TOPOLOGY_EDITOR_USER,
 } from "./config";
+import { type CriticalityTier, isCriticalityTier } from "./incidents";
 import {
   MAP_POSITION_LABEL,
   UNMANAGED_SWITCH_LABEL,
   UNMANAGED_SWITCH_VALUE,
   formatMapPosition,
 } from "./topologyLayout";
+
+// must match scripts/mqtt_poller.py (plan 14-07)
+export const CRITICALITY_LABEL = "criticality";
+export const SERVICE_CRITICALITY_LABEL = "service_criticality";
+export const DEPENDS_ON_LABEL = "depends_on";
+
+// A service name may not contain ":", ";" or "=" -- ":" is reserved by Checkmk's own service
+// naming, ";"/"=" are the entry/pair separators service_criticality's label value uses.
+const INVALID_SERVICE_NAME_CHARS_RE = /[:;=]/;
 
 export class CheckmkWriteError extends Error {
   method: string;
@@ -154,6 +164,145 @@ async function updateHostAttributes(
   });
 }
 
+// Shared label-merge choke point every label writer (setMapPosition, setCriticality,
+// setServiceCriticality, updateDependsOn) funnels through: GETs via updateHostAttributes,
+// replaces attributes.labels with mutate()'s result over the current string-valued labels
+// (REPLACE semantics -- see module header -- so a label key omitted from the mutated map is
+// a deletion, not a no-op). Does not call serialize() itself; every exported writer wraps its
+// own call in serialize() so callers can see (and tests can assert) which writes are queued.
+function updateLabels(
+  host: string,
+  mutate: (labels: Record<string, string>) => Record<string, string>,
+): Promise<void> {
+  return updateHostAttributes(host, (attributes) => {
+    const raw =
+      attributes.labels && typeof attributes.labels === "object"
+        ? (attributes.labels as Record<string, unknown>)
+        : {};
+    const currentLabels: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === "string") {
+        currentLabels[key] = value;
+      }
+    }
+    return { ...attributes, labels: mutate(currentLabels) };
+  });
+}
+
+// Parsing rules mirror scripts/mqtt_poller.py's `_parse_service_criticality` (plan 14-07):
+// malformed entries (missing "=", out-of-vocabulary tier, empty name) are dropped rather than
+// raising -- a stale/hand-edited label degrades gracefully instead of breaking the panel.
+export function parseServiceCriticalityLabel(value: unknown): Record<string, CriticalityTier> {
+  const result: Record<string, CriticalityTier> = {};
+  if (typeof value !== "string" || value.length === 0) {
+    return result;
+  }
+  for (const entry of value.split(";")) {
+    const eq = entry.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    const name = entry.slice(0, eq);
+    const tier = entry.slice(eq + 1);
+    if (isCriticalityTier(tier)) {
+      result[name] = tier;
+    }
+  }
+  return result;
+}
+
+export function formatServiceCriticality(map: Record<string, CriticalityTier>): string {
+  return Object.keys(map)
+    .sort()
+    .map((name) => `${name}=${map[name]}`)
+    .join(";");
+}
+
+// Mirrors scripts/mqtt_poller.py's `_parse_depends_on` (plan 14-07): comma-separated host ids,
+// invalid/empty entries dropped rather than raising.
+export function parseDependsOnLabel(value: unknown): string[] {
+  if (typeof value !== "string" || value.length === 0) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0 && isValidHostName(id));
+}
+
+export function formatDependsOn(ids: string[]): string {
+  return ids.join(",");
+}
+
+export function setCriticality(host: string, tier: CriticalityTier): Promise<void> {
+  if (!isValidHostName(host)) {
+    return Promise.reject(new Error(`invalid host name: ${host}`));
+  }
+  if (!isCriticalityTier(tier)) {
+    return Promise.reject(new Error(`invalid criticality tier: ${tier}`));
+  }
+  return serialize(() =>
+    updateLabels(host, (labels) => ({ ...labels, [CRITICALITY_LABEL]: tier })),
+  );
+}
+
+export function setServiceCriticality(
+  host: string,
+  serviceName: string,
+  tier: CriticalityTier | null,
+): Promise<void> {
+  if (!isValidHostName(host)) {
+    return Promise.reject(new Error(`invalid host name: ${host}`));
+  }
+  if (serviceName.length === 0 || INVALID_SERVICE_NAME_CHARS_RE.test(serviceName)) {
+    return Promise.reject(new Error(`invalid service name: ${serviceName}`));
+  }
+  if (tier !== null && !isCriticalityTier(tier)) {
+    return Promise.reject(new Error(`invalid criticality tier: ${tier}`));
+  }
+  return serialize(() =>
+    updateLabels(host, (labels) => {
+      const current = parseServiceCriticalityLabel(labels[SERVICE_CRITICALITY_LABEL]);
+      const next = { ...current };
+      if (tier === null) {
+        delete next[serviceName];
+      } else {
+        next[serviceName] = tier;
+      }
+      const rest = { ...labels };
+      delete rest[SERVICE_CRITICALITY_LABEL];
+      if (Object.keys(next).length === 0) {
+        return rest;
+      }
+      return { ...rest, [SERVICE_CRITICALITY_LABEL]: formatServiceCriticality(next) };
+    }),
+  );
+}
+
+export function updateDependsOn(
+  host: string,
+  mutate: (ids: string[]) => string[],
+): Promise<void> {
+  if (!isValidHostName(host)) {
+    return Promise.reject(new Error(`invalid host name: ${host}`));
+  }
+  return serialize(() =>
+    updateLabels(host, (labels) => {
+      const current = parseDependsOnLabel(labels[DEPENDS_ON_LABEL]);
+      const mutated = mutate(current);
+      const deduped = Array.from(
+        new Set(mutated.filter((id) => id !== host && isValidHostName(id))),
+      );
+      const rest = { ...labels };
+      delete rest[DEPENDS_ON_LABEL];
+      if (deduped.length === 0) {
+        return rest;
+      }
+      return { ...rest, [DEPENDS_ON_LABEL]: formatDependsOn(deduped) };
+    }),
+  );
+}
+
 export function updateParents(
   host: string,
   mutate: (parents: string[]) => string[],
@@ -177,16 +326,10 @@ export function updateParents(
 
 export function setMapPosition(host: string, x: number, y: number): Promise<void> {
   return serialize(() =>
-    updateHostAttributes(host, (attributes) => {
-      const currentLabels =
-        attributes.labels && typeof attributes.labels === "object"
-          ? (attributes.labels as Record<string, unknown>)
-          : {};
-      return {
-        ...attributes,
-        labels: { ...currentLabels, [MAP_POSITION_LABEL]: formatMapPosition(x, y) },
-      };
-    }),
+    updateLabels(host, (labels) => ({
+      ...labels,
+      [MAP_POSITION_LABEL]: formatMapPosition(x, y),
+    })),
   );
 }
 

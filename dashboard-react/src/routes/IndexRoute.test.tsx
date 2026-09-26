@@ -12,6 +12,7 @@ import { useAppStore } from "../store/useAppStore";
 vi.mock("../lib/checkmkWrite", () => ({
   countPendingChanges: vi.fn(),
   activateChanges: vi.fn(),
+  setCriticality: vi.fn(),
 }));
 
 // isTopologyEditingConfigured() reads the placeholder secret in config.ts, which stays
@@ -32,6 +33,7 @@ vi.mock("../components/TopologyMap", () => ({
     onEditSaved?: () => void;
     onEditFailed?: (failure: { title: string; body: string }) => void;
     incidentLookup?: IncidentLookup;
+    onSelectHost?: (id: string) => void;
   }) => (
     <div
       data-testid="topology-map"
@@ -42,6 +44,7 @@ vi.mock("../components/TopologyMap", () => ({
       <button onClick={() => props.onEditFailed?.({ title: "Map failure", body: "Map failure body" })}>
         trigger-failed
       </button>
+      <button onClick={() => props.onSelectHost?.("h1")}>trigger-select-h1</button>
     </div>
   ),
 }));
@@ -349,5 +352,67 @@ describe("IndexRoute incidents (DASH-14/DASH-15)", () => {
     renderIndex();
     seedDevicesAndIncident();
     expect(screen.getByTestId("topology-map")).toHaveAttribute("data-incident-lookup-size", "2");
+  });
+});
+
+describe("IndexRoute CriticalityEditor wiring (DASH-16)", () => {
+  beforeEach(() => {
+    vi.mocked(checkmkWrite.countPendingChanges).mockReset().mockResolvedValue(0);
+    vi.mocked(checkmkWrite.setCriticality).mockReset();
+  });
+
+  function seedTopology() {
+    act(() => {
+      useAppStore
+        .getState()
+        .handleMessage(
+          "lan/devices/topology",
+          encode({
+            devices: [
+              { id: "h1", parents: [] },
+              { id: "h2", parents: [] },
+            ],
+          }),
+        );
+    });
+  }
+
+  it("the panel is absent while edit mode is off", () => {
+    renderIndex();
+    seedTopology();
+    expect(screen.queryByRole("region", { name: "Criticality & dependencies" })).not.toBeInTheDocument();
+  });
+
+  it("with edit mode on, the panel renders under the toolbar; selecting a host via the map shows its criticality fields", async () => {
+    renderIndex();
+    seedTopology();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
+    });
+
+    expect(screen.getByRole("region", { name: "Criticality & dependencies" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Host criticality/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "trigger-select-h1" }));
+    expect(screen.getByLabelText(/^Host criticality/)).toBeInTheDocument();
+  });
+
+  it("a successful editor write increments the same pending-count banner the map uses", async () => {
+    vi.mocked(checkmkWrite.setCriticality).mockResolvedValueOnce(undefined);
+    renderIndex();
+    seedTopology();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "trigger-select-h1" }));
+
+    const select = screen.getByLabelText(/^Host criticality/) as HTMLSelectElement;
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "high" } });
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("1 change not yet applied");
   });
 });

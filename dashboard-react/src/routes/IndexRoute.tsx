@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { useSearchParams } from "react-router";
 import { useShallow } from "zustand/shallow";
 import { Snackbar } from "kone-design-system";
+import { CriticalityEditor } from "../components/CriticalityEditor";
 import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
 import { IncidentList } from "../components/IncidentList";
@@ -10,6 +11,7 @@ import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { TopologyMap, type EditFailure } from "../components/TopologyMap";
 import { TopologyToolbar } from "../components/TopologyToolbar";
 import { Tree } from "../components/Tree";
+import { displayName } from "../lib/display";
 import { useEditIdleTimeout } from "../hooks/useEditIdleTimeout";
 import { useGroupingPrefs } from "../hooks/useGroupingPrefs";
 import { useNowTick } from "../hooks/useNowTick";
@@ -17,7 +19,7 @@ import { activateChanges, countPendingChanges } from "../lib/checkmkWrite";
 import { isTopologyEditingConfigured } from "../lib/config";
 import { buildIncidentLookup, selectOpenIncidents } from "../lib/incidents";
 import { buildTree } from "../lib/treeModel";
-import type { GroupingMode } from "../lib/types";
+import type { GroupingMode, TopologyNode } from "../lib/types";
 import { makeSelectStateCounts } from "../store/selectors";
 import { useAppStore } from "../store/useAppStore";
 
@@ -108,8 +110,47 @@ export function IndexRoute() {
   const [applying, setApplying] = useState(false);
   const [snackbar, setSnackbar] = useState<SnackbarState | null>(null);
 
+  // DASH-16: the host currently selected for the "Criticality & dependencies" panel -- a map
+  // click (TopologyMap's onSelectHost) or the panel's own "Device" picker, while in edit mode.
+  // Reset to null when edit mode turns off, same "never persist edit-session state" rule
+  // editMode/pendingCount above already follow.
+  const [selectedHost, setSelectedHost] = useState<string | null>(null);
+  const hostIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          topologyDevices
+            .map((entry) => (entry && typeof entry === "object" ? (entry as TopologyNode).id : undefined))
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+        ),
+      ).sort(),
+    [topologyDevices],
+  );
+  const selectedNode = useMemo(
+    () =>
+      selectedHost
+        ? (topologyDevices.find(
+            (entry) => entry && typeof entry === "object" && (entry as TopologyNode).id === selectedHost,
+          ) as TopologyNode | undefined)
+        : undefined,
+    [topologyDevices, selectedHost],
+  );
+  const services = useAppStore((s) => s.services);
+  const serviceNames = useMemo(() => {
+    if (!selectedHost) {
+      return [];
+    }
+    return (services[selectedHost] ?? [])
+      .map((service) => service.description)
+      .filter((description): description is string => typeof description === "string");
+  }, [services, selectedHost]);
+  const nameFor = useCallback((id: string) => displayName(devices[id] ?? { id }), [devices]);
+
   const onEditModeChange = useCallback((next: boolean) => {
     setEditMode(next);
+    if (!next) {
+      setSelectedHost(null);
+    }
     if (next) {
       // Best-effort: the Banner's count is informational, so a failed read just leaves the
       // count at whatever the client already tracked, with no error surfaced for it.
@@ -220,6 +261,18 @@ export function IndexRoute() {
                 onApply={onApply}
                 editingConfigured={isTopologyEditingConfigured()}
               />
+              {editMode && isTopologyEditingConfigured() && (
+                <CriticalityEditor
+                  hostIds={hostIds}
+                  nameFor={nameFor}
+                  selectedHost={selectedHost}
+                  onSelectHost={setSelectedHost}
+                  node={selectedNode}
+                  serviceNames={serviceNames}
+                  onSaved={onEditSaved}
+                  onFailed={onEditFailed}
+                />
+              )}
               <div className="min-h-0 flex-1">
                 <TopologyMap
                   topologyDevices={topologyDevices}
@@ -229,6 +282,7 @@ export function IndexRoute() {
                   onEditSaved={onEditSaved}
                   onEditFailed={onEditFailed}
                   incidentLookup={incidentLookup}
+                  onSelectHost={setSelectedHost}
                 />
               </div>
             </div>

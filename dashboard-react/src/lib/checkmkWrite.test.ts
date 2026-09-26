@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CheckmkWriteError,
+  DEPENDS_ON_LABEL,
+  SERVICE_CRITICALITY_LABEL,
   UNMANAGED_SWITCH_ATTRIBUTES,
   activateChanges,
   countPendingChanges,
   createUnmanagedSwitch,
+  formatDependsOn,
+  formatServiceCriticality,
   isValidHostName,
+  parseDependsOnLabel,
+  parseServiceCriticalityLabel,
+  setCriticality,
   setMapPosition,
+  setServiceCriticality,
+  updateDependsOn,
   updateParents,
 } from "./checkmkWrite";
 import { TOPOLOGY_EDITOR_SECRET } from "./config";
@@ -217,6 +226,221 @@ describe("setMapPosition", () => {
 
     const body = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(body.attributes.labels).toEqual({ other: "x", map_position: "120,-40" });
+  });
+});
+
+describe("setCriticality", () => {
+  it("PUTs criticality into labels, preserving other labels and non-label attributes", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(
+        200,
+        {
+          extensions: {
+            attributes: { ipaddress: "10.0.0.5", labels: { map_position: "1,2" } },
+          },
+        },
+        { ETag: "e" },
+      ),
+    );
+    fetchMock.mockResolvedValueOnce(mockResponse(200, {}));
+
+    await setCriticality("h1", "high");
+
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(fetchMock.mock.calls[1][1].headers["If-Match"]).toBe("e");
+    expect(body.attributes.ipaddress).toBe("10.0.0.5");
+    expect(body.attributes.labels).toEqual({ map_position: "1,2", criticality: "high" });
+  });
+
+  it("rejects an invalid tier before any fetch", async () => {
+    await expect(setCriticality("h1", "urgent" as never)).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid host name before any fetch", async () => {
+    await expect(setCriticality("bad host", "high")).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("setServiceCriticality", () => {
+  it("adds a new entry to an existing service_criticality label, entries sorted by name", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(
+        200,
+        { extensions: { attributes: { labels: { [SERVICE_CRITICALITY_LABEL]: "ModemManager=low" } } } },
+        { ETag: "e" },
+      ),
+    );
+    fetchMock.mockResolvedValueOnce(mockResponse(200, {}));
+
+    await setServiceCriticality("h1", "Systemd Service cron", "critical");
+
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(body.attributes.labels[SERVICE_CRITICALITY_LABEL]).toBe(
+      "ModemManager=low;Systemd Service cron=critical",
+    );
+  });
+
+  it("removes an entry when tier is null, deleting the label key entirely when it was the last entry", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(
+        200,
+        { extensions: { attributes: { labels: { [SERVICE_CRITICALITY_LABEL]: "cron=critical" } } } },
+        { ETag: "e" },
+      ),
+    );
+    fetchMock.mockResolvedValueOnce(mockResponse(200, {}));
+
+    await setServiceCriticality("h1", "cron", null);
+
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(Object.prototype.hasOwnProperty.call(body.attributes.labels, SERVICE_CRITICALITY_LABEL)).toBe(
+      false,
+    );
+  });
+
+  it("rejects a service name containing ':', ';' or '=' before any fetch", async () => {
+    await expect(setServiceCriticality("h1", "bad:name", "low")).rejects.toThrow();
+    await expect(setServiceCriticality("h1", "bad;name", "low")).rejects.toThrow();
+    await expect(setServiceCriticality("h1", "bad=name", "low")).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("updateDependsOn", () => {
+  it("adds a host to an existing depends_on label", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(
+        200,
+        { extensions: { attributes: { labels: { [DEPENDS_ON_LABEL]: "core" } } } },
+        { ETag: "e" },
+      ),
+    );
+    fetchMock.mockResolvedValueOnce(mockResponse(200, {}));
+
+    await updateDependsOn("screen1", (ids) => [...ids, "media-srv"]);
+
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(body.attributes.labels[DEPENDS_ON_LABEL]).toBe("core,media-srv");
+  });
+
+  it("drops invalid ids and the host's own id, de-duplicates, and deletes the key when empty", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(
+        200,
+        { extensions: { attributes: { labels: { [DEPENDS_ON_LABEL]: "core" } } } },
+        { ETag: "e" },
+      ),
+    );
+    fetchMock.mockResolvedValueOnce(mockResponse(200, {}));
+
+    await updateDependsOn("screen1", (ids) => [...ids, "screen1", "bad host!", "core"]);
+
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(body.attributes.labels[DEPENDS_ON_LABEL]).toBe("core");
+  });
+
+  it("deletes the depends_on key entirely when the result is empty", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(
+        200,
+        { extensions: { attributes: { labels: { [DEPENDS_ON_LABEL]: "core" } } } },
+        { ETag: "e" },
+      ),
+    );
+    fetchMock.mockResolvedValueOnce(mockResponse(200, {}));
+
+    await updateDependsOn("screen1", () => []);
+
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(Object.prototype.hasOwnProperty.call(body.attributes.labels, DEPENDS_ON_LABEL)).toBe(false);
+  });
+});
+
+describe("parseServiceCriticalityLabel / formatServiceCriticality", () => {
+  it("parses a valid label value into a name->tier map", () => {
+    expect(parseServiceCriticalityLabel("cron=high;sshd=low")).toEqual({
+      cron: "high",
+      sshd: "low",
+    });
+  });
+
+  it("drops malformed entries and out-of-vocabulary tiers", () => {
+    expect(parseServiceCriticalityLabel("cron=urgent;=low;noeq;sshd=low")).toEqual({
+      sshd: "low",
+    });
+  });
+
+  it("returns an empty map for undefined/non-string input", () => {
+    expect(parseServiceCriticalityLabel(undefined)).toEqual({});
+    expect(parseServiceCriticalityLabel(42)).toEqual({});
+  });
+
+  it("formats a map sorted by name", () => {
+    expect(formatServiceCriticality({ sshd: "low", cron: "high" })).toBe("cron=high;sshd=low");
+  });
+});
+
+describe("parseDependsOnLabel / formatDependsOn", () => {
+  it("parses a comma-separated valid host list", () => {
+    expect(parseDependsOnLabel("core,media-srv")).toEqual(["core", "media-srv"]);
+  });
+
+  it("drops invalid/empty entries", () => {
+    expect(parseDependsOnLabel("core,,bad host!,media-srv")).toEqual(["core", "media-srv"]);
+  });
+
+  it("returns an empty array for undefined/non-string input", () => {
+    expect(parseDependsOnLabel(undefined)).toEqual([]);
+  });
+
+  it("formats an id list joined with commas", () => {
+    expect(formatDependsOn(["core", "media-srv"])).toBe("core,media-srv");
+  });
+});
+
+describe("serialize() preserved across the new writers", () => {
+  it("runs setCriticality then updateDependsOn strictly sequentially", async () => {
+    const order: string[] = [];
+    let releaseFirstPut: () => void = () => {};
+    const firstPutGate = new Promise<void>((resolve) => {
+      releaseFirstPut = resolve;
+    });
+
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url.includes("host-a")) {
+        order.push("GET host-a");
+        return mockResponse(200, { extensions: { attributes: {} } }, { ETag: "etag-a" });
+      }
+      if (method === "PUT" && url.includes("host-a")) {
+        order.push("PUT host-a");
+        await firstPutGate;
+        return mockResponse(200, {});
+      }
+      if (method === "GET" && url.includes("host-b")) {
+        order.push("GET host-b");
+        return mockResponse(200, { extensions: { attributes: {} } }, { ETag: "etag-b" });
+      }
+      if (method === "PUT" && url.includes("host-b")) {
+        order.push("PUT host-b");
+        return mockResponse(200, {});
+      }
+      throw new Error(`unexpected ${method} ${url}`);
+    });
+
+    const p1 = setCriticality("host-a", "high");
+    const p2 = updateDependsOn("host-b", (ids) => [...ids, "sw"]);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(["GET host-a", "PUT host-a"]);
+
+    releaseFirstPut();
+    await p1;
+    await p2;
+
+    expect(order).toEqual(["GET host-a", "PUT host-a", "GET host-b", "PUT host-b"]);
   });
 });
 

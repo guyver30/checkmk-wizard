@@ -296,6 +296,37 @@ describe("TopologyMap", () => {
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
   });
 
+  it("calls onSelectHost with the clicked node id and does not navigate, in edit mode", () => {
+    const onSelectHost = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({
+      topologyDevices,
+      statuses: { h1: device({ id: "h1" }) },
+      editMode: true,
+      onSelectHost,
+    });
+    act(() => {
+      instances[0].emit("click", { nodes: ["h1"] });
+    });
+    expect(onSelectHost).toHaveBeenCalledWith("h1");
+    expect(screen.queryByTestId("details-probe")).not.toBeInTheDocument();
+  });
+
+  it("does not call onSelectHost outside edit mode", () => {
+    const onSelectHost = vi.fn();
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({
+      topologyDevices,
+      statuses: { h1: device({ id: "h1" }) },
+      editMode: false,
+      onSelectHost,
+    });
+    act(() => {
+      instances[0].emit("click", { nodes: ["h1"] });
+    });
+    expect(onSelectHost).not.toHaveBeenCalled();
+  });
+
   it("shows the no-connections banner with devices present, zero edges, and edit mode off, and dismisses it", () => {
     const topologyDevices = [
       { id: "h1", parents: [] },
