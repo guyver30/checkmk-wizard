@@ -243,3 +243,14 @@
 - **2026-09-25 18:14** — make device-type icons drop-in, as simple as possible to add/change an icon for a device type
 - **2026-09-25 18:18** — document the icon drop-in clearly; where is device_types.json?
 - **2026-09-25 21:29** — /bm:pause-work
+- **2026-09-26 10:44** — /bm:resume-work
+- **2026-09-26 11:06** — /bm:discuss-phase 14
+- **2026-09-26 11:16** — clarification on service impact: unreachable GC behind a down unmanaged switch may still work; Linux services and roles (multimedia server vs screen) differ in criticality; unsure how to approach
+- **2026-09-26 11:22** — where is the historical data stored, to be used eventually by Grafana (but also by the main dashboard)?
+- **2026-09-26 11:30** — /bm:insert-phase 14.1
+- **2026-09-26 11:31** — /bm:insert-phase 14.2
+- **2026-09-26 11:32** — place phase 14 requirement IDs in REQUIREMENTS.md
+- **2026-09-26 11:34** — commit the planning changes
+- **2026-09-26 11:34** — always commit the device type icons
+- **2026-09-26 11:35** — /bm:plan-phase 14
+- **2026-09-26 12:00** — service-need tiers for technicians/experts: (1) standard — scheduled maintenance, add tasks for non-shutdown deviations e.g. disk filling → out of disk in ≥20 days; (2) urgent — same kind of issue with serious problem in 3–15 days, expert may downgrade to standard, cancel, or upgrade to immediate; (3) immediate — failure (switch down with unreachable children, stopped linux service) needing immediate technician dispatch
