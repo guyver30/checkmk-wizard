@@ -9,6 +9,7 @@ import {
   UNMANAGED_SWITCH_LABEL,
   withGridPositions,
 } from "./topologyLayout";
+import type { IncidentLookup } from "./incidents";
 import type { DevicePayload } from "./types";
 
 const NOW_MS = Date.parse("2026-09-21T12:00:00Z");
@@ -197,6 +198,53 @@ describe("buildMapModel", () => {
     // @ts-expect-error -- deliberately passing malformed input to prove defensive parsing
     expect(() => buildMapModel("not-an-array", {}, NOW_MS)).not.toThrow();
   });
+
+  describe("incidentLookup (DASH-15)", () => {
+    it("marks a consequence node dimmed with its incident id/role, and the root as root (not dimmed)", () => {
+      const lookup: IncidentLookup = new Map([
+        ["h1", { incidentId: "incident-h1", role: "root", inferred: false }],
+        ["h2", { incidentId: "incident-h1", role: "consequence", inferred: false }],
+      ]);
+      const model = buildMapModel(
+        [
+          { id: "h1", parents: [] },
+          { id: "h2", parents: ["h1"] },
+        ],
+        {},
+        NOW_MS,
+        lookup,
+      );
+      const h1 = model.nodes.find((n) => n.id === "h1");
+      const h2 = model.nodes.find((n) => n.id === "h2");
+      expect(h1).toMatchObject({ dimmed: false, incidentId: "incident-h1", incidentRole: "root", inferredRoot: false });
+      expect(h2).toMatchObject({ dimmed: true, incidentId: "incident-h1", incidentRole: "consequence" });
+    });
+
+    it("marks an inferred root's node inferredRoot true", () => {
+      const lookup: IncidentLookup = new Map([
+        ["h1", { incidentId: "incident-h1", role: "root", inferred: true }],
+      ]);
+      const model = buildMapModel([{ id: "h1", parents: [] }], {}, NOW_MS, lookup);
+      expect(model.nodes.find((n) => n.id === "h1")?.inferredRoot).toBe(true);
+    });
+
+    it("without a 4th argument, every node has dimmed false / incidentId null / incidentRole null / inferredRoot false", () => {
+      const model = buildMapModel(
+        [
+          { id: "h1", parents: [] },
+          { id: "h2", parents: ["h1"] },
+        ],
+        {},
+        NOW_MS,
+      );
+      for (const node of model.nodes) {
+        expect(node.dimmed).toBe(false);
+        expect(node.incidentId).toBeNull();
+        expect(node.incidentRole).toBeNull();
+        expect(node.inferredRoot).toBe(false);
+      }
+    });
+  });
 });
 
 describe("withGridPositions", () => {
@@ -209,6 +257,10 @@ describe("withGridPositions", () => {
         state: "OK",
         position: { x: 10, y: 20 },
         unmanaged: false,
+        dimmed: false,
+        incidentId: null,
+        incidentRole: null,
+        inferredRoot: false,
       },
       {
         id: "b",
@@ -217,6 +269,10 @@ describe("withGridPositions", () => {
         state: "OK",
         position: null,
         unmanaged: false,
+        dimmed: false,
+        incidentId: null,
+        incidentRole: null,
+        inferredRoot: false,
       },
       {
         id: "c",
@@ -225,6 +281,10 @@ describe("withGridPositions", () => {
         state: "OK",
         position: null,
         unmanaged: false,
+        dimmed: false,
+        incidentId: null,
+        incidentRole: null,
+        inferredRoot: false,
       },
     ];
     const result = withGridPositions(nodes);
@@ -245,6 +305,10 @@ describe("withGridPositions", () => {
         state: "OK",
         position: null,
         unmanaged: false,
+        dimmed: false,
+        incidentId: null,
+        incidentRole: null,
+        inferredRoot: false,
       },
     ];
     const result = withGridPositions(nodes);

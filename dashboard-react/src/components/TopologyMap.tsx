@@ -19,9 +19,10 @@ import { DataSet } from "vis-data/peer";
 import { Network } from "vis-network/peer";
 import "vis-network/styles/vis-network.css";
 import { Banner } from "kone-design-system";
-import { nodeVisual } from "../lib/mapIcons";
+import { nodeVisual, type NodeEmphasis } from "../lib/mapIcons";
 import { createUnmanagedSwitch, isValidHostName, setMapPosition, updateParents } from "../lib/checkmkWrite";
 import { buildMapModel, withGridPositions, type MapEdge, type MapNode } from "../lib/topologyLayout";
+import type { IncidentLookup } from "../lib/incidents";
 import type { DevicePayload } from "../lib/types";
 
 export interface EditFailure {
@@ -36,6 +37,7 @@ export interface TopologyMapProps {
   editMode?: boolean;
   onEditSaved?: () => void;
   onEditFailed?: (failure: EditFailure) => void;
+  incidentLookup?: IncidentLookup;
 }
 
 // Shared by addEdge/editEdge/deleteEdge -- all three write via updateParents, so all three fail
@@ -70,6 +72,10 @@ const EMPTY_STATE_BODY =
   "Every device is shown below, ready to connect. Turn on Edit topology and drag between two devices to draw a link — it saves to Checkmk once you Apply.";
 const NO_CONNECTIONS_BANNER_MESSAGE = "No connections drawn yet — turn on Edit topology to start.";
 const UNMANAGED_SWITCH_TITLE = "Unmanaged switch (not monitored)";
+// DASH-15/14-UI-SPEC "Dimmed Consequence Treatment" -- replaces the unmanaged-switch title for
+// a dimmed or inferred-root node; a plain unmanaged (non-root) node keeps its own title.
+const DIMMED_NODE_TITLE = "Part of an open incident — click to see it";
+const INFERRED_ROOT_TITLE = "Inferred root cause, not confirmed";
 
 const ROOT_CLASS_NAME =
   "relative flex h-full w-full items-center justify-center rounded-md border border-neutral-150 bg-bg-subtle";
@@ -95,11 +101,19 @@ const NETWORK_OPTIONS = {
 // Fields shared by nodes.update() (existing node) and nodes.add() (new node) -- NO x/y here,
 // so an update never disturbs a dragged/panned/zoomed position (Phase 11 D-09).
 function nodeBaseFields(node: MapNode) {
+  const emphasis: NodeEmphasis = node.inferredRoot ? "inferred-root" : node.dimmed ? "dimmed" : "normal";
+  const title = node.inferredRoot
+    ? INFERRED_ROOT_TITLE
+    : node.dimmed
+      ? DIMMED_NODE_TITLE
+      : node.unmanaged
+        ? UNMANAGED_SWITCH_TITLE
+        : undefined;
   return {
     id: node.id,
     label: node.label,
-    title: node.unmanaged ? UNMANAGED_SWITCH_TITLE : undefined,
-    ...nodeVisual(node.deviceType, node.state),
+    title,
+    ...nodeVisual(node.deviceType, node.state, emphasis),
   };
 }
 
@@ -110,6 +124,7 @@ export function TopologyMap({
   editMode = false,
   onEditSaved,
   onEditFailed,
+  incidentLookup,
 }: TopologyMapProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -140,10 +155,18 @@ export function TopologyMap({
   const pendingNodeAdds = useRef(new Map<string, MapNode>());
 
   const model = useMemo(
-    () => buildMapModel(topologyDevices, statuses, nowMs),
-    [topologyDevices, statuses, nowMs],
+    () => buildMapModel(topologyDevices, statuses, nowMs, incidentLookup),
+    [topologyDevices, statuses, nowMs, incidentLookup],
   );
   const hasNodes = model.nodes.length > 0;
+
+  // The click handler below is registered once, in the mount effect -- it reads the latest
+  // model through this ref (rather than closing over `model` directly) so a consequence node's
+  // incidentId/incidentRole is always current, exactly like editModeRef does for editMode.
+  const modelRef = useRef(model);
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
 
   // vis-network's built-in manipulation toolbar calls these with the shape documented at
   // https://visjs.github.io/vis-network/docs/network/manipulation.html; every write goes
@@ -278,6 +301,10 @@ export function TopologyMap({
         state: "PEND",
         position: { x, y },
         unmanaged: true,
+        dimmed: false,
+        incidentId: null,
+        incidentRole: null,
+        inferredRoot: false,
       });
       callback({
         ...data,
@@ -323,9 +350,15 @@ export function TopologyMap({
         return;
       }
       const nodeId = params.nodes[0];
-      if (nodeId) {
-        navigate(`/details?id=${encodeURIComponent(nodeId)}`);
+      if (!nodeId) {
+        return;
       }
+      const node = modelRef.current.nodes.find((n) => n.id === nodeId);
+      if (node?.incidentRole === "consequence" && node.incidentId) {
+        navigate(`/?incident=${encodeURIComponent(node.incidentId)}`);
+        return;
+      }
+      navigate(`/details?id=${encodeURIComponent(nodeId)}`);
     });
 
     // Position persistence: a drag only ever writes while edit mode is on. A successful write

@@ -13,6 +13,7 @@
 
 import { displayName, effectiveState } from "./display";
 import { isDeviceStale } from "./staleness";
+import type { IncidentLookup } from "./incidents";
 import type { DevicePayload } from "./types";
 
 // Checkmk host-label keys shared by the poller (plan 13-04) and the browser's direct-write
@@ -52,6 +53,10 @@ export interface MapNode {
   state: string;
   position: { x: number; y: number } | null;
   unmanaged: boolean;
+  dimmed: boolean;
+  incidentId: string | null;
+  incidentRole: "root" | "consequence" | null;
+  inferredRoot: boolean;
 }
 
 export interface MapEdge {
@@ -82,6 +87,10 @@ export function buildMapModel(
   topologyDevices: unknown[],
   statuses: Record<string, DevicePayload>,
   nowMs: number,
+  // Plain parameter, never a store read -- same rule this file's own D-11 forward-compat
+  // comment states for topologyDevices/statuses. Callers (TopologyMap, plan 14-04) pass the
+  // current incident lookup on every render.
+  incidentLookup: IncidentLookup = new Map(),
 ): { nodes: MapNode[]; edges: MapEdge[] } {
   const entries = Array.isArray(topologyDevices) ? topologyDevices : [];
   const safeStatuses = statuses && typeof statuses === "object" ? statuses : {};
@@ -104,6 +113,7 @@ export function buildMapModel(
     const status = safeStatuses[entry.id];
     const state = isDeviceStale(status, nowMs) ? "STALE" : effectiveState(status);
     const label = status ? displayName(status) : displayName({ id: entry.id, alias: entry.alias });
+    const membership = incidentLookup.get(entry.id);
     return {
       id: entry.id,
       label,
@@ -111,6 +121,10 @@ export function buildMapModel(
       state,
       position: parseMapPosition(entry.map_position),
       unmanaged: entry.unmanaged === true,
+      dimmed: membership?.role === "consequence",
+      incidentId: membership?.incidentId ?? null,
+      incidentRole: membership?.role ?? null,
+      inferredRoot: membership !== undefined && membership.role === "root" && membership.inferred,
     };
   });
 
