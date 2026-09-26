@@ -57,6 +57,10 @@ describe("SUBSCRIBE_TOPICS", () => {
     expect(SUBSCRIBE_TOPICS).toContain("lan/devices/+/services");
     expect(SUBSCRIBE_TOPICS).toContain("lan/devices/+/service_history");
   });
+
+  it("includes the Phase 14 incident wildcard topic", () => {
+    expect(SUBSCRIBE_TOPICS).toContain("lan/incidents/+/status");
+  });
 });
 
 describe("connect", () => {
