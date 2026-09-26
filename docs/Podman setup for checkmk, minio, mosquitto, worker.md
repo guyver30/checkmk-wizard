@@ -544,9 +544,14 @@ With the stack up, verify the root-cause incident engine end to end:
    open incidents (one retained message per open incident); with none open it times out
    ("Timed out", RC 27) with no message received, the same clear-vs-empty distinction as the
    manual tombstone test above.
-3. To provoke one safely: in Checkmk, select a host and use Commands > "Fake check results" to
-   set it DOWN (and, if it has children, they will show UNREACH); reverse it afterwards with
-   another "Fake check results" back to UP, or reschedule the host's active check.
+3. To provoke one safely: **do not use Checkmk's GUI "Fake check results"** — live-verified
+   2026-09-26 (plan 14-05), its result is overwritten by the host's own next real active check
+   (~1 minute for a host with no IP, whose real check always returns UP), so a fake can vanish
+   between two 60-second poller reads before it's even visible. Use Livestatus external commands
+   instead (`DISABLE_HOST_CHECK` first, then `PROCESS_HOST_CHECK_RESULT`, then
+   `ENABLE_HOST_CHECK` to reverse) — see `docs/Incident demo with fake check results.md` for the
+   exact commands, scenario scripts (single host, managed switch, unmanaged/inferred switch,
+   poller restart), and cleanup/verification steps.
 4. Expected dashboard result: within about two poll cycles, one incident card appears above the
    stats strip (`"{host} — {duration}"`, worst-criticality colour), the affected hosts dim in
    the fleet tree and on the topology map with a "See incident" link, and restoring the faked
