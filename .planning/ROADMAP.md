@@ -350,7 +350,36 @@ Plans:
 
 **Honest caveat to carry**: a projection is only as good as its history. Disk-fill dates are credible almost immediately; a drive-failure date is not credible until the drive has been watched for months. Promising it sooner is the one thing that would undermine the rest.
 
-**Plans**: TBD
+**Plans:** 9 plans
+
+Plans:
+
+**Wave 1**
+
+- [ ] 14-01-PLAN.md — Poller incident engine: `last_state_change` probe column, pure `compute_incidents()` (root-cause collapse, unmanaged inference, transitive worst criticality), retained `lan/incidents/{id}/status` publish/tombstone/self-heal (PLR-14, PLR-15, PLR-16)
+- [ ] 14-02-PLAN.md — Dashboard incident data layer: `lib/incidents.ts`, `incidents` store slice, `lan/incidents/+/status` subscription (DASH-14, DASH-15)
+
+**Wave 2** *(blocked on 14-02)*
+
+- [ ] 14-03-PLAN.md — Dimmed consequence hosts in tree and map, inferred-root styling, links to the incident (DASH-15)
+
+**Wave 3** *(blocked on 14-03)*
+
+- [ ] 14-04-PLAN.md — Incident card list above the stats strip, live wiring of dimming, `/?incident=` highlight (DASH-14, DASH-15)
+
+**Wave 4** *(blocked on 14-04; D-06 evidence-framing gate)*
+
+- [ ] 14-05-PLAN.md — Incident docs + live verification checkpoint incl. `last_state_change` probe (non-autonomous)
+- [ ] 14-06-PLAN.md — Kiosk/wall mode `?kiosk=1` with 20 s rotation (DASH-17)
+
+**Wave 5** *(blocked on 14-05)*
+
+- [ ] 14-07-PLAN.md — Poller carries criticality / service_criticality / depends_on labels to every viewer (PLR-16)
+- [ ] 14-08-PLAN.md — Criticality & dependency editor in edit mode, label writes via the single Apply flow (DASH-16)
+
+**Wave 6** *(blocked on 14-06, 14-07, 14-08)*
+
+- [ ] 14-09-PLAN.md — Label/kiosk docs + live verification checkpoint (non-autonomous)
 
 ### Phase 14.1: Fleet History Store, Availability Rollups and Grafana (INSERTED)
 
