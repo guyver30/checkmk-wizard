@@ -98,3 +98,11 @@ None — no external service configuration required.
 ---
 *Phase: 14-fleet-intelligence*
 *Completed: 2026-09-26*
+
+## Self-Check: PASSED
+
+All created/modified files verified present (`IncidentCard.tsx`, `IncidentList.tsx`,
+`IncidentList.test.tsx`, `IndexRoute.tsx`, `IndexRoute.test.tsx`); all three commits
+(`a50d148`, `e65f41f`, `edbcffb`) verified present in `git log --oneline --all`; full
+`npm test` suite 417/417 passed, `npm run typecheck` exit 0, `npm run lint` exit 0
+(pre-existing warnings only, no new ones), `npm run build` exit 0.
