@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IndexRoute } from "./IndexRoute";
 import * as checkmkWrite from "../lib/checkmkWrite";
+import type { IncidentLookup } from "../lib/incidents";
 import { useAppStore } from "../store/useAppStore";
 
 // Every write in edit mode goes through checkmkWrite.ts -- mocked here so these route-level
@@ -30,8 +31,13 @@ vi.mock("../components/TopologyMap", () => ({
     editMode?: boolean;
     onEditSaved?: () => void;
     onEditFailed?: (failure: { title: string; body: string }) => void;
+    incidentLookup?: IncidentLookup;
   }) => (
-    <div data-testid="topology-map" data-edit-mode={String(props.editMode ?? false)}>
+    <div
+      data-testid="topology-map"
+      data-edit-mode={String(props.editMode ?? false)}
+      data-incident-lookup-size={String(props.incidentLookup?.size ?? 0)}
+    >
       <button onClick={() => props.onEditSaved?.()}>trigger-saved</button>
       <button onClick={() => props.onEditFailed?.({ title: "Map failure", body: "Map failure body" })}>
         trigger-failed
@@ -55,6 +61,14 @@ function encode(value: unknown): Uint8Array {
 function renderIndex() {
   return render(
     <MemoryRouter>
+      <IndexRoute />
+    </MemoryRouter>,
+  );
+}
+
+function renderIndexAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
       <IndexRoute />
     </MemoryRouter>,
   );
@@ -251,5 +265,89 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     expect(screen.getByTestId("snackbar")).toHaveTextContent(
       "Edit topology turned off after 5 minutes of inactivity",
     );
+  });
+});
+
+describe("IndexRoute incidents (DASH-14/DASH-15)", () => {
+  function seedDevicesAndIncident() {
+    act(() => {
+      useAppStore
+        .getState()
+        .handleMessage(
+          "lan/devices/h1/status",
+          encode({
+            id: "h1",
+            state: "DOWN",
+            device_type: "NetworkDevice",
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      useAppStore
+        .getState()
+        .handleMessage(
+          "lan/devices/h2/status",
+          encode({
+            id: "h2",
+            state: "UNKNOWN",
+            host_state_raw: "UNREACH",
+            device_type: "other",
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      useAppStore
+        .getState()
+        .handleMessage(
+          "lan/incidents/incident-h1/status",
+          encode({
+            id: "incident-h1",
+            root: "h1",
+            root_state: "DOWN",
+            inferred: false,
+            confirmed_down: [],
+            not_observable: ["h2"],
+            dependents: [],
+            worst_criticality: "high",
+            since: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+          }),
+        );
+    });
+  }
+
+  it("renders the incident card above the Fleet state summary region, and h2's tree row shows 'See incident'", () => {
+    renderIndex();
+    seedDevicesAndIncident();
+
+    const incidentRegion = screen.getByRole("region", { name: /open incidents/i });
+    const status = screen.getByRole("status", { name: /fleet state summary/i });
+    const position = incidentRegion.compareDocumentPosition(status);
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const tree = screen.getByRole("tree", { name: "Device tree" });
+    within(tree)
+      .getAllByRole("button")
+      .forEach((button) => fireEvent.click(button));
+
+    expect(screen.getByText("See incident")).toBeInTheDocument();
+  });
+
+  it("with no incidents open, 'No open incidents' renders and the stats strip and map still render", () => {
+    renderIndex();
+    expect(screen.getByText("No open incidents")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /fleet state summary/i })).toBeInTheDocument();
+    expect(screen.getByTestId("topology-map")).toBeInTheDocument();
+  });
+
+  it("rendered at /?incident=incident-h1, that incident's card carries the highlight ring class", () => {
+    renderIndexAt("/?incident=incident-h1");
+    seedDevicesAndIncident();
+
+    const card = document.querySelector('[data-incident-id="incident-h1"]');
+    expect(card).toHaveClass("ring-2");
+  });
+
+  it("passes a populated incidentLookup down to TopologyMap", () => {
+    renderIndex();
+    seedDevicesAndIncident();
+    expect(screen.getByTestId("topology-map")).toHaveAttribute("data-incident-lookup-size", "2");
   });
 });
