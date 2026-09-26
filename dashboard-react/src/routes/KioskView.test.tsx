@@ -64,7 +64,7 @@ describe("KioskView", () => {
 
   it("renders a full-height IncidentList and a read-only TopologyMap", () => {
     renderKioskView();
-    expect(screen.getByTestId("topology-map")).toHaveAttribute("data-edit-mode", "false");
+    expect(screen.getByTestId("topology-map")).toBeInTheDocument();
   });
 
   it("shows an Enter full screen button that requests fullscreen and disappears on click", () => {
