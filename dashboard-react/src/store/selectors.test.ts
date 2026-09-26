@@ -12,6 +12,7 @@ function stateWithDevices(devices: Record<string, DevicePayload>): AppState {
     services: {},
     serviceHistory: {},
     events: [],
+    incidents: {},
     topology: null,
     pollerStatus: null,
     lastKnownPollerTimestamp: null,
