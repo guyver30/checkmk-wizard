@@ -116,3 +116,11 @@ None -- no external service configuration required. This plan only reads labels 
 ---
 *Phase: 14-fleet-intelligence*
 *Completed: 2026-09-26*
+
+## Self-Check: PASSED
+
+- FOUND: scripts/mqtt_poller.py
+- FOUND: tests/test_mqtt_poller.py
+- FOUND: .planning/phases/14-fleet-intelligence/14-07-SUMMARY.md
+- FOUND commit: 76fd002 (Task 1)
+- FOUND commit: 88a6935 (Task 2)
