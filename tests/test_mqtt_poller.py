@@ -1,3 +1,4 @@
+import datetime
 import importlib.util
 import json
 import sys
@@ -212,6 +213,238 @@ def test_topology_signature_tolerates_nodes_missing_map_position_and_unmanaged_k
         }
     ]
     assert poller.topology_signature(legacy) == poller.topology_signature(current)
+
+
+# --- compute_incidents / incident_signature ----------------------------------
+
+
+def test_compute_incidents_groups_down_host_and_unreachable_children():
+    snapshots = [
+        _snapshot("sw1", host_state_raw="DOWN"),
+        _snapshot("a", host_state_raw="UNREACH", parents=["sw1"]),
+        _snapshot("b", host_state_raw="UNREACH", parents=["sw1"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert incident["id"] == "incident-sw1"
+    assert incident["root"] == "sw1"
+    assert incident["root_state"] == "DOWN"
+    assert incident["inferred"] is False
+    assert incident["confirmed_down"] == []
+    assert incident["not_observable"] == ["a", "b"]
+
+
+def test_compute_incidents_multi_hop_unreachable_chain_joins_single_incident():
+    snapshots = [
+        _snapshot("core", host_state_raw="DOWN"),
+        _snapshot("sw2", host_state_raw="UNREACH", parents=["core"]),
+        _snapshot("lift1", host_state_raw="UNREACH", parents=["sw2"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert incident["root"] == "core"
+    assert incident["not_observable"] == ["lift1", "sw2"]
+    assert incident["confirmed_down"] == []
+
+
+def test_compute_incidents_nested_down_folds_into_upstream_incident():
+    snapshots = [
+        _snapshot("core", host_state_raw="DOWN"),
+        _snapshot("sw3", host_state_raw="DOWN", parents=["core"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert incident["root"] == "core"
+    assert incident["confirmed_down"] == ["sw3"]
+    assert incident["not_observable"] == []
+
+
+def test_compute_incidents_unmanaged_switch_promoted_as_inferred_root_when_sibling_also_down():
+    snapshots = [
+        _snapshot("um1", state="OK", host_state_raw="UP", unmanaged=True),
+        _snapshot("gc1", host_state_raw="DOWN", parents=["um1"]),
+        _snapshot("gc2", host_state_raw="UNREACH", parents=["um1"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert incident["id"] == "incident-um1"
+    assert incident["root"] == "um1"
+    assert incident["root_state"] == "UP"
+    assert incident["inferred"] is True
+    assert incident["confirmed_down"] == []
+    assert incident["not_observable"] == ["gc1", "gc2"]
+
+
+def test_compute_incidents_lone_down_host_under_unmanaged_switch_is_its_own_incident():
+    snapshots = [
+        _snapshot("um1", state="OK", host_state_raw="UP", unmanaged=True),
+        _snapshot("gc1", host_state_raw="DOWN", parents=["um1"]),
+        _snapshot("gc3", host_state_raw="UP", parents=["um1"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert incident["id"] == "incident-gc1"
+    assert incident["root"] == "gc1"
+    assert incident["root_state"] == "DOWN"
+    assert incident["inferred"] is False
+
+
+def test_compute_incidents_non_ok_chain_must_be_contiguous():
+    # DOWN host "h" sits under a healthy managed parent "p", which itself
+    # sits under a DOWN grandparent "gp" -- the walk must stop at "p"
+    # (UP, not traversable), so "h" and "gp" are two separate incidents.
+    snapshots = [
+        _snapshot("gp", host_state_raw="DOWN"),
+        _snapshot("p", host_state_raw="UP", parents=["gp"]),
+        _snapshot("h", host_state_raw="DOWN", parents=["p"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert {incident["root"] for incident in incidents} == {"gp", "h"}
+    assert len(incidents) == 2
+    for incident in incidents:
+        assert incident["confirmed_down"] == []
+        assert incident["not_observable"] == []
+
+
+def test_compute_incidents_unreachable_host_with_no_down_ancestor_has_no_incident():
+    snapshots = [
+        _snapshot("p", host_state_raw="UP"),
+        _snapshot("h", host_state_raw="UNREACH", parents=["p"]),
+    ]
+    assert poller.compute_incidents(snapshots) == []
+
+
+def test_compute_incidents_all_hosts_up_returns_empty_list():
+    snapshots = [_snapshot("a"), _snapshot("b", parents=["a"])]
+    assert poller.compute_incidents(snapshots) == []
+
+
+def test_compute_incidents_parent_cycle_terminates_and_assigns_single_incident():
+    snapshots = [
+        _snapshot("a", host_state_raw="DOWN", parents=["b"]),
+        _snapshot("b", host_state_raw="DOWN", parents=["a"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+    incident = incidents[0]
+    members = {incident["root"], *incident["confirmed_down"]}
+    assert members == {"a", "b"}
+
+
+def _criticality_fixture(scr_state):
+    return [
+        _snapshot("core", host_state_raw="DOWN", criticality="low"),
+        _snapshot("lift1", host_state_raw="UNREACH", parents=["core"], criticality="medium"),
+        _snapshot("srv", host_state_raw="UP", depends_on=["lift1"]),
+        _snapshot("scr", host_state_raw=scr_state, depends_on=["srv"], criticality="critical"),
+    ]
+
+
+def test_compute_incidents_worst_criticality_transitive_dependent_up_counts_one_tier_lower():
+    incidents = poller.compute_incidents(_criticality_fixture(scr_state="UP"))
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert incident["dependents"] == ["scr", "srv"]
+    # scr is UP: critical (index 3) drops one tier to high (index 2). srv
+    # defaults to "low" and is also UP, so it contributes index 0. The
+    # root/consequence contribute low/medium. Overall worst is "high".
+    assert incident["worst_criticality"] == "high"
+
+
+def test_compute_incidents_worst_criticality_non_up_dependent_counts_full_tier():
+    # scr is DOWN here, which makes it its own separate incident (it has no
+    # parents linking it to "core") -- it is a dependent of core's incident
+    # via depends_on, not a consequence of it, exactly per D-15's wording.
+    incidents = poller.compute_incidents(_criticality_fixture(scr_state="DOWN"))
+    assert len(incidents) == 2
+    core_incident = next(incident for incident in incidents if incident["root"] == "core")
+    assert core_incident["dependents"] == ["scr", "srv"]
+    assert core_incident["worst_criticality"] == "critical"
+
+
+def test_compute_incidents_worst_criticality_ignores_self_reference_and_unknown_depends_on():
+    snapshots = [_snapshot("core", host_state_raw="DOWN", depends_on=["core", "ghost"])]
+    incidents = poller.compute_incidents(snapshots)
+    assert incidents[0]["dependents"] == []
+    assert incidents[0]["worst_criticality"] == "low"
+
+
+def test_compute_incidents_invalid_criticality_string_counts_as_low():
+    snapshots = [_snapshot("core", host_state_raw="DOWN", criticality="urgent!!")]
+    incidents = poller.compute_incidents(snapshots)
+    assert incidents[0]["worst_criticality"] == "low"
+
+
+def test_compute_incidents_since_uses_min_last_state_change_of_root_and_consequences():
+    snapshots = [
+        _snapshot("core", host_state_raw="DOWN", last_state_change=1790000100),
+        _snapshot("lift1", host_state_raw="UNREACH", parents=["core"], last_state_change=1790000000),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    expected = datetime.datetime.fromtimestamp(1790000000, datetime.UTC).isoformat()
+    assert incidents[0]["since"] == expected
+
+
+def test_compute_incidents_since_is_none_when_no_positive_last_state_change():
+    incidents = poller.compute_incidents([_snapshot("core", host_state_raw="DOWN")])
+    assert incidents[0]["since"] is None
+
+
+def test_compute_incidents_since_excludes_inferred_root_own_last_state_change():
+    # The root (um1) is inferred and its own host_state_raw is "UP", so its
+    # last_state_change (1, deliberately the smallest value) must not feed
+    # `since` -- only the DOWN/UNREACH consequences' timestamps may.
+    snapshots = [
+        _snapshot("um1", state="OK", host_state_raw="UP", unmanaged=True, last_state_change=1),
+        _snapshot("gc1", host_state_raw="DOWN", parents=["um1"], last_state_change=1790000000),
+        _snapshot("gc2", host_state_raw="UNREACH", parents=["um1"], last_state_change=1790000500),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    expected = datetime.datetime.fromtimestamp(1790000000, datetime.UTC).isoformat()
+    assert incidents[0]["since"] == expected
+
+
+def test_compute_incidents_output_sorted_by_id_with_exact_keys():
+    snapshots = [
+        _snapshot("z-switch", host_state_raw="DOWN"),
+        _snapshot("a-switch", host_state_raw="DOWN"),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert [incident["id"] for incident in incidents] == ["incident-a-switch", "incident-z-switch"]
+    for incident in incidents:
+        assert set(incident.keys()) == {
+            "id",
+            "root",
+            "root_state",
+            "inferred",
+            "confirmed_down",
+            "not_observable",
+            "dependents",
+            "worst_criticality",
+            "since",
+        }
+
+
+def test_incident_signature_reflects_dependents_and_worst_criticality():
+    base = {
+        "id": "incident-core",
+        "root": "core",
+        "root_state": "DOWN",
+        "inferred": False,
+        "confirmed_down": [],
+        "not_observable": ["a"],
+        "dependents": ["scr"],
+        "worst_criticality": "high",
+        "since": None,
+    }
+    changed = {**base, "worst_criticality": "critical"}
+    assert poller.incident_signature(base) != poller.incident_signature(changed)
+    assert poller.incident_signature(base) == poller.incident_signature({**base})
 
 
 # --- extract_device_type --------------------------------------------------------
@@ -794,6 +1027,36 @@ def test_query_devices_staleness_carries_through_numeric_value_as_float():
     with patch("socket.create_connection", return_value=sock):
         snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
     assert snapshots[0].staleness == 4.5
+
+
+def test_optional_host_columns_includes_last_state_change():
+    assert "last_state_change" in poller.OPTIONAL_HOST_COLUMNS
+
+
+def test_query_devices_parses_last_state_change():
+    columns = ["name", "state", "last_state_change"]
+    sock = _fake_connection(json.dumps([["web1", 0, 1790000000]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].last_state_change == 1790000000
+
+
+def test_query_devices_last_state_change_absent_or_zero_is_none():
+    sock = _fake_connection(b'[["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10)
+    assert snapshots[0].last_state_change is None
+
+    columns = ["name", "state", "last_state_change"]
+    sock = _fake_connection(json.dumps([["web1", 0, 0]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].last_state_change is None
+
+    sock = _fake_connection(json.dumps([["web2", 0, "not-a-number"]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].last_state_change is None
 
 
 def test_query_devices_host_state_raw_is_unreach_while_state_stays_down():
@@ -1568,6 +1831,27 @@ def test_reconcile_state_seeds_previous_nodes_from_retained_topology():
     }
 
 
+def test_reconcile_state_seeds_previous_incidents_from_retained_incident_topics():
+    retained = [
+        ("lan/incidents/incident-x/status", b'{"id": "incident-x"}'),
+        ("lan/incidents/incident-cleared/status", b""),
+        (poller.TOPIC_TOPOLOGY, b'{"devices": []}'),
+    ]
+
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+
+        def _subscribe(topic, qos=None):
+            if topic == poller.TOPIC_TOPOLOGY:
+                for msg_topic, payload in retained:
+                    mock_client.on_message(mock_client, None, _make_message(msg_topic, payload))
+
+        mock_client.subscribe.side_effect = _subscribe
+        state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
+
+    assert state.previous_incidents == {"incident-x": None}
+
+
 # --- run_cycle ------------------------------------------------------------------
 
 
@@ -1579,6 +1863,11 @@ def _snapshot(
     folder="",
     in_downtime=False,
     acknowledged=False,
+    host_state_raw="UP",
+    unmanaged=False,
+    criticality="low",
+    depends_on=None,
+    last_state_change=None,
 ):
     return poller.DeviceSnapshot(
         id=id_,
@@ -1588,6 +1877,11 @@ def _snapshot(
         device_type=device_type,
         folder=folder,
         parents=parents or [],
+        host_state_raw=host_state_raw,
+        unmanaged=unmanaged,
+        criticality=criticality,
+        depends_on=depends_on or [],
+        last_state_change=last_state_change,
     )
 
 
@@ -1776,6 +2070,115 @@ def test_run_cycle_truncates_history_and_events_to_configured_bounds():
 
     assert len(state.history["a"]) <= 2
     assert len(state.events) <= 1
+
+
+# --- run_cycle: incidents (PLR-14/PLR-16) ------------------------------------
+
+
+def test_run_cycle_publishes_new_incident_retained_qos1():
+    client = MagicMock()
+    state = _poller_state()
+    snapshots = [
+        _snapshot("sw1", host_state_raw="DOWN"),
+        _snapshot("a", host_state_raw="UNREACH", parents=["sw1"]),
+    ]
+
+    poller.run_cycle(client, _make_config(), state, snapshots)
+
+    calls = _published(client, "lan/incidents/incident-sw1/status")
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.kwargs["retain"] is True
+    assert call.kwargs["qos"] == 1
+    payload = json.loads(call.args[1])
+    assert payload["root"] == "sw1"
+    assert payload["not_observable"] == ["a"]
+    assert "timestamp" in payload
+    assert state.previous_incidents["incident-sw1"] == poller.incident_signature(
+        {**payload, "id": "incident-sw1"}
+    )
+
+
+def test_run_cycle_does_not_republish_unchanged_incident():
+    client = MagicMock()
+    state = _poller_state()
+    snapshots = [
+        _snapshot("sw1", host_state_raw="DOWN"),
+        _snapshot("a", host_state_raw="UNREACH", parents=["sw1"]),
+    ]
+
+    poller.run_cycle(client, _make_config(), state, snapshots)
+    client.reset_mock()
+    poller.run_cycle(client, _make_config(), state, snapshots)
+
+    assert _published(client, "lan/incidents/incident-sw1/status") == []
+
+
+def test_run_cycle_republishes_incident_when_consequences_change():
+    client = MagicMock()
+    state = _poller_state()
+    snapshots = [
+        _snapshot("sw1", host_state_raw="DOWN"),
+        _snapshot("a", host_state_raw="UNREACH", parents=["sw1"]),
+    ]
+
+    poller.run_cycle(client, _make_config(), state, snapshots)
+    client.reset_mock()
+    recovered = [_snapshot("sw1", host_state_raw="DOWN"), _snapshot("a", parents=["sw1"])]
+    poller.run_cycle(client, _make_config(), state, recovered)
+
+    calls = _published(client, "lan/incidents/incident-sw1/status")
+    assert len(calls) == 1
+    payload = json.loads(calls[0].args[1])
+    assert payload["not_observable"] == []
+
+
+def test_run_cycle_tombstones_closed_incident():
+    client = MagicMock()
+    state = _poller_state()
+    poller.run_cycle(client, _make_config(), state, [_snapshot("sw1", host_state_raw="DOWN")])
+    client.reset_mock()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("sw1")])
+
+    tombstones = [
+        call
+        for call in client.publish.call_args_list
+        if call.args[0] == "lan/incidents/incident-sw1/status"
+        and call.kwargs.get("payload", "unset") is None
+    ]
+    assert len(tombstones) == 1
+    for call in tombstones:
+        assert call.kwargs["retain"] is True
+        assert call.kwargs["qos"] == 1
+    assert "incident-sw1" not in state.previous_incidents
+
+
+def test_run_cycle_tombstones_reconciled_incident_that_is_no_longer_open():
+    client = MagicMock()
+    state = _poller_state()
+    state.previous_incidents = {"incident-stale": None}
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a")])
+
+    tombstones = [
+        call
+        for call in client.publish.call_args_list
+        if call.args[0] == "lan/incidents/incident-stale/status"
+        and call.kwargs.get("payload", "unset") is None
+    ]
+    assert len(tombstones) == 1
+    assert state.previous_incidents == {}
+
+
+def test_run_cycle_healthy_fleet_publishes_nothing_on_incident_topics():
+    client = MagicMock()
+    state = _poller_state()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b", parents=["a"])])
+
+    incident_calls = [call for call in client.publish.call_args_list if call.args[0].startswith("lan/incidents/")]
+    assert incident_calls == []
 
 
 # --- run_cycle: services / service_history (D-12/D-13/D-14) -----------------
@@ -2309,6 +2712,7 @@ def test_reconcile_state_subscribes_topology_after_per_device_wildcards():
     assert topics[-1] == poller.TOPIC_TOPOLOGY
     for suffix in ("status", "history", "services", "service_history"):
         assert f"lan/devices/+/{suffix}" in topics
+    assert "lan/incidents/+/status" in topics
 
 
 def test_run_cycle_sweep_clears_stale_ids_and_keeps_live_ones():
