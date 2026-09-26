@@ -1,9 +1,10 @@
 import { useEffect } from "react";
-import { BrowserRouter, Route, Routes, useLocation, useNavigate } from "react-router";
+import { BrowserRouter, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router";
 import { NavBar } from "kone-design-system";
 import { ConnectionIndicator } from "./components/ConnectionIndicator";
 import { DetailsRoute } from "./routes/DetailsRoute";
 import { IndexRoute } from "./routes/IndexRoute";
+import { KioskView } from "./routes/KioskView";
 import { connect } from "./store/mqttClient";
 
 // Details is deliberately NOT in the nav (Phase 11 removed it, D-19/D-21) — the route
@@ -24,6 +25,30 @@ function AppNav() {
   );
 }
 
+// DASH-17/D-14: kiosk is a rendering mode of "/", not a separate route -- ?kiosk=1 swaps the
+// entire chrome+layout for KioskView here, at the one place that decides what "/" renders, so
+// the incident/map logic KioskView reuses (IncidentList, TopologyMap) cannot drift into a
+// second, route-level implementation of its own.
+function AppShell() {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  if (location.pathname === "/" && searchParams.get("kiosk") === "1") {
+    return <KioskView />;
+  }
+
+  return (
+    <>
+      <AppNav />
+      <Routes>
+        <Route path="/" element={<IndexRoute />} />
+        <Route path="/details" element={<DetailsRoute />} />
+        <Route path="*" element={<IndexRoute />} />
+      </Routes>
+    </>
+  );
+}
+
 function App() {
   // Connects once, at app startup. This effect body is safe despite React 18/19 StrictMode's
   // double-invoked effects because mqttClient.connect() carries its own module-level
@@ -37,12 +62,7 @@ function App() {
 
   return (
     <BrowserRouter>
-      <AppNav />
-      <Routes>
-        <Route path="/" element={<IndexRoute />} />
-        <Route path="/details" element={<DetailsRoute />} />
-        <Route path="*" element={<IndexRoute />} />
-      </Routes>
+      <AppShell />
     </BrowserRouter>
   );
 }
