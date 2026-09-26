@@ -64,7 +64,18 @@ interface NodeVisual {
   };
   borderWidth: number;
   shapeProperties: { borderDashes: false | number[] };
+  opacity?: number;
 }
+
+// DASH-15/14-UI-SPEC "Dimmed Consequence Treatment" and this plan's inferred-root decision:
+// a consequence node of an open incident is de-emphasized (not hidden, no per-state alarm
+// border), and an inferred (unmanaged-switch) root gets a distinct dashed warning border
+// instead of borrowing the state palette's DOWN/UNREACH red (D-04: its own Checkmk state is
+// UP -- it is simply unchecked, so a red border would assert something monitoring cannot see).
+export type NodeEmphasis = "normal" | "dimmed" | "inferred-root";
+
+const NEUTRAL_400 = "#96969f";
+const WARN_HEX = "#f97316"; // STATE_HEX.WARN, matches the incident card's "warning" status
 
 // 13-UI-SPEC.md's accepted CRIT/UNREACH/DOWN tradeoff: same fill hex, differentiated by
 // border weight/dash pattern instead (canvas-native styling Badge's variant system has no
@@ -80,12 +91,16 @@ const BORDER_STYLE: Record<string, { borderWidth: number; borderDashes: false | 
   UNKNOWN: { borderWidth: 2, borderDashes: false },
 };
 
-// Cached by "${deviceType}|${state}" so a DataSet.update() of an unchanged node does not
-// re-encode the same data URI on every poll cycle.
+// Cached by "${deviceType}|${state}|${emphasis}" so a DataSet.update() of an unchanged node
+// does not re-encode the same data URI on every poll cycle.
 const nodeVisualCache = new Map<string, NodeVisual>();
 
-export function nodeVisual(deviceType: string | null | undefined, state: string): NodeVisual {
-  const cacheKey = `${deviceType}|${state}`;
+export function nodeVisual(
+  deviceType: string | null | undefined,
+  state: string,
+  emphasis: NodeEmphasis = "normal",
+): NodeVisual {
+  const cacheKey = `${deviceType}|${state}|${emphasis}`;
   const cached = nodeVisualCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -95,16 +110,28 @@ export function nodeVisual(deviceType: string | null | undefined, state: string)
   const border = BORDER_STYLE[state] ?? BORDER_STYLE.UNKNOWN;
   const svg = deviceTypeSvg(deviceType);
 
+  // Same device-type/state image, faded and flattened to a neutral border -- "still there,
+  // flagged as different", not hidden (UI-SPEC's Auto-Mode Design Decisions). An inferred
+  // root's icon is recolored to the warning hue too, since its own Checkmk state is UP
+  // (unchecked) -- the state-derived `hex` above would otherwise render it green.
+  const image = emphasis === "inferred-root" ? recoloredDataUri(svg, WARN_HEX) : recoloredDataUri(svg, hex);
+  const borderColor =
+    emphasis === "dimmed" ? NEUTRAL_400 : emphasis === "inferred-root" ? WARN_HEX : hex;
+  const borderWidth = emphasis === "dimmed" ? 2 : emphasis === "inferred-root" ? 3 : border.borderWidth;
+  const borderDashes: false | number[] =
+    emphasis === "dimmed" ? false : emphasis === "inferred-root" ? [6, 3] : border.borderDashes;
+
   const visual: NodeVisual = {
-    image: recoloredDataUri(svg, hex),
+    image,
     color: {
-      border: hex,
+      border: borderColor,
       background: "#ffffff",
       highlight: { border: "#1450f5", background: "#ffffff" },
-      hover: { border: hex, background: "#ffffff" },
+      hover: { border: borderColor, background: "#ffffff" },
     },
-    borderWidth: border.borderWidth,
-    shapeProperties: { borderDashes: border.borderDashes },
+    borderWidth,
+    shapeProperties: { borderDashes },
+    ...(emphasis === "dimmed" ? { opacity: 0.4 } : {}),
   };
 
   nodeVisualCache.set(cacheKey, visual);

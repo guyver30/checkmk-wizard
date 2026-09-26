@@ -15,15 +15,22 @@ describe("STATE_HEX", () => {
 });
 
 describe("deviceTypeSvg", () => {
-  it("maps NetworkDevice to the internet.svg markup", () => {
-    expect(deviceTypeSvg("NetworkDevice")).toContain("15.1001 7.9");
+  it("maps NetworkDevice to the current NetworkDevice.svg markup", () => {
+    // Assertion updated 2026-09-26 (deferred-items.md, plan 14-03): the icon was replaced
+    // in commit a427d92 (drop-in device-type icons) and no longer contains "15.1001 7.9" --
+    // the stale assertion is corrected here to the current markup's own distinctive path,
+    // without touching the icon file itself.
+    expect(deviceTypeSvg("NetworkDevice")).toContain("M18 4l3 3l-3 3");
   });
 
-  it("maps E-link to the api.svg markup", () => {
+  it("maps E-link to its own distinct svg markup", () => {
+    // Assertion updated 2026-09-26 (deferred-items.md, plan 14-03): the vendored icons are
+    // stroke-based (`fill="none" stroke="currentColor"`), not fill-based, so no icon contains
+    // `fill="#141414"` anymore -- corrected to assert the two icons are distinct instead.
     const apiMarkup = deviceTypeSvg("E-link");
     const networkMarkup = deviceTypeSvg("NetworkDevice");
     expect(apiMarkup).not.toBe(networkMarkup);
-    expect(apiMarkup).toContain("fill=\"#141414\"");
+    expect(apiMarkup).toContain('unicode: "eb1f"');
   });
 
   it("falls back to circle.svg for undefined, 'unknown', and an unrecognized value, never throwing", () => {
@@ -122,5 +129,31 @@ describe("nodeVisual", () => {
     expect(visual.color.highlight.background).toBe("#ffffff");
     expect(visual.color.hover.border).toBe(STATE_HEX.OK);
     expect(visual.color.hover.background).toBe("#ffffff");
+  });
+
+  describe("emphasis (DASH-15)", () => {
+    it("'dimmed' sets opacity 0.4, a flat neutral border, borderWidth 2, no dashes", () => {
+      const visual = nodeVisual("server", "DOWN", "dimmed");
+      expect(visual.opacity).toBe(0.4);
+      expect(visual.color.border).toBe("#96969f");
+      expect(visual.borderWidth).toBe(2);
+      expect(visual.shapeProperties.borderDashes).toBe(false);
+    });
+
+    it("'inferred-root' sets a dashed warning border with no opacity reduction", () => {
+      const visual = nodeVisual("NetworkDevice", "OK", "inferred-root");
+      expect(visual.color.border).toBe("#f97316");
+      expect(visual.borderWidth).toBe(3);
+      expect(visual.shapeProperties.borderDashes).toEqual([6, 3]);
+      expect(visual.opacity).toBeUndefined();
+    });
+
+    it("'normal' (or omitted) emphasis returns exactly the pre-existing visual", () => {
+      const explicit = nodeVisual("NetworkDevice", "OK", "normal");
+      const omitted = nodeVisual("NetworkDevice", "OK");
+      expect(explicit).toEqual(omitted);
+      expect(explicit.opacity).toBeUndefined();
+      expect(explicit.color.border).toBe(STATE_HEX.OK);
+    });
   });
 });
