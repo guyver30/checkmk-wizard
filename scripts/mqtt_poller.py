@@ -80,7 +80,22 @@ TOPIC_TOPOLOGY = "lan/devices/topology"
 TOPIC_EVENTS = "lan/events/recent"
 TOPIC_POLLER_STATUS = "lan/poller/status"
 
+# Phase 14 (D-13/PLR-14): prefix for the incident id `compute_incidents()`
+# below mints (`f"{INCIDENT_ID_PREFIX}{root_id}"`) and topic segment
+# `reconcile_state()` matches against when collecting retained incident
+# topics at startup.
+INCIDENT_ID_PREFIX = "incident-"
+
 UNKNOWN_DEVICE_TYPE = "unknown"
+
+# Phase 14 (D-05/D-09): operator-entered business tier, never inferred from
+# any Checkmk-native signal. The 4-tier vocabulary (ordinal -- index is
+# rank) is Claude's discretion per D-09, 14-RESEARCH.md A1. Must be kept in
+# step by hand with `CRITICALITY_TIERS`/`CRITICALITY_RANK` in
+# `dashboard-react/src/lib/incidents.ts` (plan 14-02) -- no shared source of
+# truth between Python and that file.
+CRITICALITY_TIERS = ("low", "medium", "high", "critical")
+DEFAULT_CRITICALITY = "low"
 
 # Phase 13 (D-07 addendum, plan 13-04): the map's saved position and
 # unmanaged-switch marker are stored as Checkmk host labels (not a custom
@@ -205,6 +220,13 @@ OPTIONAL_HOST_COLUMNS = (
     # populated on every host, so the timestamp-age fallback (D-12) stays
     # in place: a present column can still return null per-host.
     "staleness",
+    # Added by Phase 14 (PLR-14): per-host epoch seconds of the current
+    # hard/soft state's start, used as incident duration. Standard
+    # Nagios-lineage Livestatus column, NOT yet live-probed on the
+    # 2.4.0p36.cre site (14-RESEARCH.md A3) -- plan 14-05 runs
+    # `--check-columns` live. Absent -> every incident's `since` is null,
+    # never a failure.
+    "last_state_change",
 )
 
 # Phase 12 (D-08/D-11): the services-table required/optional split mirrors
@@ -410,6 +432,20 @@ class DeviceSnapshot:
     # as `folder` above, never a hard failure.
     map_position: str | None = None
     unmanaged: bool = False
+    # Phase 14 (PLR-14/PLR-16): per-host epoch seconds of the current
+    # hard/soft state's start (Livestatus `last_state_change`, see
+    # OPTIONAL_HOST_COLUMNS above), used only as an incident's duration
+    # source. `None` when the column is absent or non-positive -- graceful
+    # degradation, never a hard failure.
+    last_state_change: int | None = None
+    # Phase 14 (D-05/D-07/D-08): criticality/depends_on are populated from
+    # Checkmk host labels by plan 14-07 (`CRITICALITY_LABEL`/
+    # `DEPENDS_ON_LABEL`, read the same way `map_position`/`unmanaged`
+    # already are). Until then they keep these safe defaults, so
+    # `compute_incidents()` below has a stable contract to compute against
+    # from wave 1.
+    criticality: str = DEFAULT_CRITICALITY
+    depends_on: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -451,6 +487,10 @@ def device_services_topic(device_id: str) -> str:
 
 def device_service_history_topic(device_id: str) -> str:
     return f"lan/devices/{device_id}/service_history"
+
+
+def incident_status_topic(incident_id: str) -> str:
+    return f"lan/incidents/{incident_id}/status"
 
 
 def is_publishable_device_id(device_id: str) -> bool:
@@ -536,6 +576,250 @@ def topology_signature(nodes: list[dict]) -> tuple:
             )
             for node in nodes
         )
+    )
+
+
+def _reachable_roots_from(
+    start_id: str,
+    roots: set[str],
+    traversable: set[str],
+    by_id: dict[str, DeviceSnapshot],
+) -> set[str]:
+    """Walk upward from `start_id`'s parents, through `traversable` hosts only, collecting
+    every member of `roots` reached. A `visited` set guards against a `parents` cycle
+    (D-10/PLR-14): each candidate is examined at most once, so this always terminates
+    regardless of how the Livestatus-reported topology is shaped.
+
+    Once a root is reached the walk does not continue past it -- a root's own ancestors
+    are not part of the incident being assigned/nested from `start_id`.
+    """
+    reached: set[str] = set()
+    visited: set[str] = set()
+    frontier = [parent_id for parent_id in by_id[start_id].parents if parent_id in by_id]
+    while frontier:
+        candidate = frontier.pop()
+        if candidate in visited:
+            continue
+        visited.add(candidate)
+        if candidate not in traversable:
+            continue
+        if candidate in roots:
+            reached.add(candidate)
+            continue
+        frontier.extend(parent_id for parent_id in by_id[candidate].parents if parent_id in by_id)
+    return reached
+
+
+def _effective_criticality_index(snapshot: DeviceSnapshot, *, is_dependent: bool) -> int:
+    """Rank of `snapshot.criticality`, D-15's one-tier reduction applied for a still-UP dependent.
+
+    An out-of-vocabulary criticality value (never raised by this project's own label writer,
+    but a hand-edited WATO label could carry one) degrades to `DEFAULT_CRITICALITY`'s rank,
+    the same safe-default posture `fetch_host_config()` already applies to `map_position`.
+    """
+    raw = snapshot.criticality
+    index = CRITICALITY_TIERS.index(raw if raw in CRITICALITY_TIERS else DEFAULT_CRITICALITY)
+    if is_dependent and snapshot.host_state_raw == "UP":
+        return max(index - 1, 0)
+    return index
+
+
+def _dependents_closure(affected: set[str], dependents_of: dict[str, list[str]]) -> set[str]:
+    """BFS outward from `affected` over the (already-inverted) `depends_on` graph.
+
+    A `visited` set is both the accumulator and the cycle guard, matching
+    `_reachable_roots_from()`'s own termination argument (T-14-02).
+    """
+    visited = set(affected)
+    frontier = list(affected)
+    while frontier:
+        current = frontier.pop()
+        for dependent_id in dependents_of.get(current, []):
+            if dependent_id not in visited:
+                visited.add(dependent_id)
+                frontier.append(dependent_id)
+    return visited
+
+
+def compute_incidents(snapshots: list[DeviceSnapshot]) -> list[dict]:
+    """Group every non-OK (DOWN/UNREACH) host into one incident per root cause (PLR-14/PLR-15).
+
+    Pure function, no I/O: re-derived from a fresh `list[DeviceSnapshot]` every poll cycle
+    (D-13/PLR-14's "no persisted incident state" requirement), using only `parents` and
+    `host_state_raw` for grouping and `criticality`/`depends_on` for the worst-affected
+    calculation -- both already present on every snapshot handed to this function.
+
+    Algorithm (D-10/D-11/PLR-14/PLR-15):
+
+    1. `non_ok` = hosts whose `host_state_raw` is "DOWN" or "UNREACH". Service-level
+       WARN/CRIT never triggers incident grouping -- this is about host-level DOWN/
+       UNREACHABLE cascades only.
+    2. Inferred roots (D-11): an `unmanaged` host with >= 2 non-OK children, at least one
+       of which is DOWN, becomes an inferred root -- Checkmk cannot see past an unmanaged
+       switch, so several children going non-OK together is the sibling evidence D-11
+       requires before blaming the switch. A lone non-OK child under an unmanaged switch
+       is NOT inferred; it stays its own plain root.
+    3. Plain roots: every DOWN host that is not a direct child of an inferred root.
+    4. Traversable set = `non_ok` union the inferred roots (an inferred root's own
+       `host_state_raw` is typically "UP" -- Checkmk can still ping the switch -- so it
+       would not otherwise be walkable). A root is NESTED when walking upward through
+       traversable parents (`_reachable_roots_from`, cycle-guarded) reaches another root;
+       top roots are the roots that are not nested. A parent cycle can leave every root in
+       a nested group nested; the fallback promotes the first (by id) root with no *other*
+       reachable top root to a top root itself, guaranteeing every root ends up assigned.
+    5. Assignment: every non-OK host that is not itself a top root walks its traversable
+       parent chain (same cycle-guarded walk) collecting reachable top roots; joining the
+       lexicographically smallest id keeps the choice deterministic when more than one is
+       reachable. A host that reaches no top root belongs to no incident and is simply
+       left out -- Checkmk's own data does not support inventing a root for it.
+    6. Classification (Plan 14-01 decision, D-04 applied to PLR-14): in an INFERRED
+       incident every consequence goes to `not_observable`, never `confirmed_down` --
+       Checkmk reports a host behind an unchecked switch as DOWN only because it cannot
+       see the switch, and claiming "confirmed down" would be exactly the overclaim D-04
+       forbids. In a non-inferred incident a DOWN consequence is `confirmed_down`, an
+       UNREACH one is `not_observable`.
+    7. Worst-affected criticality (PLR-16, transitive closure per 14-RESEARCH.md Open
+       Question 1): `dependents` is the transitive closure of `affected` (root plus
+       consequences) over the reverse `depends_on` graph, minus `affected` itself.
+       `worst_criticality` is the highest-ranked criticality among `affected` union
+       `dependents`, where a dependent that is still UP counts one tier lower than its own
+       tier (D-15) and every other member counts at its own tier.
+    8. `since`: the earliest positive `last_state_change` across the root (only when the
+       root is itself DOWN/UNREACH -- an inferred root's own timestamp is not evidence of
+       when the incident began) and every consequence, rendered ISO-8601 UTC; `None` when
+       no member has one (column absent, or every value non-positive).
+
+    Known limitation (14-RESEARCH.md Pitfall 1, shipped as-is for v1 per Open Question 2):
+    a host that is independently DOWN for its own unrelated reason, but happens to sit
+    behind a root that also failed, is folded into that root's incident as a consequence --
+    Livestatus's `parents`/`host_state_raw` alone cannot disambiguate "down because of the
+    incident" from "coincidentally also down". This is not attempted here; the wording is
+    still factually true (the host is DOWN), just imprecise about cause.
+    """
+    by_id = {snapshot.id: snapshot for snapshot in snapshots}
+    non_ok = {snapshot.id for snapshot in snapshots if snapshot.host_state_raw in ("DOWN", "UNREACH")}
+
+    children: dict[str, list[str]] = {}
+    for snapshot in snapshots:
+        for parent_id in snapshot.parents:
+            if parent_id in by_id:
+                children.setdefault(parent_id, []).append(snapshot.id)
+
+    inferred_roots: set[str] = set()
+    for snapshot in snapshots:
+        if not snapshot.unmanaged:
+            continue
+        non_ok_children = [child_id for child_id in children.get(snapshot.id, []) if child_id in non_ok]
+        if len(non_ok_children) >= 2 and any(
+            by_id[child_id].host_state_raw == "DOWN" for child_id in non_ok_children
+        ):
+            inferred_roots.add(snapshot.id)
+
+    plain_roots = {
+        snapshot.id
+        for snapshot in snapshots
+        if snapshot.host_state_raw == "DOWN"
+        and not any(parent_id in inferred_roots for parent_id in snapshot.parents)
+    }
+
+    roots = plain_roots | inferred_roots
+    traversable = non_ok | inferred_roots
+
+    reachable_from_root = {
+        root_id: _reachable_roots_from(root_id, roots, traversable, by_id) - {root_id} for root_id in roots
+    }
+    top_roots = {root_id for root_id in roots if not reachable_from_root[root_id]}
+    nested_roots = roots - top_roots
+    for root_id in sorted(nested_roots):
+        if not (reachable_from_root[root_id] & top_roots):
+            top_roots.add(root_id)
+
+    assignment: dict[str, str] = {}
+    for host_id in non_ok:
+        if host_id in top_roots:
+            assignment[host_id] = host_id
+            continue
+        reachable_top = _reachable_roots_from(host_id, top_roots, traversable, by_id)
+        if reachable_top:
+            assignment[host_id] = min(reachable_top)
+
+    dependents_of: dict[str, list[str]] = {}
+    for snapshot in snapshots:
+        for target_id in snapshot.depends_on:
+            if target_id == snapshot.id or target_id not in by_id:
+                continue
+            dependents_of.setdefault(target_id, []).append(snapshot.id)
+
+    incidents: list[dict] = []
+    for root_id in top_roots:
+        consequence_ids = sorted(
+            host_id for host_id, assigned_root in assignment.items() if assigned_root == root_id and host_id != root_id
+        )
+        inferred = root_id in inferred_roots
+
+        confirmed_down: list[str] = []
+        not_observable: list[str] = []
+        for host_id in consequence_ids:
+            if inferred:
+                not_observable.append(host_id)
+            elif by_id[host_id].host_state_raw == "DOWN":
+                confirmed_down.append(host_id)
+            else:
+                not_observable.append(host_id)
+
+        affected = {root_id, *consequence_ids}
+        closure = _dependents_closure(affected, dependents_of)
+        dependents = sorted(closure - affected)
+
+        indices = [_effective_criticality_index(by_id[host_id], is_dependent=False) for host_id in affected]
+        indices += [_effective_criticality_index(by_id[host_id], is_dependent=True) for host_id in dependents]
+        worst_criticality = CRITICALITY_TIERS[max(indices)]
+
+        root_snapshot = by_id[root_id]
+        since_candidates = [by_id[host_id].last_state_change for host_id in consequence_ids]
+        if root_snapshot.host_state_raw in ("DOWN", "UNREACH"):
+            since_candidates.append(root_snapshot.last_state_change)
+        positive_candidates = [value for value in since_candidates if value]
+        since = (
+            datetime.datetime.fromtimestamp(min(positive_candidates), datetime.UTC).isoformat()
+            if positive_candidates
+            else None
+        )
+
+        incidents.append(
+            {
+                "id": f"{INCIDENT_ID_PREFIX}{root_id}",
+                "root": root_id,
+                "root_state": root_snapshot.host_state_raw,
+                "inferred": inferred,
+                "confirmed_down": confirmed_down,
+                "not_observable": not_observable,
+                "dependents": dependents,
+                "worst_criticality": worst_criticality,
+                "since": since,
+            }
+        )
+
+    return sorted(incidents, key=lambda incident: incident["id"])
+
+
+def incident_signature(incident: dict) -> tuple:
+    """Stable signature deciding whether an incident actually changed (PLR-16 republish rule).
+
+    `dependents`/`worst_criticality` are included deliberately: an operator's criticality or
+    depends_on label edit must reach every viewer even when the underlying DOWN/UNREACH set
+    is unchanged. Uses `.get()` with defaults, matching `topology_signature()`'s own tolerance
+    for a hand-built dict that predates a field.
+    """
+    return (
+        incident.get("root"),
+        incident.get("root_state"),
+        incident.get("inferred"),
+        tuple(incident.get("confirmed_down", [])),
+        tuple(incident.get("not_observable", [])),
+        tuple(incident.get("dependents", [])),
+        incident.get("worst_criticality"),
+        incident.get("since"),
     )
 
 
@@ -1090,6 +1374,15 @@ def query_devices(
         except (IndexError, TypeError, ValueError):
             staleness = None
 
+        try:
+            last_state_change = (
+                int(row[index["last_state_change"]]) if "last_state_change" in index else None
+            )
+        except (IndexError, TypeError, ValueError):
+            last_state_change = None
+        if last_state_change is not None and last_state_change <= 0:
+            last_state_change = None
+
         # Not a new column -- derived from the `host_state` int already
         # parsed above, following the same 1=DOWN/2=UNREACHABLE mapping.
         host_state_raw = host_state_label(host_state)
@@ -1108,6 +1401,7 @@ def query_devices(
                 host_state_raw=host_state_raw,
                 map_position=map_position,
                 unmanaged=unmanaged,
+                last_state_change=last_state_change,
             )
         )
     return snapshots
@@ -1330,6 +1624,31 @@ def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
             _logger.warning("Failed to publish tombstone to %s: %s", topic, exc)
 
 
+def publish_incident(client: mqtt.Client, incident: dict, timestamp: str) -> None:
+    """Publish one incident's current state. QoS 1: change-triggered (D-13/PLR-14), the
+    caller only calls this when `incident_signature()` differs from the previously
+    published signature -- not republished every cycle like `publish_device_status`.
+    """
+    payload = {**incident, "timestamp": timestamp}
+    _publish_json(client, incident_status_topic(incident["id"]), payload, qos=1, retain=True)
+
+
+def publish_incident_tombstone(client: mqtt.Client, incident_id: str) -> None:
+    """Clear a closed incident's retained status topic.
+
+    Same tombstone contract as `publish_tombstone()` above (a zero-length
+    retained payload is MQTT's own defined "clear this retained topic"
+    semantic), applied to the single per-incident topic instead of the four
+    per-device ones.
+    """
+    topic = incident_status_topic(incident_id)
+    try:
+        info = client.publish(topic, payload=None, retain=True, qos=1)
+        info.wait_for_publish(timeout=5)
+    except (TimeoutError, OSError) as exc:
+        _logger.warning("Failed to publish tombstone to %s: %s", topic, exc)
+
+
 def publish_poller_status(
     client: mqtt.Client, since: str, last_poll: str | None, device_count: int
 ) -> None:
@@ -1404,6 +1723,15 @@ class PollerState:
     # mosquitto volume wiped too (docs section 8.5, commit 96e7182).
     # `run_cycle` sweeps it once, behind `allow_stale_sweep`, then empties it.
     retained_ids: set[str] = field(default_factory=set)
+    # Phase 14 (PLR-14): incident id -> last-published `incident_signature()`
+    # (or `None` for an id seeded by `reconcile_state` from a retained topic
+    # whose payload was never parsed -- a seeded `None` always differs from
+    # a freshly computed signature, forcing exactly one republish). In-memory
+    # only, per PLR-14's "no incident state of its own" -- a restart
+    # tombstones anything closed while it was down and republishes anything
+    # still open, using the retained `lan/incidents/+/status` topics
+    # themselves as the durable store, never a poller-owned file.
+    previous_incidents: dict[str, tuple | None] = field(default_factory=dict)
 
 
 def parse_topology_payload(payload: bytes) -> dict[str, dict]:
@@ -1568,6 +1896,17 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     state of its own" (PLR-02): the durable store is Mosquitto's
     `persistence true` from Phase 8, not a poller-owned file.
 
+    Phase 14 (PLR-14): the ids of every host with a retained, non-empty
+    `lan/incidents/{id}/status` topic are likewise collected, into
+    `retained_incident_ids`, and seeded into the returned state's
+    `previous_incidents` with a `None` signature -- a `None` always differs
+    from a freshly computed signature, so the first cycle after a restart
+    either republishes a still-open incident (no visible change to a
+    viewer, since the payload is the same) or tombstones one that closed
+    while the poller was down. Only the topic *name* is read here, never
+    the retained payload body, per the malformed-payload posture already
+    applied to `history`/`service_history` above.
+
     This function's client deliberately has no will configured -- its own
     (normal) disconnect at the end of this function must never publish a
     false offline poller status for the actual running poller (T-09-06).
@@ -1577,6 +1916,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     history_payloads: dict[str, bytes] = {}
     service_history_payloads: dict[str, bytes] = {}
     retained_ids: set[str] = set()
+    retained_incident_ids: set[str] = set()
     topology_received = threading.Event()
 
     def on_message(client, userdata, msg):
@@ -1594,6 +1934,16 @@ def reconcile_state(config: PollerConfig) -> PollerState:
             and is_publishable_device_id(parts[2])
         ):
             retained_ids.add(parts[2])
+        if (
+            len(parts) == 4
+            and parts[0] == "lan"
+            and parts[1] == "incidents"
+            and parts[3] == "status"
+            and msg.payload
+            and parts[2].startswith(INCIDENT_ID_PREFIX)
+            and is_publishable_device_id(parts[2])
+        ):
+            retained_incident_ids.add(parts[2])
         if msg.topic == TOPIC_TOPOLOGY:
             topology_result.append(msg.payload)
             topology_received.set()
@@ -1628,6 +1978,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         client.subscribe("lan/devices/+/history", qos=1)
         client.subscribe("lan/devices/+/services", qos=1)
         client.subscribe("lan/devices/+/service_history", qos=1)
+        client.subscribe("lan/incidents/+/status", qos=1)
         client.subscribe(TOPIC_TOPOLOGY, qos=1)
         client.loop_start()
         topology_received.wait(timeout=config.reconcile_timeout_seconds)
@@ -1651,6 +2002,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         since=utc_now_iso(),
         service_history=service_history,
         retained_ids=retained_ids,
+        previous_incidents={incident_id: None for incident_id in retained_incident_ids},
     )
 
 
@@ -1694,6 +2046,17 @@ def run_cycle(
     tombstoned once, and `retained_ids` is then emptied. The caller sets it
     only when the host list is confirmed (see the gate in `run_forever`);
     when false, `retained_ids` is left intact for a later cycle.
+
+    Phase 14 (PLR-14/PLR-16): `compute_incidents(snapshots)` is re-derived
+    from scratch every cycle -- no incident state persists between cycles
+    except `state.previous_incidents`' signatures, kept only to decide
+    whether to republish. An incident absent this cycle but present in
+    `state.previous_incidents` is tombstoned (it closed, or `reconcile_state`
+    seeded it as a startup guess that turned out stale); every incident
+    still open publishes only when `incident_signature()` differs from what
+    was last published, so an operator's criticality/dependency edit (which
+    changes `worst_criticality`/`dependents` without changing the DOWN/
+    UNREACH set) still triggers exactly one republish.
     """
     now = utc_now_iso()
 
@@ -1820,6 +2183,18 @@ def run_cycle(
     if events_this_cycle:
         state.events = (state.events + events_this_cycle)[-config.events_max_entries :]
         publish_events(client, state.events)
+
+    incidents = compute_incidents(snapshots)
+    current_incidents = {incident["id"]: incident for incident in incidents}
+    for incident_id in sorted(set(state.previous_incidents) - set(current_incidents)):
+        publish_incident_tombstone(client, incident_id)
+    for incident_id, incident in current_incidents.items():
+        signature = incident_signature(incident)
+        if signature != state.previous_incidents.get(incident_id):
+            publish_incident(client, incident, now)
+    state.previous_incidents = {
+        incident_id: incident_signature(incident) for incident_id, incident in current_incidents.items()
+    }
 
     publish_poller_status(client, since=state.since, last_poll=now, device_count=len(snapshots))
 
