@@ -243,6 +243,63 @@ describe("handleMessage - poller status", () => {
   });
 });
 
+describe("handleMessage - incidents", () => {
+  it("puts the parsed object at incidents.incident-a and leaves other slices intact", () => {
+    const before = useAppStore.getState();
+    useAppStore
+      .getState()
+      .handleMessage("lan/incidents/incident-a/status", encode({ id: "incident-a", root: "a" }));
+    const after = useAppStore.getState();
+
+    expect(after.incidents["incident-a"]).toEqual({ id: "incident-a", root: "a" });
+    expect(after.devices).toBe(before.devices);
+    expect(after.events).toBe(before.events);
+  });
+
+  it("replaces the previous entry wholesale rather than merging", () => {
+    useAppStore
+      .getState()
+      .handleMessage(
+        "lan/incidents/incident-a/status",
+        encode({ id: "incident-a", root: "a", worst_criticality: "low" }),
+      );
+    useAppStore
+      .getState()
+      .handleMessage("lan/incidents/incident-a/status", encode({ id: "incident-a", root: "a" }));
+
+    expect(useAppStore.getState().incidents["incident-a"]).toEqual({ id: "incident-a", root: "a" });
+    expect(useAppStore.getState().incidents["incident-a"]).not.toHaveProperty("worst_criticality");
+  });
+
+  it("deletes the incident on a zero-length payload (tombstone)", () => {
+    useAppStore
+      .getState()
+      .handleMessage("lan/incidents/incident-a/status", encode({ id: "incident-a", root: "a" }));
+
+    useAppStore.getState().handleMessage("lan/incidents/incident-a/status", EMPTY_PAYLOAD);
+
+    expect(useAppStore.getState().incidents).not.toHaveProperty("incident-a");
+  });
+
+  it("keeps the previous value and does not throw on invalid JSON or an array payload", () => {
+    useAppStore
+      .getState()
+      .handleMessage("lan/incidents/incident-a/status", encode({ id: "incident-a", root: "a" }));
+
+    expect(() => {
+      useAppStore
+        .getState()
+        .handleMessage("lan/incidents/incident-a/status", new TextEncoder().encode("{not json"));
+    }).not.toThrow();
+    expect(useAppStore.getState().incidents["incident-a"]).toEqual({ id: "incident-a", root: "a" });
+
+    expect(() => {
+      useAppStore.getState().handleMessage("lan/incidents/incident-a/status", encode(["not", "an", "object"]));
+    }).not.toThrow();
+    expect(useAppStore.getState().incidents["incident-a"]).toEqual({ id: "incident-a", root: "a" });
+  });
+});
+
 describe("handleMessage - unknown topic", () => {
   it("is a no-op and does not throw", () => {
     const before = useAppStore.getState();

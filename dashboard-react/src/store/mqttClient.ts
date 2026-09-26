@@ -34,6 +34,7 @@ export const SUBSCRIBE_TOPICS = [
   "lan/devices/topology",
   "lan/events/recent",
   "lan/poller/status",
+  "lan/incidents/+/status", // Phase 14 -- retained delivery on SUBACK gives every open incident
 ];
 
 export interface ConnectDeps {
