@@ -375,12 +375,13 @@ The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these t
 | Topic | Publish Trigger | QoS | Retain | Payload keys |
 | --- | --- | --- | --- | --- |
 | `lan/devices/{id}/status` | Every poll cycle, for every known device | 0 | true | `id`, `state` (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`), `in_downtime`, `acknowledged`, `device_type`, `folder`, `alias`, `staleness`, `host_state_raw`, `timestamp`, `cpu_percent`, `cpu_warn`, `cpu_crit`, `ram_percent`, `ram_warn`, `ram_crit`, `disk_percent`, `disk_warn`, `disk_crit`, `disk_other_worst_percent`, `disk_other_worst_warn`, `disk_other_worst_crit`, `disk_other_worst_mount`, `smart_total`, `smart_failing` |
-| `lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle | 1 | true | `devices` (list of `{id, parents, device_type, folder, alias}`), `timestamp` |
+| `lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle | 1 | true | `devices` (list of `{id, parents, device_type, folder, alias, map_position, unmanaged}`), `timestamp` |
 | `lan/devices/{id}/history` | Only on an actual state transition for that device | 1 | true | Full bounded array (max `HISTORY_MAX_ENTRIES`) of `{timestamp, from, to}` |
 | `lan/devices/{id}/services` | Only when a service's state changes or the service set changes (never on `plugin_output` alone) | 1 | true | JSON array of `{description, state, plugin_output}` — every monitored service except the CPU/RAM/Filesystem/SMART gauge-backing services |
 | `lan/devices/{id}/service_history` | Only on a per-service state transition | 1 | true | Full bounded array (max `SERVICE_HISTORY_MAX_ENTRIES`) of `{timestamp, description, from, to}` |
 | `lan/events/recent` | Only on any device's state transition, or a device add/remove | 1 | true | Full bounded array (max `EVENTS_MAX_ENTRIES`, default 1000, about 160 KB when full) of `{timestamp, device_id, event, from, to}` |
 | `lan/poller/status` | Birth (on connect), heartbeat (every poll cycle), and LWT (on ungraceful disconnect) or graceful stop | 1 | true | `{status, since, last_poll, device_count}` (birth/heartbeat) or `{status: "offline"}` (LWT/graceful stop) |
+| `lan/incidents/{incident_id}/status` | Only when an incident opens, closes, or its root, consequence set, dependents or worst criticality change | 1 | true | `id`, `root`, `root_state`, `inferred`, `confirmed_down`, `not_observable`, `dependents`, `worst_criticality`, `since`, `timestamp` |
 
 A removed device is tombstoned by publishing an empty retained payload to its `status`, `history`, `services` and `service_history` topics. On startup the poller also tombstones, the same way, any retained per-device topic whose host is absent from the site; this is gated so that a failed or unconfirmed-empty Livestatus query never clears anything, and it adds no `removed` event.
 
@@ -389,6 +390,15 @@ A removed device is tombstoned by publishing an empty retained payload to its `s
 `staleness` (Phase 11, D-17) is Checkmk's own authoritative Livestatus `staleness` value (a float), additive to the payload above. It is `null` when the live site's `hosts` table does not expose the column — a graceful degradation, not an error; a consumer should then fall back to a timestamp-age check against `timestamp` above. `host_state_raw` (Phase 11, D-17) is also additive: one of `UP`/`DOWN`/`UNREACH`, derived from Checkmk's raw host-state integer. **`state` never contains `"UNREACH"`** — it keeps its collapsed `OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN` meaning, folding both DOWN and UNREACHABLE raw states into `"DOWN"`; a consumer that needs to tell them apart must read `host_state_raw` instead. Both fields are additive — a subscriber written before Phase 11 sees a payload it already understands, just without these two keys.
 
 The fifteen gauge keys above (Phase 12, D-12) — `cpu_percent`/`cpu_warn`/`cpu_crit`, `ram_percent`/`ram_warn`/`ram_crit`, `disk_percent`/`disk_warn`/`disk_crit`, `disk_other_worst_percent`/`disk_other_worst_warn`/`disk_other_worst_crit`/`disk_other_worst_mount`, `smart_total`/`smart_failing` — are additive to `status` and follow the same null-when-absent convention as `staleness`: each is `null` when its backing Checkmk service does not exist, never an omitted key. `lan/devices/{id}/services` and `lan/devices/{id}/service_history` are new topics, not additive payloads, so no pre-Phase-12 subscriber is affected by their existence — they are simply absent from a subscriber that has not added the two new subscriptions.
+
+**`lan/incidents/{incident_id}/status` (Phase 14, PLR-14/PLR-15/PLR-16):** the incident id is `incident-{root host id}`; a closed incident is cleared with an empty retained payload, the same tombstone contract as every other topic above. The poller rebuilds the full incident set from Livestatus every cycle — there is no poller-side incident file — and, after a restart, `reconcile_state()` reads only the retained incident *topic names* (never the payload body) so the first post-restart cycle republishes a still-open incident unchanged or tombstones one that closed while the poller was down. Grouping rules, one sentence each:
+
+- A DOWN host whose parent is not an unmanaged switch is a root.
+- UNREACH hosts, and DOWN hosts reachable through a contiguous chain of non-OK hosts, join the topmost root.
+- An unmanaged switch becomes an *inferred* root when at least two of its children are non-OK and at least one of those is DOWN, and every consequence of an inferred incident is reported as `not_observable`, never `confirmed_down` (Checkmk cannot see past an unchecked switch).
+- A lone DOWN host under an unmanaged switch is its own incident, not folded into the switch.
+
+`since` comes from Livestatus's `last_state_change` and is `null` if the column is absent (or every candidate value is non-positive). `worst_criticality` counts the root, every consequence, and every host that transitively depends on them (host-level criticality only — per-service criticality does not feed this in Phase 14) and defaults to `low` until an operator sets criticality labels (criticality/depends_on editing arrives with plan 14-08). Known v1 limitation: an unrelated host that happens to be DOWN at the same time, inside the same non-OK chain, is folded into the incident as a consequence — Livestatus's `parents`/`host_state_raw` alone cannot disambiguate "down because of the incident" from "coincidentally also down".
 
 ---
 
@@ -521,6 +531,28 @@ UAT checklist:
    yet" instead of force-activating it.
 
 See `dashboard-react/README.md`'s "Topology map and editing" section for the full behaviour.
+
+### Incident check (Phase 14)
+
+With the stack up, verify the root-cause incident engine end to end:
+
+1. `podman exec mqtt-poller python -u /scripts/mqtt_poller.py --check-columns` should list
+   `present: last_state_change (optional)`. If it instead reports `missing`, every incident's
+   `since` will be `null` and the dashboard's duration string will read "duration unknown" —
+   not a bug, a documented degradation (see §6's incident topic paragraph).
+2. `mosquitto_sub -u wsreader -P wsreader -t 'lan/incidents/#' -v -C 1 -W 5` shows any currently
+   open incidents (one retained message per open incident); with none open it times out
+   ("Timed out", RC 27) with no message received, the same clear-vs-empty distinction as the
+   manual tombstone test above.
+3. To provoke one safely: in Checkmk, select a host and use Commands > "Fake check results" to
+   set it DOWN (and, if it has children, they will show UNREACH); reverse it afterwards with
+   another "Fake check results" back to UP, or reschedule the host's active check.
+4. Expected dashboard result: within about two poll cycles, one incident card appears above the
+   stats strip (`"{host} — {duration}"`, worst-criticality colour), the affected hosts dim in
+   the fleet tree and on the topology map with a "See incident" link, and restoring the faked
+   state clears the card and the dimming within about two more poll cycles.
+
+See `dashboard-react/README.md`'s "5c. Incidents" section for the full card/dimming behaviour.
 
 ---
 
