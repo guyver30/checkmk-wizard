@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: Between phases
 stopped_at: Phase 14 context gathered
-last_updated: "2026-09-26T03:29:25.203Z"
+last_updated: "2026-09-26T03:31:03.741Z"
 last_activity: 2026-09-23 -- Phase 13 execution started
 progress:
-  total_phases: 10
+  total_phases: 12
   completed_phases: 8
   total_plans: 49
   completed_plans: 49
-  percent: 80
+  percent: 67
 ---
 
 # Project State
@@ -63,6 +63,8 @@ Progress: [░░░░░░░░░░] 0%
 - Phase 11 replanned from scratch 2026-09-13: the original 10-plan set (2026-09-12) was written against the pre-KONE-branding UI-SPEC and was deleted (recoverable at commit 2de890c) before any of its 23 tasks ran. The replacement is 9 plans / 20 tasks / 5 waves built against the current KONE Design System UI-SPEC; plan-checker PASSED with no blockers.
 - Phase 13 added: Wizard Parents Support and Topology Map — teach the wizard to set Checkmk's parents attribute over REST (as Phase 10 does for tag_device_type), then build the vis-network map on real data. Split out of Phase 11 during its 2026-09-12 scope discussion because parents is unset on the target site, so an auto-built map would render as disconnected dots. Depends on Phase 11, not Phase 12.
 - Phase 15 added 2026-09-23: Location Hierarchy for Hosts and Dashboard Tower Tabs — a new Checkmk tag group (mirroring `tag_device_type`/Phase 10.1's retag UI) captures physical location (tower + sub-location, e.g. motor room, lobby, control room), propagated to the MQTT payload and surfaced as per-tower dashboard tabs with sublocation filtering. Deliberately rejects reusing folders (folders already encode VLAN, which is horizontal across towers). Parked as a not-urgent placeholder to revisit later, not planned/executed now.
+- Phase 14.1 inserted after Phase 14: Fleet history store (TSDB on MinIO, poller-written), daily availability rollups on MinIO, Grafana for analysts; split out of Phase 14 per 14-CONTEXT.md D-01/D-20..D-24
+- Phase 14.2 inserted after Phase 14: Failure prediction (regression, dates with confidence tag) and template/local-model incident narration in a separate analytics container; split out of Phase 14 per 14-CONTEXT.md D-01/D-30..D-32
 
 ### Decisions
 

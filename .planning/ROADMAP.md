@@ -20,7 +20,9 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 11.1: Dashboard Layout and Light Palette** - The dashboard moves to KONE's light palette and a resizable three-pane layout (tree / map-or-details / event history), with a grouping combo and severity ordering (completed 2026-09-21)
 - [x] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query (completed 2026-09-23)
 - [x] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map (completed 2026-09-23)
-- [ ] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, availability reporting on MinIO, a time-series store with Grafana, and failure prediction from SMART/disk/memory trends
+- [ ] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, operator-set criticality and dependencies, and kiosk mode (history and prediction split out to 14.1/14.2 per 14-CONTEXT.md D-01)
+- [ ] **Phase 14.1: Fleet History Store, Availability Rollups and Grafana** (INSERTED) - Poller-written TSDB on MinIO, daily availability rollups, read-only dashboard access, and Grafana for analysts
+- [ ] **Phase 14.2: Fleet Failure Prediction and Incident Narration** (INSERTED) - Separate analytics container: regression-based forecasts with confidence tags and template/local incident narration over MQTT
 
 ## Phase Details
 
@@ -327,7 +329,7 @@ Plans:
 
 **Goal**: The dashboard stops reporting device status and starts reporting service impact, cause, and forecast
 **Depends on**: Phase 11.1; root-cause collapse additionally depends on Phase 13; prediction additionally depends on Phase 12
-**Requirements**: TBD — to be defined in REQUIREMENTS.md before planning
+**Requirements**: PLR-14, PLR-15, PLR-16, DASH-14, DASH-15, DASH-16, DASH-17 (Phase 14's share only: items 4-7 below moved to Phases 14.1 and 14.2 per `14-CONTEXT.md` D-01)
 **Scope** (from the 2026-09-16 feature discussion; see the shared proposal for the full argument):
 
   1. **Service-impact framing** — the unit of measurement changes from devices to services. "sw-edge-tower-b is DOWN" becomes "Tower B: six lift systems unreachable, 12 minutes". Presentation work over data that already exists
@@ -349,6 +351,36 @@ Plans:
 **Honest caveat to carry**: a projection is only as good as its history. Disk-fill dates are credible almost immediately; a drive-failure date is not credible until the drive has been watched for months. Promising it sooner is the one thing that would undermine the rest.
 
 **Plans**: TBD
+
+### Phase 14.1: Fleet History Store, Availability Rollups and Grafana (INSERTED)
+
+**Goal:** The fleet gains long-term history: the poller writes metrics to a TSDB whose long-term tier is MinIO, writes one daily availability rollup object per day to MinIO, and the dashboard (read-only over HTTP) and an analyst-facing Grafana both read that history
+**Requirements**: TBD
+**Depends on:** Phase 14
+**Locked inputs** (from `.planning/phases/14-fleet-intelligence/14-CONTEXT.md`, split out of Phase 14 by D-01/D-02):
+  - D-20: Checkmk edition is fixed at Raw, so the poller writes metric history (no Checkmk-native export)
+  - D-21: retention 3 years, downsampled (raw resolution roughly 30 days)
+  - D-22: Grafana sits alongside the dashboard, for analysts; optional, never replaces it
+  - D-23: TSDB container in the compose stack with MinIO as long-term tier; product choice is for research
+  - D-24: the dashboard queries the TSDB over HTTP, read-only. This amends the "no new backend" constraint, so PROJECT.md and CLAUDE.md must be updated during planning. The access mechanism is for research
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 14.1 to break down)
+
+### Phase 14.2: Fleet Failure Prediction and Incident Narration (INSERTED)
+
+**Goal:** The dashboard reports forecasts and explains incidents: a separate analytics container fits trends from 14.1's history, extrapolates to threshold to give a date, writes incident summaries from Phase 14's incident data, and publishes both to retained MQTT topics
+**Requirements**: TBD
+**Depends on:** Phase 14.1 (history to fit trends on) and Phase 14 (incidents to narrate)
+**Locked inputs** (from `.planning/phases/14-fleet-intelligence/14-CONTEXT.md`, split out of Phase 14 by D-01):
+  - D-30: no monitoring data leaves the network; narration is template-based or a local model and never states a fact absent from the incident data
+  - D-31: simple regression on monotonic metrics (filesystem growth, SSD/NVMe wear, reallocated sectors, memory creep), no ML. Dates show immediately with a confidence tag based on how much history exists. Risk to carry: a low-confidence drive-failure date could still trigger an engineer dispatch, so the tag and history span must be prominent
+  - D-32: forecasts and narration are computed in a separate analytics container that reads the TSDB and publishes to retained MQTT topics. The poller stays small, and the dashboard stays a pure MQTT consumer for these outputs
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 14.2 to break down)
 
 ### Phase 15: Location Hierarchy for Hosts and Dashboard Tower Tabs
 
