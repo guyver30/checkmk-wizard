@@ -7,6 +7,7 @@
 // stateMapping.badgeForState, never a second colour table.
 
 import { Link } from "react-router";
+import { Badge } from "kone-design-system";
 import { deviceTypeMaskUrl } from "../lib/mapIcons";
 import { badgeForState } from "../lib/stateMapping";
 import type { TreeGroupNode } from "../lib/treeModel";
@@ -77,16 +78,23 @@ export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
         <div role="group">
           {node.children.map((device) => {
             const displayState = device.stale ? "STALE" : device.state;
+            const ariaLabel = device.dimmed
+              ? `${device.label} — part of an open incident`
+              : `${device.label} — ${displayState}`;
             return (
               <div
                 key={device.id}
                 role="treeitem"
                 style={{ paddingLeft: (depth + 1) * INDENT_PX + ROW_START_PX }}
-                aria-label={`${device.label} — ${displayState}`}
+                aria-label={ariaLabel}
+                className="flex items-center pr-3"
               >
                 <Link
                   to={`/details?id=${encodeURIComponent(device.id)}`}
-                  className="flex items-center gap-2 py-1.5 pr-3 text-sm hover:bg-bg-subtle-hover"
+                  className={[
+                    "flex flex-1 items-center gap-2 py-1.5 text-sm hover:bg-bg-subtle-hover",
+                    device.dimmed ? "opacity-50" : "",
+                  ].join(" ")}
                 >
                   <span
                     aria-hidden
@@ -110,8 +118,20 @@ export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
                     />
                   )}
                   <span className="flex-1 truncate text-fg-primary">{device.label}</span>
-                  <StateBadgeForState state={displayState} />
                 </Link>
+                {device.dimmed && device.incidentId ? (
+                  <Link to={`/?incident=${encodeURIComponent(device.incidentId)}`}>
+                    <Badge color="neutral" variant="outline">
+                      See incident
+                    </Badge>
+                  </Link>
+                ) : device.inferredRoot ? (
+                  <Badge color="warning" variant="soft">
+                    Inferred, not confirmed
+                  </Badge>
+                ) : (
+                  <StateBadgeForState state={displayState} />
+                )}
               </div>
             );
           })}

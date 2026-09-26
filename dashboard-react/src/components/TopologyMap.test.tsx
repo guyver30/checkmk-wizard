@@ -6,6 +6,7 @@ import { instances, resetFakeNetworks } from "../test/fakeVisNetwork";
 import type { DevicePayload } from "../lib/types";
 import * as checkmkWrite from "../lib/checkmkWrite";
 import { nodeVisual } from "../lib/mapIcons";
+import type { IncidentLookup } from "../lib/incidents";
 
 // Every write in edit mode goes through checkmkWrite.ts -- mocked here so these tests exercise
 // TopologyMap's own callback wiring (what it calls, with what args, and how it reacts to
@@ -36,6 +37,15 @@ function DetailsProbe() {
   return <div data-testid="details-probe">{params.get("id") ?? ""}</div>;
 }
 
+// A consequence-node click navigates to /?incident=<id> -- same path as TopologyMap's own
+// route, so this probe is mounted alongside it (not a separate <Route>) to observe the query
+// param without unmounting the map.
+function IncidentProbe() {
+  const [params] = useSearchParams();
+  const incident = params.get("incident");
+  return incident ? <div data-testid="incident-probe">{incident}</div> : null;
+}
+
 function renderMap(props: Partial<React.ComponentProps<typeof TopologyMap>> = {}) {
   const defaultProps: React.ComponentProps<typeof TopologyMap> = {
     topologyDevices: [],
@@ -45,7 +55,15 @@ function renderMap(props: Partial<React.ComponentProps<typeof TopologyMap>> = {}
   return render(
     <MemoryRouter initialEntries={["/"]}>
       <Routes>
-        <Route path="/" element={<TopologyMap {...defaultProps} {...props} />} />
+        <Route
+          path="/"
+          element={
+            <>
+              <TopologyMap {...defaultProps} {...props} />
+              <IncidentProbe />
+            </>
+          }
+        />
         <Route path="/details" element={<DetailsProbe />} />
       </Routes>
     </MemoryRouter>,
@@ -312,6 +330,101 @@ describe("TopologyMap", () => {
     const topologyDevices = [{ id: "h1", parents: [] }];
     renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) } });
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
+  });
+});
+
+describe("TopologyMap incidentLookup (DASH-15)", () => {
+  it("gives a consequence node's DataSet entry opacity 0.4 and the dimmed title", () => {
+    const topologyDevices = [
+      { id: "h1", parents: [] },
+      { id: "h2", parents: ["h1"] },
+    ];
+    const statuses = { h1: device({ id: "h1" }), h2: device({ id: "h2", state: "UNREACH" }) };
+    const incidentLookup: IncidentLookup = new Map([
+      ["h1", { incidentId: "incident-h1", role: "root", inferred: false }],
+      ["h2", { incidentId: "incident-h1", role: "consequence", inferred: false }],
+    ]);
+    renderMap({ topologyDevices, statuses, incidentLookup });
+    const nodes = instances[0].data.nodes as unknown as {
+      get: (id: string) => { opacity?: number; title?: string };
+    };
+    expect(nodes.get("h2").opacity).toBe(0.4);
+    expect(nodes.get("h2").title).toBe("Part of an open incident — click to see it");
+  });
+
+  it("clicking a consequence node outside edit mode navigates to /?incident=<id>", async () => {
+    const topologyDevices = [
+      { id: "h1", parents: [] },
+      { id: "h2", parents: ["h1"] },
+    ];
+    const statuses = { h1: device({ id: "h1" }), h2: device({ id: "h2", state: "UNREACH" }) };
+    const incidentLookup: IncidentLookup = new Map([
+      ["h1", { incidentId: "incident-h1", role: "root", inferred: false }],
+      ["h2", { incidentId: "incident-h1", role: "consequence", inferred: false }],
+    ]);
+    renderMap({ topologyDevices, statuses, incidentLookup, editMode: false });
+    act(() => {
+      instances[0].emit("click", { nodes: ["h2"] });
+    });
+    expect(await screen.findByTestId("incident-probe")).toHaveTextContent("incident-h1");
+  });
+
+  it("clicking a non-consequence node still navigates to /details?id=", async () => {
+    const topologyDevices = [
+      { id: "h1", parents: [] },
+      { id: "h2", parents: ["h1"] },
+    ];
+    const statuses = { h1: device({ id: "h1" }), h2: device({ id: "h2", state: "UNREACH" }) };
+    const incidentLookup: IncidentLookup = new Map([
+      ["h1", { incidentId: "incident-h1", role: "root", inferred: false }],
+      ["h2", { incidentId: "incident-h1", role: "consequence", inferred: false }],
+    ]);
+    renderMap({ topologyDevices, statuses, incidentLookup, editMode: false });
+    act(() => {
+      instances[0].emit("click", { nodes: ["h1"] });
+    });
+    expect(await screen.findByTestId("details-probe")).toHaveTextContent("h1");
+  });
+
+  it("does not navigate on a consequence-node click while in edit mode", () => {
+    const topologyDevices = [
+      { id: "h1", parents: [] },
+      { id: "h2", parents: ["h1"] },
+    ];
+    const statuses = { h1: device({ id: "h1" }), h2: device({ id: "h2", state: "UNREACH" }) };
+    const incidentLookup: IncidentLookup = new Map([
+      ["h1", { incidentId: "incident-h1", role: "root", inferred: false }],
+      ["h2", { incidentId: "incident-h1", role: "consequence", inferred: false }],
+    ]);
+    renderMap({ topologyDevices, statuses, incidentLookup, editMode: true });
+    act(() => {
+      instances[0].emit("click", { nodes: ["h2"] });
+    });
+    expect(screen.queryByTestId("details-probe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("incident-probe")).not.toBeInTheDocument();
+  });
+
+  it("gives an inferred root's DataSet entry the dashed warning border, no opacity reduction", () => {
+    const topologyDevices = [{ id: "sw1", parents: [], unmanaged: true }];
+    const incidentLookup: IncidentLookup = new Map([
+      ["sw1", { incidentId: "incident-sw1", role: "root", inferred: true }],
+    ]);
+    renderMap({ topologyDevices, statuses: {}, incidentLookup });
+    const nodes = instances[0].data.nodes as unknown as {
+      get: (id: string) => { opacity?: number; title?: string };
+    };
+    expect(nodes.get("sw1").opacity).toBeUndefined();
+    expect(nodes.get("sw1").title).toBe("Inferred root cause, not confirmed");
+  });
+
+  it("without an incidentLookup, the map renders exactly as before (no opacity, unmanaged title unchanged)", () => {
+    const topologyDevices = [{ id: "sw1", parents: [], unmanaged: true }];
+    renderMap({ topologyDevices, statuses: {} });
+    const nodes = instances[0].data.nodes as unknown as {
+      get: (id: string) => { opacity?: number; title?: string };
+    };
+    expect(nodes.get("sw1").opacity).toBeUndefined();
+    expect(nodes.get("sw1").title).toBe("Unmanaged switch (not monitored)");
   });
 });
 
