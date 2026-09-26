@@ -11,6 +11,7 @@
 import { buildGroupIndex, rollUpGroup, sortedGroupKeys, SEVERITY_RANK } from "./grouping";
 import { displayName, effectiveState, isTagGroupMissing } from "./display";
 import { isDeviceStale } from "./staleness";
+import type { IncidentLookup } from "./incidents";
 import type { DevicePayload, GroupingMode } from "./types";
 
 export interface TreeDeviceNode {
@@ -21,6 +22,10 @@ export interface TreeDeviceNode {
   stale: boolean;
   deviceType: string | null | undefined;
   tagGroupMissing: boolean;
+  dimmed: boolean;
+  incidentId: string | null;
+  incidentRole: "root" | "consequence" | null;
+  inferredRoot: boolean;
 }
 
 export interface TreeGroupNode {
@@ -37,6 +42,10 @@ export interface TreeGroupNode {
 
 export interface BuildTreeOptions {
   orderBySeverity?: boolean;
+  // Plain parameter, never a store read -- same rule this file's header comment states for
+  // orderBySeverity. Callers (IndexRoute, plan 14-04) pass the current incident lookup on
+  // every render; buildTree never subscribes to incident state itself.
+  incidentLookup?: IncidentLookup;
 }
 
 export function buildTree(
@@ -50,7 +59,7 @@ export function buildTree(
   // there is nowhere in this module for a stale order to be kept.
   options: BuildTreeOptions = {},
 ): TreeGroupNode[] {
-  const { orderBySeverity = false } = options;
+  const { orderBySeverity = false, incidentLookup } = options;
 
   // grouping.ts's primitives take a Map (its vanilla signature, unchanged); the store holds a
   // plain Record for Zustand selector equality. This conversion is the one intentional
@@ -67,6 +76,7 @@ export function buildTree(
     const children: TreeDeviceNode[] = [...ids]
       .map((id) => {
         const device = devicesMap.get(id);
+        const membership = incidentLookup?.get(id);
         return {
           kind: "device" as const,
           id,
@@ -75,6 +85,10 @@ export function buildTree(
           stale: isDeviceStale(device, nowMs),
           deviceType: device?.device_type,
           tagGroupMissing: isTagGroupMissing(device),
+          dimmed: membership?.role === "consequence",
+          incidentId: membership?.incidentId ?? null,
+          incidentRole: membership?.role ?? null,
+          inferredRoot: membership !== undefined && membership.role === "root" && membership.inferred,
         };
       })
       .sort((a, b) => a.label.localeCompare(b.label));

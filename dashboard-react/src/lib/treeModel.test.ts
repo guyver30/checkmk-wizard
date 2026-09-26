@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildTree } from "./treeModel";
+import type { IncidentLookup } from "./incidents";
 import type { DevicePayload } from "./types";
 
 const NOW_MS = Date.parse("2026-09-21T12:00:00Z");
@@ -147,5 +148,76 @@ describe("buildTree", () => {
     const first = buildTree(devices, "type", NOW_MS, { orderBySeverity: true });
     const second = buildTree(devices, "type", NOW_MS, { orderBySeverity: true });
     expect(first).toEqual(second);
+  });
+
+  describe("incidentLookup (DASH-15)", () => {
+    function devicesWithH1H2H3(): Record<string, DevicePayload> {
+      return {
+        h1: { id: "h1", device_type: "NetworkDevice", state: "DOWN", timestamp: FRESH_TIMESTAMP },
+        h2: { id: "h2", device_type: "ACS", state: "UNREACH", timestamp: FRESH_TIMESTAMP },
+        h3: { id: "h3", device_type: "ACS", state: "OK", timestamp: FRESH_TIMESTAMP },
+      };
+    }
+
+    function findDevice(tree: ReturnType<typeof buildTree>, id: string) {
+      for (const group of tree) {
+        const found = group.children.find((child) => child.id === id);
+        if (found) return found;
+      }
+      return undefined;
+    }
+
+    it("marks a consequence host dimmed with its incident id/role, and the root as root (not dimmed)", () => {
+      const lookup: IncidentLookup = new Map([
+        ["h1", { incidentId: "incident-h1", role: "root", inferred: false }],
+        ["h2", { incidentId: "incident-h1", role: "consequence", inferred: false }],
+      ]);
+      const tree = buildTree(devicesWithH1H2H3(), "type", NOW_MS, { incidentLookup: lookup });
+
+      const h1 = findDevice(tree, "h1");
+      expect(h1).toMatchObject({
+        dimmed: false,
+        incidentId: "incident-h1",
+        incidentRole: "root",
+        inferredRoot: false,
+      });
+
+      const h2 = findDevice(tree, "h2");
+      expect(h2).toMatchObject({
+        dimmed: true,
+        incidentId: "incident-h1",
+        incidentRole: "consequence",
+      });
+
+      const h3 = findDevice(tree, "h3");
+      expect(h3).toMatchObject({
+        dimmed: false,
+        incidentId: null,
+        incidentRole: null,
+        inferredRoot: false,
+      });
+    });
+
+    it("marks an inferred root's node inferredRoot true", () => {
+      const lookup: IncidentLookup = new Map([
+        ["h1", { incidentId: "incident-h1", role: "root", inferred: true }],
+        ["h2", { incidentId: "incident-h1", role: "consequence", inferred: true }],
+      ]);
+      const tree = buildTree(devicesWithH1H2H3(), "type", NOW_MS, { incidentLookup: lookup });
+      const h1 = findDevice(tree, "h1");
+      expect(h1?.inferredRoot).toBe(true);
+    });
+
+    it("without an incidentLookup, every device node has dimmed false, incidentId null, incidentRole null, inferredRoot false", () => {
+      const tree = buildTree(devicesWithH1H2H3(), "type", NOW_MS);
+      for (const group of tree) {
+        for (const device of group.children) {
+          expect(device.dimmed).toBe(false);
+          expect(device.incidentId).toBeNull();
+          expect(device.incidentRole).toBeNull();
+          expect(device.inferredRoot).toBe(false);
+        }
+      }
+    });
   });
 });

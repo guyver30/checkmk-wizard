@@ -9,6 +9,7 @@ import { buildTree } from "../lib/treeModel";
 import { useAppStore } from "../store/useAppStore";
 import { IndexRoute } from "../routes/IndexRoute";
 import type { DevicePayload } from "../lib/types";
+import type { IncidentLookup } from "../lib/incidents";
 
 const NOW_MS = Date.parse("2026-09-21T12:00:00Z");
 const FRESH_TIMESTAMP = new Date(NOW_MS - 5 * 1000).toISOString();
@@ -60,6 +61,17 @@ function renderStatic(devices: Record<string, DevicePayload>, mode: "type" | "fo
 /** Renders every group already expanded, so device-row links are mounted without a click. */
 function renderExpanded(devices: Record<string, DevicePayload>) {
   const groups = buildTree(devices, "type", NOW_MS);
+  const openKeys = new Set(groups.map((group) => group.key));
+  return render(
+    <MemoryRouter>
+      <Tree groups={groups} openKeys={openKeys} onToggle={() => {}} />
+    </MemoryRouter>,
+  );
+}
+
+/** Same as renderExpanded, but threads an incidentLookup through buildTree (DASH-15). */
+function renderExpandedWithLookup(devices: Record<string, DevicePayload>, incidentLookup: IncidentLookup) {
+  const groups = buildTree(devices, "type", NOW_MS, { incidentLookup });
   const openKeys = new Set(groups.map((group) => group.key));
   return render(
     <MemoryRouter>
@@ -229,5 +241,54 @@ describe("Tree", () => {
     });
 
     expect(screen.getByRole("button", { name: /ACS/i })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  describe("incidentLookup rendering (DASH-15)", () => {
+    it("dims a consequence row, hides its state badge, and links 'See incident' to its incident", () => {
+      const devices: Record<string, DevicePayload> = {
+        h2: { id: "h2", device_type: "ACS", state: "UNREACH", timestamp: FRESH_TIMESTAMP },
+      };
+      const lookup: IncidentLookup = new Map([
+        ["h2", { incidentId: "incident-h1", role: "consequence", inferred: false }],
+      ]);
+      renderExpandedWithLookup(devices, lookup);
+
+      const detailsLink = screen.getByText("h2").closest("a");
+      expect(detailsLink).toHaveClass("opacity-50");
+      expect(detailsLink).toHaveAttribute("href", "/details?id=h2");
+
+      const incidentLink = screen.getByText("See incident").closest("a");
+      expect(incidentLink).toHaveAttribute("href", "/?incident=incident-h1");
+
+      const deviceRow = screen.getByText("h2").closest('[role="treeitem"]');
+      expect(within(deviceRow as HTMLElement).queryByText("UNREACH")).not.toBeInTheDocument();
+    });
+
+    it("shows the 'Inferred, not confirmed' badge on an inferred root row", () => {
+      const devices: Record<string, DevicePayload> = {
+        h1: { id: "h1", device_type: "NetworkDevice", state: "OK", timestamp: FRESH_TIMESTAMP },
+      };
+      const lookup: IncidentLookup = new Map([
+        ["h1", { incidentId: "incident-h1", role: "root", inferred: true }],
+      ]);
+      renderExpandedWithLookup(devices, lookup);
+
+      expect(screen.getByText("Inferred, not confirmed")).toBeInTheDocument();
+    });
+
+    it("renders a non-incident row unchanged: state badge present, no opacity class", () => {
+      const devices: Record<string, DevicePayload> = {
+        h3: { id: "h3", device_type: "ACS", state: "OK", timestamp: FRESH_TIMESTAMP },
+      };
+      const lookup: IncidentLookup = new Map([
+        ["h1", { incidentId: "incident-h1", role: "root", inferred: false }],
+      ]);
+      renderExpandedWithLookup(devices, lookup);
+
+      const detailsLink = screen.getByText("h3").closest("a");
+      expect(detailsLink).not.toHaveClass("opacity-50");
+      const deviceRow = screen.getByText("h3").closest('[role="treeitem"]');
+      expect(within(deviceRow as HTMLElement).getByText("OK")).toBeInTheDocument();
+    });
   });
 });
