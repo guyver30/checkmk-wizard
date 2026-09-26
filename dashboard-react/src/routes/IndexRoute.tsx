@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router";
 import { useShallow } from "zustand/shallow";
 import { Snackbar } from "kone-design-system";
 import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
+import { IncidentList } from "../components/IncidentList";
 import { StatsStrip } from "../components/StatsStrip";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { TopologyMap, type EditFailure } from "../components/TopologyMap";
@@ -13,6 +15,7 @@ import { useGroupingPrefs } from "../hooks/useGroupingPrefs";
 import { useNowTick } from "../hooks/useNowTick";
 import { activateChanges, countPendingChanges } from "../lib/checkmkWrite";
 import { isTopologyEditingConfigured } from "../lib/config";
+import { buildIncidentLookup, selectOpenIncidents } from "../lib/incidents";
 import { buildTree } from "../lib/treeModel";
 import type { GroupingMode } from "../lib/types";
 import { makeSelectStateCounts } from "../store/selectors";
@@ -56,9 +59,18 @@ export function IndexRoute() {
   // orderBySeverity on every render (buildTree's own contract), never cached.
   const { mode, orderBySeverity, setMode, setOrderBySeverity } = useGroupingPrefs();
   const devices = useAppStore((s) => s.devices);
+
+  // Phase 14 / DASH-14/DASH-15: open incidents, ordered (D-12) and looked up by host id, both
+  // pure derivations of the incidents store slice -- never re-sorted or re-derived downstream.
+  const incidentRecord = useAppStore((s) => s.incidents);
+  const incidents = useMemo(() => selectOpenIncidents(incidentRecord), [incidentRecord]);
+  const incidentLookup = useMemo(() => buildIncidentLookup(incidents), [incidents]);
+  const [searchParams] = useSearchParams();
+  const highlightedIncidentId = searchParams.get("incident");
+
   const groups = useMemo(
-    () => buildTree(devices, mode, nowMs, { orderBySeverity }),
-    [devices, mode, nowMs, orderBySeverity],
+    () => buildTree(devices, mode, nowMs, { orderBySeverity, incidentLookup }),
+    [devices, mode, nowMs, orderBySeverity, incidentLookup],
   );
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
   const onToggleGroup = useCallback((key: string) => {
@@ -182,7 +194,17 @@ export function IndexRoute() {
           // D-25: the stats strip sits ABOVE the map, content-sized, with the map taking the
           // remaining height -- both are always visible together. Pointer/wheel/key activity
           // anywhere in the toolbar+map wrapper below postpones the edit-mode idle timeout.
+          // Phase 14 (DASH-14 UI-SPEC Layout Integration): the incident list is the new
+          // outermost-top layer, above the stats strip -- when incidents are open it is the
+          // focal point of the screen; when none are open it collapses to one quiet line and
+          // the topology map becomes the focal point.
           <div className="flex h-full flex-col gap-2 p-3">
+            <IncidentList
+              incidents={incidents}
+              devices={devices}
+              nowMs={nowMs}
+              highlightedId={highlightedIncidentId}
+            />
             <StatsStrip counts={counts} />
             <div
               className="flex min-h-0 flex-1 flex-col gap-2"
@@ -206,6 +228,7 @@ export function IndexRoute() {
                   editMode={editMode}
                   onEditSaved={onEditSaved}
                   onEditFailed={onEditFailed}
+                  incidentLookup={incidentLookup}
                 />
               </div>
             </div>
