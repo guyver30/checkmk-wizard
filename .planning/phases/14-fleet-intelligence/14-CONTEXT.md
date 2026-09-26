@@ -43,6 +43,9 @@ Decisions for 14.1 and 14.2 below (D-20..D-31) are locked inputs so those phases
 ### Kiosk / wall mode
 - **D-14:** Full-screen, chrome-free, auto-rotating view for a lobby or boardroom screen (roadmap feature 3). Not discussed in depth; details (rotation content, interval, URL switch such as `?kiosk`) are Claude's discretion, keeping to the KONE design system.
 
+### Criticality weighting of dependents
+- **D-15:** (Added 2026-09-26, during Phase 14 planning.) A **dependent** (a host that is not in the incident but depends on something in it) that is still **UP** counts **one tier lower** than its own tier toward the incident's worst criticality: critical→high, high→medium, medium→low, low→low. A still-reachable screen whose media server is unreachable or down therefore makes the incident at most "high", not "critical". The root and its consequences count at their full tier. A dependent that is not UP (for example, DOWN in a separate incident) also counts at its full tier. The dependent itself gets no extra marker in the tree or on the map; it is only listed under "Dependent devices" on the incident card (D-04: monitoring cannot prove it is impaired).
+
 ### Locked inputs for Phase 14.1 (history)
 - **D-20 [informational]:** Checkmk edition is fixed at **Raw (CRE)**; Checkmk's InfluxDB/Graphite export is a commercial feature, so the **poller writes metric history**. No abstraction layer for a hypothetical edition upgrade.
 - **D-21 [informational]:** Retention target: **3 years, downsampled** (raw resolution roughly 30 days, then downsampled out to 3 years). Sizes the store.

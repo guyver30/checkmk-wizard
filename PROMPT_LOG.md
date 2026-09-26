@@ -254,3 +254,6 @@
 - **2026-09-26 11:34** — always commit the device type icons
 - **2026-09-26 11:35** — /bm:plan-phase 14
 - **2026-09-26 12:00** — service-need tiers for technicians/experts: (1) standard — scheduled maintenance, add tasks for non-shutdown deviations e.g. disk filling → out of disk in ≥20 days; (2) urgent — same kind of issue with serious problem in 3–15 days, expert may downgrade to standard, cancel, or upgrade to immediate; (3) immediate — failure (switch down with unreachable children, stopped linux service) needing immediate technician dispatch
+- **2026-09-26 12:27** — explain criticality, service criticality, how they are created and managed
+- **2026-09-26 12:32** — keep tier names/label keys. Is depends_on valid for hosts on managed and on unmanaged switches?
+- **2026-09-26 12:37** — a still-reachable screen should not make the incident 'critical' when its media server is unreachable/down; it should show as 'high' at most
