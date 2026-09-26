@@ -110,6 +110,25 @@ UNMANAGED_SWITCH_LABEL = "unmanaged_switch"
 UNMANAGED_SWITCH_VALUE = "yes"
 _MAP_POSITION_RE = re.compile(r"^-?\d{1,6},-?\d{1,6}$")
 
+# Phase 14 (D-07/D-08/D-09, plan 14-07): the operator-entered criticality/
+# dependency labels, following the exact same "Checkmk host label, no new
+# store" pattern as MAP_POSITION_LABEL/UNMANAGED_SWITCH_LABEL above. The
+# browser-side twin (plan 14-08, `dashboard-react/src/lib/checkmkWrite.ts`)
+# must use these exact same key strings and delimiters. Checkmk host labels
+# allow any character except a colon (`:`) in key or value
+# (docs.checkmk.com/latest/en/labels.html, cited in 14-RESEARCH.md "Verified:
+# Checkmk Host Label Constraints") -- none of the delimiters below (`;`, `=`,
+# `,`) is a colon, so this scheme is safe by construction.
+CRITICALITY_LABEL = "criticality"
+SERVICE_CRITICALITY_LABEL = "service_criticality"
+DEPENDS_ON_LABEL = "depends_on"
+# Mirrors `_HOST_NAME_RE` in `src/checkmk_wizard/wizard.py` and `HOST_NAME_RE`
+# in `dashboard-react/src/lib/checkmkWrite.ts` -- the one character class
+# Checkmk host ids are constrained to across this whole codebase.
+_HOST_ID_RE = re.compile(r"^[-0-9a-zA-Z_.]+$")
+_MAX_SERVICE_CRITICALITY_ENTRIES = 200
+_MAX_DEPENDS_ON_ENTRIES = 50
+
 # Phase 12 (D-05/D-08): the SMART health-service name match string, kept in
 # this one clearly-commented location so a future live re-check is a
 # one-line fix. Source-verified against Checkmk 2.4.0's own SMART
@@ -379,19 +398,95 @@ class PollerConfig:
         )
 
 
+def _parse_criticality(raw: object) -> str:
+    """Strict parser for the `criticality` label's value -- never raises.
+
+    Any value outside the fixed `CRITICALITY_TIERS` vocabulary (a wrong
+    case like `"HIGH"`, an unknown tier like `"urgent"`, a non-string, or
+    an absent label) degrades to `DEFAULT_CRITICALITY` (T-14-19), the same
+    safe-default posture `map_position`/`unmanaged` already apply above.
+    """
+    return raw if isinstance(raw, str) and raw in CRITICALITY_TIERS else DEFAULT_CRITICALITY
+
+
+def _parse_service_criticality(raw: object) -> dict[str, str]:
+    """Strict parser for the `service_criticality` label's `;`-separated `name=tier` value.
+
+    Never raises (T-14-19): a non-string value degrades to `{}`; each
+    `;`-separated entry is independently validated and a malformed one
+    (missing `=`, empty name after stripping, or a name containing `:`,
+    which cannot legally occur in a Checkmk service name derived from this
+    project's own check plugins but is rejected defensively anyway) is
+    skipped rather than aborting the whole label. At most
+    `_MAX_SERVICE_CRITICALITY_ENTRIES` valid entries are kept (T-14-20),
+    in encounter order.
+    """
+    if not isinstance(raw, str):
+        return {}
+    result: dict[str, str] = {}
+    for entry in raw.split(";"):
+        if "=" not in entry:
+            continue
+        name, _, tier = entry.partition("=")
+        name = name.strip()
+        tier = tier.strip()
+        if not name or ":" in name or tier not in CRITICALITY_TIERS:
+            continue
+        result[name] = tier
+        if len(result) >= _MAX_SERVICE_CRITICALITY_ENTRIES:
+            break
+    return result
+
+
+def _parse_depends_on(raw: object, host_id: str) -> list[str]:
+    """Strict parser for the `depends_on` label's comma-separated host-id list.
+
+    Never raises (T-14-19): a non-string value degrades to `[]`. Each
+    comma-separated entry is stripped and validated against `_HOST_ID_RE`;
+    an invalid id (e.g. containing a space) is dropped. A self-reference
+    (`host_id` depending on itself) is dropped -- it can never form a real
+    dependency chain. Duplicates are removed, order preserved (first
+    occurrence wins). At most `_MAX_DEPENDS_ON_ENTRIES` ids are kept
+    (T-14-20), bounding `compute_incidents()`'s dependents closure walk.
+    """
+    if not isinstance(raw, str):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for entry in raw.split(","):
+        candidate = entry.strip()
+        if not candidate or not _HOST_ID_RE.match(candidate) or candidate == host_id:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        result.append(candidate)
+        if len(result) >= _MAX_DEPENDS_ON_ENTRIES:
+            break
+    return result
+
+
 @dataclass
 class HostConfigInfo:
-    """One host's REST-sourced config: folder plus the two map-editing labels.
+    """One host's REST-sourced config: folder plus the map-editing and Phase 14 labels.
 
     Returned by `fetch_host_config()` below -- a superset of what
     `fetch_host_folders()` used to return alone, from the same single
     `host_config` collection GET (no extra REST call per Phase 13's D-07
     addendum / 13-01 VERDICT V-LABELS-IN-COLLECTION).
+
+    Phase 14 (D-07/D-08/D-09, plan 14-07): `criticality`/`service_criticality`/
+    `depends_on` are populated from the same `host_config` GET's labels via
+    `_parse_criticality()`/`_parse_service_criticality()`/`_parse_depends_on()`
+    -- still no extra REST call.
     """
 
     folder: str = ""
     map_position: str | None = None
     unmanaged: bool = False
+    criticality: str = DEFAULT_CRITICALITY
+    service_criticality: dict[str, str] = field(default_factory=dict)
+    depends_on: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -438,14 +533,17 @@ class DeviceSnapshot:
     # source. `None` when the column is absent or non-positive -- graceful
     # degradation, never a hard failure.
     last_state_change: int | None = None
-    # Phase 14 (D-05/D-07/D-08): criticality/depends_on are populated from
-    # Checkmk host labels by plan 14-07 (`CRITICALITY_LABEL`/
-    # `DEPENDS_ON_LABEL`, read the same way `map_position`/`unmanaged`
-    # already are). Until then they keep these safe defaults, so
-    # `compute_incidents()` below has a stable contract to compute against
-    # from wave 1.
+    # Phase 14 (D-05/D-07/D-08, plan 14-07): criticality/service_criticality/
+    # depends_on are populated from Checkmk host labels (`CRITICALITY_LABEL`/
+    # `SERVICE_CRITICALITY_LABEL`/`DEPENDS_ON_LABEL`), read the same way
+    # `map_position`/`unmanaged` already are -- via `query_devices()`'s
+    # `host_config` parameter. A host with no `host_config` entry (or an
+    # unset label) keeps these safe defaults; `compute_incidents()` above
+    # already consumes `criticality`/`depends_on` against this exact
+    # contract (plan 14-01).
     criticality: str = DEFAULT_CRITICALITY
     depends_on: list[str] = field(default_factory=list)
+    service_criticality: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -547,6 +645,12 @@ def topology_nodes(snapshots: list[DeviceSnapshot]) -> list[dict]:
             "alias": snapshot.alias,
             "map_position": snapshot.map_position,
             "unmanaged": snapshot.unmanaged,
+            # Phase 14 (D-07/D-08/D-09, plan 14-07): carried to every viewer
+            # on this same topic so criticality/dependency edits reach the
+            # dashboard without a per-device round trip.
+            "criticality": snapshot.criticality,
+            "service_criticality": dict(snapshot.service_criticality),
+            "depends_on": list(snapshot.depends_on),
         }
         for snapshot in snapshots
     ]
@@ -562,6 +666,13 @@ def topology_signature(nodes: list[dict]) -> tuple:
     two Phase 13 fields -- `.get()` degrades that case to the same
     None/False default `_normalise_restored_node()` backfills, rather than
     raising `KeyError` for every caller that hasn't been updated yet.
+
+    Phase 14 (D-07/D-08/D-09, plan 14-07): `criticality`/`depends_on`/
+    `service_criticality` are read the same defensive `.get()` way, with the
+    same rationale -- a criticality or dependency label edit must trigger
+    exactly one republish, and an older/hand-built node dict without these
+    keys must not raise or spuriously differ from a fresh node carrying the
+    same defaults.
     """
     return tuple(
         sorted(
@@ -573,6 +684,9 @@ def topology_signature(nodes: list[dict]) -> tuple:
                 node["alias"],
                 node.get("map_position"),
                 node.get("unmanaged", False),
+                node.get("criticality", DEFAULT_CRITICALITY),
+                tuple(node.get("depends_on", [])),
+                tuple(sorted((node.get("service_criticality") or {}).items())),
             )
             for node in nodes
         )
@@ -1101,6 +1215,13 @@ def fetch_host_config(base_url: str, username: str, secret: str, timeout: float)
     topologyLayout.ts`'s `parseMapPosition()` validation exactly, T-13-11);
     an invalid or absent value degrades to `None`, never raises. `unmanaged`
     is a strict `== UNMANAGED_SWITCH_VALUE` check, never a truthy coercion.
+
+    Extended 2026-09-26 (D-07/D-08/D-09, plan 14-07) to also read the
+    `criticality`/`service_criticality`/`depends_on` labels off the same
+    collection entry -- same GET, no extra REST call. Each is run through
+    its own strict parser (`_parse_criticality`/`_parse_service_criticality`/
+    `_parse_depends_on`), which degrades any out-of-vocabulary or malformed
+    value to a safe default and never raises (T-14-19).
     """
     url = f"{base_url}/domain-types/host_config/collections/all"
     try:
@@ -1152,8 +1273,18 @@ def fetch_host_config(base_url: str, username: str, secret: str, timeout: float)
             else None
         )
         unmanaged = labels.get(UNMANAGED_SWITCH_LABEL) == UNMANAGED_SWITCH_VALUE
+        criticality = _parse_criticality(labels.get(CRITICALITY_LABEL))
+        service_criticality = _parse_service_criticality(labels.get(SERVICE_CRITICALITY_LABEL))
+        depends_on = _parse_depends_on(labels.get(DEPENDS_ON_LABEL), host_id)
 
-        result[host_id] = HostConfigInfo(folder=folder, map_position=map_position, unmanaged=unmanaged)
+        result[host_id] = HostConfigInfo(
+            folder=folder,
+            map_position=map_position,
+            unmanaged=unmanaged,
+            criticality=criticality,
+            service_criticality=service_criticality,
+            depends_on=depends_on,
+        )
     return result
 
 
@@ -1298,6 +1429,10 @@ def query_devices(
     `fetch_host_config()`; a host missing from it (or a `None` mapping)
     degrades `map_position`/`unmanaged` to their `DeviceSnapshot` defaults
     (`None`/`False`), same graceful-degradation posture as `folders`.
+    Extended 2026-09-26 (D-07/D-08/D-09, plan 14-07) to also carry
+    `criticality`/`depends_on`/`service_criticality` from the same
+    `HostConfigInfo`, degrading the same way when the host is missing from
+    `host_config`.
     """
     body = _livestatus_request(host, port, build_hosts_query(columns), timeout)
     if not body.strip():
@@ -1361,6 +1496,9 @@ def query_devices(
         host_info = host_config.get(name) if host_config else None
         map_position = host_info.map_position if host_info else None
         unmanaged = host_info.unmanaged if host_info else False
+        criticality = host_info.criticality if host_info else DEFAULT_CRITICALITY
+        depends_on = list(host_info.depends_on) if host_info else []
+        service_criticality = dict(host_info.service_criticality) if host_info else {}
 
         try:
             alias = row[index["alias"]] if "alias" in index else ""
@@ -1402,6 +1540,9 @@ def query_devices(
                 map_position=map_position,
                 unmanaged=unmanaged,
                 last_state_change=last_state_change,
+                criticality=criticality,
+                depends_on=depends_on,
+                service_criticality=service_criticality,
             )
         )
     return snapshots
@@ -1812,6 +1953,14 @@ def _normalise_restored_node(node: dict) -> dict:
     back to the default rather than propagating into `topology_signature`.
     Callers must still reject a node whose `id` is not a `str` — that one
     cannot be defaulted, since it is the dict key.
+
+    Phase 14 (D-07/D-08/D-09, plan 14-07): `criticality`/`service_criticality`/
+    `depends_on` are exactly the next-field case this comment predicts --
+    backfilled and type-checked the same way, so a pre-14-07 retained node
+    (missing these keys) and a wrong-typed one (e.g. a hand-edited retained
+    payload with `criticality: 3`) both degrade to the same safe defaults
+    `topology_nodes()` produces, republish exactly once on the first cycle
+    after upgrade, and never crash the poller (T-14-21).
     """
     parents = node.get("parents")
     if not isinstance(parents, list) or not all(isinstance(p, str) for p in parents):
@@ -1831,6 +1980,21 @@ def _normalise_restored_node(node: dict) -> dict:
     unmanaged = node.get("unmanaged")
     if not isinstance(unmanaged, bool):
         unmanaged = False
+    criticality = node.get("criticality")
+    if not isinstance(criticality, str) or criticality not in CRITICALITY_TIERS:
+        criticality = DEFAULT_CRITICALITY
+    service_criticality = node.get("service_criticality")
+    if not isinstance(service_criticality, dict):
+        service_criticality = {}
+    else:
+        service_criticality = {
+            key: value
+            for key, value in service_criticality.items()
+            if isinstance(key, str) and isinstance(value, str) and value in CRITICALITY_TIERS
+        }
+    depends_on = node.get("depends_on")
+    if not isinstance(depends_on, list) or not all(isinstance(d, str) for d in depends_on):
+        depends_on = []
     return {
         **node,
         "parents": parents,
@@ -1839,6 +2003,9 @@ def _normalise_restored_node(node: dict) -> dict:
         "alias": alias,
         "map_position": map_position,
         "unmanaged": unmanaged,
+        "criticality": criticality,
+        "service_criticality": service_criticality,
+        "depends_on": depends_on,
     }
 
 
