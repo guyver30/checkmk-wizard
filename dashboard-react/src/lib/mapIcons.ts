@@ -64,7 +64,7 @@ interface NodeVisual {
   };
   borderWidth: number;
   shapeProperties: { borderDashes: false | number[] };
-  opacity?: number;
+  opacity: number;
 }
 
 // DASH-15/14-UI-SPEC "Dimmed Consequence Treatment" and this plan's inferred-root decision:
@@ -131,7 +131,10 @@ export function nodeVisual(
     },
     borderWidth,
     shapeProperties: { borderDashes },
-    ...(emphasis === "dimmed" ? { opacity: 0.4 } : {}),
+    // Always explicit, never omitted: TopologyMap applies this through nodes.update(), which
+    // merges -- an omitted key would leave a previously dimmed node at 0.4 forever after its
+    // incident closed (bug found in 14-05's live UAT, 2026-09-26).
+    opacity: emphasis === "dimmed" ? 0.4 : 1,
   };
 
   nodeVisualCache.set(cacheKey, visual);

@@ -140,19 +140,19 @@ describe("nodeVisual", () => {
       expect(visual.shapeProperties.borderDashes).toBe(false);
     });
 
-    it("'inferred-root' sets a dashed warning border with no opacity reduction", () => {
+    it("'inferred-root' sets a dashed warning border at full opacity", () => {
       const visual = nodeVisual("NetworkDevice", "OK", "inferred-root");
       expect(visual.color.border).toBe("#f97316");
       expect(visual.borderWidth).toBe(3);
       expect(visual.shapeProperties.borderDashes).toEqual([6, 3]);
-      expect(visual.opacity).toBeUndefined();
+      expect(visual.opacity).toBe(1);
     });
 
-    it("'normal' (or omitted) emphasis returns exactly the pre-existing visual", () => {
+    it("'normal' (or omitted) emphasis returns the pre-existing visual at explicit full opacity", () => {
       const explicit = nodeVisual("NetworkDevice", "OK", "normal");
       const omitted = nodeVisual("NetworkDevice", "OK");
       expect(explicit).toEqual(omitted);
-      expect(explicit.opacity).toBeUndefined();
+      expect(explicit.opacity).toBe(1);
       expect(explicit.color.border).toBe(STATE_HEX.OK);
     });
   });

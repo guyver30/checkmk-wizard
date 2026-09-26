@@ -404,7 +404,7 @@ describe("TopologyMap incidentLookup (DASH-15)", () => {
     expect(screen.queryByTestId("incident-probe")).not.toBeInTheDocument();
   });
 
-  it("gives an inferred root's DataSet entry the dashed warning border, no opacity reduction", () => {
+  it("gives an inferred root's DataSet entry the dashed warning border, full opacity", () => {
     const topologyDevices = [{ id: "sw1", parents: [], unmanaged: true }];
     const incidentLookup: IncidentLookup = new Map([
       ["sw1", { incidentId: "incident-sw1", role: "root", inferred: true }],
@@ -413,17 +413,61 @@ describe("TopologyMap incidentLookup (DASH-15)", () => {
     const nodes = instances[0].data.nodes as unknown as {
       get: (id: string) => { opacity?: number; title?: string };
     };
-    expect(nodes.get("sw1").opacity).toBeUndefined();
+    expect(nodes.get("sw1").opacity).toBe(1);
     expect(nodes.get("sw1").title).toBe("Inferred root cause, not confirmed");
   });
 
-  it("without an incidentLookup, the map renders exactly as before (no opacity, unmanaged title unchanged)", () => {
+  // Regression (14-05 live UAT, 2026-09-26): after an incident closed, its former consequence
+  // nodes stayed faded on the map until a page reload. nodes.update() MERGES into the existing
+  // DataSet item, so a "normal" visual that merely omitted `opacity` never overwrote the 0.4 a
+  // dimmed update had set. The rerender below reuses renderMap()'s exact tree so the same map
+  // instance (and DataSet) stays mounted, as it does when a live MQTT tombstone arrives.
+  it("restores full opacity and the plain title once a consequence node's incident closes", () => {
+    const topologyDevices = [
+      { id: "h1", parents: [] },
+      { id: "h2", parents: ["h1"] },
+    ];
+    const statuses = { h1: device({ id: "h1" }), h2: device({ id: "h2", state: "UNREACH" }) };
+    const incidentLookup: IncidentLookup = new Map([
+      ["h1", { incidentId: "incident-h1", role: "root", inferred: false }],
+      ["h2", { incidentId: "incident-h1", role: "consequence", inferred: false }],
+    ]);
+    const { rerender } = renderMap({ topologyDevices, statuses, incidentLookup });
+    const nodes = instances[0].data.nodes as unknown as {
+      get: (id: string) => { opacity?: number; title?: string };
+    };
+    expect(nodes.get("h2").opacity).toBe(0.4);
+
+    const recovered = { h1: device({ id: "h1" }), h2: device({ id: "h2" }) };
+    rerender(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <>
+                <TopologyMap topologyDevices={topologyDevices} statuses={recovered} nowMs={NOW_MS} />
+                <IncidentProbe />
+              </>
+            }
+          />
+          <Route path="/details" element={<DetailsProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(instances).toHaveLength(1);
+    expect(nodes.get("h2").opacity).toBe(1);
+    expect(nodes.get("h2").title).toBeUndefined();
+  });
+
+  it("without an incidentLookup, the map renders exactly as before (full opacity, unmanaged title unchanged)", () => {
     const topologyDevices = [{ id: "sw1", parents: [], unmanaged: true }];
     renderMap({ topologyDevices, statuses: {} });
     const nodes = instances[0].data.nodes as unknown as {
       get: (id: string) => { opacity?: number; title?: string };
     };
-    expect(nodes.get("sw1").opacity).toBeUndefined();
+    expect(nodes.get("sw1").opacity).toBe(1);
     expect(nodes.get("sw1").title).toBe("Unmanaged switch (not monitored)");
   });
 });
