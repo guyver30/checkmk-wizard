@@ -375,7 +375,7 @@ The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these t
 | Topic | Publish Trigger | QoS | Retain | Payload keys |
 | --- | --- | --- | --- | --- |
 | `lan/devices/{id}/status` | Every poll cycle, for every known device | 0 | true | `id`, `state` (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`), `in_downtime`, `acknowledged`, `device_type`, `folder`, `alias`, `staleness`, `host_state_raw`, `timestamp`, `cpu_percent`, `cpu_warn`, `cpu_crit`, `ram_percent`, `ram_warn`, `ram_crit`, `disk_percent`, `disk_warn`, `disk_crit`, `disk_other_worst_percent`, `disk_other_worst_warn`, `disk_other_worst_crit`, `disk_other_worst_mount`, `smart_total`, `smart_failing` |
-| `lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle | 1 | true | `devices` (list of `{id, parents, device_type, folder, alias, map_position, unmanaged}`), `timestamp` |
+| `lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle, or a label changes (`map_position`, `unmanaged`, `criticality`, `service_criticality`, `depends_on`) | 1 | true | `devices` (list of `{id, parents, device_type, folder, alias, map_position, unmanaged, criticality, service_criticality, depends_on}`), `timestamp` |
 | `lan/devices/{id}/history` | Only on an actual state transition for that device | 1 | true | Full bounded array (max `HISTORY_MAX_ENTRIES`) of `{timestamp, from, to}` |
 | `lan/devices/{id}/services` | Only when a service's state changes or the service set changes (never on `plugin_output` alone) | 1 | true | JSON array of `{description, state, plugin_output}` — every monitored service except the CPU/RAM/Filesystem/SMART gauge-backing services |
 | `lan/devices/{id}/service_history` | Only on a per-service state transition | 1 | true | Full bounded array (max `SERVICE_HISTORY_MAX_ENTRIES`) of `{timestamp, description, from, to}` |
@@ -398,7 +398,53 @@ The fifteen gauge keys above (Phase 12, D-12) — `cpu_percent`/`cpu_warn`/`cpu_
 - An unmanaged switch becomes an *inferred* root when at least two of its children are non-OK and at least one of those is DOWN, and every consequence of an inferred incident is reported as `not_observable`, never `confirmed_down` (Checkmk cannot see past an unchecked switch).
 - A lone DOWN host under an unmanaged switch is its own incident, not folded into the switch.
 
-`since` comes from Livestatus's `last_state_change` and is `null` if the column is absent (or every candidate value is non-positive). `worst_criticality` counts the root, every consequence, and every host that transitively depends on them (host-level criticality only — per-service criticality does not feed this in Phase 14) and defaults to `low` until an operator sets criticality labels (criticality/depends_on editing arrives with plan 14-08). Known v1 limitation: an unrelated host that happens to be DOWN at the same time, inside the same non-OK chain, is folded into the incident as a consequence — Livestatus's `parents`/`host_state_raw` alone cannot disambiguate "down because of the incident" from "coincidentally also down".
+`since` comes from Livestatus's `last_state_change` and is `null` if the column is absent (or every candidate value is non-positive). `worst_criticality` counts the root, every consequence, and every host that transitively depends on them (host-level criticality only — per-service criticality does not feed this in Phase 14) and defaults to `low` until an operator sets criticality labels. Known v1 limitation: an unrelated host that happens to be DOWN at the same time, inside the same non-OK chain, is folded into the incident as a consequence — Livestatus's `parents`/`host_state_raw` alone cannot disambiguate "down because of the incident" from "coincidentally also down".
+
+**Criticality and dependency labels (Phase 14, PLR-16/DASH-16):** three Checkmk host labels drive
+the incident engine's severity and dependency fan-out above. All three are written by the
+dashboard's "Edit topology" mode (the `CriticalityEditor` panel, plan 14-08) using the same
+`topology_editor` credential Phase 13's map edits already use — no new Checkmk permission is
+needed — and go live only once **Apply changes** is pressed, identical to every other topology
+edit. They can equally be hand-edited directly in Checkmk (Setup > Hosts > *host* > Labels); the
+poller reads whichever value Checkmk actually stores, dashboard or not.
+
+- `criticality`: one of `low`/`medium`/`high`/`critical`, set on the host itself. Absent, or any
+  other value, degrades to `low`.
+- `service_criticality`: `<name>=<tier>;<name>=<tier>;...`, a per-service override on the host. A
+  service name may not contain `:` (reserved by Checkmk's own service naming), `;` or `=` (this
+  label's own separators). Stored and republished on every topology node, but does **not** feed
+  `worst_criticality` in Phase 14 — only host-level `criticality` does.
+- `depends_on`: `<host>,<host>,...`, set on the *dependent* host, listing the hosts it depends on.
+  This is what lets `worst_criticality` count a still-UP dependent one tier below a critical host
+  it depends on that is currently down (D-15).
+
+The poller's label parsers never raise: an out-of-vocabulary tier, a malformed entry (missing
+`=`, empty name, a name containing a reserved character), or an invalid host id is silently
+dropped rather than rejected or crashing the poll cycle. Both multi-value labels are capped
+against a runaway label value — `service_criticality` at 200 entries, `depends_on` at 50 ids —
+counting only the entries that parsed successfully, not raw comma/semicolon-split segments.
+
+### Kiosk / wall screen (Phase 14)
+
+Open `http://<HOST_IP>:<dashboard port>/?kiosk=1` for a chrome-free, auto-rotating view
+(incidents, then topology, alternating every ~20s) suited to a lobby or NOC wall screen — no nav
+bar, device tree, event history, or edit toggle (DASH-17, plan 14-06). Its own "Enter full
+screen" button only works from an in-page click (browsers require a user gesture before granting
+fullscreen) and disappears once pressed or after 10 seconds of no interaction; a page reload
+brings it back.
+
+For permanent signage, don't rely on that in-page button — since fullscreen can never be
+triggered without a gesture, an unattended screen can never dismiss the browser's own chrome on
+its own. Launch the browser itself in the OS's own kiosk mode instead, e.g.:
+
+```bash
+chromium --kiosk "http://<HOST_IP>:<port>/?kiosk=1"
+```
+
+Keep kiosk screens on the trusted LAN, the same posture as every other dashboard client: the
+React SPA bundle served to that screen still embeds the `topology_editor` secret
+(`dashboard-react/src/lib/config.ts`, Phase 13 posture), even though the kiosk route itself never
+renders edit controls and never imports the manipulation toolbar (defense in depth).
 
 ---
 

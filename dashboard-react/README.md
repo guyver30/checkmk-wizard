@@ -199,6 +199,45 @@ is reporting normally" instead of an empty card area. The list caps at 35% of vi
 (`max-h-[35vh]`, scrollable) in the default layout; a `fill` variant exists for a future kiosk/wall
 mode (DASH-17) to reuse without modification.
 
+## 5d. Criticality & dependencies
+
+While "Edit topology" is on, a collapsible "Criticality & dependencies" panel (`CriticalityEditor`,
+DASH-16) sits below the toolbar. Pick a device from its own `Device` selector, or click a node on
+the map — a node click while editing routes to this panel's selection instead of the detail page.
+Once a host is selected:
+
+- **Host criticality** — a Low/Medium/High/Critical `Select` setting the host's own
+  business-criticality tier (the `criticality` label).
+- **Per-service criticality** — one row per monitored service (plus any stale label entry for a
+  service no longer monitored, so a leftover override can still be cleared), each a `Select` with
+  the same four tiers plus **Default**, which removes that service's override entirely rather
+  than writing an explicit low value.
+- **Depends on** — a `MultiSelect` of every other device; removing an existing link prompts
+  "Remove this dependency?" before writing — cancelling leaves it selected and makes no write.
+
+Every field writes immediately on change — there is no per-field Set/Save button, the same
+auto-write behaviour a map drag already has. Each write still only feeds the shared
+pending-changes count; nothing goes live until the one **Apply changes** button above is pressed,
+same as every other topology edit in §5.
+
+Criticality badges use a fixed low/medium/high/critical colour palette, independent of the
+OK/WARN/CRIT state palette — see §5c for where these badges appear on incident cards.
+
+## 5e. Kiosk mode
+
+`?kiosk=1` on the app's root URL (e.g. `/?kiosk=1`) renders `KioskView` (DASH-17) instead of the
+normal operator layout: a full-bleed, chrome-free view with no nav bar, no device tree, no event
+history, and no edit toggle, alternating between the incidents list and the topology map every
+20 seconds (`useKioskRotation`, `KIOSK_ROTATION_MS`). It is read-only by construction —
+`editMode` is hard-coded `false` and the manipulation toolbar is never imported on this route,
+independent of whether `topology_editor` is configured (defense in depth).
+
+A one-time "Enter full screen" button calls `requestFullscreen()` from its own click handler
+(fullscreen requires a user gesture — it can never be triggered from an effect); it disappears
+once pressed or after 10 seconds of no interaction, and a page reload brings it back. For
+unattended signage, launch the browser itself in OS kiosk mode instead — see the deployment
+doc's "Kiosk / wall screen" section, e.g. `chromium --kiosk`.
+
 ## 6. Version pins and why
 
 - `tailwindcss` is pinned to the 3.x line. A bare `npm install tailwindcss` would grab v4,
