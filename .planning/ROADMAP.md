@@ -350,7 +350,7 @@ Plans:
 
 **Honest caveat to carry**: a projection is only as good as its history. Disk-fill dates are credible almost immediately; a drive-failure date is not credible until the drive has been watched for months. Promising it sooner is the one thing that would undermine the rest.
 
-**Plans:** 4/9 plans executed
+**Plans:** 5/9 plans executed
 
 Plans:
 
@@ -370,7 +370,7 @@ Plans:
 **Wave 4** *(blocked on 14-04; D-06 evidence-framing gate)*
 
 - [ ] 14-05-PLAN.md — Incident docs + live verification checkpoint incl. `last_state_change` probe (non-autonomous)
-- [ ] 14-06-PLAN.md — Kiosk/wall mode `?kiosk=1` with 20 s rotation (DASH-17)
+- [x] 14-06-PLAN.md — Kiosk/wall mode `?kiosk=1` with 20 s rotation (DASH-17)
 
 **Wave 5** *(blocked on 14-05)*
 
