@@ -38,6 +38,7 @@ export interface TopologyMapProps {
   onEditSaved?: () => void;
   onEditFailed?: (failure: EditFailure) => void;
   incidentLookup?: IncidentLookup;
+  onSelectHost?: (id: string) => void;
 }
 
 // Shared by addEdge/editEdge/deleteEdge -- all three write via updateParents, so all three fail
@@ -125,6 +126,7 @@ export function TopologyMap({
   onEditSaved,
   onEditFailed,
   incidentLookup,
+  onSelectHost,
 }: TopologyMapProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -135,16 +137,21 @@ export function TopologyMap({
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
   // The manipulation callbacks below are only re-registered with vis-network when editMode
-  // toggles (see the gating effect), so onEditSaved/onEditFailed are read through refs rather
-  // than captured directly -- otherwise a prop change between toggles would go unseen.
+  // toggles (see the gating effect), so onEditSaved/onEditFailed/onSelectHost are read through
+  // refs rather than captured directly -- otherwise a prop change between toggles would go
+  // unseen.
   const onEditSavedRef = useRef(onEditSaved);
   const onEditFailedRef = useRef(onEditFailed);
+  const onSelectHostRef = useRef(onSelectHost);
   useEffect(() => {
     onEditSavedRef.current = onEditSaved;
   }, [onEditSaved]);
   useEffect(() => {
     onEditFailedRef.current = onEditFailed;
   }, [onEditFailed]);
+  useEffect(() => {
+    onSelectHostRef.current = onSelectHost;
+  }, [onSelectHost]);
 
   // Pending-edit overlay: a host-attribute write only becomes visible to other viewers once
   // changes are activated and the poller's next Livestatus poll picks it up -- without this
@@ -346,10 +353,13 @@ export function TopologyMap({
     });
 
     network.on("click", (params: { nodes: string[] }) => {
+      const nodeId = params.nodes[0];
       if (editModeRef.current) {
+        if (nodeId) {
+          onSelectHostRef.current?.(nodeId);
+        }
         return;
       }
-      const nodeId = params.nodes[0];
       if (!nodeId) {
         return;
       }
