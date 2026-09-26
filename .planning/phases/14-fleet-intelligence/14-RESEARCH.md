@@ -390,22 +390,25 @@ export const SUBSCRIBE_TOPICS = [
 | A3 | `last_state_change` exists as a Livestatus `hosts` table column on this project's Checkmk 2.4.0p36.cre site | Pattern 2 | Low: the existing defensive-probe machinery degrades this gracefully to `since: null` rather than failing — but incident cards without a duration are a visibly worse UX, so this is worth an early live-probe task in Wave 0 rather than discovering it at UAT |
 | A4 | Transitive (not just one-hop) closure over `depends_on` edges is the right scope for "worst affected criticality" | Pattern 4 | Low-medium: over-counting worst-criticality in a densely-linked fleet would make everything look critical; under-counting (one-hop only) would miss legitimate multi-hop impact — worth a one-line discuss-phase confirmation before locking |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **One-hop vs. transitive `depends_on` closure for worst-affected criticality (PLR-16)?**
    - What we know: the requirement text says "every host that depends on any of them" — grammatically ambiguous between "any of them directly" and "any of them, including transitively."
    - What's unclear: whether the operator's mental model extends past one hop.
    - Recommendation: default to transitive (safer to over-surface a business-critical impact than under-surface it) but flag this explicitly for a one-question discuss-phase confirmation before the planner locks acceptance criteria.
+   - RESOLVED: transitive closure, adopted in 14-01-PLAN.md.
 
 2. **Does an incident's consequence set include hosts that are independently DOWN (Pitfall 1), or should the algorithm try to exclude them?**
    - What we know: Livestatus alone cannot distinguish "down because of the incident" from "down for an unrelated reason at the same time."
    - What's unclear: whether operators would find the current design's over-inclusion (folding coincidental failures into one card) confusing enough to warrant future work.
    - Recommendation: ship as designed (Pattern 1), document the limitation in the incident card's own UI copy if there's room (e.g. a small "cause inferred from topology, not confirmed" note — which D-11 already requires for the inferred-root case specifically), and treat any operator pushback as a future refinement, not a Phase 14 blocker.
+   - RESOLVED: ship as designed; limitation documented in 14-01-PLAN.md.
 
 3. **Do systemd/other per-service criticality overrides ever need to influence an incident's worst-affected criticality (PLR-16), or only host-level criticality?**
    - What we know: PLR-16's wording ("operator-set criticality tier") reads as host-level; per-service criticality (D-08) is stored but PLR-16 doesn't explicitly say it feeds incident severity.
    - What's unclear: whether a host with a WARN/CRIT on a `critical`-tier service, but whose own host-level tier is `low`, should visually stand out in an incident.
    - Recommendation: keep worst-affected criticality host-level-only for v1 (simpler, matches the literal requirement text); per-service criticality's only confirmed consumer in this phase is the per-service editor UI itself (DASH-16), not incident severity math.
+   - RESOLVED: host-level criticality only for incident severity, adopted in 14-01-PLAN.md.
 
 ## Environment Availability
 
