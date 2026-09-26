@@ -110,6 +110,25 @@ UNMANAGED_SWITCH_LABEL = "unmanaged_switch"
 UNMANAGED_SWITCH_VALUE = "yes"
 _MAP_POSITION_RE = re.compile(r"^-?\d{1,6},-?\d{1,6}$")
 
+# Phase 14 (D-07/D-08/D-09, plan 14-07): the operator-entered criticality/
+# dependency labels, following the exact same "Checkmk host label, no new
+# store" pattern as MAP_POSITION_LABEL/UNMANAGED_SWITCH_LABEL above. The
+# browser-side twin (plan 14-08, `dashboard-react/src/lib/checkmkWrite.ts`)
+# must use these exact same key strings and delimiters. Checkmk host labels
+# allow any character except a colon (`:`) in key or value
+# (docs.checkmk.com/latest/en/labels.html, cited in 14-RESEARCH.md "Verified:
+# Checkmk Host Label Constraints") -- none of the delimiters below (`;`, `=`,
+# `,`) is a colon, so this scheme is safe by construction.
+CRITICALITY_LABEL = "criticality"
+SERVICE_CRITICALITY_LABEL = "service_criticality"
+DEPENDS_ON_LABEL = "depends_on"
+# Mirrors `_HOST_NAME_RE` in `src/checkmk_wizard/wizard.py` and `HOST_NAME_RE`
+# in `dashboard-react/src/lib/checkmkWrite.ts` -- the one character class
+# Checkmk host ids are constrained to across this whole codebase.
+_HOST_ID_RE = re.compile(r"^[-0-9a-zA-Z_.]+$")
+_MAX_SERVICE_CRITICALITY_ENTRIES = 200
+_MAX_DEPENDS_ON_ENTRIES = 50
+
 # Phase 12 (D-05/D-08): the SMART health-service name match string, kept in
 # this one clearly-commented location so a future live re-check is a
 # one-line fix. Source-verified against Checkmk 2.4.0's own SMART
@@ -379,19 +398,95 @@ class PollerConfig:
         )
 
 
+def _parse_criticality(raw: object) -> str:
+    """Strict parser for the `criticality` label's value -- never raises.
+
+    Any value outside the fixed `CRITICALITY_TIERS` vocabulary (a wrong
+    case like `"HIGH"`, an unknown tier like `"urgent"`, a non-string, or
+    an absent label) degrades to `DEFAULT_CRITICALITY` (T-14-19), the same
+    safe-default posture `map_position`/`unmanaged` already apply above.
+    """
+    return raw if isinstance(raw, str) and raw in CRITICALITY_TIERS else DEFAULT_CRITICALITY
+
+
+def _parse_service_criticality(raw: object) -> dict[str, str]:
+    """Strict parser for the `service_criticality` label's `;`-separated `name=tier` value.
+
+    Never raises (T-14-19): a non-string value degrades to `{}`; each
+    `;`-separated entry is independently validated and a malformed one
+    (missing `=`, empty name after stripping, or a name containing `:`,
+    which cannot legally occur in a Checkmk service name derived from this
+    project's own check plugins but is rejected defensively anyway) is
+    skipped rather than aborting the whole label. At most
+    `_MAX_SERVICE_CRITICALITY_ENTRIES` valid entries are kept (T-14-20),
+    in encounter order.
+    """
+    if not isinstance(raw, str):
+        return {}
+    result: dict[str, str] = {}
+    for entry in raw.split(";"):
+        if "=" not in entry:
+            continue
+        name, _, tier = entry.partition("=")
+        name = name.strip()
+        tier = tier.strip()
+        if not name or ":" in name or tier not in CRITICALITY_TIERS:
+            continue
+        result[name] = tier
+        if len(result) >= _MAX_SERVICE_CRITICALITY_ENTRIES:
+            break
+    return result
+
+
+def _parse_depends_on(raw: object, host_id: str) -> list[str]:
+    """Strict parser for the `depends_on` label's comma-separated host-id list.
+
+    Never raises (T-14-19): a non-string value degrades to `[]`. Each
+    comma-separated entry is stripped and validated against `_HOST_ID_RE`;
+    an invalid id (e.g. containing a space) is dropped. A self-reference
+    (`host_id` depending on itself) is dropped -- it can never form a real
+    dependency chain. Duplicates are removed, order preserved (first
+    occurrence wins). At most `_MAX_DEPENDS_ON_ENTRIES` ids are kept
+    (T-14-20), bounding `compute_incidents()`'s dependents closure walk.
+    """
+    if not isinstance(raw, str):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for entry in raw.split(","):
+        candidate = entry.strip()
+        if not candidate or not _HOST_ID_RE.match(candidate) or candidate == host_id:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        result.append(candidate)
+        if len(result) >= _MAX_DEPENDS_ON_ENTRIES:
+            break
+    return result
+
+
 @dataclass
 class HostConfigInfo:
-    """One host's REST-sourced config: folder plus the two map-editing labels.
+    """One host's REST-sourced config: folder plus the map-editing and Phase 14 labels.
 
     Returned by `fetch_host_config()` below -- a superset of what
     `fetch_host_folders()` used to return alone, from the same single
     `host_config` collection GET (no extra REST call per Phase 13's D-07
     addendum / 13-01 VERDICT V-LABELS-IN-COLLECTION).
+
+    Phase 14 (D-07/D-08/D-09, plan 14-07): `criticality`/`service_criticality`/
+    `depends_on` are populated from the same `host_config` GET's labels via
+    `_parse_criticality()`/`_parse_service_criticality()`/`_parse_depends_on()`
+    -- still no extra REST call.
     """
 
     folder: str = ""
     map_position: str | None = None
     unmanaged: bool = False
+    criticality: str = DEFAULT_CRITICALITY
+    service_criticality: dict[str, str] = field(default_factory=dict)
+    depends_on: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1101,6 +1196,13 @@ def fetch_host_config(base_url: str, username: str, secret: str, timeout: float)
     topologyLayout.ts`'s `parseMapPosition()` validation exactly, T-13-11);
     an invalid or absent value degrades to `None`, never raises. `unmanaged`
     is a strict `== UNMANAGED_SWITCH_VALUE` check, never a truthy coercion.
+
+    Extended 2026-09-26 (D-07/D-08/D-09, plan 14-07) to also read the
+    `criticality`/`service_criticality`/`depends_on` labels off the same
+    collection entry -- same GET, no extra REST call. Each is run through
+    its own strict parser (`_parse_criticality`/`_parse_service_criticality`/
+    `_parse_depends_on`), which degrades any out-of-vocabulary or malformed
+    value to a safe default and never raises (T-14-19).
     """
     url = f"{base_url}/domain-types/host_config/collections/all"
     try:
@@ -1152,8 +1254,18 @@ def fetch_host_config(base_url: str, username: str, secret: str, timeout: float)
             else None
         )
         unmanaged = labels.get(UNMANAGED_SWITCH_LABEL) == UNMANAGED_SWITCH_VALUE
+        criticality = _parse_criticality(labels.get(CRITICALITY_LABEL))
+        service_criticality = _parse_service_criticality(labels.get(SERVICE_CRITICALITY_LABEL))
+        depends_on = _parse_depends_on(labels.get(DEPENDS_ON_LABEL), host_id)
 
-        result[host_id] = HostConfigInfo(folder=folder, map_position=map_position, unmanaged=unmanaged)
+        result[host_id] = HostConfigInfo(
+            folder=folder,
+            map_position=map_position,
+            unmanaged=unmanaged,
+            criticality=criticality,
+            service_criticality=service_criticality,
+            depends_on=depends_on,
+        )
     return result
 
 

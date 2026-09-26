@@ -749,6 +749,89 @@ def test_fetch_host_config_raises_rest_error_on_malformed_json():
             raise AssertionError("expected RestError, not a bare json.JSONDecodeError")
 
 
+# --- fetch_host_config: Phase 14 criticality/service_criticality/depends_on labels ---
+
+
+def test_fetch_host_config_parses_criticality_labels():
+    body = json.dumps(
+        {
+            "value": [
+                {
+                    "id": "screen1",
+                    "extensions": {
+                        "folder": "/vlan10",
+                        "attributes": {
+                            "labels": {
+                                "criticality": "high",
+                                "service_criticality": "cron=high;ModemManager=low",
+                                "depends_on": "media-srv,core.sw1, bad host ,media-srv",
+                            }
+                        },
+                    },
+                },
+            ]
+        }
+    ).encode()
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(body)):
+        result = poller.fetch_host_config("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+    info = result["screen1"]
+    assert info.criticality == "high"
+    assert info.service_criticality == {"cron": "high", "ModemManager": "low"}
+    assert info.depends_on == ["media-srv", "core.sw1"]
+
+
+def test_fetch_host_config_invalid_criticality_degrades_to_low():
+    for raw in ("HIGH", "urgent", 5):
+        body = json.dumps(
+            {"value": [{"id": "web1", "extensions": {"folder": "/", "attributes": {"labels": {"criticality": raw}}}}]}
+        ).encode()
+        with patch("urllib.request.urlopen", return_value=_fake_urlopen(body)):
+            result = poller.fetch_host_config("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+        assert result["web1"].criticality == "low"
+
+
+def test_parse_service_criticality_skips_malformed_entries():
+    raw = "cron=high;=low;noequals;bad:name=high;also bad tier=nope; =medium; cron2 = medium "
+    result = poller._parse_service_criticality(raw)
+    assert result == {"cron": "high", "cron2": "medium"}
+    assert poller._parse_service_criticality(123) == {}
+    assert poller._parse_service_criticality(None) == {}
+
+
+def test_parse_service_criticality_caps_entries():
+    raw = ";".join(f"svc{i}=low" for i in range(250))
+    result = poller._parse_service_criticality(raw)
+    assert len(result) == poller._MAX_SERVICE_CRITICALITY_ENTRIES
+    assert "svc0" in result
+    assert "svc199" in result
+    assert "svc200" not in result
+
+
+def test_parse_depends_on_drops_invalid_self_and_duplicate_ids():
+    raw = "media-srv,core.sw1, bad host ,media-srv,screen1"
+    assert poller._parse_depends_on(raw, "screen1") == ["media-srv", "core.sw1"]
+    assert poller._parse_depends_on(None, "screen1") == []
+    assert poller._parse_depends_on(123, "screen1") == []
+
+
+def test_parse_depends_on_caps_entries():
+    raw = ",".join(f"host{i}" for i in range(75))
+    result = poller._parse_depends_on(raw, "screen1")
+    assert len(result) == poller._MAX_DEPENDS_ON_ENTRIES
+    assert result[0] == "host0"
+    assert result[-1] == f"host{poller._MAX_DEPENDS_ON_ENTRIES - 1}"
+
+
+def test_fetch_host_config_missing_phase14_labels_defaults():
+    body = json.dumps({"value": [{"id": "web1", "extensions": {"folder": "/vlan10"}}]}).encode()
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(body)):
+        result = poller.fetch_host_config("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
+    info = result["web1"]
+    assert info.criticality == "low"
+    assert info.service_criticality == {}
+    assert info.depends_on == []
+
+
 def test_fetch_host_folders_derives_from_fetch_host_config():
     """fetch_host_folders() is now a thin wrapper -- one REST call backs both."""
     body = json.dumps(
