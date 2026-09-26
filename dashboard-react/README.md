@@ -161,6 +161,44 @@ The file name **is** the device type — the `tag_device_type` value from `devic
   (see `recoloredDataUri` in `src/lib/mapIcons.ts`). The sidebar tree uses the same file as a CSS
   mask, so it follows the text colour. Multi-colour/gradient icons will not recolour.
 
+## 5c. Incidents
+
+Above the stats strip, `IncidentList` (DASH-14) shows one card per open root-cause incident,
+sourced from the poller's `lan/incidents/{incident_id}/status` topics (see the deployment doc's
+MQTT topic contract). It never re-sorts its input — ordering is `selectOpenIncidents`'s job
+(D-12): worst criticality tier first, then longest-open within a tier (a null `since` sorts
+last within its tier), ties broken by incident id.
+
+**Copy rules (D-04 — never overclaim from UNREACH/inferred evidence alone):**
+
+- The card never says a device has "stopped operating"; it separately counts and lists
+  **confirmed down** hosts (a DOWN host in a non-inferred incident) versus **not observable**
+  hosts (an UNREACH host, or *any* consequence of an inferred incident, even one Checkmk itself
+  reports as DOWN — an unmanaged switch hides what is actually happening behind it).
+- An inferred incident (root is an unmanaged switch with at least two non-OK children, one DOWN)
+  carries an "Inferred, not confirmed" badge next to its title.
+
+**Layout:** the card's title is `"{root label} — {duration}"` (duration ticks live: seconds under
+a minute, minutes under an hour, hours+minutes under a day, days+hours beyond that; `since` being
+absent — Livestatus `last_state_change` missing or non-positive — shows "duration unknown"
+instead). The description line is the confirmed-down/not-observable summary plus a criticality
+badge (`low`/`medium`/`high`/`critical`, a colour dimension independent of the state palette — a
+`critical`-tier incident is never rendered in state red/orange). A "View devices" toggle expands
+the confirmed-down and not-observable host lists (each linking to `/details?id=...`) plus a
+"Dependent devices: …" line when the incident has any (a dependent gets no badge/link of its own,
+only this mention — D-15).
+
+Consequence hosts also dim (opacity, neutral border) in the fleet tree and on the topology map,
+each with a "See incident" link/click that routes to `/?incident={incident_id}` — a deep link
+that scrolls the matching card into view and highlights it with a ring. An incident's root keeps
+its full alarm styling; an inferred root gets a distinct warning-coloured dashed border instead of
+DOWN/UNREACH red, since its own Checkmk state is UP/unchecked (D-04).
+
+With no open incidents, the list shows "No open incidents" / "Every device the poller can reach
+is reporting normally" instead of an empty card area. The list caps at 35% of viewport height
+(`max-h-[35vh]`, scrollable) in the default layout; a `fill` variant exists for a future kiosk/wall
+mode (DASH-17) to reuse without modification.
+
 ## 6. Version pins and why
 
 - `tailwindcss` is pinned to the 3.x line. A bare `npm install tailwindcss` would grab v4,
