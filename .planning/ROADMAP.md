@@ -350,7 +350,7 @@ Plans:
 
 **Honest caveat to carry**: a projection is only as good as its history. Disk-fill dates are credible almost immediately; a drive-failure date is not credible until the drive has been watched for months. Promising it sooner is the one thing that would undermine the rest.
 
-**Plans:** 3/9 plans executed
+**Plans:** 4/9 plans executed
 
 Plans:
 
@@ -365,7 +365,7 @@ Plans:
 
 **Wave 3** *(blocked on 14-03)*
 
-- [ ] 14-04-PLAN.md — Incident card list above the stats strip, live wiring of dimming, `/?incident=` highlight (DASH-14, DASH-15)
+- [x] 14-04-PLAN.md — Incident card list above the stats strip, live wiring of dimming, `/?incident=` highlight (DASH-14, DASH-15)
 
 **Wave 4** *(blocked on 14-04; D-06 evidence-framing gate)*
 
