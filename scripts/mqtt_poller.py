@@ -222,10 +222,10 @@ OPTIONAL_HOST_COLUMNS = (
     "staleness",
     # Added by Phase 14 (PLR-14): per-host epoch seconds of the current
     # hard/soft state's start, used as incident duration. Standard
-    # Nagios-lineage Livestatus column, NOT yet live-probed on the
-    # 2.4.0p36.cre site (14-RESEARCH.md A3) -- plan 14-05 runs
-    # `--check-columns` live. Absent -> every incident's `since` is null,
-    # never a failure.
+    # Nagios-lineage Livestatus column -- live-verified present on a real
+    # 2.4.0p36.cre site on 2026-09-26 via `--check-columns` (plan 14-05):
+    # incident duration displays real values (e.g. "9 h 56 min"). Absent
+    # would make every incident's `since` null, never a failure.
     "last_state_change",
 )
 
