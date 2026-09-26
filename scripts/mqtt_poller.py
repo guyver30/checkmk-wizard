@@ -80,6 +80,12 @@ TOPIC_TOPOLOGY = "lan/devices/topology"
 TOPIC_EVENTS = "lan/events/recent"
 TOPIC_POLLER_STATUS = "lan/poller/status"
 
+# Phase 14 (D-13/PLR-14): prefix for the incident id `compute_incidents()`
+# below mints (`f"{INCIDENT_ID_PREFIX}{root_id}"`) and topic segment
+# `reconcile_state()` matches against when collecting retained incident
+# topics at startup.
+INCIDENT_ID_PREFIX = "incident-"
+
 UNKNOWN_DEVICE_TYPE = "unknown"
 
 # Phase 14 (D-05/D-09): operator-entered business tier, never inferred from
@@ -483,6 +489,10 @@ def device_service_history_topic(device_id: str) -> str:
     return f"lan/devices/{device_id}/service_history"
 
 
+def incident_status_topic(incident_id: str) -> str:
+    return f"lan/incidents/{incident_id}/status"
+
+
 def is_publishable_device_id(device_id: str) -> bool:
     """Reject any device id that would corrupt the MQTT topic hierarchy if interpolated.
 
@@ -778,7 +788,7 @@ def compute_incidents(snapshots: list[DeviceSnapshot]) -> list[dict]:
 
         incidents.append(
             {
-                "id": f"incident-{root_id}",
+                "id": f"{INCIDENT_ID_PREFIX}{root_id}",
                 "root": root_id,
                 "root_state": root_snapshot.host_state_raw,
                 "inferred": inferred,
@@ -1614,6 +1624,31 @@ def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
             _logger.warning("Failed to publish tombstone to %s: %s", topic, exc)
 
 
+def publish_incident(client: mqtt.Client, incident: dict, timestamp: str) -> None:
+    """Publish one incident's current state. QoS 1: change-triggered (D-13/PLR-14), the
+    caller only calls this when `incident_signature()` differs from the previously
+    published signature -- not republished every cycle like `publish_device_status`.
+    """
+    payload = {**incident, "timestamp": timestamp}
+    _publish_json(client, incident_status_topic(incident["id"]), payload, qos=1, retain=True)
+
+
+def publish_incident_tombstone(client: mqtt.Client, incident_id: str) -> None:
+    """Clear a closed incident's retained status topic.
+
+    Same tombstone contract as `publish_tombstone()` above (a zero-length
+    retained payload is MQTT's own defined "clear this retained topic"
+    semantic), applied to the single per-incident topic instead of the four
+    per-device ones.
+    """
+    topic = incident_status_topic(incident_id)
+    try:
+        info = client.publish(topic, payload=None, retain=True, qos=1)
+        info.wait_for_publish(timeout=5)
+    except (TimeoutError, OSError) as exc:
+        _logger.warning("Failed to publish tombstone to %s: %s", topic, exc)
+
+
 def publish_poller_status(
     client: mqtt.Client, since: str, last_poll: str | None, device_count: int
 ) -> None:
@@ -1688,6 +1723,15 @@ class PollerState:
     # mosquitto volume wiped too (docs section 8.5, commit 96e7182).
     # `run_cycle` sweeps it once, behind `allow_stale_sweep`, then empties it.
     retained_ids: set[str] = field(default_factory=set)
+    # Phase 14 (PLR-14): incident id -> last-published `incident_signature()`
+    # (or `None` for an id seeded by `reconcile_state` from a retained topic
+    # whose payload was never parsed -- a seeded `None` always differs from
+    # a freshly computed signature, forcing exactly one republish). In-memory
+    # only, per PLR-14's "no incident state of its own" -- a restart
+    # tombstones anything closed while it was down and republishes anything
+    # still open, using the retained `lan/incidents/+/status` topics
+    # themselves as the durable store, never a poller-owned file.
+    previous_incidents: dict[str, tuple | None] = field(default_factory=dict)
 
 
 def parse_topology_payload(payload: bytes) -> dict[str, dict]:
@@ -1852,6 +1896,17 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     state of its own" (PLR-02): the durable store is Mosquitto's
     `persistence true` from Phase 8, not a poller-owned file.
 
+    Phase 14 (PLR-14): the ids of every host with a retained, non-empty
+    `lan/incidents/{id}/status` topic are likewise collected, into
+    `retained_incident_ids`, and seeded into the returned state's
+    `previous_incidents` with a `None` signature -- a `None` always differs
+    from a freshly computed signature, so the first cycle after a restart
+    either republishes a still-open incident (no visible change to a
+    viewer, since the payload is the same) or tombstones one that closed
+    while the poller was down. Only the topic *name* is read here, never
+    the retained payload body, per the malformed-payload posture already
+    applied to `history`/`service_history` above.
+
     This function's client deliberately has no will configured -- its own
     (normal) disconnect at the end of this function must never publish a
     false offline poller status for the actual running poller (T-09-06).
@@ -1861,6 +1916,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     history_payloads: dict[str, bytes] = {}
     service_history_payloads: dict[str, bytes] = {}
     retained_ids: set[str] = set()
+    retained_incident_ids: set[str] = set()
     topology_received = threading.Event()
 
     def on_message(client, userdata, msg):
@@ -1878,6 +1934,16 @@ def reconcile_state(config: PollerConfig) -> PollerState:
             and is_publishable_device_id(parts[2])
         ):
             retained_ids.add(parts[2])
+        if (
+            len(parts) == 4
+            and parts[0] == "lan"
+            and parts[1] == "incidents"
+            and parts[3] == "status"
+            and msg.payload
+            and parts[2].startswith(INCIDENT_ID_PREFIX)
+            and is_publishable_device_id(parts[2])
+        ):
+            retained_incident_ids.add(parts[2])
         if msg.topic == TOPIC_TOPOLOGY:
             topology_result.append(msg.payload)
             topology_received.set()
@@ -1912,6 +1978,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         client.subscribe("lan/devices/+/history", qos=1)
         client.subscribe("lan/devices/+/services", qos=1)
         client.subscribe("lan/devices/+/service_history", qos=1)
+        client.subscribe("lan/incidents/+/status", qos=1)
         client.subscribe(TOPIC_TOPOLOGY, qos=1)
         client.loop_start()
         topology_received.wait(timeout=config.reconcile_timeout_seconds)
@@ -1935,6 +2002,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         since=utc_now_iso(),
         service_history=service_history,
         retained_ids=retained_ids,
+        previous_incidents={incident_id: None for incident_id in retained_incident_ids},
     )
 
 
@@ -1978,6 +2046,17 @@ def run_cycle(
     tombstoned once, and `retained_ids` is then emptied. The caller sets it
     only when the host list is confirmed (see the gate in `run_forever`);
     when false, `retained_ids` is left intact for a later cycle.
+
+    Phase 14 (PLR-14/PLR-16): `compute_incidents(snapshots)` is re-derived
+    from scratch every cycle -- no incident state persists between cycles
+    except `state.previous_incidents`' signatures, kept only to decide
+    whether to republish. An incident absent this cycle but present in
+    `state.previous_incidents` is tombstoned (it closed, or `reconcile_state`
+    seeded it as a startup guess that turned out stale); every incident
+    still open publishes only when `incident_signature()` differs from what
+    was last published, so an operator's criticality/dependency edit (which
+    changes `worst_criticality`/`dependents` without changing the DOWN/
+    UNREACH set) still triggers exactly one republish.
     """
     now = utc_now_iso()
 
@@ -2104,6 +2183,18 @@ def run_cycle(
     if events_this_cycle:
         state.events = (state.events + events_this_cycle)[-config.events_max_entries :]
         publish_events(client, state.events)
+
+    incidents = compute_incidents(snapshots)
+    current_incidents = {incident["id"]: incident for incident in incidents}
+    for incident_id in sorted(set(state.previous_incidents) - set(current_incidents)):
+        publish_incident_tombstone(client, incident_id)
+    for incident_id, incident in current_incidents.items():
+        signature = incident_signature(incident)
+        if signature != state.previous_incidents.get(incident_id):
+            publish_incident(client, incident, now)
+    state.previous_incidents = {
+        incident_id: incident_signature(incident) for incident_id, incident in current_incidents.items()
+    }
 
     publish_poller_status(client, since=state.since, last_poll=now, device_count=len(snapshots))
 

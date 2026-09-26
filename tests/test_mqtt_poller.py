@@ -1831,6 +1831,27 @@ def test_reconcile_state_seeds_previous_nodes_from_retained_topology():
     }
 
 
+def test_reconcile_state_seeds_previous_incidents_from_retained_incident_topics():
+    retained = [
+        ("lan/incidents/incident-x/status", b'{"id": "incident-x"}'),
+        ("lan/incidents/incident-cleared/status", b""),
+        (poller.TOPIC_TOPOLOGY, b'{"devices": []}'),
+    ]
+
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+
+        def _subscribe(topic, qos=None):
+            if topic == poller.TOPIC_TOPOLOGY:
+                for msg_topic, payload in retained:
+                    mock_client.on_message(mock_client, None, _make_message(msg_topic, payload))
+
+        mock_client.subscribe.side_effect = _subscribe
+        state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
+
+    assert state.previous_incidents == {"incident-x": None}
+
+
 # --- run_cycle ------------------------------------------------------------------
 
 
@@ -2049,6 +2070,115 @@ def test_run_cycle_truncates_history_and_events_to_configured_bounds():
 
     assert len(state.history["a"]) <= 2
     assert len(state.events) <= 1
+
+
+# --- run_cycle: incidents (PLR-14/PLR-16) ------------------------------------
+
+
+def test_run_cycle_publishes_new_incident_retained_qos1():
+    client = MagicMock()
+    state = _poller_state()
+    snapshots = [
+        _snapshot("sw1", host_state_raw="DOWN"),
+        _snapshot("a", host_state_raw="UNREACH", parents=["sw1"]),
+    ]
+
+    poller.run_cycle(client, _make_config(), state, snapshots)
+
+    calls = _published(client, "lan/incidents/incident-sw1/status")
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.kwargs["retain"] is True
+    assert call.kwargs["qos"] == 1
+    payload = json.loads(call.args[1])
+    assert payload["root"] == "sw1"
+    assert payload["not_observable"] == ["a"]
+    assert "timestamp" in payload
+    assert state.previous_incidents["incident-sw1"] == poller.incident_signature(
+        {**payload, "id": "incident-sw1"}
+    )
+
+
+def test_run_cycle_does_not_republish_unchanged_incident():
+    client = MagicMock()
+    state = _poller_state()
+    snapshots = [
+        _snapshot("sw1", host_state_raw="DOWN"),
+        _snapshot("a", host_state_raw="UNREACH", parents=["sw1"]),
+    ]
+
+    poller.run_cycle(client, _make_config(), state, snapshots)
+    client.reset_mock()
+    poller.run_cycle(client, _make_config(), state, snapshots)
+
+    assert _published(client, "lan/incidents/incident-sw1/status") == []
+
+
+def test_run_cycle_republishes_incident_when_consequences_change():
+    client = MagicMock()
+    state = _poller_state()
+    snapshots = [
+        _snapshot("sw1", host_state_raw="DOWN"),
+        _snapshot("a", host_state_raw="UNREACH", parents=["sw1"]),
+    ]
+
+    poller.run_cycle(client, _make_config(), state, snapshots)
+    client.reset_mock()
+    recovered = [_snapshot("sw1", host_state_raw="DOWN"), _snapshot("a", parents=["sw1"])]
+    poller.run_cycle(client, _make_config(), state, recovered)
+
+    calls = _published(client, "lan/incidents/incident-sw1/status")
+    assert len(calls) == 1
+    payload = json.loads(calls[0].args[1])
+    assert payload["not_observable"] == []
+
+
+def test_run_cycle_tombstones_closed_incident():
+    client = MagicMock()
+    state = _poller_state()
+    poller.run_cycle(client, _make_config(), state, [_snapshot("sw1", host_state_raw="DOWN")])
+    client.reset_mock()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("sw1")])
+
+    tombstones = [
+        call
+        for call in client.publish.call_args_list
+        if call.args[0] == "lan/incidents/incident-sw1/status"
+        and call.kwargs.get("payload", "unset") is None
+    ]
+    assert len(tombstones) == 1
+    for call in tombstones:
+        assert call.kwargs["retain"] is True
+        assert call.kwargs["qos"] == 1
+    assert "incident-sw1" not in state.previous_incidents
+
+
+def test_run_cycle_tombstones_reconciled_incident_that_is_no_longer_open():
+    client = MagicMock()
+    state = _poller_state()
+    state.previous_incidents = {"incident-stale": None}
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a")])
+
+    tombstones = [
+        call
+        for call in client.publish.call_args_list
+        if call.args[0] == "lan/incidents/incident-stale/status"
+        and call.kwargs.get("payload", "unset") is None
+    ]
+    assert len(tombstones) == 1
+    assert state.previous_incidents == {}
+
+
+def test_run_cycle_healthy_fleet_publishes_nothing_on_incident_topics():
+    client = MagicMock()
+    state = _poller_state()
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a"), _snapshot("b", parents=["a"])])
+
+    incident_calls = [call for call in client.publish.call_args_list if call.args[0].startswith("lan/incidents/")]
+    assert incident_calls == []
 
 
 # --- run_cycle: services / service_history (D-12/D-13/D-14) -----------------
@@ -2582,6 +2712,7 @@ def test_reconcile_state_subscribes_topology_after_per_device_wildcards():
     assert topics[-1] == poller.TOPIC_TOPOLOGY
     for suffix in ("status", "history", "services", "service_history"):
         assert f"lan/devices/+/{suffix}" in topics
+    assert "lan/incidents/+/status" in topics
 
 
 def test_run_cycle_sweep_clears_stale_ids_and_keeps_live_ones():
