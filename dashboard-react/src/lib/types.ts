@@ -93,6 +93,30 @@ export interface TopologyNode {
   alias?: string;
   map_position?: string | null;
   unmanaged?: boolean;
+  // Phase 14, PLR-16 — populated by the poller from Checkmk host labels (plan 14-07).
+  criticality?: string;
+  service_criticality?: unknown;
+  depends_on?: unknown;
+}
+
+/**
+ * One incident published on `lan/incidents/{incident_id}/status` (retained; zero-length
+ * payload is a tombstone), per plan 14-01's contract: `incident_id` is
+ * `"incident-" + root host id`. Untrusted JSON crossing the MQTT trust boundary --
+ * incidents.ts's normalizeIncident() is the runtime guard, not this type.
+ */
+export interface IncidentPayload {
+  id?: string;
+  root?: string;
+  root_state?: string;
+  inferred?: boolean;
+  confirmed_down?: unknown;
+  not_observable?: unknown;
+  dependents?: unknown;
+  worst_criticality?: string;
+  since?: string | null;
+  timestamp?: string;
+  [key: string]: unknown;
 }
 
 export interface TopologyPayload {

@@ -33,6 +33,7 @@ import type {
   DevicePayload,
   EventEntry,
   HistoryEntry,
+  IncidentPayload,
   PollerStatusPayload,
   ServiceEntry,
   ServiceHistoryEntry,
@@ -52,6 +53,9 @@ export interface AppState {
   services: Record<string, ServiceEntry[]>;
   serviceHistory: Record<string, ServiceHistoryEntry[]>;
   events: EventEntry[];
+  // Phase 14 / D-13: open incidents, keyed by incident id, kept in step with the poller's
+  // retained `lan/incidents/{id}/status` topics -- a pure MQTT consumer for this feature.
+  incidents: Record<string, IncidentPayload>;
   topology: TopologyPayload | null;
   pollerStatus: PollerStatusPayload | null;
   // Bug fixed 2026-09-16 (ported from state-store.js): the poller's MQTT will
@@ -99,6 +103,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   services: {},
   serviceHistory: {},
   events: [],
+  incidents: {},
   topology: null,
   pollerStatus: null,
   lastKnownPollerTimestamp: null,
@@ -113,6 +118,26 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // matching segment positions rather than a single regex over the whole string, because
     // the device id segment (parts[2]) is arbitrary text sourced from Checkmk host names.
     const parts = topic.split("/");
+
+    if (parts[1] === "incidents" && parts[3] === "status") {
+      const id = parts[2];
+      const parsed = parsePayload(payload);
+      if (!parsed.ok) {
+        return; // malformed -- ignore, keep last-known-good
+      }
+      if (parsed.value === null) {
+        // Zero-length retained payload is a tombstone -- the incident closed.
+        const incidents = { ...get().incidents };
+        delete incidents[id];
+        set({ incidents });
+        return;
+      }
+      if (!isPlainObject(parsed.value)) {
+        return; // wrong shape -- malformed, drop
+      }
+      set({ incidents: { ...get().incidents, [id]: parsed.value as IncidentPayload } });
+      return;
+    }
 
     if (parts[1] === "devices" && parts[3] === "status") {
       const id = parts[2];
