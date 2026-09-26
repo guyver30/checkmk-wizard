@@ -46,3 +46,13 @@ body,
   color: #e5252a;
   border-color: #e5252a;
 }
+
+/* Phase 14 D-14 kiosk rotation progress; decorative chrome, accent colour per UI-SPEC. */
+@keyframes kiosk-progress {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
