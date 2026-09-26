@@ -350,14 +350,14 @@ Plans:
 
 **Honest caveat to carry**: a projection is only as good as its history. Disk-fill dates are credible almost immediately; a drive-failure date is not credible until the drive has been watched for months. Promising it sooner is the one thing that would undermine the rest.
 
-**Plans:** 9 plans
+**Plans:** 2/9 plans executed
 
 Plans:
 
 **Wave 1**
 
-- [ ] 14-01-PLAN.md — Poller incident engine: `last_state_change` probe column, pure `compute_incidents()` (root-cause collapse, unmanaged inference, transitive worst criticality), retained `lan/incidents/{id}/status` publish/tombstone/self-heal (PLR-14, PLR-15, PLR-16)
-- [ ] 14-02-PLAN.md — Dashboard incident data layer: `lib/incidents.ts`, `incidents` store slice, `lan/incidents/+/status` subscription (DASH-14, DASH-15)
+- [x] 14-01-PLAN.md — Poller incident engine: `last_state_change` probe column, pure `compute_incidents()` (root-cause collapse, unmanaged inference, transitive worst criticality), retained `lan/incidents/{id}/status` publish/tombstone/self-heal (PLR-14, PLR-15, PLR-16)
+- [x] 14-02-PLAN.md — Dashboard incident data layer: `lib/incidents.ts`, `incidents` store slice, `lan/incidents/+/status` subscription (DASH-14, DASH-15)
 
 **Wave 2** *(blocked on 14-02)*
 
