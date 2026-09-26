@@ -533,14 +533,17 @@ class DeviceSnapshot:
     # source. `None` when the column is absent or non-positive -- graceful
     # degradation, never a hard failure.
     last_state_change: int | None = None
-    # Phase 14 (D-05/D-07/D-08): criticality/depends_on are populated from
-    # Checkmk host labels by plan 14-07 (`CRITICALITY_LABEL`/
-    # `DEPENDS_ON_LABEL`, read the same way `map_position`/`unmanaged`
-    # already are). Until then they keep these safe defaults, so
-    # `compute_incidents()` below has a stable contract to compute against
-    # from wave 1.
+    # Phase 14 (D-05/D-07/D-08, plan 14-07): criticality/service_criticality/
+    # depends_on are populated from Checkmk host labels (`CRITICALITY_LABEL`/
+    # `SERVICE_CRITICALITY_LABEL`/`DEPENDS_ON_LABEL`), read the same way
+    # `map_position`/`unmanaged` already are -- via `query_devices()`'s
+    # `host_config` parameter. A host with no `host_config` entry (or an
+    # unset label) keeps these safe defaults; `compute_incidents()` above
+    # already consumes `criticality`/`depends_on` against this exact
+    # contract (plan 14-01).
     criticality: str = DEFAULT_CRITICALITY
     depends_on: list[str] = field(default_factory=list)
+    service_criticality: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -642,6 +645,12 @@ def topology_nodes(snapshots: list[DeviceSnapshot]) -> list[dict]:
             "alias": snapshot.alias,
             "map_position": snapshot.map_position,
             "unmanaged": snapshot.unmanaged,
+            # Phase 14 (D-07/D-08/D-09, plan 14-07): carried to every viewer
+            # on this same topic so criticality/dependency edits reach the
+            # dashboard without a per-device round trip.
+            "criticality": snapshot.criticality,
+            "service_criticality": dict(snapshot.service_criticality),
+            "depends_on": list(snapshot.depends_on),
         }
         for snapshot in snapshots
     ]
@@ -657,6 +666,13 @@ def topology_signature(nodes: list[dict]) -> tuple:
     two Phase 13 fields -- `.get()` degrades that case to the same
     None/False default `_normalise_restored_node()` backfills, rather than
     raising `KeyError` for every caller that hasn't been updated yet.
+
+    Phase 14 (D-07/D-08/D-09, plan 14-07): `criticality`/`depends_on`/
+    `service_criticality` are read the same defensive `.get()` way, with the
+    same rationale -- a criticality or dependency label edit must trigger
+    exactly one republish, and an older/hand-built node dict without these
+    keys must not raise or spuriously differ from a fresh node carrying the
+    same defaults.
     """
     return tuple(
         sorted(
@@ -668,6 +684,9 @@ def topology_signature(nodes: list[dict]) -> tuple:
                 node["alias"],
                 node.get("map_position"),
                 node.get("unmanaged", False),
+                node.get("criticality", DEFAULT_CRITICALITY),
+                tuple(node.get("depends_on", [])),
+                tuple(sorted((node.get("service_criticality") or {}).items())),
             )
             for node in nodes
         )
@@ -1410,6 +1429,10 @@ def query_devices(
     `fetch_host_config()`; a host missing from it (or a `None` mapping)
     degrades `map_position`/`unmanaged` to their `DeviceSnapshot` defaults
     (`None`/`False`), same graceful-degradation posture as `folders`.
+    Extended 2026-09-26 (D-07/D-08/D-09, plan 14-07) to also carry
+    `criticality`/`depends_on`/`service_criticality` from the same
+    `HostConfigInfo`, degrading the same way when the host is missing from
+    `host_config`.
     """
     body = _livestatus_request(host, port, build_hosts_query(columns), timeout)
     if not body.strip():
@@ -1473,6 +1496,9 @@ def query_devices(
         host_info = host_config.get(name) if host_config else None
         map_position = host_info.map_position if host_info else None
         unmanaged = host_info.unmanaged if host_info else False
+        criticality = host_info.criticality if host_info else DEFAULT_CRITICALITY
+        depends_on = list(host_info.depends_on) if host_info else []
+        service_criticality = dict(host_info.service_criticality) if host_info else {}
 
         try:
             alias = row[index["alias"]] if "alias" in index else ""
@@ -1514,6 +1540,9 @@ def query_devices(
                 map_position=map_position,
                 unmanaged=unmanaged,
                 last_state_change=last_state_change,
+                criticality=criticality,
+                depends_on=depends_on,
+                service_criticality=service_criticality,
             )
         )
     return snapshots
@@ -1924,6 +1953,14 @@ def _normalise_restored_node(node: dict) -> dict:
     back to the default rather than propagating into `topology_signature`.
     Callers must still reject a node whose `id` is not a `str` — that one
     cannot be defaulted, since it is the dict key.
+
+    Phase 14 (D-07/D-08/D-09, plan 14-07): `criticality`/`service_criticality`/
+    `depends_on` are exactly the next-field case this comment predicts --
+    backfilled and type-checked the same way, so a pre-14-07 retained node
+    (missing these keys) and a wrong-typed one (e.g. a hand-edited retained
+    payload with `criticality: 3`) both degrade to the same safe defaults
+    `topology_nodes()` produces, republish exactly once on the first cycle
+    after upgrade, and never crash the poller (T-14-21).
     """
     parents = node.get("parents")
     if not isinstance(parents, list) or not all(isinstance(p, str) for p in parents):
@@ -1943,6 +1980,21 @@ def _normalise_restored_node(node: dict) -> dict:
     unmanaged = node.get("unmanaged")
     if not isinstance(unmanaged, bool):
         unmanaged = False
+    criticality = node.get("criticality")
+    if not isinstance(criticality, str) or criticality not in CRITICALITY_TIERS:
+        criticality = DEFAULT_CRITICALITY
+    service_criticality = node.get("service_criticality")
+    if not isinstance(service_criticality, dict):
+        service_criticality = {}
+    else:
+        service_criticality = {
+            key: value
+            for key, value in service_criticality.items()
+            if isinstance(key, str) and isinstance(value, str) and value in CRITICALITY_TIERS
+        }
+    depends_on = node.get("depends_on")
+    if not isinstance(depends_on, list) or not all(isinstance(d, str) for d in depends_on):
+        depends_on = []
     return {
         **node,
         "parents": parents,
@@ -1951,6 +2003,9 @@ def _normalise_restored_node(node: dict) -> dict:
         "alias": alias,
         "map_position": map_position,
         "unmanaged": unmanaged,
+        "criticality": criticality,
+        "service_criticality": service_criticality,
+        "depends_on": depends_on,
     }
 
 

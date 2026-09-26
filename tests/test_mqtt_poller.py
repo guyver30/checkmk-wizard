@@ -114,8 +114,29 @@ def test_topology_nodes_emits_map_position_and_unmanaged():
             "alias": "",
             "map_position": "120,-40",
             "unmanaged": True,
+            "criticality": "low",
+            "service_criticality": {},
+            "depends_on": [],
         }
     ]
+
+
+def test_topology_nodes_include_criticality_service_criticality_and_depends_on():
+    snapshot = poller.DeviceSnapshot(
+        id="screen1",
+        state="OK",
+        in_downtime=False,
+        acknowledged=False,
+        device_type="Multimedia",
+        folder="",
+        criticality="critical",
+        depends_on=["media-srv"],
+        service_criticality={"cron": "high"},
+    )
+    nodes = poller.topology_nodes([snapshot])
+    assert nodes[0]["criticality"] == "critical"
+    assert nodes[0]["service_criticality"] == {"cron": "high"}
+    assert nodes[0]["depends_on"] == ["media-srv"]
 
 
 def test_topology_nodes_defaults_map_position_and_unmanaged_when_no_host_config_entry():
@@ -1029,6 +1050,33 @@ def test_query_devices_host_config_defaults_when_host_missing_from_mapping():
     assert snapshots[0].unmanaged is False
 
 
+def test_query_devices_carries_phase14_labels_from_host_config():
+    sock = _fake_connection(b'[["h1", 0]]')
+    host_config = {
+        "h1": poller.HostConfigInfo(
+            criticality="critical", depends_on=["h2"], service_criticality={"cron": "high"}
+        )
+    }
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10, host_config=host_config
+        )
+    assert snapshots[0].criticality == "critical"
+    assert snapshots[0].depends_on == ["h2"]
+    assert snapshots[0].service_criticality == {"cron": "high"}
+
+
+def test_query_devices_phase14_labels_default_when_host_missing_from_host_config():
+    sock = _fake_connection(b'[["web1", 0]]')
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices(
+            "checkmk", poller.DEFAULT_LIVESTATUS_PORT, ["name", "state"], 10, host_config={"other-host": poller.HostConfigInfo()}
+        )
+    assert snapshots[0].criticality == poller.DEFAULT_CRITICALITY
+    assert snapshots[0].depends_on == []
+    assert snapshots[0].service_criticality == {}
+
+
 def test_query_devices_host_config_defaults_when_no_mapping_supplied():
     sock = _fake_connection(b'[["web1", 0]]')
     with patch("socket.create_connection", return_value=sock):
@@ -1742,6 +1790,9 @@ def test_parse_topology_payload_parses_devices_keyed_by_id():
             "alias": "",
             "map_position": "0,0",
             "unmanaged": False,
+            "criticality": poller.DEFAULT_CRITICALITY,
+            "service_criticality": {},
+            "depends_on": [],
         }
     }
 
@@ -1828,7 +1879,9 @@ def test_parse_topology_payload_coerces_string_parents_to_empty_list():
     restored = poller.parse_topology_payload(payload)
     assert restored["a"]["parents"] == []
     sig = poller.topology_signature(list(restored.values()))
-    assert sig == (("a", (), poller.UNKNOWN_DEVICE_TYPE, "", "", None, False),)
+    assert sig == (
+        ("a", (), poller.UNKNOWN_DEVICE_TYPE, "", "", None, False, poller.DEFAULT_CRITICALITY, (), ()),
+    )
 
 
 def test_parse_topology_payload_coerces_non_str_folder_and_alias():
@@ -1845,6 +1898,59 @@ def test_topology_signature_differs_when_restored_node_gains_an_alias():
     )
     fresh = [{"id": "a", "parents": [], "device_type": "server", "folder": "/f", "alias": "core-sw"}]
     assert poller.topology_signature(fresh) != poller.topology_signature(list(restored.values()))
+
+
+def test_normalise_restored_node_backfills_phase14_fields():
+    """A pre-14-07 retained node (no criticality/service_criticality/depends_on keys)."""
+    node = poller._normalise_restored_node({"id": "a", "device_type": "server", "folder": "/f"})
+    assert node["criticality"] == poller.DEFAULT_CRITICALITY
+    assert node["service_criticality"] == {}
+    assert node["depends_on"] == []
+
+
+def test_normalise_restored_node_rejects_wrong_typed_phase14_fields():
+    node = poller._normalise_restored_node(
+        {
+            "id": "a",
+            "device_type": "server",
+            "folder": "/f",
+            "criticality": 3,
+            "service_criticality": "x",
+            "depends_on": "a,b",
+        }
+    )
+    assert node["criticality"] == poller.DEFAULT_CRITICALITY
+    assert node["service_criticality"] == {}
+    assert node["depends_on"] == []
+
+    node2 = poller._normalise_restored_node({"id": "a", "depends_on": [1, "b"]})
+    assert node2["depends_on"] == []
+
+
+def test_normalise_restored_node_upgrade_republishes_topology_once_and_never_raises():
+    restored = poller.parse_topology_payload(
+        json.dumps({"devices": [{"id": "a", "device_type": "server", "folder": "/f"}]}).encode()
+    )
+    fresh_same = [
+        {
+            "id": "a",
+            "parents": [],
+            "device_type": "server",
+            "folder": "/f",
+            "alias": "",
+            "map_position": None,
+            "unmanaged": False,
+            "criticality": poller.DEFAULT_CRITICALITY,
+            "service_criticality": {},
+            "depends_on": [],
+        }
+    ]
+    # No new labels set: the restored (backfilled) node and a fresh node with
+    # the same defaults must compare equal -- no spurious republish.
+    assert poller.topology_signature(fresh_same) == poller.topology_signature(list(restored.values()))
+
+    fresh_changed = [{**fresh_same[0], "criticality": "critical"}]
+    assert poller.topology_signature(fresh_changed) != poller.topology_signature(list(restored.values()))
 
 
 def test_parse_events_payload_empty_returns_empty_list():
@@ -1910,6 +2016,9 @@ def test_reconcile_state_seeds_previous_nodes_from_retained_topology():
             "alias": "",
             "map_position": None,
             "unmanaged": False,
+            "criticality": poller.DEFAULT_CRITICALITY,
+            "service_criticality": {},
+            "depends_on": [],
         }
     }
 
@@ -1951,6 +2060,7 @@ def _snapshot(
     criticality="low",
     depends_on=None,
     last_state_change=None,
+    service_criticality=None,
 ):
     return poller.DeviceSnapshot(
         id=id_,
@@ -1964,6 +2074,7 @@ def _snapshot(
         unmanaged=unmanaged,
         criticality=criticality,
         depends_on=depends_on or [],
+        service_criticality=service_criticality or {},
         last_state_change=last_state_change,
     )
 
@@ -2021,6 +2132,52 @@ def test_run_cycle_publishes_topology_on_reparent():
     poller.run_cycle(client, _make_config(), state, [_snapshot("a", parents=["y"])])
 
     assert len(_published(client, poller.TOPIC_TOPOLOGY)) == 1
+
+
+def test_run_cycle_republishes_topology_on_criticality_change():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a", criticality="high")])
+
+    assert len(_published(client, poller.TOPIC_TOPOLOGY)) == 1
+
+
+def test_run_cycle_republishes_topology_on_depends_on_change():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("a", depends_on=["b"])])
+
+    assert len(_published(client, poller.TOPIC_TOPOLOGY)) == 1
+
+
+def test_run_cycle_skips_topology_publish_when_phase14_labels_unchanged():
+    client = MagicMock()
+    node_a = {
+        "id": "a",
+        "parents": [],
+        "device_type": "server",
+        "folder": "",
+        "alias": "",
+        "map_position": None,
+        "unmanaged": False,
+        "criticality": "medium",
+        "service_criticality": {"cron": "low"},
+        "depends_on": ["b"],
+    }
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+
+    poller.run_cycle(
+        client,
+        _make_config(),
+        state,
+        [_snapshot("a", criticality="medium", depends_on=["b"], service_criticality={"cron": "low"})],
+    )
+
+    assert _published(client, poller.TOPIC_TOPOLOGY) == []
 
 
 def test_run_cycle_publishes_topology_on_add():
@@ -2180,6 +2337,29 @@ def test_run_cycle_publishes_new_incident_retained_qos1():
     assert state.previous_incidents["incident-sw1"] == poller.incident_signature(
         {**payload, "id": "incident-sw1"}
     )
+
+
+def test_run_cycle_incident_worst_criticality_counts_dependents_from_labels():
+    """End-to-end (D-05/D-07/D-15): lift1 is UNREACH under DOWN sw1, and screen1
+    (UP, criticality "critical") depends_on ["lift1"] -- run_cycle publishes an
+    incident with dependents ["screen1"] and worst_criticality "high" (screen1
+    is UP, so its "critical" tier counts one tier lower, D-15).
+    """
+    client = MagicMock()
+    state = _poller_state()
+    snapshots = [
+        _snapshot("sw1", host_state_raw="DOWN"),
+        _snapshot("lift1", host_state_raw="UNREACH", parents=["sw1"]),
+        _snapshot("screen1", host_state_raw="UP", criticality="critical", depends_on=["lift1"]),
+    ]
+
+    poller.run_cycle(client, _make_config(), state, snapshots)
+
+    calls = _published(client, "lan/incidents/incident-sw1/status")
+    assert len(calls) == 1
+    payload = json.loads(calls[0].args[1])
+    assert payload["dependents"] == ["screen1"]
+    assert payload["worst_criticality"] == "high"
 
 
 def test_run_cycle_does_not_republish_unchanged_incident():
