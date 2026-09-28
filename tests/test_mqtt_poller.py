@@ -283,6 +283,35 @@ def test_compute_incidents_nested_down_folds_into_upstream_incident():
     assert incident["not_observable"] == []
 
 
+def test_compute_incidents_three_level_down_chain_is_one_incident():
+    # Regression for 14-REVIEW CR-01: nesting only looked one hop up, so `access` saw the
+    # nested root `dist` but never the top root `core`, became a top root itself, and one
+    # outage showed as two incident cards.
+    snapshots = [
+        _snapshot("core", host_state_raw="DOWN"),
+        _snapshot("dist", host_state_raw="DOWN", parents=["core"]),
+        _snapshot("access", host_state_raw="DOWN", parents=["dist"]),
+        _snapshot("leaf", host_state_raw="UNREACH", parents=["access"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert incident["root"] == "core"
+    assert incident["confirmed_down"] == ["access", "dist"]
+    assert incident["not_observable"] == ["leaf"]
+
+
+def test_compute_incidents_down_parent_cycle_still_yields_one_incident():
+    # A `parents` cycle of DOWN hosts has no natural top root; exactly one must be promoted.
+    snapshots = [
+        _snapshot("a", host_state_raw="DOWN", parents=["c"]),
+        _snapshot("b", host_state_raw="DOWN", parents=["a"]),
+        _snapshot("c", host_state_raw="DOWN", parents=["b"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+
+
 def test_compute_incidents_unmanaged_switch_promoted_as_inferred_root_when_sibling_also_down():
     snapshots = [
         _snapshot("um1", state="OK", host_state_raw="UP", unmanaged=True),
@@ -2021,6 +2050,42 @@ def test_reconcile_state_seeds_previous_nodes_from_retained_topology():
             "depends_on": [],
         }
     }
+
+
+def test_host_config_from_topology_keeps_labels_from_retained_topology():
+    # Regression for 14-REVIEW WR-06: the startup host-config cache must carry the retained
+    # labels, so a REST failure on the first cycle doesn't reset them all to defaults.
+    payload = json.dumps(
+        {
+            "devices": [
+                {
+                    "id": "a",
+                    "parents": [],
+                    "device_type": "server",
+                    "folder": "lan",
+                    "alias": "",
+                    "map_position": "10,20",
+                    "unmanaged": True,
+                    "criticality": "critical",
+                    "service_criticality": {"PING": "high"},
+                    "depends_on": ["b"],
+                }
+            ],
+            "timestamp": "t",
+        }
+    ).encode()
+    config = poller.host_config_from_topology(poller.parse_topology_payload(payload))
+    assert config == {
+        "a": poller.HostConfigInfo(
+            folder="lan",
+            map_position="10,20",
+            unmanaged=True,
+            criticality="critical",
+            service_criticality={"PING": "high"},
+            depends_on=["b"],
+        )
+    }
+    assert poller.host_config_from_topology({}) == {}
 
 
 def test_reconcile_state_seeds_previous_incidents_from_retained_incident_topics():

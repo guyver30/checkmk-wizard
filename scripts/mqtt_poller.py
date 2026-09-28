@@ -698,6 +698,8 @@ def _reachable_roots_from(
     roots: set[str],
     traversable: set[str],
     by_id: dict[str, DeviceSnapshot],
+    *,
+    through_roots: bool = False,
 ) -> set[str]:
     """Walk upward from `start_id`'s parents, through `traversable` hosts only, collecting
     every member of `roots` reached. A `visited` set guards against a `parents` cycle
@@ -705,7 +707,12 @@ def _reachable_roots_from(
     regardless of how the Livestatus-reported topology is shaped.
 
     Once a root is reached the walk does not continue past it -- a root's own ancestors
-    are not part of the incident being assigned/nested from `start_id`.
+    are not part of the incident being assigned/nested from `start_id` -- unless
+    `through_roots` is set, which collects every root on the whole upward chain. Nesting
+    needs the full chain: bug fixed 2026-09-28 (14-REVIEW CR-01). Stopping at the first
+    root meant `r2` in a DOWN chain `r0 <- r1 <- r2` saw only the nested root `r1`, never
+    the top root `r0`, and was wrongly promoted to a top root of its own, splitting one
+    outage into two incidents.
     """
     reached: set[str] = set()
     visited: set[str] = set()
@@ -719,7 +726,8 @@ def _reachable_roots_from(
             continue
         if candidate in roots:
             reached.add(candidate)
-            continue
+            if not through_roots:
+                continue
         frontier.extend(parent_id for parent_id in by_id[candidate].parents if parent_id in by_id)
     return reached
 
@@ -840,7 +848,8 @@ def compute_incidents(snapshots: list[DeviceSnapshot]) -> list[dict]:
     traversable = non_ok | inferred_roots
 
     reachable_from_root = {
-        root_id: _reachable_roots_from(root_id, roots, traversable, by_id) - {root_id} for root_id in roots
+        root_id: _reachable_roots_from(root_id, roots, traversable, by_id, through_roots=True) - {root_id}
+        for root_id in roots
     }
     top_roots = {root_id for root_id in roots if not reachable_from_root[root_id]}
     nested_roots = roots - top_roots
@@ -1941,6 +1950,30 @@ def parse_topology_payload(payload: bytes) -> dict[str, dict]:
 # Backfilled the same way as every prior field: missing or wrong-type both
 # fall back to the same default `topology_nodes()` itself uses for a host
 # with no `host_config` entry (`None`/`False`), never a crash.
+def host_config_from_topology(nodes: dict[str, dict]) -> dict[str, HostConfigInfo]:
+    """Rebuild the REST host-config map from reconciled retained topology nodes.
+
+    Seeds `last_host_config` at startup, so a REST failure on the very first cycle reuses
+    the operator's labels as last published instead of defaulting every one of them. Bug
+    fixed 2026-09-28 (14-REVIEW WR-06): the map used to start empty, so a transient REST
+    error right after a restart republished the topology with every criticality at `low`,
+    every `depends_on`/`map_position` blanked and every `unmanaged` false. That downgraded
+    incidents and dissolved inferred roots until REST recovered. `nodes` must already be
+    normalised by `_normalise_restored_node()`, as `reconcile_state()` guarantees.
+    """
+    return {
+        node_id: HostConfigInfo(
+            folder=node["folder"],
+            map_position=node["map_position"],
+            unmanaged=node["unmanaged"],
+            criticality=node["criticality"],
+            service_criticality=dict(node["service_criticality"]),
+            depends_on=list(node["depends_on"]),
+        )
+        for node_id, node in nodes.items()
+    }
+
+
 def _normalise_restored_node(node: dict) -> dict:
     """Backfill AND type-check a node restored from a retained payload.
 
@@ -2399,8 +2432,9 @@ def run_forever(config: PollerConfig) -> int:
     # signature stable across a REST blip (T-10-12). Phase 13 (plan
     # 13-04): `last_host_config` carries `map_position`/`unmanaged` too,
     # same reuse-on-failure reasoning -- both now participate in
-    # `topology_signature`.
-    last_host_config: dict[str, HostConfigInfo] = {}
+    # `topology_signature`. Seeded from the retained topology so the reuse
+    # also covers a REST failure on the very first cycle (14-REVIEW WR-06).
+    last_host_config: dict[str, HostConfigInfo] = host_config_from_topology(state.previous_nodes)
 
     # OPS-03 posture decision, dated 2026-09-12: the requirement asks for
     # "one consistent failure posture" across the startup Livestatus probe
