@@ -295,3 +295,7 @@
 - **2026-09-28 14:51** — live check 2 passed (deep link + reconnect); close phase 14
 - **2026-09-28 14:52** — how to reduce polling cycle? Checkmk UI updates quickly after up/down, React dashboard takes longer
 - **2026-09-28 14:55** — yes, set 15s poll interval in the repo and push
+- **2026-09-28 15:01** — pasted poller startup log: Livestatus probe refused 3x then Poller started poll_interval=15s
+- **2026-09-28 15:10** — request: instead of navigating to a details page when clicking a host, show host details in a collapsible pane on the right of the map area (collapse button)
+- **2026-09-28 15:25** — request: event history filters to the clicked host; clicking empty map or empty space under the device tree unselects the host and shows all events again
+- **2026-09-28 15:25** — details pane should not show any event/status history (already at the bottom of the main page)
