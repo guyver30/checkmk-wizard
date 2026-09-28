@@ -83,7 +83,23 @@ export class FakeNetwork {
   }
 
   getScale(): number {
-    return 1;
+    return this.scale;
+  }
+
+  // Zoom controls (TopologyMap's +/−/fit buttons): record the calls so tests can assert on them.
+  scale = 1;
+  moveToCalls: Record<string, unknown>[] = [];
+  fitCallCount = 0;
+
+  moveTo(options: { scale?: number }): void {
+    this.moveToCalls.push(options);
+    if (typeof options.scale === "number") {
+      this.scale = options.scale;
+    }
+  }
+
+  fit(): void {
+    this.fitCallCount += 1;
   }
 
   disableEditMode(): void {

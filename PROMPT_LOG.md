@@ -302,3 +302,5 @@
 - **2026-09-28 15:49** — replace Collapse/Expand/Close text buttons with proper icons, as common in modern UIs
 - **2026-09-28 15:55** — what is the next phase?
 - **2026-09-28 15:57** — do pending todos 1 (IP next to renamed hosts) and 2 (map grid/snap + edge hint) now
+- **2026-09-28 16:21** — in topology edit mode, map should be full screen: no cards, no history; keep the device tree visible
+- **2026-09-28 16:22** — move the state counter badges (ok, down, unknown...) into the header near the Overview link, smaller, to free space on the dashboard

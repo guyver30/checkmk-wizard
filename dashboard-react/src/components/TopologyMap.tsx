@@ -103,6 +103,37 @@ const MAX_GRID_LINES_PER_AXIS = 400;
 // while edit mode is on.
 const EDGE_DIRECTION_HINT = "Drag from the parent (uplink) to the child device";
 
+// Zoom controls (operator request 2026-09-28): each step multiplies or divides the current scale,
+// clamped so the map can neither vanish nor blow up past usefulness. Fit uses vis-network's own
+// fit(), which frames every node.
+const ZOOM_STEP = 1.25;
+const ZOOM_MIN = 0.1;
+const ZOOM_MAX = 4;
+const ZOOM_ANIMATION = { duration: 200, easingFunction: "easeInOutQuad" as const };
+
+const ZOOM_BUTTON_CLASS =
+  "flex h-8 w-8 items-center justify-center text-fg-secondary hover:bg-bg-subtle-hover hover:text-fg-primary";
+
+function ZoomIcon({ kind }: { kind: "in" | "out" | "fit" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {kind === "in" && <path d="M12 5v14M5 12h14" />}
+      {kind === "out" && <path d="M5 12h14" />}
+      {kind === "fit" && <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />}
+    </svg>
+  );
+}
+
 // Draws a faint grid across the currently visible canvas area, in network (canvas-space)
 // coordinates. Called from vis-network's beforeDrawing hook, whose ctx is already transformed
 // into those coordinates -- so drawing here pans and zooms with the map for free, with no
@@ -602,6 +633,15 @@ export function TopologyMap({
     }
   }, [model]);
 
+  const zoomBy = (factor: number) => {
+    const network = networkRef.current;
+    if (!network) {
+      return;
+    }
+    const scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, network.getScale() * factor));
+    network.moveTo({ scale, animation: ZOOM_ANIMATION });
+  };
+
   if (!hasNodes) {
     return (
       <div data-testid="topology-map" className={ROOT_CLASS_NAME}>
@@ -633,6 +673,33 @@ export function TopologyMap({
           {EDGE_DIRECTION_HINT}
         </div>
       )}
+      <div
+        className="absolute bottom-2 right-2 z-10 flex flex-col overflow-hidden rounded-sm border border-neutral-300 bg-bg-surface shadow-sm"
+        role="group"
+        aria-label="Map zoom"
+      >
+        <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(ZOOM_STEP)} className={ZOOM_BUTTON_CLASS}>
+          <ZoomIcon kind="in" />
+        </button>
+        <button
+          type="button"
+          aria-label="Zoom out"
+          title="Zoom out"
+          onClick={() => zoomBy(1 / ZOOM_STEP)}
+          className={`${ZOOM_BUTTON_CLASS} border-t border-neutral-150`}
+        >
+          <ZoomIcon kind="out" />
+        </button>
+        <button
+          type="button"
+          aria-label="Fit to view"
+          title="Fit to view"
+          onClick={() => networkRef.current?.fit({ animation: ZOOM_ANIMATION })}
+          className={`${ZOOM_BUTTON_CLASS} border-t border-neutral-150`}
+        >
+          <ZoomIcon kind="fit" />
+        </button>
+      </div>
       <div ref={containerRef} className="h-full w-full bg-white" />
     </div>
   );

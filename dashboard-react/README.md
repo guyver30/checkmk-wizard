@@ -142,6 +142,10 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
 - A faint 50px grid is drawn behind the map in every mode (read-only and edit) and pans/zooms
   with it.
 
+**Zoom controls:** the bottom-right corner of the map has three icon buttons, available in both
+view and edit mode: **Zoom in** and **Zoom out** step the scale by 1.25x (clamped between 0.1x
+and 4x), and **Fit to view** frames every node. Mouse-wheel zoom and drag-to-pan still work.
+
 **Edit mode:** the "Edit topology" toggle (off by default, on every page load) switches on
 vis-network's manipulation toolbar:
 

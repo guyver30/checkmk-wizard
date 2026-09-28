@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useSearchParams } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TopologyMap } from "./TopologyMap";
@@ -277,6 +277,36 @@ describe("TopologyMap", () => {
       instances[0].emit("stabilizationIterationsDone");
     });
     expect(instances[0].setOptionsCalls).toContainEqual({ physics: false });
+  });
+
+  it("zoom in/out step the scale by 1.25x and fit frames the whole map (zoom controls)", () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) } });
+    const net = instances[0];
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(net.getScale()).toBeCloseTo(1.25);
+    fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+    expect(net.getScale()).toBeCloseTo(1);
+    fireEvent.click(screen.getByRole("button", { name: "Fit to view" }));
+    expect(net.fitCallCount).toBe(1);
+    for (const name of ["Zoom in", "Zoom out", "Fit to view"]) {
+      expect(screen.getByRole("button", { name })).toHaveAttribute("title", name);
+    }
+  });
+
+  it("zoom is clamped between 0.1x and 4x", () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) } });
+    const net = instances[0];
+    for (let i = 0; i < 20; i += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    }
+    expect(net.getScale()).toBe(4);
+    for (let i = 0; i < 40; i += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+    }
+    expect(net.getScale()).toBe(0.1);
   });
 
   it("navigates to /?host=h1 on a node click when not in edit mode", async () => {
