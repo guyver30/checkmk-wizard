@@ -1,20 +1,18 @@
-import { useSearchParams } from "react-router";
 import { Badge, ProgressCircle, Table } from "kone-design-system";
 import type { BadgeColor, ProgressColor, TableColumn } from "kone-design-system";
 import { gaugeColor, otherMountsLabel, smartBadge } from "../lib/gauges";
 import { classifyAgentServices } from "../lib/agentDetail";
 import { compareServices } from "../lib/serviceSort";
 import { displayName, formatClock } from "../lib/display";
-import { StateBadge, StateBadgeForState } from "../components/StateBadge";
+import { StateBadge, StateBadgeForState } from "./StateBadge";
 import { useAppStore } from "../store/useAppStore";
 import type { ServiceEntry } from "../lib/types";
 
-// Preserves the ?id=<hostname> convention (D-19) on a route instead of a second HTML
-// file (D-41) — Phase 11 removed Details from the nav, but the route stays bookmarkable.
+// The host details view: gauges, agent-host focused view, services table and history for one
+// device. Lives in the overview's right-hand pane (opened at ?host=<id>, see ThreePaneLayout /
+// IndexRoute) rather than its own route -- a bookmarked/shared old /details?id=<id> link
+// redirects here via App.tsx's DetailsRedirect.
 
-const NO_DEVICE_HEADING = "No device selected";
-const NO_DEVICE_BODY =
-  "Choose a device from the fleet tree to view its live metrics and service status.";
 const DEVICE_NOT_FOUND_HEADING = "Device not found";
 const NO_METRICS_TEXT = "No agent metrics available for this device.";
 const SERVICES_NOT_ARRIVED_TEXT =
@@ -58,10 +56,10 @@ function toBadgeColor(color: ProgressColor): BadgeColor {
 
 function EmptyState({ heading, body }: { heading: string; body: string }) {
   return (
-    <main className="px-4">
+    <div className="px-4 py-3">
       <h1 className="text-xl font-semibold">{heading}</h1>
       <p>{body}</p>
-    </main>
+    </div>
   );
 }
 
@@ -81,16 +79,10 @@ function GaugeValue({ percent }: { percent: number }) {
   );
 }
 
-export function DetailsRoute() {
-  const [searchParams] = useSearchParams();
-  const id = searchParams.get("id");
-  const device = useAppStore((s) => (id ? s.devices[id] : undefined));
-  const services = useAppStore((s) => (id ? s.services[id] : undefined));
-  const history = useAppStore((s) => (id ? s.history[id] : undefined));
-
-  if (!id) {
-    return <EmptyState heading={NO_DEVICE_HEADING} body={NO_DEVICE_BODY} />;
-  }
+export function HostDetails({ id }: { id: string }) {
+  const device = useAppStore((s) => s.devices[id]);
+  const services = useAppStore((s) => s.services[id]);
+  const history = useAppStore((s) => s.history[id]);
 
   if (!device) {
     return (
@@ -199,7 +191,7 @@ export function DetailsRoute() {
     const chosen = agent.chosenServices.slice().sort(compareServices);
     const ports = agent.tcpPorts.slice().sort(compareServices);
     return (
-      <main className="px-4">
+      <div className="px-4 py-3">
         <div className="flex items-center gap-2">
           <h1 className="text-xl font-semibold">{displayName(device)}</h1>
           <StateBadge device={device} />
@@ -241,7 +233,7 @@ export function DetailsRoute() {
             <Table columns={PORT_COLUMNS} rows={ports} rowKey={(row) => row.description ?? ""} />
           </section>
         )}
-      </main>
+      </div>
     );
   }
 
@@ -254,7 +246,7 @@ export function DetailsRoute() {
   const historyRows = (history ?? []).slice().reverse();
 
   return (
-    <main className="px-4">
+    <div className="px-4 py-3">
       <div className="flex items-center gap-2">
         <h1 className="text-xl font-semibold">{displayName(device)}</h1>
         <StateBadge device={device} />
@@ -294,6 +286,6 @@ export function DetailsRoute() {
           })
         )}
       </section>
-    </main>
+    </div>
   );
 }

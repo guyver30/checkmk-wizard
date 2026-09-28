@@ -1,13 +1,14 @@
 import { useEffect } from "react";
-import { BrowserRouter, Route, Routes, useLocation, useNavigate } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router";
 import { NavBar } from "kone-design-system";
 import { ConnectionIndicator } from "./components/ConnectionIndicator";
-import { DetailsRoute } from "./routes/DetailsRoute";
+import { hostHref } from "./lib/searchLinks";
 import { IndexRoute } from "./routes/IndexRoute";
 import { connect } from "./store/mqttClient";
 
-// Details is deliberately NOT in the nav (Phase 11 removed it, D-19/D-21) — the route
-// stays reachable via a bookmarked/shared ?id= link, just not linked from here.
+// Details is deliberately NOT in the nav (Phase 11 removed it, D-19/D-21) — the host details
+// view now lives in the overview's right-hand pane (?host=<id>, 260928-l4h), reachable from the
+// map/tree/incident cards, not from here.
 function AppNav() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -24,13 +25,22 @@ function AppNav() {
   );
 }
 
-function AppShell() {
+// A bookmarked/shared old /details?id=<id> link (pre-260928-l4h) redirects to the new
+// /?host=<id> pane; /details with no id just lands on the overview. `replace` so the old URL
+// doesn't linger in browser history.
+function DetailsRedirect() {
+  const [searchParams] = useSearchParams();
+  const id = searchParams.get("id");
+  return <Navigate replace to={id ? hostHref("", id) : "/"} />;
+}
+
+export function AppShell() {
   return (
     <>
       <AppNav />
       <Routes>
         <Route path="/" element={<IndexRoute />} />
-        <Route path="/details" element={<DetailsRoute />} />
+        <Route path="/details" element={<DetailsRedirect />} />
         <Route path="*" element={<IndexRoute />} />
       </Routes>
     </>

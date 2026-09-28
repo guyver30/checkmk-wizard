@@ -1,9 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { Badge } from "kone-design-system";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
-import App from "./App";
-import { DetailsRoute } from "./routes/DetailsRoute";
+import App, { AppShell } from "./App";
 
 describe("App", () => {
   afterEach(() => {
@@ -20,17 +19,25 @@ describe("App", () => {
     expect(screen.getByText("DMC digital live dashboard")).toBeInTheDocument();
   });
 
-  it("reads the hostname from the ?id= query string on /details", () => {
+  it("redirects a bookmarked /details?id=<id> link to the /?host=<id> pane", () => {
     render(
       <MemoryRouter initialEntries={["/details?id=sw-edge-01"]}>
-        <Routes>
-          <Route path="/details" element={<DetailsRoute />} />
-        </Routes>
+        <AppShell />
       </MemoryRouter>,
     );
-    // Plan 12-04 replaced the bare-id stub with the locked "Device not found" copy (the
-    // store has no matching device here), which still echoes the id back as text.
+    // The pane shows the locked "Device not found" copy (the store has no matching device
+    // here), which still echoes the id back as text.
+    expect(screen.getByText("Device not found")).toBeInTheDocument();
     expect(screen.getByText(/sw-edge-01/)).toBeInTheDocument();
+  });
+
+  it("/details with no id redirects to / with no 'Device not found' pane", () => {
+    render(
+      <MemoryRouter initialEntries={["/details"]}>
+        <AppShell />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText("Device not found")).not.toBeInTheDocument();
   });
 
   it("renders a design-system Badge with the library's own compiled styles applied", () => {
