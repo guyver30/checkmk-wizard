@@ -114,6 +114,7 @@ None.
 | 260925-m4p | Container mode: agent registration address from CMK_PUBLIC_HOST (compose worker env, deploy/.env) instead of container-local interface discovery | 2026-09-25 | 4afda04 | [260925-m4p-cmk-public-host](./quick/260925-m4p-cmk-public-host/) |
 | 260925-p7d | Dashboard: remove Devices menu; agent-host detail shows gauges/SMART, agent connected, uptime, wizard-chosen services, TCP ports | 2026-09-25 | 1a2e3d4 | [260925-p7d-agent-host-detail-view](./quick/260925-p7d-agent-host-detail-view/) |
 | 260925-pc7 | Drop-in device-type icons (file name = device type) | 2026-09-25 | a427d92 | [260925-pc7-drop-in-device-type-icons](./quick/260925-pc7-drop-in-device-type-icons/) |
+| fast | 14-09 per-service criticality list limited to details-view services | 2026-09-28 | dd10079 | — |
 
 ## Deferred Items
 

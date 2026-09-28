@@ -257,3 +257,29 @@
 - **2026-09-26 12:27** — explain criticality, service criticality, how they are created and managed
 - **2026-09-26 12:32** — keep tier names/label keys. Is depends_on valid for hosts on managed and on unmanaged switches?
 - **2026-09-26 12:37** — a still-reachable screen should not make the incident 'critical' when its media server is unreachable/down; it should show as 'high' at most
+- **2026-09-26 12:40** — /bm:execute-phase 14
+- **2026-09-26 13:36** — 14-05 checkpoint: --check-columns all present incl. last_state_change; cannot add unmanaged switch or draw edges: 'Checkmk rejected the new host' / 'Checkmk rejected the update' though devices exist
+- **2026-09-26 13:40** — add node → POST host_config/collections/all 401; draw edge → objects/host_config/router 401 (dev server :5173)
+- **2026-09-26 13:42** — no topology_editor user in checkmk; only agent_registration, cmkadmin, automation
+- **2026-09-26 13:56** — faked unmanaged switch DOWN; its two children showed no change in checkmk/dashboard. How long does a fake check result last?
+- **2026-09-26 14:06** — switch-only fake DOWN: one card appeared, cleared when switch recovered. Can't find 'disable active checks'
+- **2026-09-26 14:10** — shared docs/host_service_menu.png (Commands menu on Services of host view, no disable-active-checks entry)
+- **2026-09-26 14:17** — shared docs/hosts_down.png: inferred switchxxx incident card with 2 not observable, children dimmed; separate 192.168.0.203 card
+- **2026-09-26 14:23** — shared hosts_down2.png (split to .222 single card, .222 STALE) and hosts_up.png (incidents cleared, but .204/.222 still faded on map)
+- **2026-09-26 14:26** — approved (14-05 live checks); document the fake-check-result tests for later stakeholder demos
+- **2026-09-26 14:27** — leave the screenshots out
+- **2026-09-26 14:29** — request: grid on network map with snap-to-grid for hosts; instructions when drawing an edge (arrow points to children, user assumed it pointed to parent)
+- **2026-09-26 14:30** — chose: keep parent→child arrow + hint; do grid/snap + hint as quick task after Phase 14
+- **2026-09-26 21:14** — /bm:pause-work
+- **2026-09-28 11:12** — /bm:resume-work
+- **2026-09-28 11:18** — note: dashboard is actually run via podman node:22-alpine container (npm --prefix dashboard-react run dev -- --host, CHECKMK_PROXY_TARGET=http://localhost:8080); update docs and verification steps
+- **2026-09-28 11:21** — so I need to run the tests highlighted at "checkpoint details" in 14-09-summary.md?
+- **2026-09-28 11:26** — all Checkmk-monitored hosts (even alive ones) turned DOWN in Checkmk GUI and dashboard; what could have happened?
+- **2026-09-28 11:30** — pasted lq output (all hosts CRITICAL rta nan lost 100%), podman ps (checkmk up 3 days, mqtt-poller + dev container up 6 min), check_icmp from checkmk container fails to 192.168.0.1 and 192.168.97.128
+- **2026-09-28 11:39** — ping OK, hosts back online after down/up; pasted journal 03:22:09-03:24 (poller restart 03:22:34, veth5 re-created, dev container 03:22:38)
+- **2026-09-28 12:09** — 14-09 results: step 2 ok; step 3: per-service list should show only the services visualized when clicking the host (non-topology mode), not all poller services — rest ok; step 4 confirmed (long label, no truncation); step 5 ok (13 depends_on, pasted node JSON); steps 6-7 pending
+- **2026-09-28 12:13** — request: when a host name is not an IP (renamed in wizard), show its IP: tooltip on hover in device tree; always visible in brackets next to the name in incident cards, map, and event history
+- **2026-09-28 12:19** — step 6: set .200 critical, depends_on .204; faked .204 down; card shows .204 with criticality critical and dependent devices .200; but .200 still OK in map and device tree
+- **2026-09-28 12:21** — step 6 data: .200 critical depends_on [.204]; .204 critical; Livestatus .200 state 0, .204 state 1
+- **2026-09-28 12:28** — criticality/dependency model not working as expected and still unclear; park it and revisit later
+- **2026-09-28 13:22** — kiosk mode is not needed. push all the changes now
