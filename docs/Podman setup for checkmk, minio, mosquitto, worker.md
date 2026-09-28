@@ -340,6 +340,14 @@ Expected output: `OK - 192.168.0.1 rta 1.072ms lost 0%` (substitute your own LAN
 
 If you skip this step, there are two distinct failure signatures depending on which half is missing: without the capability, every PING service reports `Return code of 126 is out of bounds - plugin may not be executable`. With the capability but without the sysctl, `check_icmp` runs cleanly but reports 100% packet loss to every target — including the LAN gateway that the host itself can ping successfully — which is indistinguishable from a genuine network fault unless you check this sysctl specifically.
 
+**A third signature: every host goes DOWN right after restarting a single container.** Seen on 2026-09-28 (rootless Podman 4.9.3, netavark, slirp4netns). Running `podman compose restart poller` removed and re-created the poller's link on the `cmk_net` bridge. Seven seconds later, every host except the always-UP unmanaged switch went DOWN, with `rta nan, lost 100%`. Checkmk had lost *all* traffic to the LAN, not only ICMP. A TCP test from inside the container failed too, while the host itself could still ping the gateway. Traffic between the containers kept working, so the poller and dashboard kept updating, just with the wrong states. The sysctl and the NAT rules were both still in place. What fixed it was a full `podman compose down && podman compose up -d`, which rebuilds the shared rootless network namespace. To tell this apart from the sysctl case above: TCP out of the container fails too, and the sysctl is already set.
+
+```bash
+podman exec checkmk bash -c 'timeout 3 bash -c "</dev/tcp/192.168.0.1/80" && echo tcp-ok || echo tcp-fail'
+```
+
+This was seen once and not re-run to confirm. Until it's shown to be safe, apply new poller code with a full `podman compose down && podman compose up -d`, not `podman compose restart <service>`. Volumes are kept, so this loses no data.
+
 ---
 
 ## 6. Endpoints & Network Access
@@ -670,7 +678,7 @@ If you only want to clear the events feed and keep everything else in the broker
 podman exec mosquitto mosquitto_pub -h localhost -u poller -P '<poller password>' -t lan/events/recent -r -n
 ```
 
-If you rebuilt Checkmk **without** a full `podman compose down`, the poller kept running. The sweep runs only at poller startup, so run `podman compose restart poller` (poller restart) afterwards.
+If you rebuilt Checkmk **without** a full `podman compose down`, the poller kept running. The sweep runs only at poller startup, so restart the stack afterwards with `podman compose down && podman compose up -d`. Don't use `podman compose restart poller`: restarting a single container can cut Checkmk off from the LAN (see §5.1, "A third signature").
 
 Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's credentials and ACL are bind-mounted files (`mosquitto.passwd`, `mosquitto.acl`), so they survive the wipe.
 

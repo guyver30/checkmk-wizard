@@ -106,12 +106,15 @@ Task 2's live checkpoint requires an operator with access to the live deployed s
 
 **How to verify (copy-pasteable, run in order):**
 
-1. Restart the poller on the deploy host and run the React dashboard as in plan 14-05:
+1. On the deploy host (192.168.97.129), pull main, restart the stack, then start the React dashboard dev server in a throwaway Node container from the repo root (see `dashboard-react/README.md` §3, "Running the dev server on the deploy host"):
    ```bash
-   cd deploy && podman compose restart poller
-   cd ../dashboard-react && npm run dev
+   git pull
+   (cd deploy && podman compose down && podman compose up -d)   # not `restart poller`: see deployment doc §5.1 "A third signature"
+   podman run --rm -it --network host -v "$PWD":/app:z -w /app \
+     -e CHECKMK_PROXY_TARGET=http://localhost:8080 \
+     node:22-alpine npm --prefix dashboard-react run dev -- --host
    ```
-   (Per the context notes, the operator has previously run this at `192.168.97.129:5173` proxying `/checkmk-api` to Checkmk. If the dashboard write gets a 401, the `topology_editor` secret in `dashboard-react/src/lib/config.ts` is stale — re-provision per the deployment doc's "Note on the topology editor credential" and re-run `scripts/provision_topology_editor.py`.)
+   Open `http://192.168.97.129:5173/`. (If a dev-server container is already running, stop it with Ctrl+C first so the new one serves the pulled code. If the dashboard write gets a 401, the `topology_editor` secret in `dashboard-react/src/lib/config.ts` is stale — re-provision per the deployment doc's "Note on the topology editor credential" and re-run `scripts/provision_topology_editor.py`.)
 
 2. In the dashboard, turn on **"Edit topology"**, then click a host on the map. Confirm the **"Criticality & dependencies"** panel shows that host. Set **Host criticality** to **Critical**; confirm the pending-changes banner count goes up by exactly one.
 
@@ -140,7 +143,7 @@ Task 2's live checkpoint requires an operator with access to the live deployed s
 
 7. Open `/?kiosk=1`. Confirm: no nav bar, no device tree, no event history, no edit toggle; the view alternates Incidents/Topology roughly every 20 seconds; the "Enter full screen" button works on click (and disappears after being clicked), or disappears on its own after ~10 seconds if untouched.
 
-**Automated checks to also run and report** (do not skip — report pass/fail and counts, not an assumption):
+**Automated checks** (run by Claude on the dev machine, not the operator; report pass/fail and counts, not an assumption):
 ```bash
 cd dashboard-react && npm test
 cd /home/kone/checkmk-wizard && uv run pytest tests/test_mqtt_poller.py -q
@@ -155,7 +158,6 @@ Report back, per step:
 - Step 5: pass/fail — did the mosquitto_sub output show the new keys?
 - Step 6: pass/fail — did the incident card show worst criticality "high" and the "Dependent devices" line; was cleanup done?
 - Step 7: pass/fail — kiosk chrome-free rotation and fullscreen button behaviour.
-- The two automated command outputs (test counts / pass-fail).
 
 **Resume signal:** Type `"approved"` if every step passed (a resumed agent will then complete this SUMMARY, mark PLR-16/DASH-16/DASH-17 requirements-complete, and finalize the plan), or describe exactly which step failed and what was observed (a resumed agent will record the gap and stop for gap-closure planning per Task 2's own instructions, rather than patching in place).
 

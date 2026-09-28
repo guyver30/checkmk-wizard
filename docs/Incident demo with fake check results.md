@@ -12,9 +12,17 @@ Live-verified against a real Checkmk 2.4.0p36.cre site on 2026-09-26 (plan 14-05
 ## Prerequisites
 
 1. The stack is up (`cd deploy && podman compose up -d`, or already running).
-2. The React dashboard is built and served: `cd dashboard-react && npm run build && npm run
-   preview -- --host`, then open `http://<HOST_IP>:4173/` (Vite's default preview port; check
-   the preview command's own printed URL if this differs).
+2. The React dashboard is running. On the deploy host, from the repo root, run the Vite dev
+   server in a throwaway Node container:
+
+   ```bash
+   podman run --rm -it --network host -v "$PWD":/app:z -w /app \
+     -e CHECKMK_PROXY_TARGET=http://localhost:8080 \
+     node:22-alpine npm --prefix dashboard-react run dev -- --host
+   ```
+
+   Then open `http://<HOST_IP>:5173/`. See `dashboard-react/README.md` §3 ("Running the dev
+   server on the deploy host") for what each flag is for.
 3. `TOPOLOGY_EDITOR_SECRET` is provisioned in `dashboard-react/src/lib/config.ts` — not required
    for this demo's fake-check-result flow, but if the site was rebuilt since the secret was last
    provisioned, every dashboard write (including this doc's cleanup verification) will 401.
@@ -163,7 +171,9 @@ Audience narrative: "the monitoring pipeline itself can restart without losing t
 already broken, and without inventing a duplicate."
 
 1. Fake a host down (scenario A's two commands) and confirm its card is showing.
-2. Restart the poller: `cd deploy && podman compose restart poller`.
+2. Restart the poller: `cd deploy && podman compose down && podman compose up -d`. Don't use
+   `podman compose restart poller`: on rootless Podman, restarting one container can cut Checkmk
+   off from the LAN and turn every host DOWN (see the deployment doc §5.1, "A third signature").
 
 What the audience sees: after the restart, the same single card reappears (or never
 disappeared, if the restart was fast) — same incident id, same duration continuing from the

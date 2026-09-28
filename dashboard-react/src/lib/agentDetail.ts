@@ -49,3 +49,12 @@ export function classifyAgentServices(services: ServiceEntry[]): AgentServiceVie
     tcpPorts: services.filter((s) => typeof s.description === "string" && TCP_PORT_RE.test(s.description)),
   };
 }
+
+// The rows the host details view actually shows, so other views (the criticality editor's
+// per-service list, 14-09 live feedback 2026-09-28) offer the same services and not every
+// row the poller publishes: an agent host shows only its chosen services and TCP ports;
+// any other host shows its full service table.
+export function displayedServices(services: ServiceEntry[]): ServiceEntry[] {
+  const agent = classifyAgentServices(services);
+  return agent.isAgentHost ? [...agent.chosenServices, ...agent.tcpPorts] : services;
+}

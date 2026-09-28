@@ -15,6 +15,7 @@ import { displayName } from "../lib/display";
 import { useEditIdleTimeout } from "../hooks/useEditIdleTimeout";
 import { useGroupingPrefs } from "../hooks/useGroupingPrefs";
 import { useNowTick } from "../hooks/useNowTick";
+import { displayedServices } from "../lib/agentDetail";
 import { activateChanges, countPendingChanges } from "../lib/checkmkWrite";
 import { isTopologyEditingConfigured } from "../lib/config";
 import { buildIncidentLookup, selectOpenIncidents } from "../lib/incidents";
@@ -140,7 +141,9 @@ export function IndexRoute() {
     if (!selectedHost) {
       return [];
     }
-    return (services[selectedHost] ?? [])
+    // Only what the host details view shows (agent hosts: chosen services + TCP ports), so
+    // the editor doesn't offer every row the poller publishes (14-09 live feedback).
+    return displayedServices(services[selectedHost] ?? [])
       .map((service) => service.description)
       .filter((description): description is string => typeof description === "string");
   }, [services, selectedHost]);

@@ -41,6 +41,30 @@ npm --prefix dashboard-react test           # run the test suite
 npm --prefix dashboard-react run typecheck  # tsc -b --noEmit only
 ```
 
+### Running the dev server on the deploy host (no local Node install)
+
+The deploy host has no Node toolchain, so the dev server runs in a throwaway `node:22-alpine`
+container from the repo root. This is how the live deployment is run:
+
+```bash
+podman run --rm -it --network host -v "$PWD":/app:z -w /app \
+  -e CHECKMK_PROXY_TARGET=http://localhost:8080 \
+  node:22-alpine npm --prefix dashboard-react run dev -- --host
+```
+
+Then open `http://<HOST_IP>:5173/` from a LAN browser.
+
+- `--network host` makes `localhost:8080` in the container the host's published Checkmk port,
+  so the `/checkmk-api` proxy reaches Checkmk. It also puts the broker's WebSockets port on the
+  page's own hostname, which is where the dashboard looks for it.
+- `-- --host` makes Vite listen on all interfaces instead of loopback only.
+- `:z` relabels the bind mount for SELinux hosts. It does nothing on hosts without SELinux.
+- The §2 install commands can be run the same way: replace the final `npm ...` with each of them.
+  Keep installs inside the container: `node_modules` built on a glibc host may lack the musl
+  native binaries that esbuild and Rollup need on Alpine.
+- Stop with Ctrl+C. `--rm` removes the container, so a `git pull` followed by re-running the
+  command picks up new code.
+
 ## 4. Configuration — `src/lib/config.ts`
 
 This is the one file an operator edits per deployment. Read it before deploying.
@@ -208,7 +232,9 @@ Once a host is selected:
 
 - **Host criticality** — a Low/Medium/High/Critical `Select` setting the host's own
   business-criticality tier (the `criticality` label).
-- **Per-service criticality** — one row per monitored service (plus any stale label entry for a
+- **Per-service criticality** — one row per service shown on the host's details page. For an
+  agent host that is the services chosen in the wizard plus the monitored TCP ports; any other
+  host lists all of its services. Any stale label entry for a
   service no longer monitored, so a leftover override can still be cleared), each a `Select` with
   the same four tiers plus **Default**, which removes that service's override entirely rather
   than writing an explicit low value.

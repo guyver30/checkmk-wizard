@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyAgentServices } from "./agentDetail";
+import { classifyAgentServices, displayedServices } from "./agentDetail";
 import type { ServiceEntry } from "./types";
 
 const svc = (description: string, state = "OK"): ServiceEntry => ({ description, state, plugin_output: "" });
@@ -49,5 +49,24 @@ describe("classifyAgentServices", () => {
     const view = classifyAgentServices([{ state: "OK" }, { description: 5 as unknown as string }]);
     expect(view.chosenServices).toEqual([]);
     expect(view.tcpPorts).toEqual([]);
+  });
+});
+
+describe("displayedServices", () => {
+  it("returns only chosen services and TCP ports for an agent host", () => {
+    const shown = displayedServices([
+      svc("Check_MK Agent"),
+      svc("Check_MK"),
+      svc("CPU load"),
+      svc("Systemd Service ssh"),
+      svc("Systemd Service Summary"),
+      svc("TCP Port 22 (expected open)"),
+    ]);
+    expect(shown.map((s) => s.description)).toEqual(["Systemd Service ssh", "TCP Port 22 (expected open)"]);
+  });
+
+  it("returns every service for a non-agent host", () => {
+    const rows = [svc("PING"), svc("Interface 2")];
+    expect(displayedServices(rows)).toEqual(rows);
   });
 });
