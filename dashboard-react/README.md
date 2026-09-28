@@ -233,10 +233,10 @@ Once a host is selected:
   business-criticality tier (the `criticality` label).
 - **Per-service criticality** — one row per service shown on the host's details page. For an
   agent host that is the services chosen in the wizard plus the monitored TCP ports; any other
-  host lists all of its services. Any stale label entry for a
-  service no longer monitored, so a leftover override can still be cleared), each a `Select` with
-  the same four tiers plus **Default**, which removes that service's override entirely rather
-  than writing an explicit low value.
+  host lists all of its services. A service that already has a stored tier is always listed,
+  even if it's no longer shown or monitored, so a leftover override can still be cleared. Each
+  row is a `Select` with the same four tiers plus **Default**, which removes that service's
+  override entirely rather than writing an explicit low value.
 - **Depends on** — a `MultiSelect` of every other device; removing an existing link prompts
   "Remove this dependency?" before writing — cancelling leaves it selected and makes no write.
 
