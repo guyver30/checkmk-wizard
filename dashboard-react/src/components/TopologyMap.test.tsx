@@ -404,6 +404,67 @@ describe("TopologyMap", () => {
   });
 });
 
+describe("TopologyMap grid and edge hint", () => {
+  // Minimal 2D-context stub: only the methods/props drawGrid touches.
+  function fakeCtx() {
+    return {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      strokeStyle: "",
+      lineWidth: 0,
+    };
+  }
+
+  it("draws grid lines on beforeDrawing in read-only mode", () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: false });
+    const ctx = fakeCtx();
+
+    act(() => {
+      instances[0].emit("beforeDrawing", ctx);
+    });
+
+    expect(ctx.moveTo).toHaveBeenCalled();
+    expect(ctx.lineTo).toHaveBeenCalled();
+    expect(ctx.stroke).toHaveBeenCalled();
+    expect(ctx.strokeStyle).toBe("#ececef");
+  });
+
+  it("draws grid lines on beforeDrawing in edit mode too (grid is always visible)", () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true });
+    const ctx = fakeCtx();
+
+    act(() => {
+      instances[0].emit("beforeDrawing", ctx);
+    });
+
+    expect(ctx.moveTo).toHaveBeenCalled();
+    expect(ctx.lineTo).toHaveBeenCalled();
+    expect(ctx.stroke).toHaveBeenCalled();
+  });
+
+  it("shows the edge-direction hint only while edit mode is on, and removes it when edit mode turns off", () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    const statuses = { h1: device({ id: "h1" }) };
+    const { rerender } = renderMap({ topologyDevices, statuses, editMode: true });
+    expect(screen.getByText("Drag from the parent (uplink) to the child device")).toBeInTheDocument();
+
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: false });
+    expect(screen.queryByText("Drag from the parent (uplink) to the child device")).not.toBeInTheDocument();
+  });
+
+  it("does not show the hint in read-only mode", () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: false });
+    expect(screen.queryByText("Drag from the parent (uplink) to the child device")).not.toBeInTheDocument();
+  });
+});
+
 describe("TopologyMap incidentLookup (DASH-15)", () => {
   it("gives a consequence node's DataSet entry opacity 0.4 and the dimmed title", () => {
     const topologyDevices = [

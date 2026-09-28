@@ -23,7 +23,14 @@ import { Banner } from "kone-design-system";
 import { nodeVisual, type NodeEmphasis } from "../lib/mapIcons";
 import { createUnmanagedSwitch, isValidHostName, setMapPosition, updateParents } from "../lib/checkmkWrite";
 import { hostHref, incidentHref, withSearchParam } from "../lib/searchLinks";
-import { buildMapModel, snapToGrid, withGridPositions, type MapEdge, type MapNode } from "../lib/topologyLayout";
+import {
+  buildMapModel,
+  MAP_SNAP_SPACING,
+  snapToGrid,
+  withGridPositions,
+  type MapEdge,
+  type MapNode,
+} from "../lib/topologyLayout";
 import type { IncidentLookup } from "../lib/incidents";
 import type { DevicePayload } from "../lib/types";
 
@@ -82,6 +89,55 @@ const INFERRED_ROOT_TITLE = "Inferred root cause, not confirmed";
 
 const ROOT_CLASS_NAME =
   "relative flex h-full w-full items-center justify-center rounded-md border border-neutral-150 bg-bg-subtle";
+
+// D-01/D-05: the map hard-codes its palette (NETWORK_OPTIONS below) and has no theme tokens
+// today, so the grid follows suit with one faint neutral hex close to the container's own
+// border tone, rather than plumbing in a new theme concept.
+const GRID_LINE_COLOR = "#ececef";
+
+// Defensive cap (threat T-m6g-02): at extreme zoom-out the visible network-coordinate range can
+// span an enormous number of grid lines; skip drawing rather than let that stall the canvas.
+const MAX_GRID_LINES_PER_AXIS = 400;
+
+// D-03: the arrow direction itself is unchanged (parent -> child); this hint just explains it
+// while edit mode is on.
+const EDGE_DIRECTION_HINT = "Drag from the parent (uplink) to the child device";
+
+// Draws a faint grid across the currently visible canvas area, in network (canvas-space)
+// coordinates. Called from vis-network's beforeDrawing hook, whose ctx is already transformed
+// into those coordinates -- so drawing here pans and zooms with the map for free, with no
+// per-frame bookkeeping of our own.
+function drawGrid(ctx: CanvasRenderingContext2D, network: Network, container: HTMLElement): void {
+  const topLeft = network.DOMtoCanvas({ x: 0, y: 0 });
+  const bottomRight = network.DOMtoCanvas({ x: container.clientWidth, y: container.clientHeight });
+  const minX = Math.floor(topLeft.x / MAP_SNAP_SPACING) * MAP_SNAP_SPACING;
+  const maxX = Math.ceil(bottomRight.x / MAP_SNAP_SPACING) * MAP_SNAP_SPACING;
+  const minY = Math.floor(topLeft.y / MAP_SNAP_SPACING) * MAP_SNAP_SPACING;
+  const maxY = Math.ceil(bottomRight.y / MAP_SNAP_SPACING) * MAP_SNAP_SPACING;
+
+  const columnCount = (maxX - minX) / MAP_SNAP_SPACING;
+  const rowCount = (maxY - minY) / MAP_SNAP_SPACING;
+  if (columnCount > MAX_GRID_LINES_PER_AXIS || rowCount > MAX_GRID_LINES_PER_AXIS) {
+    return;
+  }
+
+  ctx.save();
+  ctx.strokeStyle = GRID_LINE_COLOR;
+  // Keep the stroke about 1px wide on screen regardless of zoom, since ctx is in
+  // network (post-zoom) coordinates here.
+  ctx.lineWidth = 1 / network.getScale();
+  ctx.beginPath();
+  for (let x = minX; x <= maxX; x += MAP_SNAP_SPACING) {
+    ctx.moveTo(x, minY);
+    ctx.lineTo(x, maxY);
+  }
+  for (let y = minY; y <= maxY; y += MAP_SNAP_SPACING) {
+    ctx.moveTo(minX, y);
+    ctx.lineTo(maxX, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
 
 // 13-UI-SPEC.md "Topology Map Rendering" -- node/edge/physics/interaction options, locked.
 const NETWORK_OPTIONS = {
@@ -350,16 +406,21 @@ export function TopologyMap({
   // render never showed a map, only the "no connections" banner, until the page was reloaded or
   // re-navigated).
   useEffect(() => {
-    if (!containerRef.current) {
+    const container = containerRef.current;
+    if (!container) {
       return;
     }
     const nodes = new DataSet<Record<string, unknown>>([]);
     const edges = new DataSet<Record<string, unknown>>([]);
-    const network = new Network(containerRef.current, { nodes, edges }, NETWORK_OPTIONS);
+    const network = new Network(container, { nodes, edges }, NETWORK_OPTIONS);
 
     network.once("stabilizationIterationsDone", () => {
       network.setOptions({ physics: false });
     });
+
+    // D-01: registered unconditionally (not gated on editMode) so the grid is always visible,
+    // in both read-only and edit mode.
+    network.on("beforeDrawing", (ctx: CanvasRenderingContext2D) => drawGrid(ctx, network, container));
 
     network.on("click", (params: { nodes: string[]; edges?: string[] }) => {
       const nodeId = params.nodes[0];
@@ -565,6 +626,11 @@ export function TopologyMap({
       {showBanner && (
         <div className="absolute left-2 right-2 top-2 z-10">
           <Banner status="info" message={NO_CONNECTIONS_BANNER_MESSAGE} onDismiss={() => setBannerDismissed(true)} />
+        </div>
+      )}
+      {editMode && (
+        <div className="pointer-events-none absolute bottom-2 left-2 z-10 rounded bg-bg-subtle px-2 py-1 text-xs text-fg-tertiary">
+          {EDGE_DIRECTION_HINT}
         </div>
       )}
       <div ref={containerRef} className="h-full w-full bg-white" />

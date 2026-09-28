@@ -75,6 +75,17 @@ export class FakeNetwork {
     return result;
   }
 
+  // TopologyMap's beforeDrawing grid hook calls these on every mounted Network -- identity/1
+  // stand-ins so that hook can run (and be exercised via emit("beforeDrawing", ctx)) under
+  // jsdom, which has no real canvas/coordinate transform to back them.
+  DOMtoCanvas(pos: { x: number; y: number }): { x: number; y: number } {
+    return pos;
+  }
+
+  getScale(): number {
+    return 1;
+  }
+
   disableEditMode(): void {
     this.editModeEnabled = false;
     this.disableEditModeCallCount += 1;
