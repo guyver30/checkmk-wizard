@@ -4,9 +4,10 @@
 // claim of failure.
 
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { Badge, Message } from "kone-design-system";
 import { deviceTypeMaskUrl } from "../lib/mapIcons";
+import { hostHref } from "../lib/searchLinks";
 import {
   consequenceSummary,
   formatIncidentDuration,
@@ -37,10 +38,11 @@ export interface IncidentCardProps {
 }
 
 function DeviceLinkList({ ids, nameFor }: { ids: string[]; nameFor: (id: string) => string }) {
+  const { search } = useLocation();
   return (
     <span className="flex flex-col">
       {ids.map((id) => (
-        <Link key={id} to={`/details?id=${encodeURIComponent(id)}`} className="underline">
+        <Link key={id} to={hostHref(search, id)} className="underline">
           {nameFor(id)}
         </Link>
       ))}

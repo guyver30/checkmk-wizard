@@ -114,14 +114,15 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
 - Node icons are coloured by the same live state (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`) as the
   rest of the dashboard, updated in place as MQTT messages arrive.
 - Edges are drawn parent→child from each host's Checkmk `parents` attribute.
-- Clicking a node opens its detail page (`/details?id=...`).
-  - **Agent hosts** (those with a `Check_MK Agent` service) get a focused page: the CPU/RAM/disk
+- Clicking a node opens the right-hand host details pane (`/?host=...`; see "Host details pane"
+  below) beside the map.
+  - **Agent hosts** (those with a `Check_MK Agent` service) get a focused view: the CPU/RAM/disk
     gauges (with the SMART badge if installed), whether the Checkmk agent is connected (the
     `Check_MK` service state), uptime (the `Uptime` service), only the services chosen in the
     wizard (`Systemd Service <unit>` / `Service <name>` rows) and the monitored TCP ports
     (`TCP Port <N> (expected open)`). Those Checkmk service names are the 2.4 defaults and were
     not live-verified — they are constants in `src/lib/agentDetail.ts`.
-  - Other hosts (SNMP/ping) keep the full page: the service table and state history.
+  - Other hosts (SNMP/ping) keep the full view: the service table and state history.
   - The nav bar has only **Overview**; the old placeholder "Devices" page was removed
     (2026-09-25).
 - A saved position (`map_position`, a Checkmk host label written by edit mode) is applied only
@@ -153,6 +154,18 @@ both go live.
 Edit mode also has a 5-minute idle auto-exit: if the toggle is left on with no interaction, it
 switches itself off and shows a one-time notice, so a browser tab left open overnight doesn't
 sit in a writable state indefinitely.
+
+**Host details pane:** clicking a host — on the map (edit mode off), in the device tree, or in
+an incident card's device list — opens a right-hand pane beside the map (`ThreePaneLayout`'s
+fourth slot) showing that host's `HostDetails` content (the same gauges/services/history
+described above). The pane is absent until a host is opened; its **Collapse** button shrinks it
+to a 40px rail with an **Expand** button, and **Close** removes it. Its divider is
+drag-resizable, and both its width and collapsed state persist across a reload (`usePaneLayout`,
+the same storage record the device tree and event history panes use). Opening a different host
+while the pane is collapsed re-expands it. The open host lives in the URL as `/?host=<id>` and
+coexists with `?incident=` — opening one never drops the other, so a shared link can carry both.
+A bookmarked pre-260928-l4h `/details?id=...` link redirects (`replace`, so it doesn't linger in
+history) to `/?host=...`; `/details` with no id redirects to `/`.
 
 ## 5a. Event history
 
@@ -210,7 +223,7 @@ absent — Livestatus `last_state_change` missing or non-positive — shows "dur
 instead). The description line is the confirmed-down/not-observable summary plus a criticality
 badge (`low`/`medium`/`high`/`critical`, a colour dimension independent of the state palette — a
 `critical`-tier incident is never rendered in state red/orange). A "View devices" toggle expands
-the confirmed-down and not-observable host lists (each linking to `/details?id=...`) plus a
+the confirmed-down and not-observable host lists (each opening that host's details pane) plus a
 "Dependent devices: …" line when the incident has any (a dependent gets no badge/link of its own,
 only this mention — D-15).
 
@@ -272,7 +285,7 @@ changes.
    (`deploy/dashboard.Containerfile`) instead of bind-mounting `../dashboard`. The image runs the
    §2 builds in a Node stage and serves `dist/` from `nginx:alpine`.
 2. `deploy/dashboard-nginx.conf` adds the SPA fallback (`try_files $uri $uri/ /index.html;`), so
-   a cold-loaded `/details?id=...` bookmark works.
+   a cold-loaded `/?host=...` (or old `/details?id=...`) bookmark works.
 3. The same file adds the `/checkmk-api/` forwarding rule (`proxy_pass http://checkmk:5000/;`),
    the production twin of `vite.config.ts`'s dev/preview proxy.
 4. Deploying an update: `git pull`, then

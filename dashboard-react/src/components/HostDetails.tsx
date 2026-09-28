@@ -10,8 +10,8 @@ import type { ServiceEntry } from "../lib/types";
 
 // The host details view: gauges, agent-host focused view, services table and history for one
 // device. Lives in the overview's right-hand pane (opened at ?host=<id>, see ThreePaneLayout /
-// IndexRoute) rather than its own route -- a bookmarked/shared old /details?id=<id> link
-// redirects here via App.tsx's DetailsRedirect.
+// IndexRoute) rather than its own route -- a bookmarked/shared old /details route link (with
+// its id in ?id=) redirects here via App.tsx's DetailsRedirect.
 
 const DEVICE_NOT_FOUND_HEADING = "Device not found";
 const NO_METRICS_TEXT = "No agent metrics available for this device.";

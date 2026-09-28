@@ -29,12 +29,15 @@ function device(overrides: Partial<DevicePayload> & { id: string }): DevicePaylo
 }
 
 // Probe route -- TopologyMap navigates imperatively (network.on("click", ...)), not via a
-// React <Link>, so the only way to observe the navigation is to actually route to /details and
-// read back the ?id= it was called with (same pattern DetailsRoute.test.tsx uses to assert on
-// ?id=, just driven from the other end).
-function DetailsProbe() {
+// React <Link>, so the only way to observe the navigation is to mount a probe reading the
+// query string alongside the map and read back what it was called with (same pattern
+// HostDetails.test.tsx uses to assert on ?id=, just driven from the other end). Both probes
+// stay mounted on the SAME "/" route as the map (rather than a separate /host or /details
+// route) since a click only ever changes the query string, never the path.
+function HostProbe() {
   const [params] = useSearchParams();
-  return <div data-testid="details-probe">{params.get("id") ?? ""}</div>;
+  const host = params.get("host");
+  return host ? <div data-testid="host-probe">{host}</div> : null;
 }
 
 // A consequence-node click navigates to /?incident=<id> -- same path as TopologyMap's own
@@ -46,25 +49,28 @@ function IncidentProbe() {
   return incident ? <div data-testid="incident-probe">{incident}</div> : null;
 }
 
-function renderMap(props: Partial<React.ComponentProps<typeof TopologyMap>> = {}) {
+function renderMap(
+  props: Partial<React.ComponentProps<typeof TopologyMap>> = {},
+  initialPath = "/",
+) {
   const defaultProps: React.ComponentProps<typeof TopologyMap> = {
     topologyDevices: [],
     statuses: {},
     nowMs: NOW_MS,
   };
   return render(
-    <MemoryRouter initialEntries={["/"]}>
+    <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
         <Route
           path="/"
           element={
             <>
               <TopologyMap {...defaultProps} {...props} />
+              <HostProbe />
               <IncidentProbe />
             </>
           }
         />
-        <Route path="/details" element={<DetailsProbe />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -86,7 +92,6 @@ function rerenderMap(
     <MemoryRouter initialEntries={["/"]}>
       <Routes>
         <Route path="/" element={<TopologyMap {...defaultProps} {...props} />} />
-        <Route path="/details" element={<DetailsProbe />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -154,7 +159,6 @@ describe("TopologyMap", () => {
               />
             }
           />
-          <Route path="/details" element={<DetailsProbe />} />
         </Routes>
       </MemoryRouter>,
     );
@@ -182,7 +186,6 @@ describe("TopologyMap", () => {
               />
             }
           />
-          <Route path="/details" element={<DetailsProbe />} />
         </Routes>
       </MemoryRouter>,
     );
@@ -219,7 +222,6 @@ describe("TopologyMap", () => {
             path="/"
             element={<TopologyMap topologyDevices={nextTopologyDevices} statuses={nextStatuses} nowMs={NOW_MS} />}
           />
-          <Route path="/details" element={<DetailsProbe />} />
         </Routes>
       </MemoryRouter>,
     );
@@ -277,13 +279,28 @@ describe("TopologyMap", () => {
     expect(instances[0].setOptionsCalls).toContainEqual({ physics: false });
   });
 
-  it("navigates to /details?id=h1 on a node click when not in edit mode", async () => {
+  it("navigates to /?host=h1 on a node click when not in edit mode", async () => {
     const topologyDevices = [{ id: "h1", parents: [] }];
     renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: false });
     act(() => {
       instances[0].emit("click", { nodes: ["h1"] });
     });
-    expect(await screen.findByTestId("details-probe")).toHaveTextContent("h1");
+    expect(await screen.findByTestId("host-probe")).toHaveTextContent("h1");
+  });
+
+  // ?host= and ?incident= coexist (operator decision 2): opening a host from the map while an
+  // incident is already highlighted must not drop ?incident=.
+  it("starting at /?incident=i1, clicking a node adds ?host= while keeping ?incident=", async () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap(
+      { topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: false },
+      "/?incident=i1",
+    );
+    act(() => {
+      instances[0].emit("click", { nodes: ["h1"] });
+    });
+    expect(await screen.findByTestId("host-probe")).toHaveTextContent("h1");
+    expect(await screen.findByTestId("incident-probe")).toHaveTextContent("i1");
   });
 
   it("does not navigate on a node click while in edit mode", () => {
@@ -292,7 +309,7 @@ describe("TopologyMap", () => {
     act(() => {
       instances[0].emit("click", { nodes: ["h1"] });
     });
-    expect(screen.queryByTestId("details-probe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("host-probe")).not.toBeInTheDocument();
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
   });
 
@@ -309,7 +326,7 @@ describe("TopologyMap", () => {
       instances[0].emit("click", { nodes: ["h1"] });
     });
     expect(onSelectHost).toHaveBeenCalledWith("h1");
-    expect(screen.queryByTestId("details-probe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("host-probe")).not.toBeInTheDocument();
   });
 
   it("does not call onSelectHost outside edit mode", () => {
@@ -400,7 +417,7 @@ describe("TopologyMap incidentLookup (DASH-15)", () => {
     expect(await screen.findByTestId("incident-probe")).toHaveTextContent("incident-h1");
   });
 
-  it("clicking a non-consequence node still navigates to /details?id=", async () => {
+  it("clicking a non-consequence node still navigates to /?host=", async () => {
     const topologyDevices = [
       { id: "h1", parents: [] },
       { id: "h2", parents: ["h1"] },
@@ -414,7 +431,7 @@ describe("TopologyMap incidentLookup (DASH-15)", () => {
     act(() => {
       instances[0].emit("click", { nodes: ["h1"] });
     });
-    expect(await screen.findByTestId("details-probe")).toHaveTextContent("h1");
+    expect(await screen.findByTestId("host-probe")).toHaveTextContent("h1");
   });
 
   it("does not navigate on a consequence-node click while in edit mode", () => {
@@ -431,7 +448,7 @@ describe("TopologyMap incidentLookup (DASH-15)", () => {
     act(() => {
       instances[0].emit("click", { nodes: ["h2"] });
     });
-    expect(screen.queryByTestId("details-probe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("host-probe")).not.toBeInTheDocument();
     expect(screen.queryByTestId("incident-probe")).not.toBeInTheDocument();
   });
 
@@ -482,7 +499,6 @@ describe("TopologyMap incidentLookup (DASH-15)", () => {
               </>
             }
           />
-          <Route path="/details" element={<DetailsProbe />} />
         </Routes>
       </MemoryRouter>,
     );

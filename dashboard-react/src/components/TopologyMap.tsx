@@ -4,23 +4,25 @@
 // `.update()`/`.add()`/`.remove()` -- the whole-graph-replacement Network method is never called.
 //
 // The `editMode` prop gates both node-click navigation and vis-network's built-in manipulation
-// toolbar: off, a click navigates to /details and dragging/drawing is disabled; on, the
-// toolbar's addEdge/editEdge/deleteEdge/addNode callbacks write directly to Checkmk through the
-// shared REST writer module and dragging a node persists its position. Every write applies
-// immediately to Checkmk but is never activated from here -- activating changes is a separate,
-// explicitly triggered batch action owned by the toolbar UI that surrounds this component.
+// toolbar: off, a click opens the overview's right-hand host details pane (?host=<id>) and
+// dragging/drawing is disabled; on, the toolbar's addEdge/editEdge/deleteEdge/addNode callbacks
+// write directly to Checkmk through the shared REST writer module and dragging a node persists
+// its position. Every write applies immediately to Checkmk but is never activated from here --
+// activating changes is a separate, explicitly triggered batch action owned by the toolbar UI
+// that surrounds this component.
 //
 // Takes its device list as a prop rather than reading the store directly, so a future
 // tag-filter pass can narrow the input list without changing this file.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { DataSet } from "vis-data/peer";
 import { Network } from "vis-network/peer";
 import "vis-network/styles/vis-network.css";
 import { Banner } from "kone-design-system";
 import { nodeVisual, type NodeEmphasis } from "../lib/mapIcons";
 import { createUnmanagedSwitch, isValidHostName, setMapPosition, updateParents } from "../lib/checkmkWrite";
+import { hostHref, incidentHref } from "../lib/searchLinks";
 import { buildMapModel, withGridPositions, type MapEdge, type MapNode } from "../lib/topologyLayout";
 import type { IncidentLookup } from "../lib/incidents";
 import type { DevicePayload } from "../lib/types";
@@ -129,6 +131,7 @@ export function TopologyMap({
   onSelectHost,
 }: TopologyMapProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const nodesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
   const edgesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
@@ -139,10 +142,13 @@ export function TopologyMap({
   // The manipulation callbacks below are only re-registered with vis-network when editMode
   // toggles (see the gating effect), so onEditSaved/onEditFailed/onSelectHost are read through
   // refs rather than captured directly -- otherwise a prop change between toggles would go
-  // unseen.
+  // unseen. The click handler (registered once, see the mount effect) reads the current search
+  // string the same way, so hostHref/incidentHref always build on top of whatever ?host=/
+  // ?incident= is present at click time, not whatever it was when the handler was registered.
   const onEditSavedRef = useRef(onEditSaved);
   const onEditFailedRef = useRef(onEditFailed);
   const onSelectHostRef = useRef(onSelectHost);
+  const searchRef = useRef(location.search);
   useEffect(() => {
     onEditSavedRef.current = onEditSaved;
   }, [onEditSaved]);
@@ -152,6 +158,9 @@ export function TopologyMap({
   useEffect(() => {
     onSelectHostRef.current = onSelectHost;
   }, [onSelectHost]);
+  useEffect(() => {
+    searchRef.current = location.search;
+  }, [location.search]);
 
   // Pending-edit overlay: a host-attribute write only becomes visible to other viewers once
   // changes are activated and the poller's next Livestatus poll picks it up -- without this
@@ -365,10 +374,10 @@ export function TopologyMap({
       }
       const node = modelRef.current.nodes.find((n) => n.id === nodeId);
       if (node?.incidentRole === "consequence" && node.incidentId) {
-        navigate(`/?incident=${encodeURIComponent(node.incidentId)}`);
+        navigate(incidentHref(searchRef.current, node.incidentId));
         return;
       }
-      navigate(`/details?id=${encodeURIComponent(nodeId)}`);
+      navigate(hostHref(searchRef.current, nodeId));
     });
 
     // Position persistence: a drag only ever writes while edit mode is on. A successful write

@@ -177,7 +177,7 @@ describe("Tree", () => {
     };
     renderExpanded(devices);
     const link = screen.getByText("web1").closest("a");
-    expect(link).toHaveAttribute("href", "/details?id=web1");
+    expect(link).toHaveAttribute("href", "/?host=web1");
   });
 
   it("encodes a device id containing a space in its drill-down link", () => {
@@ -186,7 +186,7 @@ describe("Tree", () => {
     };
     renderExpanded(devices);
     const link = screen.getByText("web 1").closest("a");
-    expect(link).toHaveAttribute("href", "/details?id=web%201");
+    expect(link).toHaveAttribute("href", "/?host=web+1");
   });
 
   it("activating a group row still calls its toggle handler rather than navigating", async () => {
@@ -255,7 +255,7 @@ describe("Tree", () => {
 
       const detailsLink = screen.getByText("h2").closest("a");
       expect(detailsLink).toHaveClass("opacity-50");
-      expect(detailsLink).toHaveAttribute("href", "/details?id=h2");
+      expect(detailsLink).toHaveAttribute("href", "/?host=h2");
 
       const incidentLink = screen.getByText("See incident").closest("a");
       expect(incidentLink).toHaveAttribute("href", "/?incident=incident-h1");

@@ -6,9 +6,10 @@
 // depth-driven left padding, and a severity-derived accent from node.worst via
 // stateMapping.badgeForState, never a second colour table.
 
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { Badge } from "kone-design-system";
 import { deviceTypeMaskUrl } from "../lib/mapIcons";
+import { hostHref, incidentHref } from "../lib/searchLinks";
 import { badgeForState } from "../lib/stateMapping";
 import type { TreeGroupNode } from "../lib/treeModel";
 import { StateBadgeForState } from "./StateBadge";
@@ -32,6 +33,7 @@ export interface TreeNodeProps {
 }
 
 export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
+  const { search } = useLocation();
   const spec = badgeForState(node.worst);
   const accentClass = ACCENT_BORDER_CLASS[spec.color] ?? "border-neutral-300";
 
@@ -90,7 +92,7 @@ export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
                 className="flex items-center pr-3"
               >
                 <Link
-                  to={`/details?id=${encodeURIComponent(device.id)}`}
+                  to={hostHref(search, device.id)}
                   className={[
                     "flex flex-1 items-center gap-2 py-1.5 text-sm hover:bg-bg-subtle-hover",
                     device.dimmed ? "opacity-50" : "",
@@ -120,7 +122,7 @@ export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
                   <span className="flex-1 truncate text-fg-primary">{device.label}</span>
                 </Link>
                 {device.dimmed && device.incidentId ? (
-                  <Link to={`/?incident=${encodeURIComponent(device.incidentId)}`}>
+                  <Link to={incidentHref(search, device.incidentId)}>
                     <Badge color="neutral" variant="outline">
                       See incident
                     </Badge>

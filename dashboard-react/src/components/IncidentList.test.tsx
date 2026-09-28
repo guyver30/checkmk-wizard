@@ -121,7 +121,7 @@ describe("IncidentList", () => {
     );
   });
 
-  it("'View devices' toggles an inline list: headings only for non-empty groups, hosts link to /details, and a dependents line only when non-empty", () => {
+  it("'View devices' toggles an inline list: headings only for non-empty groups, hosts link to the host details pane, and a dependents line only when non-empty", () => {
     const inc = incident({
       id: "incident-a",
       root: "a",
@@ -144,7 +144,7 @@ describe("IncidentList", () => {
     expect(screen.getByText("Confirmed down")).toBeInTheDocument();
     expect(screen.queryByText("Not observable")).not.toBeInTheDocument();
     const link = screen.getByRole("link", { name: "Confirmed Device" });
-    expect(link).toHaveAttribute("href", "/details?id=c1");
+    expect(link).toHaveAttribute("href", "/?host=c1");
     expect(screen.getByText("Dependent devices: dep1, dep2")).toBeInTheDocument();
   });
 

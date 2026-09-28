@@ -157,7 +157,7 @@ A few things worth knowing that aren't obvious just from reading those files:
 builds `dashboard-react/` into its own nginx image (`deploy/dashboard.Containerfile`, build context
 = the repo root). The image build compiles `design-system/` and the SPA inside a Node container, so
 the host needs no Node install. nginx serves the static files, with an SPA fallback for
-`/details?id=...` bookmarks and a same-origin `/checkmk-api/` route to `checkmk:5000`
+`/?host=...` (and old `/details?id=...`) bookmarks and a same-origin `/checkmk-api/` route to `checkmk:5000`
 (`deploy/dashboard-nginx.conf`). There's no server-side process and no `environment:` block:
 every per-deployment setting lives in `dashboard-react/src/lib/config.ts`, which is **baked into
 the image at build time**. Edit it once, before the first build:
