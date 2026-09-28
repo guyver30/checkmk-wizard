@@ -392,24 +392,26 @@ Plans:
   - D-22: Grafana sits alongside the dashboard, for analysts; optional, never replaces it
   - D-23: TSDB container in the compose stack with MinIO as long-term tier; product choice is for research
   - D-24: the dashboard queries the TSDB over HTTP, read-only. This amends the "no new backend" constraint, so PROJECT.md and CLAUDE.md must be updated during planning. The access mechanism is for research
-**Plans:** 6 plans
+**Plans:** 8 plans
 
 Plans:
 
 **Wave 1**
 
-- [ ] 14.1-01-PLAN.md — Poller /metrics endpoint: perf_data, host/service state and downtime series (HIST-01..03)
-- [ ] 14.1-02-PLAN.md — Grafana provisioning: Thanos datasource and three starter dashboards (HIST-10)
-- [ ] 14.1-03-PLAN.md — Dashboard nginx GET-only allowlist to Thanos Query and rollup objects, plus live smoke test (HIST-08, HIST-09)
+- [ ] 14.1-01-PLAN.md — Requirements reworded for ClickHouse (+HIST-07a); ClickHouse S3-tiered storage policy, TTL schema, read-only users (HIST-04, HIST-05, HIST-07a, HIST-08)
+- [ ] 14.1-02-PLAN.md — Poller history write path: ClickHouse HTTP choke point, per-cycle metric/host/service state rows (HIST-01..03)
+- [ ] 14.1-03-PLAN.md — Grafana provisioning: ClickHouse datasource (read-only user) and three starter dashboards (HIST-10)
+- [ ] 14.1-04-PLAN.md — Dashboard nginx GET-only allowlist to ClickHouse and rollup objects, plus live smoke test (HIST-08, HIST-09, HIST-10)
 
-**Wave 2** *(blocked on 14.1-01)*
+**Wave 2** *(blocked on Wave 1)*
 
-- [ ] 14.1-04-PLAN.md — Compose: Prometheus + Thanos on MinIO, bucket init, Grafana, poller history settings (HIST-04, HIST-05, HIST-10)
-- [ ] 14.1-05-PLAN.md — Daily availability rollups with auto-backfill, never-overwrite S3 writes (HIST-06, HIST-07)
+- [ ] 14.1-05-PLAN.md — Daily availability rollups: JSON + Parquet, auto-backfill, never-overwrite (HIST-05, HIST-06, HIST-07, HIST-07a; blocked on 14.1-02)
+- [ ] 14.1-06-PLAN.md — Compose: ClickHouse, minio-init, Grafana, pinned quay.io MinIO, poller/dashboard settings (HIST-04, HIST-05, HIST-10; blocked on 14.1-01, -03, -04)
+- [ ] 14.1-07-PLAN.md — Constraint amendment and deployment docs (HIST-11; blocked on 14.1-01)
 
 **Wave 3** *(blocked on all of the above)*
 
-- [ ] 14.1-06-PLAN.md — Constraint amendment, deployment docs, live verification checkpoint (HIST-11; non-autonomous)
+- [ ] 14.1-08-PLAN.md — Live verification checkpoint on the Podman host (non-autonomous)
 
 ### Phase 14.2: Fleet Failure Prediction and Incident Narration (INSERTED)
 
