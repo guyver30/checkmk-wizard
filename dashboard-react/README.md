@@ -160,8 +160,10 @@ sit in a writable state indefinitely.
 **Host details pane:** clicking a host — on the map (edit mode off), in the device tree, or in
 an incident card's device list — opens a right-hand pane beside the map (`ThreePaneLayout`'s
 fourth slot) showing that host's `HostDetails` content (the gauges and services
-described above). The pane is absent until a host is opened; its **Collapse** button shrinks it
-to a 40px rail with an **Expand** button, and **Close** removes it. Its divider is
+described above). The pane is absent until a host is opened. Its header has icon buttons, like
+the device tree and event history panes: a chevron collapses it to a 40px rail (the chevron
+flips to expand it again) and an × closes it. Each icon has an accessible name and a tooltip
+("Collapse host details", "Close host details" and so on). Its divider is
 drag-resizable, and both its width and collapsed state persist across a reload (`usePaneLayout`,
 the same storage record the device tree and event history panes use). Opening a different host
 while the pane is collapsed re-expands it. The open host lives in the URL as `/?host=<id>` and

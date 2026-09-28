@@ -299,3 +299,4 @@
 - **2026-09-28 15:10** — request: instead of navigating to a details page when clicking a host, show host details in a collapsible pane on the right of the map area (collapse button)
 - **2026-09-28 15:25** — request: event history filters to the clicked host; clicking empty map or empty space under the device tree unselects the host and shows all events again
 - **2026-09-28 15:25** — details pane should not show any event/status history (already at the bottom of the main page)
+- **2026-09-28 15:49** — replace Collapse/Expand/Close text buttons with proper icons, as common in modern UIs

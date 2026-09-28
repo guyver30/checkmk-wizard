@@ -57,6 +57,25 @@ describe("ThreePaneLayout", () => {
     expect(rowHeightPx()).toBeLessThan(before);
   });
 
+  it("pane controls are icon buttons with accessible names and tooltips, no visible text", () => {
+    render(
+      <ThreePaneLayout
+        tree={<p>tree</p>}
+        centreTop={<p>top</p>}
+        centreBottom={<p>bottom</p>}
+        details={<p>details</p>}
+        detailsKey="h1"
+        onCloseDetails={() => {}}
+      />,
+    );
+    for (const name of ["Collapse device tree", "Collapse event history", "Collapse host details", "Close host details"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveAttribute("title", name);
+      expect(button.textContent).toBe("");
+      expect(button.querySelector("svg")).not.toBeNull();
+    }
+  });
+
   it("collapses and restores the tree pane via its collapse button", () => {
     render(
       <ThreePaneLayout tree={<p>Device tree content</p>} centreTop={<p>top</p>} centreBottom={<p>bottom</p>} />,

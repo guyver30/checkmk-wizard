@@ -14,39 +14,91 @@ export interface ThreePaneLayoutProps {
 // Width/height a collapsed pane's rail occupies -- just enough for its restore button.
 const COLLAPSED_RAIL_PX = 40;
 
+// Which edge of the layout a pane sits on. It decides which way the collapse/expand chevron
+// points: towards the edge the pane collapses into, and back out again.
+type PaneSide = "left" | "right" | "bottom";
+
 interface CollapsiblePaneProps {
   title: string;
+  side: PaneSide;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onClose?: () => void;
   children: ReactNode;
 }
 
-function CollapsiblePane({ title, collapsed, onToggleCollapse, onClose, children }: CollapsiblePaneProps) {
+// Chevron rotation per side, for the "collapse" direction; "expand" is the opposite (180deg).
+const COLLAPSE_ROTATION: Record<PaneSide, number> = { left: 180, right: 0, bottom: 90 };
+
+// Inline SVG icons (stroke = currentColor), so no icon library is added for three glyphs.
+function ChevronIcon({ rotation }: { rotation: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      style={{ transform: `rotate(${rotation}deg)` }}
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
+const ICON_BUTTON_CLASS =
+  "flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-fg-secondary hover:bg-bg-subtle-hover hover:text-fg-primary";
+
+function CollapsiblePane({ title, side, collapsed, onToggleCollapse, onClose, children }: CollapsiblePaneProps) {
+  const toggleLabel = collapsed ? `Expand ${title.toLowerCase()}` : `Collapse ${title.toLowerCase()}`;
+  const closeLabel = `Close ${title.toLowerCase()}`;
+  const collapseRotation = COLLAPSE_ROTATION[side];
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg-surface">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-neutral-150 px-3 py-2">
+      <div
+        className={[
+          "flex shrink-0 items-center gap-1 border-b border-neutral-150 py-1.5",
+          collapsed ? "justify-center px-1" : "justify-between px-3",
+        ].join(" ")}
+      >
         {!collapsed && <span className="truncate text-sm font-semibold text-fg-primary">{title}</span>}
-        <div className="flex shrink-0 items-center gap-2">
-          {!collapsed && onClose && (
-            <button
-              type="button"
-              aria-label={`Close ${title.toLowerCase()}`}
-              onClick={onClose}
-              className="shrink-0 rounded-sm border border-neutral-300 px-2 py-1 text-xs text-fg-secondary hover:bg-bg-subtle-hover"
-            >
-              Close
-            </button>
-          )}
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             aria-expanded={!collapsed}
-            aria-label={collapsed ? `Expand ${title.toLowerCase()}` : `Collapse ${title.toLowerCase()}`}
+            aria-label={toggleLabel}
+            title={toggleLabel}
             onClick={onToggleCollapse}
-            className="shrink-0 rounded-sm border border-neutral-300 px-2 py-1 text-xs text-fg-secondary hover:bg-bg-subtle-hover"
+            className={ICON_BUTTON_CLASS}
           >
-            {collapsed ? "Expand" : "Collapse"}
+            <ChevronIcon rotation={collapsed ? collapseRotation + 180 : collapseRotation} />
           </button>
+          {!collapsed && onClose && (
+            <button type="button" aria-label={closeLabel} title={closeLabel} onClick={onClose} className={ICON_BUTTON_CLASS}>
+              <CloseIcon />
+            </button>
+          )}
         </div>
       </div>
       {/* A collapsed pane unmounts its content -- only the rail with the restore button remains. */}
@@ -99,7 +151,7 @@ export function ThreePaneLayout({
 
   return (
     <div className="grid h-full w-full" style={{ gridTemplateColumns }}>
-      <CollapsiblePane title="Device tree" collapsed={collapsed.tree} onToggleCollapse={() => toggleCollapse("tree")}>
+      <CollapsiblePane title="Device tree" side="left" collapsed={collapsed.tree} onToggleCollapse={() => toggleCollapse("tree")}>
         {tree}
       </CollapsiblePane>
 
@@ -138,6 +190,7 @@ export function ThreePaneLayout({
 
         <CollapsiblePane
           title="Event history"
+          side="bottom"
           collapsed={collapsed.events}
           onToggleCollapse={() => toggleCollapse("events")}
         >
@@ -163,6 +216,7 @@ export function ThreePaneLayout({
 
           <CollapsiblePane
             title="Host details"
+            side="right"
             collapsed={collapsed.details}
             onToggleCollapse={() => toggleCollapse("details")}
             onClose={onCloseDetails}
