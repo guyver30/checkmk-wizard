@@ -91,7 +91,9 @@ export function connect(deps: ConnectDeps = {}): void {
     }
     // Subscribing is what triggers the broker's retained-message replay on SUBACK -- no
     // cache-warming request of any kind is needed or permitted (11-RESEARCH.md
-    // Don't-Hand-Roll table).
+    // Don't-Hand-Roll table). Incidents are cleared first so the replay rebuilds them and
+    // drops any that closed while disconnected (14-REVIEW CR-02).
+    useAppStore.getState().resetIncidents();
     client?.subscribe(SUBSCRIBE_TOPICS);
     useAppStore.getState().setConnection({ phase: "connected" });
   });

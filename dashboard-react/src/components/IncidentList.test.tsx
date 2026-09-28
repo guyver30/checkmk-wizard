@@ -180,6 +180,24 @@ describe("IncidentList", () => {
     expect(notHighlighted).not.toHaveClass("ring-2");
   });
 
+  it("scrolls to the highlighted card once incidents arrive after the first render", () => {
+    // Regression for 14-REVIEW WR-04: on a fresh load of /?incident=..., retained incidents
+    // arrive after the first render, and the scroll never happened.
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    const b = incident({ id: "incident-b", root: "b" });
+
+    const { rerender } = renderList({ incidents: [], highlightedId: "incident-b" });
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    rerender(
+      <MemoryRouter>
+        <IncidentList incidents={[b]} devices={{}} nowMs={NOW_MS} highlightedId="incident-b" />
+      </MemoryRouter>,
+    );
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
   it("never renders the words 'not operating' anywhere in the list", () => {
     const inc = incident({
       id: "incident-a",

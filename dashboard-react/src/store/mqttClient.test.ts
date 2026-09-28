@@ -85,6 +85,21 @@ describe("connect", () => {
     expect(useAppStore.getState().connection.phase).toBe("connected");
   });
 
+  it("drops incidents on reconnect so ones closed while disconnected don't linger", () => {
+    // Regression for 14-REVIEW CR-02: a tombstone published while the tab was offline is
+    // never delivered, and a cleared retained topic replays nothing.
+    const fake = createFakeClient();
+    const connectFn = vi.fn(() => fake as unknown as MqttClient);
+    connect({ connectFn });
+    fake.emit("connect");
+    useAppStore.getState().handleMessage("lan/incidents/incident-a/status", new TextEncoder().encode('{"id":"incident-a","root":"a"}'));
+    expect(Object.keys(useAppStore.getState().incidents)).toEqual(["incident-a"]);
+
+    fake.emit("connect"); // reconnect; the broker replays nothing for the closed incident
+
+    expect(useAppStore.getState().incidents).toEqual({});
+  });
+
   it("schedules a reconnect with jittered exponential backoff on close", () => {
     const fake = createFakeClient();
     const connectFn = vi.fn(() => fake as unknown as MqttClient);

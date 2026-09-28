@@ -19,6 +19,7 @@ function stateWithDevices(devices: Record<string, DevicePayload>): AppState {
     connection: { phase: "connected" },
     handleMessage: () => {},
     setConnection: () => {},
+    resetIncidents: () => {},
   };
 }
 

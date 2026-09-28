@@ -71,6 +71,7 @@ export interface AppState {
   connection: ConnectionState;
   handleMessage: (topic: string, payload: Uint8Array) => void;
   setConnection: (status: ConnectionState) => void;
+  resetIncidents: () => void;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -111,6 +112,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setConnection: (status) => {
     set({ connection: status });
+  },
+
+  // Incidents are change-triggered, never republished per cycle, so a tombstone missed
+  // while disconnected would leave a closed incident on screen forever. mqttClient calls
+  // this on every (re)connect, before subscribing, so the retained replay rebuilds the
+  // slice from scratch (14-REVIEW CR-02, 2026-09-28).
+  resetIncidents: () => {
+    set({ incidents: {} });
   },
 
   handleMessage: (topic, payload) => {

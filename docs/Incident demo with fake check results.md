@@ -76,9 +76,10 @@ cmk "PROCESS_HOST_CHECK_RESULT;<plain_host>;1;faked down"
 ```
 
 What the audience sees (within ~2 poll cycles): exactly one incident card,
-`"{plain_host label} — {duration}"`, appears above the stats strip with a criticality badge and
-the description `"1 confirmed down"`. No other host changes — a plain host with no managed
-children never produces a second card or dims anything else.
+`"{plain_host label} — {duration}"`, appears above the stats strip with a criticality badge. It
+has no consequence line, because the root isn't counted as a consequence and there are none. No
+other host changes — a plain host with no managed children never produces a second card or dims
+anything else.
 
 Recover:
 
@@ -103,8 +104,9 @@ fails — no separate fake command needed for the children in this scenario, sin
 UNREACH from the parent/child relationship on its own.
 
 What the audience sees: one card, `"{managed_switch label} — {duration}"`, description
-`"{N} confirmed down · {M} not observable"` (the switch itself counts as confirmed down; UNREACH
-children count as not observable). In the fleet tree and on the topology map, the UNREACH
+`"{M} not observable"`, where M is the number of UNREACH children. The switch itself is the root
+and isn't counted. A child that Checkmk reports as DOWN rather than UNREACH counts as confirmed
+down, and the line then reads `"{N} confirmed down · {M} not observable"`. In the fleet tree and on the topology map, the UNREACH
 children are dimmed with a "See incident" link; clicking a faded map node or the link routes to
 `/?incident={incident_id}` and highlights the matching card with a ring. The root itself keeps
 full alarm styling (no dashed border — Checkmk can see the switch itself is DOWN, unlike the

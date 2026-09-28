@@ -285,3 +285,4 @@
 - **2026-09-28 13:22** — kiosk mode is not needed. push all the changes now
 - **2026-09-28 14:02** — remove kiosk mode
 - **2026-09-28 14:07** — close phase 14 now
+- **2026-09-28 14:20** — go with your recommendation (fix CR-01, CR-02, WR-04, WR-06, WR-07 with tests; park editor warnings in criticality todo; then close phase 14)

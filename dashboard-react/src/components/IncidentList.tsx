@@ -20,6 +20,10 @@ export function IncidentList({ incidents, devices, nowMs, highlightedId }: Incid
 
   // T-14-12: `highlightedId` comes from the `?incident=` query string (user-controllable). An
   // unmatched or malformed value must highlight nothing and never throw.
+  // `hasTarget` re-runs the scroll once the card exists: on a fresh page load the incidents
+  // arrive after the first render, and keying on `highlightedId` alone never scrolled
+  // (14-REVIEW WR-04, 2026-09-28).
+  const hasTarget = incidents.some((incident) => incident.id === highlightedId);
   useEffect(() => {
     if (!highlightedId || !sectionRef.current) {
       return;
@@ -34,7 +38,7 @@ export function IncidentList({ incidents, devices, nowMs, highlightedId }: Incid
     } catch {
       // Malformed id: highlight nothing, never throw.
     }
-  }, [highlightedId]);
+  }, [highlightedId, hasTarget]);
 
   const nameFor = (id: string) => displayName(devices[id] ?? { id });
 
