@@ -5,7 +5,9 @@ import {
   GRID_SPACING,
   initialGridPositions,
   MAP_POSITION_LABEL,
+  MAP_SNAP_SPACING,
   parseMapPosition,
+  snapToGrid,
   UNMANAGED_SWITCH_LABEL,
   withGridPositions,
 } from "./topologyLayout";
@@ -54,6 +56,22 @@ describe("parseMapPosition", () => {
 describe("formatMapPosition", () => {
   it("rounds both coordinates to the nearest integer", () => {
     expect(formatMapPosition(119.6, -40.2)).toBe("120,-40");
+  });
+});
+
+describe("snapToGrid", () => {
+  it("rounds to the nearest multiple of MAP_SNAP_SPACING (= GRID_SPACING / 3 = 50)", () => {
+    expect(MAP_SNAP_SPACING).toBe(GRID_SPACING / 3);
+    expect(MAP_SNAP_SPACING).toBe(50);
+    expect(snapToGrid(77)).toBe(100);
+    expect(snapToGrid(-33)).toBe(-50);
+    expect(snapToGrid(24)).toBe(0);
+    expect(snapToGrid(25)).toBe(50);
+    expect(snapToGrid(150)).toBe(150);
+  });
+
+  it("normalises a -0 result to +0", () => {
+    expect(Object.is(snapToGrid(-10), 0)).toBe(true);
   });
 });
 

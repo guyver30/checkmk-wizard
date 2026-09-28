@@ -22,8 +22,18 @@ export const MAP_POSITION_LABEL = "map_position";
 export const UNMANAGED_SWITCH_LABEL = "unmanaged_switch";
 export const UNMANAGED_SWITCH_VALUE = "yes";
 export const GRID_SPACING = 150;
+// A third of the auto-layout spacing: every auto-layout slot (GRID_SPACING) lands exactly on a
+// grid intersection, while 50px gives enough resolution to line hosts up in a dense map (a
+// 150px snap would be too coarse).
+export const MAP_SNAP_SPACING = GRID_SPACING / 3;
 
 const MAP_POSITION_RE = /^-?\d{1,6},-?\d{1,6}$/;
+
+export function snapToGrid(value: number): number {
+  // `+ 0` normalises a -0 result (e.g. snapping a small negative value to the origin) to 0, so
+  // saved map_position labels and toEqual/toHaveBeenCalledWith assertions never see "-0".
+  return Math.round(value / MAP_SNAP_SPACING) * MAP_SNAP_SPACING + 0;
+}
 
 export function parseMapPosition(value: unknown): { x: number; y: number } | null {
   if (typeof value !== "string" || !MAP_POSITION_RE.test(value)) {

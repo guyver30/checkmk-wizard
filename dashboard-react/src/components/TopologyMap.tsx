@@ -23,7 +23,7 @@ import { Banner } from "kone-design-system";
 import { nodeVisual, type NodeEmphasis } from "../lib/mapIcons";
 import { createUnmanagedSwitch, isValidHostName, setMapPosition, updateParents } from "../lib/checkmkWrite";
 import { hostHref, incidentHref, withSearchParam } from "../lib/searchLinks";
-import { buildMapModel, withGridPositions, type MapEdge, type MapNode } from "../lib/topologyLayout";
+import { buildMapModel, snapToGrid, withGridPositions, type MapEdge, type MapNode } from "../lib/topologyLayout";
 import type { IncidentLookup } from "../lib/incidents";
 import type { DevicePayload } from "../lib/types";
 
@@ -385,8 +385,11 @@ export function TopologyMap({
       navigate(hostHref(searchRef.current, nodeId));
     });
 
-    // Position persistence: a drag only ever writes while edit mode is on. A successful write
-    // freezes that node's physics so later syncs never move it again.
+    // Position persistence: a drag only ever writes while edit mode is on. The dropped position
+    // is snapped to the grid before the write, so saved map_position labels are always on-grid;
+    // a node placed from an existing off-grid saved label is left alone until it is next dragged
+    // (D-02 -- no migration, no snapping on load/sync). A successful write freezes that node's
+    // physics so later syncs never move it again.
     network.on("dragEnd", (params: { nodes: string[] }) => {
       if (!editModeRef.current) {
         return;
@@ -397,7 +400,10 @@ export function TopologyMap({
         if (!pos) {
           continue;
         }
-        setMapPosition(id, pos.x, pos.y)
+        const x = snapToGrid(pos.x);
+        const y = snapToGrid(pos.y);
+        nodesRef.current?.update({ id, x, y });
+        setMapPosition(id, x, y)
           .then(() => {
             nodesRef.current?.update({ id, physics: false });
             onEditSavedRef.current?.();

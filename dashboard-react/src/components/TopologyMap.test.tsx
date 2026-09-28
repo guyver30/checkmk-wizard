@@ -793,35 +793,46 @@ describe("TopologyMap edit mode", () => {
     confirmSpy.mockRestore();
   });
 
-  it("dragEnd in edit mode saves the dragged node's position via setMapPosition and calls onEditSaved", async () => {
+  it("dragEnd in edit mode snaps the dragged node's position to the grid, saves it via setMapPosition, and calls onEditSaved", async () => {
     const mockSetMapPosition = vi.mocked(checkmkWrite.setMapPosition);
     mockSetMapPosition.mockResolvedValue(undefined);
     const onEditSaved = vi.fn();
     const topologyDevices = [{ id: "h1", parents: [] }];
     renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: true, onEditSaved });
     const network = instances[0];
-    const nodes = network.data.nodes as unknown as { update: (item: Record<string, unknown>) => void };
+    const nodes = network.data.nodes as unknown as {
+      update: (item: Record<string, unknown>) => void;
+      get: (id: string) => { x: number; y: number };
+    };
     nodes.update({ id: "h1", x: 77, y: -33 });
 
     act(() => {
       network.emit("dragEnd", { nodes: ["h1"] });
     });
 
-    await waitFor(() => expect(mockSetMapPosition).toHaveBeenCalledWith("h1", 77, -33));
+    // (77, -33) snaps to the nearest 50-unit grid intersection: (100, -50).
+    await waitFor(() => expect(mockSetMapPosition).toHaveBeenCalledWith("h1", 100, -50));
     await waitFor(() => expect(onEditSaved).toHaveBeenCalledTimes(1));
+    expect(nodes.get("h1")).toMatchObject({ x: 100, y: -50 });
   });
 
-  it("dragEnd in read-only mode makes no write", () => {
+  it("dragEnd in read-only mode makes no write and does not move the node", () => {
     const mockSetMapPosition = vi.mocked(checkmkWrite.setMapPosition);
     const topologyDevices = [{ id: "h1", parents: [] }];
     renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: false });
     const network = instances[0];
+    const nodes = network.data.nodes as unknown as {
+      update: (item: Record<string, unknown>) => void;
+      get: (id: string) => { x: number; y: number };
+    };
+    nodes.update({ id: "h1", x: 77, y: -33 });
 
     act(() => {
       network.emit("dragEnd", { nodes: ["h1"] });
     });
 
     expect(mockSetMapPosition).not.toHaveBeenCalled();
+    expect(nodes.get("h1")).toMatchObject({ x: 77, y: -33 });
   });
 
   it("dragEnd failure calls onEditFailed with the position copy", async () => {
