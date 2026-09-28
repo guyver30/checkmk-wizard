@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 14.1 context gathered
-last_updated: "2026-09-28T09:36:50.420Z"
+stopped_at: Phase 14.1 context updated (ClickHouse); plans need replan
+last_updated: "2026-09-28T12:55:16.765Z"
 last_activity: "2026-09-28 - Completed quick task 260928-l4h: host details right-hand pane"
 progress:
   total_phases: 12
@@ -131,6 +131,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-09-28T08:59:00.677Z
-Stopped at: Phase 14.1 context gathered
+Last session: 2026-09-28T12:55:16.742Z
+Stopped at: Phase 14.1 context updated (ClickHouse); plans need replan
 Resume file: .planning/phases/14.1-fleet-history-store-availability-rollups-and-grafana/14.1-CONTEXT.md
