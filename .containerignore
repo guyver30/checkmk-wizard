@@ -1,0 +1,13 @@
+# Build context for deploy/dashboard.Containerfile is the repo root. Keep it small and
+# keep host-built node_modules out: they may hold glibc binaries that fail on Alpine.
+**/node_modules
+**/dist
+design-system/*.tgz
+.git
+.venv
+.planning
+.claude
+.pytest_cache
+.ruff_cache
+docs
+tests

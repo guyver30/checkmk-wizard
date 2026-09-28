@@ -225,11 +225,18 @@ services:
   # to change per deployment lives in dashboard/js/config.js instead of an
   # environment: block here (D-01/D-02/D-20).
   dashboard:
-    image: nginx:alpine
+    # React dashboard, built into its own nginx image (cutover 2026-09-28; it
+    # replaced the vanilla ../dashboard bind mount). Rebuild after every
+    # `git pull` or config.ts edit: `podman compose build dashboard`.
+    build:
+      context: ..
+      dockerfile: deploy/dashboard.Containerfile
+    image: localhost/checkmk-dashboard:latest
     container_name: dashboard
     restart: unless-stopped
-    volumes:
-      - ../dashboard:/usr/share/nginx/html:ro,z
+    # nginx resolves `checkmk` for the /checkmk-api/ proxy when it starts.
+    depends_on:
+      - checkmk
     ports:
       - "8090:80"       # dashboard UI — host 8090 is clear of 8080/8000/6556
                           # checkmk, 1883 mqtt, 9000/9001 minio and 9002

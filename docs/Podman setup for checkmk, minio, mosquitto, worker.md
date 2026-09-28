@@ -153,15 +153,19 @@ A few things worth knowing that aren't obvious just from reading those files:
 
 **Note on `CMK_PUBLIC_HOST`:** set this in `deploy/.env` (see `deploy/.env.example`) to the address of the machine running Podman, as your LAN hosts reach it (e.g. `192.168.1.20`) — the one publishing ports 8000 (agent registration) and 6556 (agent pull). The `worker` passes it to checkmk-wizard, whose Phase 5 shows it as the address Linux/Windows agents register against (`cmk-agent-ctl register --server <address>:8000`) instead of asking. The worker can't discover it itself: it only sees its own `10.89.x.x` bridge address, which LAN hosts can't reach. If it needs to change, edit it in `deploy/.env` and run `podman compose up -d worker`. Left empty, the wizard warns and asks for the address by hand.
 
-**Note on `dashboard/js/config.js` (dashboard, Phase 11):** the `dashboard` service (§6) has no
-server-side process and no `environment:` block of its own — every per-deployment setting a
-browser-served static site needs instead lives in this one classic script, loaded before every
-other dashboard script (see `dashboard/README.md`). Edit it once, before first use:
+**Note on the dashboard (React, served on 8090 since 2026-09-28):** the `dashboard` service (§6)
+builds `dashboard-react/` into its own nginx image (`deploy/dashboard.Containerfile`, build context
+= the repo root). The image build compiles `design-system/` and the SPA inside a Node container, so
+the host needs no Node install. nginx serves the static files, with an SPA fallback for
+`/details?id=...` bookmarks and a same-origin `/checkmk-api/` route to `checkmk:5000`
+(`deploy/dashboard-nginx.conf`). There's no server-side process and no `environment:` block:
+every per-deployment setting lives in `dashboard-react/src/lib/config.ts`, which is **baked into
+the image at build time**. Edit it once, before the first build:
 
 - `CHECKMK_BASE_URL` — must be changed from its checked-in `http://<HOST_IP>:8080` placeholder to
   a URL a LAN browser can actually resolve. The poller reaches Checkmk over the container-internal
-  name `checkmk:5000`, which no browser outside `cmk_net` can resolve — this constant is what the
-  detail page's "View in Checkmk →" link is built from (D-20).
+  name `checkmk:5000`, which no browser outside `cmk_net` can resolve. This constant is what the
+  "View in Checkmk" link is built from (D-20), and the link stays disabled while it's the placeholder.
 - `CHECKMK_SITE` — the same site name used everywhere else in this doc (`dmc` by default).
 - `WS_USERNAME`/`WS_PASSWORD` (`wsreader`/`wsreader` by default) — disposable read-only Mosquitto
   WebSockets credentials, checked in deliberately, same convention as `cmkadmin`/`cmkadmin` and
@@ -169,21 +173,17 @@ other dashboard script (see `dashboard/README.md`). Edit it once, before first u
   `deploy/gen-mosquitto-passwd.sh`) before exposing this stack beyond a trusted LAN. The grant
   behind them is read-only (`topic read lan/#` in `deploy/mosquitto.acl`), so the exposure is
   bounded to reading the device list, never writing to the broker.
+- `TOPOLOGY_EDITOR_SECRET` — see the next note.
 
-The dashboard has no build step: there is no `npm install`, no bundler, and no `package.json` —
-every asset under `dashboard/` (HTML, CSS, JS, the vendored `mqtt.js`, fonts and icons) is
-committed as-is, and deployment is nothing more than the `dashboard` service's read-only bind
-mount (§4/§6).
+After editing `config.ts`, or after every `git pull`, rebuild the image and restart the stack
+(a full down/up, not a single-service restart; see §5.1 "A third signature"):
 
-**Note on `dashboard-react/` (Phase 11.1):** a React + TypeScript rewrite of the dashboard now
-lives at `dashboard-react/` (see `dashboard-react/README.md`). Its equivalent of
-`dashboard/js/config.js` is `dashboard-react/src/lib/config.ts` — same `CHECKMK_BASE_URL`
-placeholder trap as above (`http://<HOST_IP>:8080`, disabled deep link until edited). The
-compose `dashboard` service (§6) still serves the vanilla `dashboard/` unchanged until cutover;
-`dashboard-react/` is not yet wired into `deploy/compose.yaml`. Unlike `dashboard/`, this app
-does have a build step (it needs `design-system/dist/` built first — see its README), and its
-eventual cutover additionally requires adding the nginx SPA fallback
-(`try_files $uri $uri/ /index.html;`) that the stock `nginx:alpine` image's default config lacks.
+```bash
+cd deploy && podman compose build dashboard && podman compose down && podman compose up -d
+```
+
+The old vanilla dashboard in `dashboard/` is no longer served. It stays in the repo until a
+later cleanup removes it. For development with hot reload, see `dashboard-react/README.md` §3.
 
 **Note on the topology editor credential (Phase 13):** the dashboard's map edit mode (§7's
 "Topology map check") writes directly to Checkmk's REST API from the browser, using a
@@ -249,6 +249,10 @@ Then set `CMK_SITE_ID=mysite` in `deploy/.env`, update the dashboard's `CHECKMK_
 # what makes deploy/compose.yaml's ../scripts mount for the poller service
 # resolve correctly without setting POLLER_SCRIPTS_DIR
 cd app/checkmk-wizard/deploy
+
+# Build the dashboard image (first time, and after every git pull or
+# dashboard-react/src/lib/config.ts edit; see the dashboard note in §3)
+podman compose build dashboard
 
 # Start all containers in the background
 podman compose up -d
@@ -361,11 +365,12 @@ This was seen once and not re-run to confirm. Until it's shown to be safe, apply
 | **Mosquitto (WebSockets)** | `ws://<HOST_IP>:9002` | `ws://mosquitto:9001` |
 | **MinIO S3** | `http://<HOST_IP>:9000` | `http://minio:9000` |
 | **MinIO Console** | `http://<HOST_IP>:9001` | *N/A (Browser only)* |
-| **Live Dashboard** (Phase 11) | `http://<HOST_IP>:8090/` | *N/A (Browser only — served by the `dashboard` nginx service)* |
+| **Live Dashboard** (React) | `http://<HOST_IP>:8090/` | *N/A (Browser only — served by the `dashboard` nginx service)* |
 
 The dashboard's browser JavaScript talks to Mosquitto's WebSockets listener (`ws://<HOST_IP>:9002`
-above) directly from the LAN client — the `dashboard` nginx service on 8090 serves static files
-only and proxies nothing, so 9002 must stay reachable from wherever the dashboard is opened.
+above) directly from the LAN client, so 9002 must stay reachable from wherever the dashboard is
+opened. The `dashboard` nginx service on 8090 serves the static files and forwards only
+`/checkmk-api/` to Checkmk's REST API (for map edit mode). It proxies nothing else.
 
 Default credentials:
 
@@ -541,7 +546,7 @@ LAN browser. Confirm:
   `retain: true` specifically so a freshly-opened browser tab gets the current fleet state
   immediately, not just future updates.
 
-If the indicator never leaves "Connecting…", check that `config.js`'s `WS_PORT`/credentials match
+If the indicator never leaves "Connecting…", check that `dashboard-react/src/lib/config.ts`'s `WS_PORT`/credentials match
 this doc's §6 defaults (or your rotated ones) and that port 9002 is reachable from the browser's
 own network, not just from the deployment host.
 

@@ -286,3 +286,4 @@
 - **2026-09-28 14:02** — remove kiosk mode
 - **2026-09-28 14:07** — close phase 14 now
 - **2026-09-28 14:20** — go with your recommendation (fix CR-01, CR-02, WR-04, WR-06, WR-07 with tests; park editor warnings in criticality todo; then close phase 14)
+- **2026-09-28 14:27** — react dashboard must start automatically with the other containers (currently manual podman run node:22-alpine dev server)

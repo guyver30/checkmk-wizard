@@ -6,10 +6,9 @@ A React + TypeScript + Tailwind single-page app that replaces the vanilla `dashb
 D-40/D-42 — same live, at-a-glance topology/status picture, built against the company's own
 `kone-design-system` component library instead of hand-rolled markup and CSS.
 
-`dashboard/` **keeps running and remains the deployed dashboard** (host port 8090, see
-`deploy/compose.yaml`) until this app reaches feature parity. This is a parity-then-cutover
-migration, not a big-bang replace — nothing under `dashboard/` was edited by this phase, and
-`dashboard-react/` is not yet wired into the compose stack. See the cutover checklist (§7).
+Since 2026-09-28 this app **is** the deployed dashboard. The compose `dashboard` service builds
+it into an nginx image (`deploy/dashboard.Containerfile`) and serves it on host port 8090. The
+cutover checklist in §8 is done, except for deleting the old `dashboard/`.
 
 ## 2. Build precondition — build `design-system` first
 
@@ -19,8 +18,11 @@ this app's own dependencies, build and pack the design system:
 ```bash
 npm --prefix design-system ci
 npm --prefix design-system run build
-npm --prefix design-system pack --pack-destination design-system
+(cd design-system && npm pack)
 ```
+
+`npm pack` ignores `--prefix` and always packs the current directory, so it has to run from
+inside `design-system/`.
 
 Then install this app's dependencies:
 
@@ -264,25 +266,16 @@ OK/WARN/CRIT state palette — see §5c for where these badges appear on inciden
 for import. The two must be kept in step by hand whenever the design system's token set
 changes.
 
-## 8. Cutover checklist (D-42 — tracked, deliberately NOT executed by this phase)
+## 8. Cutover (done 2026-09-28)
 
-1. Repoint `deploy/compose.yaml`'s `dashboard` service volume from `../dashboard` to
-   `../dashboard-react/dist`.
-2. Add the SPA fallback to the nginx config: the stock `nginx:alpine` image's default config
-   has none, so a cold-loaded `/details?id=...` bookmark would 404. Add it by mounting a
-   custom `nginx.conf` or switching to a purpose-built image:
-   ```nginx
-   location / {
-       try_files $uri $uri/ /index.html;
-   }
-   ```
-3. Add the `/checkmk-api/` same-origin forwarding rule that `vite.config.ts`'s dev/preview
-   proxy provides today (§4/§5), as an nginx `location` block inside the same dashboard
-   service's config — a forwarding rule on the existing container, not a new service:
-   ```nginx
-   location /checkmk-api/ {
-       proxy_pass http://checkmk:5000/;
-   }
-   ```
-4. Add the `design-system` and `dashboard-react` builds (§2) as deployment steps.
-5. Delete `dashboard/`.
+1. The compose `dashboard` service now builds this app into its own image
+   (`deploy/dashboard.Containerfile`) instead of bind-mounting `../dashboard`. The image runs the
+   §2 builds in a Node stage and serves `dist/` from `nginx:alpine`.
+2. `deploy/dashboard-nginx.conf` adds the SPA fallback (`try_files $uri $uri/ /index.html;`), so
+   a cold-loaded `/details?id=...` bookmark works.
+3. The same file adds the `/checkmk-api/` forwarding rule (`proxy_pass http://checkmk:5000/;`),
+   the production twin of `vite.config.ts`'s dev/preview proxy.
+4. Deploying an update: `git pull`, then
+   `cd deploy && podman compose build dashboard && podman compose down && podman compose up -d`.
+   `src/lib/config.ts` is baked in at build time, so rebuild after editing it too.
+5. Still to do: delete `dashboard/`.
