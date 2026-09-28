@@ -220,8 +220,7 @@ DOWN/UNREACH red, since its own Checkmk state is UP/unchecked (D-04).
 
 With no open incidents, the list shows "No open incidents" / "Every device the poller can reach
 is reporting normally" instead of an empty card area. The list caps at 35% of viewport height
-(`max-h-[35vh]`, scrollable) in the default layout; a `fill` variant exists for a future kiosk/wall
-mode (DASH-17) to reuse without modification.
+(`max-h-[35vh]`, scrollable).
 
 ## 5d. Criticality & dependencies
 
@@ -248,21 +247,6 @@ same as every other topology edit in §5.
 
 Criticality badges use a fixed low/medium/high/critical colour palette, independent of the
 OK/WARN/CRIT state palette — see §5c for where these badges appear on incident cards.
-
-## 5e. Kiosk mode
-
-`?kiosk=1` on the app's root URL (e.g. `/?kiosk=1`) renders `KioskView` (DASH-17) instead of the
-normal operator layout: a full-bleed, chrome-free view with no nav bar, no device tree, no event
-history, and no edit toggle, alternating between the incidents list and the topology map every
-20 seconds (`useKioskRotation`, `KIOSK_ROTATION_MS`). It is read-only by construction —
-`editMode` is hard-coded `false` and the manipulation toolbar is never imported on this route,
-independent of whether `topology_editor` is configured (defense in depth).
-
-A one-time "Enter full screen" button calls `requestFullscreen()` from its own click handler
-(fullscreen requires a user gesture — it can never be triggered from an effect); it disappears
-once pressed or after 10 seconds of no interaction, and a page reload brings it back. For
-unattended signage, launch the browser itself in OS kiosk mode instead — see the deployment
-doc's "Kiosk / wall screen" section, e.g. `chromium --kiosk`.
 
 ## 6. Version pins and why
 

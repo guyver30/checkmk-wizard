@@ -62,7 +62,7 @@
 - [ ] **DASH-14**: The dashboard shows an incident list above the primary view, with one card per open incident. Each card shows the root host, the duration, an "inferred, not confirmed" marker when the root is an unmanaged switch, the consequence hosts grouped into "confirmed down" and "not observable", and the worst criticality affected. Cards are ordered by worst criticality, then by duration. The wording never claims equipment is not operating from an UNREACHABLE state alone
 - [ ] **DASH-15**: In the fleet tree and on the topology map, a host that is a consequence of an open incident stays visible but is dimmed, and links to its incident instead of raising an alarm of its own. Only the incident's root shows alarm styling
 - [ ] **DASH-16**: In the existing edit mode (off by default), an operator can set a host's criticality tier, set the criticality of individual services on a host, and add or remove "depends on" links between hosts. Each change is written to Checkmk host labels through the same narrowly scoped REST credential and single "Apply changes" flow as DASH-12
-- [ ] **DASH-17**: A kiosk/wall mode, entered by URL, shows a full-screen view with no navigation or edit controls. It rotates automatically between the incident list and the topology map, so it can run unattended on a lobby or boardroom screen
+- [~] **DASH-17** *(descoped 2026-09-28: operator said kiosk mode isn't needed; the 14-06 code and docs were removed)*: A kiosk/wall mode, entered by URL, shows a full-screen view with no navigation or edit controls. It rotates automatically between the incident list and the topology map, so it can run unattended on a lobby or boardroom screen
 
 ## v2 Requirements
 
@@ -139,7 +139,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-14 | Phase 14 | Pending |
 | DASH-15 | Phase 14 | Pending |
 | DASH-16 | Phase 14 | Pending |
-| DASH-17 | Phase 14 | Pending |
+| DASH-17 | Phase 14 | Descoped (2026-09-28) |
 
 **Coverage:**
 - v1 requirements: 44 total

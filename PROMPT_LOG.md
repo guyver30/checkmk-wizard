@@ -283,3 +283,4 @@
 - **2026-09-28 12:21** — step 6 data: .200 critical depends_on [.204]; .204 critical; Livestatus .200 state 0, .204 state 1
 - **2026-09-28 12:28** — criticality/dependency model not working as expected and still unclear; park it and revisit later
 - **2026-09-28 13:22** — kiosk mode is not needed. push all the changes now
+- **2026-09-28 14:02** — remove kiosk mode

@@ -432,28 +432,6 @@ dropped rather than rejected or crashing the poll cycle. Both multi-value labels
 against a runaway label value — `service_criticality` at 200 entries, `depends_on` at 50 ids —
 counting only the entries that parsed successfully, not raw comma/semicolon-split segments.
 
-### Kiosk / wall screen (Phase 14)
-
-Open `http://<HOST_IP>:<dashboard port>/?kiosk=1` for a chrome-free, auto-rotating view
-(incidents, then topology, alternating every ~20s) suited to a lobby or NOC wall screen — no nav
-bar, device tree, event history, or edit toggle (DASH-17, plan 14-06). Its own "Enter full
-screen" button only works from an in-page click (browsers require a user gesture before granting
-fullscreen) and disappears once pressed or after 10 seconds of no interaction; a page reload
-brings it back.
-
-For permanent signage, don't rely on that in-page button — since fullscreen can never be
-triggered without a gesture, an unattended screen can never dismiss the browser's own chrome on
-its own. Launch the browser itself in the OS's own kiosk mode instead, e.g.:
-
-```bash
-chromium --kiosk "http://<HOST_IP>:<port>/?kiosk=1"
-```
-
-Keep kiosk screens on the trusted LAN, the same posture as every other dashboard client: the
-React SPA bundle served to that screen still embeds the `topology_editor` secret
-(`dashboard-react/src/lib/config.ts`, Phase 13 posture), even though the kiosk route itself never
-renders edit controls and never imports the manipulation toolbar (defense in depth).
-
 ---
 
 ## 7. Verification & Pipeline Testing

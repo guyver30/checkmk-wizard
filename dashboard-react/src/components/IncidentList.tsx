@@ -13,10 +13,9 @@ export interface IncidentListProps {
   devices: Record<string, DevicePayload>;
   nowMs: number;
   highlightedId?: string | null;
-  fill?: boolean;
 }
 
-export function IncidentList({ incidents, devices, nowMs, highlightedId, fill = false }: IncidentListProps) {
+export function IncidentList({ incidents, devices, nowMs, highlightedId }: IncidentListProps) {
   const sectionRef = useRef<HTMLElement | null>(null);
 
   // T-14-12: `highlightedId` comes from the `?incident=` query string (user-controllable). An
@@ -52,11 +51,7 @@ export function IncidentList({ incidents, devices, nowMs, highlightedId, fill = 
     <section
       ref={sectionRef}
       aria-label="Open incidents"
-      className={
-        fill
-          ? "flex h-full flex-col gap-2 overflow-y-auto"
-          : "flex max-h-[35vh] shrink-0 flex-col gap-2 overflow-y-auto"
-      }
+      className="flex max-h-[35vh] shrink-0 flex-col gap-2 overflow-y-auto"
     >
       {incidents.map((incident) => (
         <IncidentCard

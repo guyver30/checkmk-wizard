@@ -370,7 +370,7 @@ Plans:
 **Wave 4** *(blocked on 14-04; D-06 evidence-framing gate)*
 
 - [x] 14-05-PLAN.md — Incident docs + live verification checkpoint incl. `last_state_change` probe (non-autonomous)
-- [x] 14-06-PLAN.md — Kiosk/wall mode `?kiosk=1` with 20 s rotation (DASH-17)
+- [x] 14-06-PLAN.md — Kiosk/wall mode `?kiosk=1` with 20 s rotation (DASH-17) — *removed 2026-09-28 (descoped, operator decision)*
 
 **Wave 5** *(blocked on 14-05)*
 

@@ -223,11 +223,3 @@ If a host is left with active checks disabled for more than a few minutes, its C
 `host_state_raw` persists independently (the poller groups incidents on `host_state_raw`
 DOWN/UNREACH, not on staleness). This is expected: `ENABLE_HOST_CHECK` and a subsequent real
 check clear the STALE badge on their own, no action needed beyond scenario E's cleanup.
-
-## Kiosk tip for a wall screen
-
-To show the running dashboard on a wall display during or after the demo without the edit
-toolbar, open it with `?kiosk=1` appended to the URL (e.g.
-`http://<HOST_IP>:4173/?kiosk=1`) — a read-only rotating view added in plan 14-06. It reuses the
-same incident list/card components, so any incident triggered by this runbook's scenarios shows
-up there too.
