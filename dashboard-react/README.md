@@ -247,6 +247,14 @@ With no open incidents, the list shows "No open incidents" / "Every device the p
 is reporting normally" instead of an empty card area. The list caps at 35% of viewport height
 (`max-h-[35vh]`, scrollable).
 
+**Name/IP display (quick 260928-m6f):** wherever a host's display name (its trimmed alias, or
+its id when there is none) differs from its Livestatus-derived IP, that IP is appended as
+`name (ip)` — on incident cards (root label and the "View devices" list), topology map node
+labels and event history rows. The host details header shows the same `name (ip)` form. The
+device tree instead shows the IP as a hover tooltip on the host name, leaving the visible label
+unchanged. Nothing is appended when the name already equals the IP, or when the poller has no
+address for that host (e.g. an unmanaged switch, or a payload from an older poller).
+
 ## 5d. Criticality & dependencies
 
 While "Edit topology" is on, a collapsible "Criticality & dependencies" panel (`CriticalityEditor`,
