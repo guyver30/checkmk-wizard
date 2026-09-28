@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-stopped_at: Phase 14 complete (9/9) — ready to discuss Phase 14.1
-last_updated: 2026-09-28T06:51:13.991Z
-last_activity: 2026-09-26 -- Phase 14 execution started
+status: planning
+stopped_at: Phase 14.1 context gathered
+last_updated: "2026-09-28T08:59:00.697Z"
+last_activity: "2026-09-28 - Completed quick task 260928-l4h: host details right-hand pane"
 progress:
   total_phases: 12
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 58
   completed_plans: 58
-  percent: 67
+  percent: 75
 ---
 
 # Project State
@@ -131,6 +131,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-09-26T03:50:58.272Z
-Stopped at: Phase 14 UI-SPEC approved
-Resume file: .planning/phases/14-fleet-intelligence/14-UI-SPEC.md
+Last session: 2026-09-28T08:59:00.677Z
+Stopped at: Phase 14.1 context gathered
+Resume file: .planning/phases/14.1-fleet-history-store-availability-rollups-and-grafana/14.1-CONTEXT.md
