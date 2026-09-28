@@ -242,3 +242,16 @@ Output of `gsd-tools verify conventions --check` on the changed TS/TSX files:
 _Reviewed: 2026-09-28T06:13:59Z_
 _Reviewer: Claude (bm-code-reviewer)_
 _Depth: standard_
+
+## Fix Status (2026-09-28)
+
+| Finding | Outcome |
+| --- | --- |
+| CR-01 | Fixed in `24b22f5`, with regression tests for a 3-level DOWN chain and a DOWN parent cycle |
+| CR-02 | Fixed in `a1a73cf` (`resetIncidents()` on every connect), with a regression test |
+| WR-04 | Fixed in `a1a73cf`, with a regression test |
+| WR-06 | Fixed in `24b22f5` (`host_config_from_topology()` seeds the cache), with a test |
+| WR-07 | Fixed in `a1a73cf` (runbook text) |
+| IN-07 | Fixed in `c5ffc6a` |
+| WR-01, WR-02, WR-03, WR-05, IN-02 | Deferred to `.planning/todos/pending/2026-09-28-revisit-criticality-and-dependency-model.md` (editor redesign) |
+| IN-01, IN-03, IN-04, IN-05, IN-06 | Not fixed; minor, left as is |
