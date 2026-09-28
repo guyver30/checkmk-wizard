@@ -19,6 +19,7 @@ A single Python-based toolchain takes a bare Checkmk install all the way to a fu
 - ✓ SSH-based remote automation (firewall rules, agent install/registration, OS-compatibility checks) for Linux targets, with manual-instruction fallback for Windows and SNMP-only devices — existing
 - ✓ Minimal Livestatus-over-TCP client performs a post-activation host-state health check, proven to work from a separate container (no local OMD filesystem access needed) — existing
 - ✓ Final run produces a JSON config snapshot for reference — existing
+- ✓ Root-cause incidents: the poller groups non-OK hosts into one incident per root cause along Checkmk `parents` (including inferred unmanaged-switch roots) and publishes them to retained `lan/incidents/{id}/status` topics; the dashboard shows incident cards and dims consequence hosts in the tree and map. Operators can set host/per-service criticality and "depends on" links as Checkmk host labels from edit mode. — Validated in Phase 14: Fleet Intelligence (PLR-14..16, DASH-14..16; kiosk mode DASH-17 descoped; criticality/dependency model parked for redesign)
 
 ### Active
 
@@ -59,7 +60,7 @@ A single Python-based toolchain takes a bare Checkmk install all the way to a fu
 | Redesign MQTT contract around per-device topics (`lan/devices/{id}/...`) instead of reusing the old scripts' full-blob `checkmk/*` topics | Matches the frontend's "merge, don't rebuild" requirement; avoids republishing the entire host/service list on every poll | — Pending |
 | Add a new Checkmk host tag group for device type, set during the wizard's Phase 5 onboarding | No existing tag captures this; onboarding time is the natural point to collect it | — Pending |
 | Drop MAC address from v1 topology data | Not reliably available without Checkmk's inventory plugin; avoids adding a new dependency for one field | — Pending |
-| Serve the dashboard via a new nginx container in `compose.yaml` | Consistent with the rest of the containerized stack; simplest way to make it reachable from any LAN device | — Pending |
+| Serve the dashboard via a new nginx container in `compose.yaml` | Consistent with the rest of the containerized stack; simplest way to make it reachable from any LAN device | ✓ Done 2026-09-28: the React dashboard is built into its own nginx image (`deploy/dashboard.Containerfile`) and served on 8090, with the `/checkmk-api/` proxy; the vanilla `dashboard/` is retired pending deletion |
 | Keep the dashboard to 3 pages, folding a stats strip and recent-events panel into existing pages rather than adding new ones | Matches explicit ask to stay simple/effective and not duplicate Checkmk's own UI | — Pending |
 
 ## Evolution
@@ -80,4 +81,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-23 after Phase 12 (Agent Metrics and Service Status) completion*
+*Last updated: 2026-09-28 after Phase 14 (Fleet Intelligence) completion*
