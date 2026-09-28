@@ -48,3 +48,12 @@ During the 14-09 live UAT (2026-09-28), the operator said the criticality and de
   doc) is probably false. The poller reads labels from REST `host_config`, which likely includes
   unactivated changes. Live-verify, then fix the wording.
 - **IN-02:** `service_criticality` is written, parsed and published, but nothing uses it.
+
+## Parent link vs "depends on" confusion (live, 2026-09-28)
+
+To test a 3-level chain, the operator set `.64 → .65 → .66` as **depends on** links instead of
+drawing parent edges, and got 3 separate incident cards. That is correct for the current model:
+incidents are grouped only along Checkmk **parents**, while `depends_on` only adds a host to the
+"Dependent devices" list and feeds the criticality weighting. The two concepts clearly read as the
+same thing to the operator. The redesign should either merge them or make the difference
+explicit in the editor.

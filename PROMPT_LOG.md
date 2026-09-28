@@ -287,3 +287,7 @@
 - **2026-09-28 14:07** — close phase 14 now
 - **2026-09-28 14:20** — go with your recommendation (fix CR-01, CR-02, WR-04, WR-06, WR-07 with tests; park editor warnings in criticality todo; then close phase 14)
 - **2026-09-28 14:27** — react dashboard must start automatically with the other containers (currently manual podman run node:22-alpine dev server)
+- **2026-09-28 14:39** — live check 1: set .64 parent of .65, .65 parent of .66; ran DISABLE_HOST_CHECK with typo 102.168.0.x, then PROCESS_HOST_CHECK_RESULT down for 192.168.0.64/65/66
+- **2026-09-28 14:40** — re-ran the disable + faked-down commands with correct 192.168.0.64/65/66
+- **2026-09-28 14:41** — live check 1 result: 3 incident cards and 3 red symbols on the map
+- **2026-09-28 14:42** — clarified: used "depends on" (not parent edges) for .64/.65/.66 chain
