@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router";
 import { NavBar } from "kone-design-system";
 import { ConnectionIndicator } from "./components/ConnectionIndicator";
+import { HeaderStats } from "./components/StatsStrip";
 import { hostHref } from "./lib/searchLinks";
 import { IndexRoute } from "./routes/IndexRoute";
 import { connect } from "./store/mqttClient";
@@ -20,6 +21,7 @@ function AppNav() {
       items={[
         { id: "overview", label: "Overview", active: location.pathname === "/", onClick: () => navigate("/") },
       ]}
+      navExtra={<HeaderStats />}
       actions={<ConnectionIndicator />}
     />
   );

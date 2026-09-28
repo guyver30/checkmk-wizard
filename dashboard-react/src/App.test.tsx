@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { Badge } from "kone-design-system";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,13 @@ describe("App", () => {
   it("renders the three-pane layout at /", () => {
     render(<App />);
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
+  });
+
+  it("shows the fleet state summary as compact badges in the header next to Overview", () => {
+    render(<App />);
+    const banner = screen.getByRole("banner");
+    const status = within(banner).getByRole("status", { name: /fleet state summary/i });
+    expect(status).toHaveTextContent("OK 0");
   });
 
   it("renders the normal app at / with the NavBar present", () => {

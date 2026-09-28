@@ -78,42 +78,16 @@ function renderIndexAt(path: string) {
 }
 
 describe("IndexRoute", () => {
-  it("renders the stats strip before the topology map, in document order", () => {
+  it("no longer renders the fleet state summary on the dashboard (it lives in the header)", () => {
     render(
       <MemoryRouter>
         <IndexRoute />
       </MemoryRouter>,
     );
-    const status = screen.getByRole("status", { name: /fleet state summary/i });
-    const map = screen.getByTestId("topology-map");
-    // DOCUMENT_POSITION_FOLLOWING (4) set on `map` relative to `status` means status comes
-    // first in document order.
-    const position = status.compareDocumentPosition(map);
-    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("status", { name: /fleet state summary/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId("topology-map")).toBeInTheDocument();
   });
 
-  it("updates the strip's counts in place without remounting the topology map", () => {
-    render(
-      <MemoryRouter>
-        <IndexRoute />
-      </MemoryRouter>,
-    );
-    const mapBefore = screen.getByTestId("topology-map");
-
-    act(() => {
-      useAppStore
-        .getState()
-        .handleMessage(
-          "lan/devices/h1/status",
-          encode({ id: "h1", state: "DOWN", timestamp: new Date().toISOString() }),
-        );
-    });
-
-    const status = screen.getByRole("status", { name: /fleet state summary/i });
-    expect(within(status).getByText("DOWN")).toBeInTheDocument();
-    const mapAfter = screen.getByTestId("topology-map");
-    expect(mapAfter).toBe(mapBefore);
-  });
 });
 
 describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit", () => {
@@ -337,13 +311,13 @@ describe("IndexRoute incidents (DASH-14/DASH-15)", () => {
     });
   }
 
-  it("renders the incident card above the Fleet state summary region, and h2's tree row shows 'See incident'", () => {
+  it("renders the incident card above the topology map, and h2's tree row shows 'See incident'", () => {
     renderIndex();
     seedDevicesAndIncident();
 
     const incidentRegion = screen.getByRole("region", { name: /open incidents/i });
-    const status = screen.getByRole("status", { name: /fleet state summary/i });
-    const position = incidentRegion.compareDocumentPosition(status);
+    const map = screen.getByTestId("topology-map");
+    const position = incidentRegion.compareDocumentPosition(map);
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     const tree = screen.getByRole("tree", { name: "Device tree" });
@@ -354,10 +328,9 @@ describe("IndexRoute incidents (DASH-14/DASH-15)", () => {
     expect(screen.getByText("See incident")).toBeInTheDocument();
   });
 
-  it("with no incidents open, 'No open incidents' renders and the stats strip and map still render", () => {
+  it("with no incidents open, 'No open incidents' renders and the map still renders", () => {
     renderIndex();
     expect(screen.getByText("No open incidents")).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: /fleet state summary/i })).toBeInTheDocument();
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
   });
 

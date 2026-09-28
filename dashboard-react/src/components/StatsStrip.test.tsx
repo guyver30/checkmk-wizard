@@ -18,18 +18,16 @@ function counts(overrides: Partial<StateCounts> = {}): StateCounts {
 }
 
 describe("StatsStrip", () => {
-  it("renders one tile per non-zero state plus OK, and gives DOWN the danger tone", () => {
+  it("renders one compact badge per non-zero state plus OK, e.g. 'OK 17' and 'DOWN 3'", () => {
     render(<StatsStrip counts={counts({ OK: 17, DOWN: 3 })} />);
     const status = screen.getByRole("status", { name: /fleet state summary/i });
-    const okTile = within(status).getByText("OK").closest("div");
-    const downTile = within(status).getByText("DOWN").closest("div");
-    expect(okTile).toHaveTextContent("17");
-    expect(downTile).toHaveTextContent("3");
-    // WARN/CRIT/etc. are all zero and must not render a tile at all.
-    expect(within(status).queryByText("WARN")).not.toBeInTheDocument();
+    expect(within(status).getByText("OK 17")).toBeInTheDocument();
+    expect(within(status).getByText("DOWN 3")).toBeInTheDocument();
+    // WARN/CRIT/etc. are all zero and must not render a badge at all.
+    expect(within(status).queryByText(/WARN/)).not.toBeInTheDocument();
   });
 
-  it("always renders the OK tile even at zero", () => {
+  it("always renders the OK badge even at zero", () => {
     render(<StatsStrip counts={counts()} />);
     expect(screen.getByRole("status", { name: /fleet state summary/i })).toHaveTextContent("OK");
   });

@@ -127,6 +127,14 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
     open host instead (see §5a).
   - The nav bar has only **Overview**; the old placeholder "Devices" page was removed
     (2026-09-25).
+  - The fleet state counts sit in the header next to **Overview**, as compact badges such as
+    `OK 17` and `DOWN 3` (OK always shown, other states only when non-zero). They moved there
+    from a row of tiles above the map on 2026-09-28. The design system's `NavBar` gained an
+    optional `navExtra` slot for this; after changing `design-system/`, rebuild and pack it, then
+    run `npm install ../design-system/kone-design-system-0.1.0.tgz` in `dashboard-react/` so its
+    lockfile records the new tarball's integrity hash, or the image build's `npm ci` fails.
+  - In topology edit mode the map fills the centre area: the incident list, event history and
+    host details pane are hidden until edit mode is turned off. The device tree stays.
 - A saved position (`map_position`, a Checkmk host label written by edit mode) is applied only
   the first time a node appears on the map; positions are never re-applied to a node a viewer
   has since dragged locally, and the map never moves a node out from under someone looking at
@@ -218,7 +226,7 @@ The file name **is** the device type — the `tag_device_type` value from `devic
 
 ## 5c. Incidents
 
-Above the stats strip, `IncidentList` (DASH-14) shows one card per open root-cause incident,
+Above the topology map, `IncidentList` (DASH-14) shows one card per open root-cause incident,
 sourced from the poller's `lan/incidents/{incident_id}/status` topics (see the deployment doc's
 MQTT topic contract). It never re-sorts its input — ordering is `selectOpenIncidents`'s job
 (D-12): worst criticality tier first, then longest-open within a tier (a null `since` sorts

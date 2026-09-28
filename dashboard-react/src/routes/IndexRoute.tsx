@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
-import { useShallow } from "zustand/shallow";
 import { Snackbar } from "kone-design-system";
 import { CriticalityEditor } from "../components/CriticalityEditor";
 import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
 import { HostDetails } from "../components/HostDetails";
 import { IncidentList } from "../components/IncidentList";
-import { StatsStrip } from "../components/StatsStrip";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { TopologyMap, type EditFailure } from "../components/TopologyMap";
 import { TopologyToolbar } from "../components/TopologyToolbar";
@@ -22,7 +20,6 @@ import { isTopologyEditingConfigured } from "../lib/config";
 import { buildIncidentLookup, selectOpenIncidents } from "../lib/incidents";
 import { buildTree } from "../lib/treeModel";
 import type { GroupingMode, TopologyNode } from "../lib/types";
-import { makeSelectStateCounts } from "../store/selectors";
 import { useAppStore } from "../store/useAppStore";
 
 interface SnackbarState {
@@ -35,20 +32,10 @@ const APPLY_FAILURE_BODY =
   "Your changes are stored but Activate Changes failed. Press Apply changes again, or finish activation directly in Checkmk.";
 
 export function IndexRoute() {
-  // useNowTick is the app's single periodic clock (D-34): it drives every time-derived
-  // surface on this route so staleness becomes visible even when the poller goes silent and
-  // no new MQTT message ever arrives. A stable selector (memoized on nowMs) is subscribed
-  // through useAppStore, not a one-off `makeSelectStateCounts(nowMs)(useAppStore.getState())`
-  // read -- the latter would bypass Zustand's subscription entirely and never re-render this
-  // route on a device update. `makeSelectStateCounts` is the same factory selectors.ts's
-  // clock-agnostic `selectStateCounts` is built from (`selectStateCounts` itself pins nowMs
-  // at import time, which this component must not do). `useShallow` compares the selector's
-  // output by value, not by reference -- `selectCounts` allocates a brand-new counts object
-  // on every call (selectors.ts), so without it useSyncExternalStore would treat every store
-  // notification as "changed" and loop forever.
+  // useNowTick is the app's single periodic clock (D-34): it drives every time-derived surface
+  // on this route so staleness becomes visible even when the poller goes silent. The fleet
+  // state counts moved to the header (HeaderStats in StatsStrip.tsx, 2026-09-28).
   const nowMs = useNowTick();
-  const selectCounts = useCallback(makeSelectStateCounts(nowMs), [nowMs]);
-  const counts = useAppStore(useShallow(selectCounts));
 
   const topology = useAppStore((s) => s.topology);
   const topologyDevices = useMemo(
@@ -266,26 +253,22 @@ export function IndexRoute() {
           </div>
         }
         centreTop={
-          // D-25: the stats strip sits ABOVE the map, content-sized, with the map taking the
-          // remaining height -- both are always visible together. Pointer/wheel/key activity
-          // anywhere in the toolbar+map wrapper below postpones the edit-mode idle timeout.
-          // Phase 14 (DASH-14 UI-SPEC Layout Integration): the incident list is the new
-          // outermost-top layer, above the stats strip -- when incidents are open it is the
-          // focal point of the screen; when none are open it collapses to one quiet line and
-          // the topology map becomes the focal point.
+          // The map takes the remaining height below the incident list (the D-25 stats strip
+          // moved to the header on 2026-09-28). Pointer/wheel/key activity anywhere in the
+          // toolbar+map wrapper below postpones the edit-mode idle timeout. Phase 14 (DASH-14
+          // UI-SPEC Layout Integration): when incidents are open the list is the focal point of
+          // the screen; when none are open it collapses to one quiet line and the topology map
+          // becomes the focal point.
           <div className="flex h-full flex-col gap-2 p-3">
-            {/* Topology edit mode gives the map the full centre area: no incident cards, stats
-                strip, event history or host details pane; the device tree stays (260928). */}
+            {/* Topology edit mode gives the map the full centre area: no incident cards, event
+                history or host details pane; the device tree stays (260928). */}
             {!editMode && (
-              <>
-                <IncidentList
-                  incidents={incidents}
-                  devices={devices}
-                  nowMs={nowMs}
-                  highlightedId={highlightedIncidentId}
-                />
-                <StatsStrip counts={counts} />
-              </>
+              <IncidentList
+                incidents={incidents}
+                devices={devices}
+                nowMs={nowMs}
+                highlightedId={highlightedIncidentId}
+              />
             )}
             <div
               className="flex min-h-0 flex-1 flex-col gap-2"

@@ -12,6 +12,8 @@ export interface NavBarProps {
   logo?: ReactNode;
   items?: NavItem[];
   actions?: ReactNode;
+  /** Extra content shown inline right after the nav items, e.g. compact status badges. */
+  navExtra?: ReactNode;
   user?: { name: string; avatar?: ReactNode };
 }
 
@@ -20,7 +22,7 @@ export interface NavBarProps {
  * home, not kone.com, per the source guideline. Limit nav items to under 5;
  * on narrow viewports, collapse items into a Menu instead (see Menu.tsx).
  */
-export function NavBar({ appName, logo, items = [], actions, user }: NavBarProps) {
+export function NavBar({ appName, logo, items = [], actions, navExtra, user }: NavBarProps) {
   return (
     <header className="flex h-14 items-center gap-6 border-b border-neutral-150 bg-bg-surface px-6">
       <a href="#" className="flex items-center gap-2 font-semibold text-fg-primary">
@@ -40,6 +42,7 @@ export function NavBar({ appName, logo, items = [], actions, user }: NavBarProps
             {item.label}
           </button>
         ))}
+        {navExtra}
       </nav>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
       {user && (
