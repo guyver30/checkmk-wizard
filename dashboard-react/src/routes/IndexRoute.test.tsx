@@ -467,4 +467,40 @@ describe("IndexRoute host details pane (260928-l4h)", () => {
     const cardAfter = document.querySelector('[data-incident-id="incident-h1"]');
     expect(cardAfter).toHaveClass("ring-2");
   });
+
+  it("a click on empty space in the tree pane deselects the host and unfilters the event history", () => {
+    act(() => {
+      useAppStore
+        .getState()
+        .handleMessage(
+          "lan/devices/web1/status",
+          encode({ id: "web1", state: "OK", timestamp: new Date().toISOString() }),
+        );
+    });
+    renderIndexAt("/?host=web1");
+    expect(screen.getByTestId("event-host-filter")).toHaveTextContent("web1");
+    const treeScroller = screen.getByRole("tree").parentElement as HTMLElement;
+
+    fireEvent.click(treeScroller);
+
+    expect(screen.queryByRole("button", { name: /collapse host details/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("event-host-filter")).not.toBeInTheDocument();
+  });
+
+  it("a click on a tree control (group toggle) does not count as an empty-space click", () => {
+    act(() => {
+      useAppStore
+        .getState()
+        .handleMessage(
+          "lan/devices/web1/status",
+          encode({ id: "web1", state: "OK", timestamp: new Date().toISOString() }),
+        );
+    });
+    renderIndexAt("/?host=web1");
+    const treeScroller = screen.getByRole("tree").parentElement as HTMLElement;
+    const toggle = treeScroller.querySelector("button") as HTMLElement;
+    expect(toggle).not.toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
+  });
 });

@@ -3,12 +3,12 @@ import type { BadgeColor, ProgressColor, TableColumn } from "kone-design-system"
 import { gaugeColor, otherMountsLabel, smartBadge } from "../lib/gauges";
 import { classifyAgentServices } from "../lib/agentDetail";
 import { compareServices } from "../lib/serviceSort";
-import { displayName, formatClock } from "../lib/display";
+import { displayName } from "../lib/display";
 import { StateBadge, StateBadgeForState } from "./StateBadge";
 import { useAppStore } from "../store/useAppStore";
 import type { ServiceEntry } from "../lib/types";
 
-// The host details view: gauges, agent-host focused view, services table and history for one
+// The host details view: gauges, agent-host focused view and services table for one
 // device. Lives in the overview's right-hand pane (opened at ?host=<id>, see ThreePaneLayout /
 // IndexRoute) rather than its own route -- a bookmarked/shared old /details route link (with
 // its id in ?id=) redirects here via App.tsx's DetailsRedirect.
@@ -19,7 +19,6 @@ const SERVICES_NOT_ARRIVED_TEXT =
   "Service data has not arrived yet — it should appear within one poll cycle.";
 const NO_ADDITIONAL_SERVICES_TEXT = "No additional services.";
 const NO_CHOSEN_SERVICES_TEXT = "No services were selected for monitoring in the wizard.";
-const NO_HISTORY_TEXT = "No recent transitions for this device.";
 
 // The TCP-port check reports no output text, so that table drops the Output column.
 const PORT_COLUMNS: TableColumn<ServiceEntry>[] = [
@@ -82,7 +81,6 @@ function GaugeValue({ percent }: { percent: number }) {
 export function HostDetails({ id }: { id: string }) {
   const device = useAppStore((s) => s.devices[id]);
   const services = useAppStore((s) => s.services[id]);
-  const history = useAppStore((s) => s.history[id]);
 
   if (!device) {
     return (
@@ -243,8 +241,6 @@ export function HostDetails({ id }: { id: string }) {
   const serviceRowKey = (row: ServiceEntry) =>
     row.description || String(sortedServices.indexOf(row));
 
-  const historyRows = (history ?? []).slice().reverse();
-
   return (
     <div className="px-4 py-3">
       <div className="flex items-center gap-2">
@@ -264,28 +260,6 @@ export function HostDetails({ id }: { id: string }) {
         )}
       </section>
 
-      <section className="mt-3">
-        <h2 className="text-sm font-semibold">History</h2>
-        {historyRows.length === 0 ? (
-          <div className="p-3 text-sm text-fg-tertiary">{NO_HISTORY_TEXT}</div>
-        ) : (
-          historyRows.map((entry, index) => {
-            const fromState = typeof entry?.from === "string" ? entry.from : "UNKNOWN";
-            const toState = typeof entry?.to === "string" ? entry.to : "UNKNOWN";
-            const key = `${entry?.timestamp ?? "unknown"}:${index}`;
-            return (
-              <div key={key} className="flex items-center gap-2 py-1.5 text-sm">
-                <span className="shrink-0 font-mono text-xs text-fg-tertiary">
-                  {formatClock(entry?.timestamp)}
-                </span>
-                <StateBadgeForState state={fromState} />
-                <span aria-hidden>→</span>
-                <StateBadgeForState state={toState} />
-              </div>
-            );
-          })
-        )}
-      </section>
     </div>
   );
 }

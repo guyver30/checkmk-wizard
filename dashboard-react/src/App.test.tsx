@@ -28,7 +28,8 @@ describe("App", () => {
     // The pane shows the locked "Device not found" copy (the store has no matching device
     // here), which still echoes the id back as text.
     expect(screen.getByText("Device not found")).toBeInTheDocument();
-    expect(screen.getByText(/sw-edge-01/)).toBeInTheDocument();
+    // Echoed in the pane and in the event history's host filter line, hence getAll.
+    expect(screen.getAllByText(/sw-edge-01/).length).toBeGreaterThan(0);
   });
 
   it("/details with no id redirects to / with no 'Device not found' pane", () => {

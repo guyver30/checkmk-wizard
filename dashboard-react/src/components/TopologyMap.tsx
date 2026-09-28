@@ -22,7 +22,7 @@ import "vis-network/styles/vis-network.css";
 import { Banner } from "kone-design-system";
 import { nodeVisual, type NodeEmphasis } from "../lib/mapIcons";
 import { createUnmanagedSwitch, isValidHostName, setMapPosition, updateParents } from "../lib/checkmkWrite";
-import { hostHref, incidentHref } from "../lib/searchLinks";
+import { hostHref, incidentHref, withSearchParam } from "../lib/searchLinks";
 import { buildMapModel, withGridPositions, type MapEdge, type MapNode } from "../lib/topologyLayout";
 import type { IncidentLookup } from "../lib/incidents";
 import type { DevicePayload } from "../lib/types";
@@ -361,7 +361,7 @@ export function TopologyMap({
       network.setOptions({ physics: false });
     });
 
-    network.on("click", (params: { nodes: string[] }) => {
+    network.on("click", (params: { nodes: string[]; edges?: string[] }) => {
       const nodeId = params.nodes[0];
       if (editModeRef.current) {
         if (nodeId) {
@@ -370,6 +370,11 @@ export function TopologyMap({
         return;
       }
       if (!nodeId) {
+        // A click on empty canvas (not on a node or an edge) deselects the host: it closes the
+        // details pane and returns the event history to every host (260928 follow-up).
+        if (!params.edges?.length && new URLSearchParams(searchRef.current).has("host")) {
+          navigate(withSearchParam(searchRef.current, "host", null));
+        }
         return;
       }
       const node = modelRef.current.nodes.find((n) => n.id === nodeId);

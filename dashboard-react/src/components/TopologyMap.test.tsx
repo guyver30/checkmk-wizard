@@ -288,6 +288,29 @@ describe("TopologyMap", () => {
     expect(await screen.findByTestId("host-probe")).toHaveTextContent("h1");
   });
 
+  it("a click on empty canvas clears ?host= but keeps ?incident= (260928 follow-up)", async () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap(
+      { topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: false },
+      "/?host=h1&incident=i1",
+    );
+    expect(screen.getByTestId("host-probe")).toHaveTextContent("h1");
+    act(() => {
+      instances[0].emit("click", { nodes: [], edges: [] });
+    });
+    expect(screen.queryByTestId("host-probe")).not.toBeInTheDocument();
+    expect(screen.getByTestId("incident-probe")).toHaveTextContent("i1");
+  });
+
+  it("a click on an edge (no node) keeps the selected host", () => {
+    const topologyDevices = [{ id: "h1", parents: [] }];
+    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) }, editMode: false }, "/?host=h1");
+    act(() => {
+      instances[0].emit("click", { nodes: [], edges: ["sw->h1"] });
+    });
+    expect(screen.getByTestId("host-probe")).toHaveTextContent("h1");
+  });
+
   // ?host= and ?incident= coexist (operator decision 2): opening a host from the map while an
   // incident is already highlighted must not drop ?incident=.
   it("starting at /?incident=i1, clicking a node adds ?host= while keeping ?incident=", async () => {

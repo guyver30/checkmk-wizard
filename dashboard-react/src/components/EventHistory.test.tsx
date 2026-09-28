@@ -35,6 +35,20 @@ describe("EventHistory", () => {
     expect(labels).toEqual(["c", "b", "a"]);
   });
 
+  it("with hostId set, shows only that host's events and says so (260928 follow-up)", () => {
+    useAppStore.setState({ events: oldestFirstEvents() });
+    render(<EventHistory hostId="b" />);
+    const log = screen.getByRole("log", { name: /recent events/i });
+    expect(within(log).getAllByText(/^[abc]$/).map((el) => el.textContent)).toEqual(["b"]);
+    expect(screen.getByTestId("event-host-filter")).toHaveTextContent("Showing events for b");
+  });
+
+  it("with hostId set and no events for it, shows the per-host empty text", () => {
+    useAppStore.setState({ events: oldestFirstEvents() });
+    render(<EventHistory hostId="zzz" />);
+    expect(screen.getByText("No recent events for this host")).toBeInTheDocument();
+  });
+
   it("does not mutate the store's events array while rendering", () => {
     const events = oldestFirstEvents();
     useAppStore.setState({ events });

@@ -122,7 +122,9 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
     wizard (`Systemd Service <unit>` / `Service <name>` rows) and the monitored TCP ports
     (`TCP Port <N> (expected open)`). Those Checkmk service names are the 2.4 defaults and were
     not live-verified — they are constants in `src/lib/agentDetail.ts`.
-  - Other hosts (SNMP/ping) keep the full view: the service table and state history.
+  - Other hosts (SNMP/ping) keep the full service table.
+  - The pane shows no history of its own: the event history pane below the map filters to the
+    open host instead (see §5a).
   - The nav bar has only **Overview**; the old placeholder "Devices" page was removed
     (2026-09-25).
 - A saved position (`map_position`, a Checkmk host label written by edit mode) is applied only
@@ -157,7 +159,7 @@ sit in a writable state indefinitely.
 
 **Host details pane:** clicking a host — on the map (edit mode off), in the device tree, or in
 an incident card's device list — opens a right-hand pane beside the map (`ThreePaneLayout`'s
-fourth slot) showing that host's `HostDetails` content (the same gauges/services/history
+fourth slot) showing that host's `HostDetails` content (the gauges and services
 described above). The pane is absent until a host is opened; its **Collapse** button shrinks it
 to a 40px rail with an **Expand** button, and **Close** removes it. Its divider is
 drag-resizable, and both its width and collapsed state persist across a reload (`usePaneLayout`,
@@ -166,6 +168,12 @@ while the pane is collapsed re-expands it. The open host lives in the URL as `/?
 coexists with `?incident=` — opening one never drops the other, so a shared link can carry both.
 A bookmarked pre-260928-l4h `/details?id=...` link redirects (`replace`, so it doesn't linger in
 history) to `/?host=...`; `/details` with no id redirects to `/`.
+
+**Selecting and deselecting:** the host open in the pane is the selected host. While one is
+selected, the event history (§5a) shows only that host's events, with a "Showing events for …"
+line above the list. A click on empty map canvas, or on empty space in the device tree pane
+(anything that isn't a row, link or control), deselects it: `?host=` is cleared, the pane closes
+and the event history shows every host again. Collapsing the pane keeps the host selected.
 
 ## 5a. Event history
 

@@ -248,33 +248,16 @@ describe("HostDetails", () => {
     expect(screen.getByText("No additional services.")).toBeInTheDocument();
   });
 
-  it("renders history entries newest-first, and the empty-history copy when absent", () => {
+  it("shows no history section; history lives in the event history pane (260928 follow-up)", () => {
     act(() => {
       useAppStore.getState().handleMessage("lan/devices/web1/status", encode({ id: "web1", state: "OK" }));
-    });
-    const noHistory = renderAt("web1");
-    expect(screen.getByText("No recent transitions for this device.")).toBeInTheDocument();
-    noHistory.unmount();
-
-    act(() => {
       useAppStore.getState().handleMessage(
         "lan/devices/web1/history",
-        encode([
-          { timestamp: "2026-09-23T08:00:00Z", from: "OK", to: "WARN" },
-          { timestamp: "2026-09-23T09:00:00Z", from: "WARN", to: "CRIT" },
-        ]),
+        encode([{ timestamp: "2026-09-23T09:00:00Z", from: "WARN", to: "CRIT" }]),
       );
     });
     renderAt("web1");
-    // Scoped to the History section (not the whole document) so the device's own header
-    // badge can't be mistaken for a transition badge. Newest transition first (WARN -> CRIT),
-    // then the older one (OK -> WARN) -- proves slice().reverse() actually flipped the
-    // store's oldest-first array.
-    const historySection = screen.getByText("History").closest("section");
-    expect(historySection).not.toBeNull();
-    const badgeTexts = within(historySection as HTMLElement)
-      .getAllByText(/^(OK|WARN|CRIT)$/)
-      .map((el) => el.textContent);
-    expect(badgeTexts).toEqual(["WARN", "CRIT", "OK", "WARN"]);
+    expect(screen.queryByText("History")).not.toBeInTheDocument();
+    expect(screen.queryByText("No recent transitions for this device.")).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import { useShallow } from "zustand/shallow";
 import { Snackbar } from "kone-design-system";
@@ -75,6 +75,23 @@ export function IndexRoute() {
   // from the map/tree/incident cards. Closing it clears just ?host=, leaving ?incident= (and
   // any other param) untouched -- the two params coexist (operator decision 2).
   const hostId = searchParams.get("host");
+  const onTreeBackgroundClick = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement;
+      if (target.closest("a, button, input, select, label, [role='treeitem'], [role='button']")) {
+        return;
+      }
+      if (!searchParams.has("host")) {
+        return;
+      }
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("host");
+        return next;
+      });
+    },
+    [searchParams, setSearchParams],
+  );
   const onCloseDetails = useCallback(() => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -241,7 +258,9 @@ export function IndexRoute() {
               onModeChange={onModeChange}
               onOrderChange={setOrderBySeverity}
             />
-            <div className="min-h-0 flex-1 overflow-auto">
+            {/* A click on empty space in the tree pane (not on a row, link or control) deselects
+                the host, like a click on empty map canvas (260928 follow-up). */}
+            <div className="min-h-0 flex-1 overflow-auto" onClick={onTreeBackgroundClick}>
               <Tree groups={groups} openKeys={openKeys} onToggle={onToggleGroup} />
             </div>
           </div>
@@ -303,7 +322,7 @@ export function IndexRoute() {
             </div>
           </div>
         }
-        centreBottom={<EventHistory />}
+        centreBottom={<EventHistory hostId={hostId} />}
         details={hostId ? <HostDetails id={hostId} /> : undefined}
         detailsKey={hostId}
         onCloseDetails={onCloseDetails}
