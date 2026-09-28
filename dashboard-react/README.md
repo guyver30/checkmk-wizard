@@ -131,13 +131,19 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
   the first time a node appears on the map; positions are never re-applied to a node a viewer
   has since dragged locally, and the map never moves a node out from under someone looking at
   it.
+- A faint 50px grid is drawn behind the map in every mode (read-only and edit) and pans/zooms
+  with it.
 
 **Edit mode:** the "Edit topology" toggle (off by default, on every page load) switches on
 vis-network's manipulation toolbar:
 
 - **Add Edge** / reconnect / delete draws, moves and removes parent→child links, written
-  immediately to the child host's `parents` attribute over `CHECKMK_REST_ORIGIN`.
-- Dragging a node writes its new `map_position` label immediately.
+  immediately to the child host's `parents` attribute over `CHECKMK_REST_ORIGIN`. Arrows point
+  parent→child, so drag from the parent (uplink) to the child device; an on-map hint says so
+  while edit mode is on.
+- Dragging a node snaps it to the nearest grid intersection when dropped, and it's that snapped
+  position that's written as `map_position`. Positions saved before this change stay where they
+  are until the node is next dragged.
 - **Add Node** creates an unmanaged switch — a real, check-free Checkmk host (DASH-13) added at
   the drop position; see `scripts/provision_topology_editor.py`'s docstring and 13-CONTEXT.md
   D-06 for the exact no-agent/no-ip/no-snmp attribute shape that keeps it at zero services.
