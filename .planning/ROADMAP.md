@@ -379,7 +379,7 @@ Plans:
 
 **Wave 6** *(blocked on 14-06, 14-07, 14-08)*
 
-- [ ] 14-09-PLAN.md — Label/kiosk docs + live verification checkpoint (non-autonomous)
+- [x] 14-09-PLAN.md — Label/kiosk docs + live verification checkpoint (non-autonomous)
 
 ### Phase 14.1: Fleet History Store, Availability Rollups and Grafana (INSERTED)
 

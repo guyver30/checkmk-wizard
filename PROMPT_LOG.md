@@ -284,3 +284,4 @@
 - **2026-09-28 12:28** — criticality/dependency model not working as expected and still unclear; park it and revisit later
 - **2026-09-28 13:22** — kiosk mode is not needed. push all the changes now
 - **2026-09-28 14:02** — remove kiosk mode
+- **2026-09-28 14:07** — close phase 14 now

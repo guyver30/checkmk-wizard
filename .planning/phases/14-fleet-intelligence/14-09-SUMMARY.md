@@ -2,8 +2,8 @@
 phase: 14-fleet-intelligence
 plan: 09
 subsystem: docs
-tags: [docs, live-verification, checkpoint, kiosk, criticality]
-status: paused
+tags: [docs, live-verification, checkpoint, criticality]
+status: complete
 
 # Dependency graph
 requires:
@@ -28,21 +28,25 @@ key-files:
     - "docs/Podman setup for checkmk, minio, mosquitto, worker.md"
     - "dashboard-react/README.md"
 
-key-decisions: []
+key-decisions:
+  - "Kiosk mode (DASH-17) descoped by the operator; the 14-06 code and docs were removed in 9f9bbe8"
+  - "Per-service criticality list limited to the services the host details view shows (dd10079)"
+  - "Criticality/dependency model parked for redesign after step 6 (todo 2026-09-28-revisit-criticality-and-dependency-model)"
+  - "Deploy docs: run the dev server in a node:22-alpine container; never restart a single compose service (it cut Checkmk off from the LAN)"
 
-requirements-completed: []  # Task 1 (docs) is done; PLR-16/DASH-16/DASH-17 remain pending Task 2's live checkpoint below before they can be marked complete.
+requirements-completed: [PLR-16, DASH-16]  # DASH-17 (kiosk) descoped 2026-09-28; the D-15 dependent weighting was live-exercised but parked for redesign (todo 2026-09-28-revisit-criticality-and-dependency-model)
 
-duration: "Task 1 only, in progress"
-completed: null
+duration: "2 sessions (docs 2026-09-26, live UAT 2026-09-28)"
+completed: 2026-09-28
 ---
 
-# Phase 14 Plan 09: Documentation and Live Verification of Criticality/Dependency Labels and Kiosk Mode (PAUSED)
+# Phase 14 Plan 09: Documentation and Live Verification of Criticality/Dependency Labels and Kiosk Mode 
 
-**Task 1 (documentation) is complete and committed; Task 2 is a blocking `checkpoint:human-verify` awaiting an operator to run the live verification steps against the deployed stack — this plan is paused, not finished.**
+**Docs written (Task 1) and live-verified by the operator on 2026-09-28 (Task 2). The label editing and poller read path pass. Kiosk mode was descoped and removed. The dependent-weighting behaviour works as coded but is parked for redesign.**
 
 ## Performance
 
-- **Tasks:** 1 of 2 completed (Task 2 is the checkpoint below, not yet run)
+- **Tasks:** 2 of 2 completed
 - **Files modified:** 2
 
 ## Accomplishments (Task 1)
@@ -57,7 +61,7 @@ completed: null
 
 1. **Task 1: Document criticality/dependency labels and kiosk mode** - `63e662e` (docs)
 
-Task 2 has not run yet — no commit for it.
+2. **Task 2: Live verification** — operator UAT 2026-09-28. Follow-up commits: `dd10079` (per-service list fix + deploy doc fixes), `1fc28a4` and `8fa862f` (todos), `9f9bbe8` (kiosk removal)
 
 ## Files Created/Modified
 
@@ -70,97 +74,28 @@ None beyond following the plan's `<action>` content requirements exactly; every 
 
 ## Deviations from Plan
 
-None — Task 1 executed exactly as written. No auto-fixes were required.
+- The per-service criticality list originally offered every service the poller publishes. The operator wanted only the services shown on the host details view. Fixed in `dd10079` with `displayedServices()` in `lib/agentDetail.ts`.
+- Kiosk mode (DASH-17, plan 14-06) was descoped by the operator. `KioskView`, `useKioskRotation`, the `?kiosk=1` branch, the `kiosk-progress` keyframes, IncidentList's unused `fill` variant and all kiosk docs were removed in `9f9bbe8`. The Task 1 kiosk docs listed above no longer exist.
+- The live dev server actually runs as `podman run ... node:22-alpine npm --prefix dashboard-react run dev -- --host`. That is now documented in `dashboard-react/README.md` §3 and in the incident demo runbook.
 
 ## Issues Encountered
 
-None.
+- **Every host went DOWN after step 1.** At 03:22:34 UTC, `podman compose restart poller` re-created the poller's link on `cmk_net` (rootless Podman 4.9.3, slirp4netns). Seven seconds later the checkmk container had lost all LAN traffic, ICMP and TCP alike (`rta nan, lost 100%` on every host). A full `podman compose down && podman compose up -d` fixed it. The deployment doc §5.1 now has an "A third signature" paragraph, and the restart instructions use a full down/up. Seen once, not reproduced. `scripts/smoke_test_poller.py` and `scripts/smoke_test_broker.py` still default to single-service restart commands.
+
+## Live Verification Results (Task 2, operator, 2026-09-28)
+
+| Step | Check | Result |
+| --- | --- | --- |
+| 1 | Restart stack, run dev server | Done (see Issues Encountered) |
+| 2 | Host criticality → Critical, pending count +1 | Pass |
+| 3 | Per-service tier; add/remove depends_on with confirm prompt | Pass. The service list was too broad; fixed in `dd10079` |
+| 4 | Long `depends_on` label (13 hosts) stored unmodified in Checkmk | Pass: no truncation, no rejection |
+| 5 | Poller publishes `criticality`/`service_criticality`/`depends_on` | Pass (`192.168.0.203`: 13 depends_on, `service_criticality {PING: high}`) |
+| 6 | D-15 worst-criticality with a still-UP dependent | Behaves as coded, but the operator finds the model unclear. `.200` (critical, UP) depends on `.204` (also critical), `.204` faked DOWN → card `critical` from `.204`'s own tier, `.200` listed as dependent, no map/tree marker (by D-15). Parked: `.planning/todos/pending/2026-09-28-revisit-criticality-and-dependency-model.md` |
+| 7 | Kiosk mode | Not run. Descoped and removed (`9f9bbe8`) |
+
+Automated checks (dev machine): dashboard 469/469 after the fix and 455/455 after the kiosk removal, typecheck clean; `tests/test_mqtt_poller.py` 209 passed.
 
 ## User Setup Required
 
-Task 2's live checkpoint requires an operator with access to the live deployed stack (Checkmk 2.4.0p36.cre, site `dmc`) — see the checkpoint returned to the orchestrator for the exact steps.
-
----
-
-## CHECKPOINT REACHED (Task 2 — not yet run)
-
-**Type:** human-verify (`gate="blocking"`)
-**Plan:** 14-09
-**Progress:** 1/2 tasks complete
-
-### Completed Tasks
-
-| Task | Name | Commit | Files |
-| --- | --- | --- | --- |
-| 1 | Document criticality/dependency labels and kiosk mode | `63e662e` | `docs/Podman setup for checkmk, minio, mosquitto, worker.md`, `dashboard-react/README.md` |
-
-### Current Task
-
-**Task 2:** Live verification of criticality/dependency editing and kiosk mode
-**Status:** blocked — awaiting operator to run the steps below against the live deployed stack
-**Blocked by:** requires a real browser session against the live Checkmk site, live MQTT subscription, and visual/interaction confirmation — none of which can be fabricated or simulated by the executor
-
-### Checkpoint Details
-
-**What was built (by prior plans, verified present in code during Task 1):** poller label carriage (plan 14-07: `CRITICALITY_LABEL`/`SERVICE_CRITICALITY_LABEL`/`DEPENDS_ON_LABEL` read into `topology_nodes()`), the criticality/dependency editor (plan 14-08: `CriticalityEditor.tsx` + `checkmkWrite.ts` writers), kiosk mode (plan 14-06: `KioskView.tsx`/`useKioskRotation.ts`), and this plan's Task 1 docs.
-
-**How to verify (copy-pasteable, run in order):**
-
-1. On the deploy host (192.168.97.129), pull main, restart the stack, then start the React dashboard dev server in a throwaway Node container from the repo root (see `dashboard-react/README.md` §3, "Running the dev server on the deploy host"):
-   ```bash
-   git pull
-   (cd deploy && podman compose down && podman compose up -d)   # not `restart poller`: see deployment doc §5.1 "A third signature"
-   podman run --rm -it --network host -v "$PWD":/app:z -w /app \
-     -e CHECKMK_PROXY_TARGET=http://localhost:8080 \
-     node:22-alpine npm --prefix dashboard-react run dev -- --host
-   ```
-   Open `http://192.168.97.129:5173/`. (If a dev-server container is already running, stop it with Ctrl+C first so the new one serves the pulled code. If the dashboard write gets a 401, the `topology_editor` secret in `dashboard-react/src/lib/config.ts` is stale — re-provision per the deployment doc's "Note on the topology editor credential" and re-run `scripts/provision_topology_editor.py`.)
-
-2. In the dashboard, turn on **"Edit topology"**, then click a host on the map. Confirm the **"Criticality & dependencies"** panel shows that host. Set **Host criticality** to **Critical**; confirm the pending-changes banner count goes up by exactly one.
-
-3. For a Linux agent host, set one systemd service's **Per-service criticality** to **High**. For a screen-like host (or any host with at least two other hosts to depend on), add two **"Depends on"** hosts; then remove one and confirm the **"Remove this dependency?"** prompt appears — cancel once (confirm nothing changed), then accept (confirm the id is dropped and a write happens).
-
-4. **Label length spot-check (D-XX from 14-RESEARCH.md):** on one host, add `depends_on` links to 10+ other hosts so the label value is long. Press **"Apply changes"**. In Checkmk (Setup > Hosts > *that host* > Labels) confirm `criticality:critical`, `service_criticality:<name>=high`, and the full `depends_on:` list are all stored **unmodified** — no truncation, no rejection/error. This is the proof that the unchanged `topology_editor` role (no new Checkmk permission) can write labels at this length.
-   - **If step 4 shows any truncation or rejection:** record the exact limit observed here and STOP — this needs gap-closure planning, not an in-place patch.
-
-5. Confirm the poller picked it up:
-   ```bash
-   mosquitto_sub -u wsreader -P wsreader -t lan/devices/topology -C 1 -W 5
-   ```
-   Expect the new `criticality`/`service_criticality`/`depends_on` keys on the edited nodes within about two poll cycles (poller restarted in step 1, then Apply in step 4 — allow up to ~2 minutes after Apply).
-
-6. **Incident worst-criticality propagation (D-15):** provoke an incident on a host that the critical-tier screen/host depends on. Use the Livestatus method from `docs/Incident demo with fake check results.md` (NOT Checkmk's GUI "Fake check results" — it self-reverts within ~1 poll cycle):
-   ```bash
-   cmk() { podman exec checkmk su - dmc -c "lq 'COMMAND [$(date +%s)] $1'"; }
-   cmk "DISABLE_HOST_CHECK;<host-the-critical-host-depends-on>"
-   cmk "PROCESS_HOST_CHECK_RESULT;<that-host>;1;faked down"
-   ```
-   Confirm the incident card shows **worst criticality "high"** (the dependent host is still UP, so it counts one tier below "critical" per D-15) and, under **"View devices"**, a **"Dependent devices: ..."** line lists the dependent host. Then restore:
-   ```bash
-   cmk "PROCESS_HOST_CHECK_RESULT;<that-host>;0;faked up"
-   cmk "ENABLE_HOST_CHECK;<that-host>"
-   ```
-
-7. Open `/?kiosk=1`. Confirm: no nav bar, no device tree, no event history, no edit toggle; the view alternates Incidents/Topology roughly every 20 seconds; the "Enter full screen" button works on click (and disappears after being clicked), or disappears on its own after ~10 seconds if untouched.
-
-**Automated checks** (run by Claude on the dev machine, not the operator; report pass/fail and counts, not an assumption):
-```bash
-cd dashboard-react && npm test
-cd /home/kone/checkmk-wizard && uv run pytest tests/test_mqtt_poller.py -q
-```
-
-### Awaiting
-
-Report back, per step:
-- Step 2: pass/fail — did the panel show, did Host criticality set to Critical, did the pending count go up by 1?
-- Step 3: pass/fail — did per-service High save; did the cancel-then-accept confirm dialog behave as described?
-- Step 4: pass/fail, **and the observed depends_on label length/content** stored in Checkmk after Apply (exact string, or a description of any truncation/rejection).
-- Step 5: pass/fail — did the mosquitto_sub output show the new keys?
-- Step 6: pass/fail — did the incident card show worst criticality "high" and the "Dependent devices" line; was cleanup done?
-- Step 7: pass/fail — kiosk chrome-free rotation and fullscreen button behaviour.
-
-**Resume signal:** Type `"approved"` if every step passed (a resumed agent will then complete this SUMMARY, mark PLR-16/DASH-16/DASH-17 requirements-complete, and finalize the plan), or describe exactly which step failed and what was observed (a resumed agent will record the gap and stop for gap-closure planning per Task 2's own instructions, rather than patching in place).
-
----
-*Phase: 14-fleet-intelligence*
-*Status: paused at Task 2 checkpoint*
+None.
