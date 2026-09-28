@@ -144,6 +144,27 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     expect(screen.getByTestId("topology-map")).toHaveAttribute("data-edit-mode", "false");
   });
 
+  it("edit mode gives the map the full centre: no incident list, event history or details pane; tree stays", async () => {
+    vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValue(0);
+    renderIndexAt("/?host=h1");
+    expect(screen.getByRole("log", { name: /recent events/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
+    await flush();
+
+    expect(screen.queryByText("No open incidents")).not.toBeInTheDocument();
+    expect(screen.queryByRole("log", { name: /recent events/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /collapse host details/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /collapse device tree/i })).toBeInTheDocument();
+    expect(screen.getByTestId("topology-map")).toHaveAttribute("data-edit-mode", "true");
+
+    fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
+    await flush();
+    expect(screen.getByRole("log", { name: /recent events/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
+  });
+
   it("turning the switch on calls countPendingChanges once and shows its result as the pending count", async () => {
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValueOnce(2);
     renderIndex();

@@ -274,13 +274,19 @@ export function IndexRoute() {
           // focal point of the screen; when none are open it collapses to one quiet line and
           // the topology map becomes the focal point.
           <div className="flex h-full flex-col gap-2 p-3">
-            <IncidentList
-              incidents={incidents}
-              devices={devices}
-              nowMs={nowMs}
-              highlightedId={highlightedIncidentId}
-            />
-            <StatsStrip counts={counts} />
+            {/* Topology edit mode gives the map the full centre area: no incident cards, stats
+                strip, event history or host details pane; the device tree stays (260928). */}
+            {!editMode && (
+              <>
+                <IncidentList
+                  incidents={incidents}
+                  devices={devices}
+                  nowMs={nowMs}
+                  highlightedId={highlightedIncidentId}
+                />
+                <StatsStrip counts={counts} />
+              </>
+            )}
             <div
               className="flex min-h-0 flex-1 flex-col gap-2"
               onPointerDown={touch}
@@ -322,8 +328,8 @@ export function IndexRoute() {
             </div>
           </div>
         }
-        centreBottom={<EventHistory hostId={hostId} />}
-        details={hostId ? <HostDetails id={hostId} /> : undefined}
+        centreBottom={editMode ? undefined : <EventHistory hostId={hostId} />}
+        details={hostId && !editMode ? <HostDetails id={hostId} /> : undefined}
         detailsKey={hostId}
         onCloseDetails={onCloseDetails}
       />
