@@ -20,7 +20,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 11.1: Dashboard Layout and Light Palette** - The dashboard moves to KONE's light palette and a resizable three-pane layout (tree / map-or-details / event history), with a grouping combo and severity ordering (completed 2026-09-21)
 - [x] **Phase 12: Agent Metrics and Service Status** - The per-device drill-down gains live agent-derived metrics (CPU/RAM/disk/SMART) and per-service status from a new Livestatus services query (completed 2026-09-23)
 - [x] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map (completed 2026-09-23)
-- [ ] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, operator-set criticality and dependencies, and kiosk mode (history and prediction split out to 14.1/14.2 per 14-CONTEXT.md D-01)
+- [x] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, operator-set criticality and dependencies, and kiosk mode (history and prediction split out to 14.1/14.2 per 14-CONTEXT.md D-01) (completed 2026-09-28)
 - [ ] **Phase 14.1: Fleet History Store, Availability Rollups and Grafana** (INSERTED) - Poller-written TSDB on MinIO, daily availability rollups, read-only dashboard access, and Grafana for analysts
 - [ ] **Phase 14.2: Fleet Failure Prediction and Incident Narration** (INSERTED) - Separate analytics container: regression-based forecasts with confidence tags and template/local incident narration over MQTT
 
@@ -350,7 +350,7 @@ Plans:
 
 **Honest caveat to carry**: a projection is only as good as its history. Disk-fill dates are credible almost immediately; a drive-failure date is not credible until the drive has been watched for months. Promising it sooner is the one thing that would undermine the rest.
 
-**Plans:** 8/9 plans executed
+**Plans:** 9/9 plans complete
 
 Plans:
 

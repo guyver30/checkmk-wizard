@@ -20,9 +20,9 @@
 - [x] **PLR-11**: Poller publishes the per-host non-gauge service list (name, state, `plugin_output`) on a new retained `lan/devices/{id}/services` topic, republished only when a service's state or the service set itself changes — never on `plugin_output` text drift
 - [x] **PLR-12**: Poller publishes a bounded per-service transition history on `lan/devices/{id}/service_history`, kept separate from the device-level `lan/devices/{id}/history` topic, and tombstones both new topics when a device is removed
 - [x] **PLR-13**: Poller adds each host's saved map position and unmanaged-switch marker (read from Checkmk host labels through its existing once-per-cycle REST `host_config` lookup) to the `lan/devices/topology` node shape and to the topology change-detection signature, so every dashboard viewer sees the same saved layout without holding a Checkmk credential
-- [ ] **PLR-14**: Poller groups non-OK hosts into incidents each cycle, one incident per root cause, using `parents` and the DOWN-vs-UNREACHABLE distinction in `host_state_raw`. Each incident names its root host and its duration, and lists its consequence hosts split into "confirmed down" (DOWN) and "not observable" (UNREACHABLE behind the root). The poller keeps no incident state of its own: it re-derives incidents from Livestatus every cycle, so incidents self-heal across a poller restart
-- [ ] **PLR-15**: When a host is DOWN and its parent is an unmanaged switch (which Checkmk cannot check), and at least one sibling under the same switch is also non-OK, the poller makes the unmanaged switch the incident's root and marks the incident "inferred, not confirmed". A single DOWN host under an unmanaged switch with no non-OK sibling is its own incident
-- [ ] **PLR-16**: Poller publishes open incidents to retained MQTT topics. It republishes only when an incident opens, closes, or changes its root or consequence set, and it clears a closed incident's topic with a tombstone. It also carries each host's operator-set criticality tier, per-service criticality and "depends on" links (read from Checkmk host labels through its existing REST `host_config` lookup) to every dashboard viewer. An incident's worst affected criticality counts the root, its consequences, and every host that depends on any of them; a dependent that is still UP counts one tier below its own tier (14-CONTEXT D-15)
+- [x] **PLR-14**: Poller groups non-OK hosts into incidents each cycle, one incident per root cause, using `parents` and the DOWN-vs-UNREACHABLE distinction in `host_state_raw`. Each incident names its root host and its duration, and lists its consequence hosts split into "confirmed down" (DOWN) and "not observable" (UNREACHABLE behind the root). The poller keeps no incident state of its own: it re-derives incidents from Livestatus every cycle, so incidents self-heal across a poller restart
+- [x] **PLR-15**: When a host is DOWN and its parent is an unmanaged switch (which Checkmk cannot check), and at least one sibling under the same switch is also non-OK, the poller makes the unmanaged switch the incident's root and marks the incident "inferred, not confirmed". A single DOWN host under an unmanaged switch with no non-OK sibling is its own incident
+- [x] **PLR-16**: Poller publishes open incidents to retained MQTT topics. It republishes only when an incident opens, closes, or changes its root or consequence set, and it clears a closed incident's topic with a tombstone. It also carries each host's operator-set criticality tier, per-service criticality and "depends on" links (read from Checkmk host labels through its existing REST `host_config` lookup) to every dashboard viewer. An incident's worst affected criticality counts the root, its consequences, and every host that depends on any of them; a dependent that is still UP counts one tier below its own tier (14-CONTEXT D-15)
 
 ### Broker
 
@@ -59,9 +59,9 @@
 - [x] **DASH-11**: Device rows in the fleet tree navigate to that device's drill-down (`/details?id={id}`), so the drill-down is reachable without hand-typing a URL
 - [x] **DASH-12**: While an explicit "Edit topology" mode is switched on (off by default), an operator can draw, reconnect and delete parent/child links and drag host positions on the topology map. Each edit is written to Checkmk's REST API (the `parents` host attribute and a `map_position` host label) with a dedicated, narrowly-scoped automation credential, and goes live only when the operator presses a single "Apply changes" action that runs Checkmk's Activate Changes
 - [x] **DASH-13**: From the same edit mode, an operator can add an unmanaged LAN switch as a real Checkmk host (one host per switch) configured so Checkmk runs no checks against it, so it carries parents and a map position like any other host but never raises WARN/CRIT
-- [ ] **DASH-14**: The dashboard shows an incident list above the primary view, with one card per open incident. Each card shows the root host, the duration, an "inferred, not confirmed" marker when the root is an unmanaged switch, the consequence hosts grouped into "confirmed down" and "not observable", and the worst criticality affected. Cards are ordered by worst criticality, then by duration. The wording never claims equipment is not operating from an UNREACHABLE state alone
-- [ ] **DASH-15**: In the fleet tree and on the topology map, a host that is a consequence of an open incident stays visible but is dimmed, and links to its incident instead of raising an alarm of its own. Only the incident's root shows alarm styling
-- [ ] **DASH-16**: In the existing edit mode (off by default), an operator can set a host's criticality tier, set the criticality of individual services on a host, and add or remove "depends on" links between hosts. Each change is written to Checkmk host labels through the same narrowly scoped REST credential and single "Apply changes" flow as DASH-12
+- [x] **DASH-14**: The dashboard shows an incident list above the primary view, with one card per open incident. Each card shows the root host, the duration, an "inferred, not confirmed" marker when the root is an unmanaged switch, the consequence hosts grouped into "confirmed down" and "not observable", and the worst criticality affected. Cards are ordered by worst criticality, then by duration. The wording never claims equipment is not operating from an UNREACHABLE state alone
+- [x] **DASH-15**: In the fleet tree and on the topology map, a host that is a consequence of an open incident stays visible but is dimmed, and links to its incident instead of raising an alarm of its own. Only the incident's root shows alarm styling
+- [x] **DASH-16**: In the existing edit mode (off by default), an operator can set a host's criticality tier, set the criticality of individual services on a host, and add or remove "depends on" links between hosts. Each change is written to Checkmk host labels through the same narrowly scoped REST credential and single "Apply changes" flow as DASH-12
 - [~] **DASH-17** *(descoped 2026-09-28: operator said kiosk mode isn't needed; the 14-06 code and docs were removed)*: A kiosk/wall mode, entered by URL, shows a full-screen view with no navigation or edit controls. It rotates automatically between the incident list and the topology map, so it can run unattended on a lobby or boardroom screen
 
 ## v2 Requirements
@@ -133,12 +133,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-09 | Phase 12 | Complete |
 | DASH-10 | Phase 12 | Complete |
 | DASH-11 | Phase 12 | Complete |
-| PLR-14 | Phase 14 | Pending |
-| PLR-15 | Phase 14 | Pending |
-| PLR-16 | Phase 14 | Pending |
-| DASH-14 | Phase 14 | Pending |
-| DASH-15 | Phase 14 | Pending |
-| DASH-16 | Phase 14 | Pending |
+| PLR-14 | Phase 14 | Complete |
+| PLR-15 | Phase 14 | Complete |
+| PLR-16 | Phase 14 | Complete |
+| DASH-14 | Phase 14 | Complete |
+| DASH-15 | Phase 14 | Complete |
+| DASH-16 | Phase 14 | Complete |
 | DASH-17 | Phase 14 | Descoped (2026-09-28) |
 
 **Coverage:**

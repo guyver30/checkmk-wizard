@@ -1,7 +1,7 @@
 ---
 phase: 14-fleet-intelligence
 verified: 2026-09-28T06:27:40Z
-status: human_needed
+status: passed
 score: 26/26 in-scope must-haves verified (4 kiosk truths descoped by the operator, not counted)
 has_blocking_gaps: false
 overrides_applied: 0
@@ -27,7 +27,7 @@ human_verification:
 
 **Phase Goal:** The dashboard stops reporting device status and starts reporting service impact, cause, and forecast. Phase 14's share (14-CONTEXT D-01): root-cause collapse into incidents, incident cards, consequence dimming, and operator-set criticality and dependency labels. History/prediction are Phases 14.1/14.2 and out of scope.
 **Verified:** 2026-09-28T06:27:40Z
-**Status:** human_needed (no gaps; two post-UAT regression smoke checks requested)
+**Status:** passed. Both post-UAT smoke checks passed live on 2026-09-28 (see Human Verification Results).
 **Re-verification:** No, initial verification
 
 ## Goal Achievement
@@ -172,3 +172,11 @@ No gaps. Every in-scope must-have from plans 14-01..14-05, 14-07 and 14-08 is pr
 
 _Verified: 2026-09-28T06:27:40Z_
 _Verifier: Claude (bm-verifier)_
+
+## Human Verification Results (operator, 2026-09-28)
+
+| Check | Result |
+| --- | --- |
+| 3-level DOWN chain (`.64` → `.65` → `.66` as parent edges, all faked DOWN) | **Pass**: one card rooted at `.64`, `.65` confirmed down, `.66` not observable (Checkmk UNREACH). A first attempt using "depends on" links instead of parent edges gave 3 cards, which is correct for the current model; the confusion is recorded in the criticality-revisit todo. |
+| Reconnect with an incident closing while offline; fresh `/?incident=` deep link | **Pass**: no ghost card after reconnect; the deep link scrolled to and ringed the card. |
+

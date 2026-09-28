@@ -291,3 +291,5 @@
 - **2026-09-28 14:40** — re-ran the disable + faked-down commands with correct 192.168.0.64/65/66
 - **2026-09-28 14:41** — live check 1 result: 3 incident cards and 3 red symbols on the map
 - **2026-09-28 14:42** — clarified: used "depends on" (not parent edges) for .64/.65/.66 chain
+- **2026-09-28 14:49** — live check 1 PASS: one card, root .64, confirmed down .65, not observable .66
+- **2026-09-28 14:51** — live check 2 passed (deep link + reconnect); close phase 14

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 14 UI-SPEC approved
-last_updated: "2026-09-26T04:40:30.581Z"
+status: ready_to_plan
+stopped_at: Phase 14 complete (9/9) — ready to discuss Phase 14.1
+last_updated: 2026-09-28T06:51:13.991Z
 last_activity: 2026-09-26 -- Phase 14 execution started
 progress:
   total_phases: 12
   completed_phases: 8
   total_plans: 58
-  completed_plans: 49
+  completed_plans: 58
   percent: 67
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Phase 14 — fleet-intelligence
+**Current focus:** Phase 14.1 — fleet history store availability rollups and grafana
 
 ## Current Position
 
-Phase: 14 (fleet-intelligence) — EXECUTING
-Plan: 1 of 9
-Status: Executing Phase 14
-Last activity: 2026-09-26 -- Phase 14 execution started
+Phase: 14.1
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-28
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -36,7 +36,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 16
+- Total plans completed: 25
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -46,6 +46,7 @@ Progress: [░░░░░░░░░░] 0%
 |-------|-------|-------|----------|
 | 11.1 | 11 | - | - |
 | 12 | 5 | - | - |
+| 14 | 9 | - | - |
 
 **Recent Trend:**
 
