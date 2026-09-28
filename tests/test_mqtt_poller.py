@@ -1155,6 +1155,52 @@ def test_query_devices_alias_coerces_non_string_value_to_empty_string():
     assert snapshots[0].alias == ""
 
 
+def test_optional_host_columns_includes_address():
+    assert "address" in poller.OPTIONAL_HOST_COLUMNS
+
+
+def test_query_devices_address_defaults_to_empty_string_when_column_absent():
+    columns = ["name", "state", "tags"]
+    sock = _fake_connection(json.dumps([["web1", 0, {}]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].address == ""
+
+
+def test_query_devices_address_defaults_to_empty_string_when_row_truncated():
+    columns = ["name", "state", "tags", "address"]
+    # Row ends before the address column's position.
+    truncated_row = ["web1", 0, {}]
+    sock = _fake_connection(json.dumps([truncated_row]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].address == ""
+
+
+def test_query_devices_address_coerces_non_string_value_to_empty_string():
+    columns = ["name", "state", "address"]
+    sock = _fake_connection(json.dumps([["web1", 0, None]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].address == ""
+
+
+def test_query_devices_address_carries_through_populated_value():
+    columns = ["name", "state", "address"]
+    sock = _fake_connection(json.dumps([["router", 0, "192.168.0.1"]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].address == "192.168.0.1"
+
+
+def test_query_devices_address_is_stripped_of_surrounding_whitespace():
+    columns = ["name", "state", "address"]
+    sock = _fake_connection(json.dumps([["router", 0, "  192.168.0.1  "]]).encode())
+    with patch("socket.create_connection", return_value=sock):
+        snapshots = poller.query_devices("checkmk", poller.DEFAULT_LIVESTATUS_PORT, columns, 10)
+    assert snapshots[0].address == "192.168.0.1"
+
+
 def test_query_devices_staleness_defaults_to_none_when_column_absent():
     columns = ["name", "state", "tags"]
     sock = _fake_connection(json.dumps([["web1", 0, {}]]).encode())
@@ -1641,6 +1687,7 @@ def test_publish_device_status_uses_qos0_and_exact_payload_keys():
         folder="vlan10",
         parents=[],
         alias="Web Server 1",
+        address="192.168.0.10",
     )
     poller.publish_device_status(mock_client, snapshot, "2026-09-06T00:00:00+00:00")
 
@@ -1655,11 +1702,13 @@ def test_publish_device_status_uses_qos0_and_exact_payload_keys():
         "device_type",
         "folder",
         "alias",
+        "address",
         "staleness",
         "host_state_raw",
         "timestamp",
     }
     assert payload["alias"] == "Web Server 1"
+    assert payload["address"] == "192.168.0.10"
     assert kwargs["qos"] == 0
     assert kwargs["retain"] is True
 

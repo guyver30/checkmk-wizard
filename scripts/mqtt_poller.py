@@ -246,6 +246,13 @@ OPTIONAL_HOST_COLUMNS = (
     # incident duration displays real values (e.g. "9 h 56 min"). Absent
     # would make every incident's `since` null, never a failure.
     "last_state_change",
+    # Added 2026-09-28 (quick 260928-m6f) so the dashboard can show a host's
+    # IP next to a renamed host's name: the standard Livestatus `hosts`
+    # column holding the host's configured IP (the host check output
+    # `router: 192.168.0.1 rta ...` shows Checkmk already knows it).
+    # Optional, never required -- a site without it publishes an empty
+    # string and never fails.
+    "address",
 )
 
 # Phase 12 (D-08/D-11): the services-table required/optional split mirrors
@@ -508,6 +515,11 @@ class DeviceSnapshot:
     # over the hostname for display. This phase only makes it available;
     # it does not decide display preference.
     alias: str = ""
+    # Added 2026-09-28 (quick 260928-m6f): the host's configured IP from
+    # Livestatus's `address` column, carried through so the dashboard can
+    # show it next to a renamed host's display name. `""` when the column
+    # is absent or the host has none (e.g. an unmanaged switch).
+    address: str = ""
     # D-17: Checkmk's own authoritative staleness value (Livestatus
     # `staleness` column), preferred by DASH-04 over a timestamp-age
     # fallback. `None` when the column is absent from the live site --
@@ -1517,6 +1529,14 @@ def query_devices(
             alias = ""
 
         try:
+            address = row[index["address"]] if "address" in index else ""
+        except (IndexError, TypeError):
+            address = ""
+        if not isinstance(address, str):
+            address = ""
+        address = address.strip()
+
+        try:
             staleness = float(row[index["staleness"]]) if "staleness" in index else None
         except (IndexError, TypeError, ValueError):
             staleness = None
@@ -1544,6 +1564,7 @@ def query_devices(
                 folder=folder,
                 parents=parents,
                 alias=alias,
+                address=address,
                 staleness=staleness,
                 host_state_raw=host_state_raw,
                 map_position=map_position,
@@ -1700,6 +1721,9 @@ def publish_device_status(
         "device_type": snapshot.device_type,
         "folder": snapshot.folder,
         "alias": snapshot.alias,
+        # Added 2026-09-28 (quick 260928-m6f): additive key, same spirit as
+        # the dated D-17 comment below -- an older subscriber never sees it.
+        "address": snapshot.address,
         # D-17: additive keys. An older subscriber reading a payload from
         # before this plan is unaffected -- it simply never sees these.
         "staleness": snapshot.staleness,
