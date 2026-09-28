@@ -64,6 +64,20 @@
 - [x] **DASH-16**: In the existing edit mode (off by default), an operator can set a host's criticality tier, set the criticality of individual services on a host, and add or remove "depends on" links between hosts. Each change is written to Checkmk host labels through the same narrowly scoped REST credential and single "Apply changes" flow as DASH-12
 - [~] **DASH-17** *(descoped 2026-09-28: operator said kiosk mode isn't needed; the 14-06 code and docs were removed)*: A kiosk/wall mode, entered by URL, shows a full-screen view with no navigation or edit controls. It rotates automatically between the incident list and the topology map, so it can run unattended on a lobby or boardroom screen
 
+### Fleet History
+
+- [ ] **HIST-01**: The poller exposes every parsed `perf_data` metric from every service it already reads as TSDB series, labelled at least by host and service description and metric name, and never by a free-text or high-cardinality field (14.1-CONTEXT D-42)
+- [ ] **HIST-02**: The poller exposes a per-host state series (UP/DOWN/UNREACHABLE, from `host_state_raw`) with a separate downtime-flag series, and a per-service state series (OK/WARN/CRIT/UNKNOWN), so availability and Grafana state timelines can be derived from the TSDB (D-43)
+- [ ] **HIST-03**: The poller's history write path adds no on-disk state to the poller container: samples are served from memory on a `/metrics` endpoint that the TSDB scrapes, and stop being served when the poller's Livestatus data goes stale, so a gap reads as "no data" (D-44, D-47)
+- [ ] **HIST-04**: A Prometheus + Thanos stack in the compose file keeps recent raw data on a local volume, uploads blocks to MinIO, keeps raw resolution about 30 days, downsamples, and retains 3 years in total, with one read-only query API (Thanos Query) for every consumer (D-21, D-23, D-40)
+- [ ] **HIST-05**: The TSDB long-term tier and the rollup writer work against MinIO or AWS S3 by configuration only (endpoint, region, credentials), with no MinIO-specific API calls, reusing the existing MinIO root credentials (D-41, D-56)
+- [ ] **HIST-06**: Shortly after local midnight (Asia/Singapore) the poller computes the previous day's availability from the TSDB state series and writes one JSON object per day (`availability/YYYY/MM/YYYY-MM-DD.json`, with `schema_version`) holding per-device and per-folder UP %, DOWN %, UNOBSERVED % (UNREACHABLE), availability = UP / (UP + DOWN), downtime minutes excluded from the denominator, and no-data minutes counted as neither up nor down; the group key is generic so later location groups need no format change (D-45..D-49, D-51, D-53)
+- [ ] **HIST-07**: On startup and at each midnight the rollup job writes every missing day object back as far as raw retention allows (about 30 days), and never overwrites an existing day object (D-52)
+- [ ] **HIST-08**: The dashboard's nginx exposes a same-origin, GET-only allowlist of Thanos Query read paths and the rollup objects; every other path under those prefixes, every write method, and every admin/delete endpoint is unreachable through it, and no storage credential reaches the browser (D-24, D-54, D-56)
+- [ ] **HIST-09**: A standalone live smoke-test script proves the read path answers a real query and serves a rollup object, and that write, admin and delete operations are rejected through it and on the rollup bucket (D-54)
+- [ ] **HIST-10**: Grafana runs alongside the dashboard with a provisioned Thanos datasource and three provisioned dashboards (host metrics explorer, fleet state timeline, availability); login is required with the admin password from `deploy/.env`, anonymous access is off, and Grafana refuses to start with a default password (D-22, D-55)
+- [ ] **HIST-11**: PROJECT.md and CLAUDE.md record the amendment to the "no new backend for the dashboard" constraint, and the "Time-series graphing/charting" Out of Scope rows are narrowed to match (D-24)
+
 ## v2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -140,10 +154,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-15 | Phase 14 | Complete |
 | DASH-16 | Phase 14 | Complete |
 | DASH-17 | Phase 14 | Descoped (2026-09-28) |
+| HIST-01 | Phase 14.1 | Pending |
+| HIST-02 | Phase 14.1 | Pending |
+| HIST-03 | Phase 14.1 | Pending |
+| HIST-04 | Phase 14.1 | Pending |
+| HIST-05 | Phase 14.1 | Pending |
+| HIST-06 | Phase 14.1 | Pending |
+| HIST-07 | Phase 14.1 | Pending |
+| HIST-08 | Phase 14.1 | Pending |
+| HIST-09 | Phase 14.1 | Pending |
+| HIST-10 | Phase 14.1 | Pending |
+| HIST-11 | Phase 14.1 | Pending |
 
 **Coverage:**
-- v1 requirements: 44 total
-- Mapped to phases: 44 ✓
+- v1 requirements: 55 total
+- Mapped to phases: 55 ✓
 - Unmapped: 0
 
 ---
@@ -160,3 +185,5 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Phase 13 requirement note (2026-09-23, added during `/bm:plan-phase 13`): ROADMAP.md's Phase 13 entry anticipated "requirement IDs covering the wizard's `parents` support". The discuss-phase session replaced that wizard-CLI approach with an in-dashboard topology editor (13-CONTEXT.md Scope Revision, D-01..D-07), so the minted IDs describe that instead: DASH-12 (edit mode, write-back, batched Apply), DASH-13 (unmanaged switches as check-free Checkmk hosts) and PLR-13 (the poller carries saved positions to every viewer). PLR-13 widens PLR-04's "host added/removed/reparented" trigger to also include a saved-position or unmanaged-marker change; the change-only publishing rule itself is unchanged. The "Drag-and-drop topology editing" Out of Scope row was narrowed in the same pass. See `.planning/phases/13-wizard-parents-support-and-topology-map/13-CONTEXT.md`.*
 
 *Phase 14 requirement note (2026-09-26, minted after `/bm:discuss-phase 14`): ROADMAP.md's Phase 14 entry carried `Requirements: TBD` over seven scope items. The discussion split it into three phases (14-CONTEXT.md D-01), so these IDs cover only Phase 14's share: root-cause collapse (PLR-14, PLR-15, DASH-15), incident publishing plus the criticality and dependency model (PLR-16, DASH-14, DASH-16) and kiosk mode (DASH-17). History, availability rollups and Grafana belong to Phase 14.1; prediction and narration belong to Phase 14.2. Both still carry `Requirements: TBD`. Two consequences for 14.1: the "Time-series graphing/charting" Out of Scope row will need narrowing when 14.1 is planned, and so will the "no server-side application" constraint in PROJECT.md (D-24). The coverage count was corrected in the same pass: it had read 31 since 2026-09-05 and was never updated as Phases 12 and 13 minted IDs. The real total before this pass was 37; it is now 44.*
+
+*Phase 14.1 requirement note (2026-09-28, minted during `/bm:plan-phase 14.1`): ROADMAP.md's Phase 14.1 entry carried `Requirements: TBD`. HIST-01..HIST-11 were minted from `14.1-RESEARCH.md`'s proposed table, reworded against `14.1-CONTEXT.md` D-40..D-56 and the carried D-20..D-24. Coverage is now 55. HIST-11 owns narrowing the "Time-series graphing/charting" Out of Scope row, which Phase 14's note anticipated. Dashboard history views stay out of scope (D-50).*

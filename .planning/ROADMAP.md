@@ -384,7 +384,7 @@ Plans:
 ### Phase 14.1: Fleet History Store, Availability Rollups and Grafana (INSERTED)
 
 **Goal:** The fleet gains long-term history: the poller writes metrics to a TSDB whose long-term tier is MinIO, writes one daily availability rollup object per day to MinIO, and the dashboard (read-only over HTTP) and an analyst-facing Grafana both read that history
-**Requirements**: TBD
+**Requirements**: HIST-01, HIST-02, HIST-03, HIST-04, HIST-05, HIST-06, HIST-07, HIST-08, HIST-09, HIST-10, HIST-11
 **Depends on:** Phase 14
 **Locked inputs** (from `.planning/phases/14-fleet-intelligence/14-CONTEXT.md`, split out of Phase 14 by D-01/D-02):
   - D-20: Checkmk edition is fixed at Raw, so the poller writes metric history (no Checkmk-native export)
@@ -392,10 +392,24 @@ Plans:
   - D-22: Grafana sits alongside the dashboard, for analysts; optional, never replaces it
   - D-23: TSDB container in the compose stack with MinIO as long-term tier; product choice is for research
   - D-24: the dashboard queries the TSDB over HTTP, read-only. This amends the "no new backend" constraint, so PROJECT.md and CLAUDE.md must be updated during planning. The access mechanism is for research
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 14.1 to break down)
+
+**Wave 1**
+
+- [ ] 14.1-01-PLAN.md — Poller /metrics endpoint: perf_data, host/service state and downtime series (HIST-01..03)
+- [ ] 14.1-02-PLAN.md — Grafana provisioning: Thanos datasource and three starter dashboards (HIST-10)
+- [ ] 14.1-03-PLAN.md — Dashboard nginx GET-only allowlist to Thanos Query and rollup objects, plus live smoke test (HIST-08, HIST-09)
+
+**Wave 2** *(blocked on 14.1-01)*
+
+- [ ] 14.1-04-PLAN.md — Compose: Prometheus + Thanos on MinIO, bucket init, Grafana, poller history settings (HIST-04, HIST-05, HIST-10)
+- [ ] 14.1-05-PLAN.md — Daily availability rollups with auto-backfill, never-overwrite S3 writes (HIST-06, HIST-07)
+
+**Wave 3** *(blocked on all of the above)*
+
+- [ ] 14.1-06-PLAN.md — Constraint amendment, deployment docs, live verification checkpoint (HIST-11; non-autonomous)
 
 ### Phase 14.2: Fleet Failure Prediction and Incident Narration (INSERTED)
 
