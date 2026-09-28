@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-28T13:51:50.977Z",
+  "phase": "14.1",
+  "phase_name": "fleet-history-store-availability-rollups-and-grafana",
+  "phase_dir": ".planning/phases/14.1-fleet-history-store-availability-rollups-and-grafana",
+  "plan": 0,
+  "task": 0,
+  "total_tasks": 18,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": 1, "name": "Re-research phase 14.1 for ClickHouse (D-40, D-57)", "status": "done", "commit": "1e8bccb"},
+    {"id": 2, "name": "Regenerate PATTERNS.md, replan 8 plans, plan-checker passed, warnings fixed", "status": "done", "commit": "f3188bf"}
+  ],
+  "remaining_tasks": [
+    {"id": 3, "name": "Execute wave 1: plans 14.1-01, 02, 03, 04", "status": "not_started"},
+    {"id": 4, "name": "Execute wave 2: plans 14.1-05, 06, 07", "status": "not_started"},
+    {"id": 5, "name": "Execute wave 3: plan 14.1-08 (operator live verification on Podman host)", "status": "not_started"}
+  ],
+  "blockers": [],
+  "human_actions_pending": [
+    {"action": "Run plan 14.1-08 live checks on the Podman host (ClickHouse TTL GROUP BY rules, S3 grants, Grafana plugin preinstall, nginx read-only path)", "context": "Executor has no container runtime; container behaviour is only provable live", "blocking": true}
+  ],
+  "decisions": [
+    {"decision": "ClickHouse single container with S3 disk on MinIO/AWS S3 replaces Prometheus + Thanos", "rationale": "D-40: SQL end to end, Parquet export for AWS/Databricks path, server-enforced read-only", "phase": "14.1"},
+    {"decision": "Poller writes ClickHouse via a urllib choke point, no new HTTP client", "rationale": "scripts/mqtt_poller.py is synchronous urllib, not async httpx", "phase": "14.1"},
+    {"decision": "Pin MinIO to a quay.io/minio/minio release tag", "rationale": "minio/minio removed from Docker Hub 2026-09-11; fresh deploys would fail to pull", "phase": "14.1"},
+    {"decision": "Parquet rollups exported by ClickHouse INSERT INTO FUNCTION s3(), JSON via boto3 HEAD-before-PUT", "rationale": "Same source rows so JSON and Parquet cannot drift; no pyarrow dependency", "phase": "14.1"},
+    {"decision": "nginx sends reader credentials as X-ClickHouse-User/Key headers via envsubst template; bare /ch-api and /availability return 404", "rationale": "proxy_pass cannot carry user:password; plan-checker warning 3", "phase": "14.1"},
+    {"decision": "No UI-SPEC for 14.1", "rationale": "D-50: no dashboard history views in this phase", "phase": "14.1"}
+  ],
+  "uncommitted_files": ["PROMPT_LOG.md", "docs/host_service_menu.png", "docs/hosts_down.png", "docs/hosts_down2.png", "docs/hosts_up.png"],
+  "next_action": "/clear then /bm:execute-phase 14.1",
+  "context_notes": "Planning is complete and committed; nothing executed yet. Image tags (clickhouse-server 26.9.4.3, grafana 13.2.2, quay.io MinIO RELEASE tag) are unconfirmed; plan 06 re-checks registries at execution. If ClickHouse rejects two GROUP BY TTL rules on one table, fall back to the 5-minute rule only (plan 01). Auto mode's server-side classifier failed repeatedly this session (no verdict), blocking Bash/Agent; leaving auto mode fixed it."
+}
