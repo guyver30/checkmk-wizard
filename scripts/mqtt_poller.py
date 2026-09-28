@@ -55,7 +55,7 @@ import paho.mqtt.client as mqtt
 
 DEFAULT_LIVESTATUS_PORT = 6557
 DEFAULT_MQTT_PORT = 1883
-DEFAULT_POLL_INTERVAL_SECONDS = 60
+DEFAULT_POLL_INTERVAL_SECONDS = 15
 DEFAULT_HISTORY_MAX_ENTRIES = 20
 # 2026-09-25: raised from 50 by operator decision so the dashboard's date-range
 # filter has days of history to work with (~160 KB retained payload at 1000).

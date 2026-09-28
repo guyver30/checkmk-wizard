@@ -84,7 +84,7 @@ The remaining constants in `src/lib/config.ts`:
 - `WS_USERNAME` / `WS_PASSWORD` — deliberately-committed disposable read-only broker
   credentials (same convention as `dashboard/js/config.js`, `cmkadmin`/`cmkadmin`, and
   `deploy/mosquitto.passwd`). Rotate them before exposing the dashboard beyond a trusted LAN.
-- `POLL_INTERVAL_SECONDS` / `STALENESS_FACTOR` — must be kept in step with
+- `POLL_INTERVAL_SECONDS` (15) / `STALENESS_FACTOR` (3) — must be kept in step with
   `scripts/mqtt_poller.py`'s own defaults; a mismatch would make staleness flip at the wrong
   time.
 - `HISTORY_MAX_ENTRIES` — mirrors the poller's per-device history bound (20); it does not

@@ -293,3 +293,5 @@
 - **2026-09-28 14:42** — clarified: used "depends on" (not parent edges) for .64/.65/.66 chain
 - **2026-09-28 14:49** — live check 1 PASS: one card, root .64, confirmed down .65, not observable .66
 - **2026-09-28 14:51** — live check 2 passed (deep link + reconnect); close phase 14
+- **2026-09-28 14:52** — how to reduce polling cycle? Checkmk UI updates quickly after up/down, React dashboard takes longer
+- **2026-09-28 14:55** — yes, set 15s poll interval in the repo and push

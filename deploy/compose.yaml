@@ -184,7 +184,7 @@ services:
       # credential setup"), same as this stack's other default credentials.
       - MQTT_USERNAME=poller
       - MQTT_PASSWORD=poller
-      - POLL_INTERVAL_SECONDS=60
+      - POLL_INTERVAL_SECONDS=15
       - RECONCILE_TIMEOUT_SECONDS=5
       - HISTORY_MAX_ENTRIES=20
       - EVENTS_MAX_ENTRIES=1000

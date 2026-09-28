@@ -5,7 +5,7 @@ import type { DevicePayload } from "./types";
 
 const NOW_MS = Date.parse("2026-09-21T12:00:00Z");
 const FRESH_TIMESTAMP = new Date(NOW_MS - 5 * 1000).toISOString();
-// STALENESS_FACTOR (3) * POLL_INTERVAL_SECONDS (60) = 180s threshold (staleness.ts).
+// STALENESS_FACTOR (3) * POLL_INTERVAL_SECONDS (15) = 45s threshold (staleness.ts).
 const STALE_TIMESTAMP = new Date(NOW_MS - 400 * 1000).toISOString();
 
 describe("buildTree", () => {

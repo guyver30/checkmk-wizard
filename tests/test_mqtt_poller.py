@@ -592,7 +592,7 @@ def _clear_poller_env(monkeypatch):
 def test_poller_config_from_env_defaults_with_empty_environment(monkeypatch):
     _clear_poller_env(monkeypatch)
     config = poller.PollerConfig.from_env()
-    assert config.poll_interval_seconds == 60
+    assert config.poll_interval_seconds == 15
     assert config.history_max_entries == 20
     assert config.events_max_entries == 1000
     assert config.livestatus_port == 6557

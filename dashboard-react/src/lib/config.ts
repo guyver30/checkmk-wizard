@@ -43,7 +43,7 @@
 export const WS_PORT = 9002;
 export const WS_USERNAME = "wsreader";
 export const WS_PASSWORD = "wsreader";
-export const POLL_INTERVAL_SECONDS = 60;
+export const POLL_INTERVAL_SECONDS = 15;
 export const STALENESS_FACTOR = 3;
 export const HISTORY_MAX_ENTRIES = 20;
 export const CHECKMK_BASE_URL = "http://<HOST_IP>:8080";

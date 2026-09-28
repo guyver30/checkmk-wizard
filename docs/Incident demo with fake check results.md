@@ -34,8 +34,8 @@ Live-verified against a real Checkmk 2.4.0p36.cre site on 2026-09-26 (plan 14-05
 Checkmk's GUI has a Commands > "Fake check results" action, but its result is overwritten by the
 host's own next real active check — about a minute later for a host with no real payload (e.g.
 one with no IP), whose real check always comes back UP. That's fast enough to make a fake state
-vanish between two 60-second poller reads, which looks like a demo bug rather than a Checkmk
-quirk. The 2.4 GUI also has no "Disable active checks" command visible in the host commands menu
+vanish within about a minute, often after at most a few poller reads, which looks like a demo
+bug rather than a Checkmk quirk. The 2.4 GUI also has no "Disable active checks" command visible in the host commands menu
 (checked including the "⋯ show more" toggle).
 
 The reliable method is Livestatus external commands run from the deploy host, which first
@@ -54,9 +54,10 @@ cmk "ENABLE_HOST_CHECK;<host>"                        # undo; next real check re
 deployment doc's "Choosing the site name" if yours differs). Always re-run `ENABLE_HOST_CHECK`
 for every host you touch — see the cleanup scenario (E) below.
 
-Timing to expect throughout: the poller polls every 60 seconds
-(`POLL_INTERVAL_SECONDS`/`DEFAULT_POLL_INTERVAL_SECONDS` in `scripts/mqtt_poller.py`); allow
-about two poll cycles (up to ~2 minutes) for a card to appear, split, or clear.
+Timing to expect throughout: the poller polls every 15 seconds
+(`POLL_INTERVAL_SECONDS` in `deploy/compose.yaml`, default `DEFAULT_POLL_INTERVAL_SECONDS` in
+`scripts/mqtt_poller.py`); allow about two poll cycles (up to ~30 seconds) for a card to appear,
+split, or clear.
 
 ## Scenario A — single host down, one card
 

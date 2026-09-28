@@ -584,7 +584,7 @@ With the stack up, verify the root-cause incident engine end to end:
 3. To provoke one safely: **do not use Checkmk's GUI "Fake check results"** — live-verified
    2026-09-26 (plan 14-05), its result is overwritten by the host's own next real active check
    (~1 minute for a host with no IP, whose real check always returns UP), so a fake can vanish
-   between two 60-second poller reads before it's even visible. Use Livestatus external commands
+   within about a minute, often before it's clearly visible. Use Livestatus external commands
    instead (`DISABLE_HOST_CHECK` first, then `PROCESS_HOST_CHECK_RESULT`, then
    `ENABLE_HOST_CHECK` to reverse) — see `docs/Incident demo with fake check results.md` for the
    exact commands, scenario scripts (single host, managed switch, unmanaged/inferred switch,
