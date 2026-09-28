@@ -117,6 +117,7 @@ None.
 | 260925-pc7 | Drop-in device-type icons (file name = device type) | 2026-09-25 | a427d92 | [260925-pc7-drop-in-device-type-icons](./quick/260925-pc7-drop-in-device-type-icons/) |
 | fast | 14-09 per-service criticality list limited to details-view services | 2026-09-28 | dd10079 | — |
 | 260928-l4h | Host details as a collapsible right-hand pane beside the map (`?host=`), replacing the /details page; event history filters to the selected host, empty-space click deselects | 2026-09-28 | 6183a2e | [260928-l4h-host-details-right-hand-pane](./quick/260928-l4h-host-details-right-hand-pane/) |
+| 260928-m6f | Show host IP next to renamed hosts (poller publishes `address`; tree tooltip, `name (ip)` on cards/map/events/details) | 2026-09-28 | ae02bb4 | [260928-m6f-show-host-ip-next-to-renamed-hosts](./quick/260928-m6f-show-host-ip-next-to-renamed-hosts/) |
 
 ## Deferred Items
 
