@@ -300,3 +300,5 @@
 - **2026-09-28 15:25** — request: event history filters to the clicked host; clicking empty map or empty space under the device tree unselects the host and shows all events again
 - **2026-09-28 15:25** — details pane should not show any event/status history (already at the bottom of the main page)
 - **2026-09-28 15:49** — replace Collapse/Expand/Close text buttons with proper icons, as common in modern UIs
+- **2026-09-28 15:55** — what is the next phase?
+- **2026-09-28 15:57** — do pending todos 1 (IP next to renamed hosts) and 2 (map grid/snap + edge hint) now
