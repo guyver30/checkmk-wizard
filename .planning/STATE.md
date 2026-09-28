@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 Phase: 14.1
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-09-28
+Last activity: 2026-09-28 - Completed quick task 260928-l4h: host details right-hand pane
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -116,6 +116,7 @@ None.
 | 260925-p7d | Dashboard: remove Devices menu; agent-host detail shows gauges/SMART, agent connected, uptime, wizard-chosen services, TCP ports | 2026-09-25 | 1a2e3d4 | [260925-p7d-agent-host-detail-view](./quick/260925-p7d-agent-host-detail-view/) |
 | 260925-pc7 | Drop-in device-type icons (file name = device type) | 2026-09-25 | a427d92 | [260925-pc7-drop-in-device-type-icons](./quick/260925-pc7-drop-in-device-type-icons/) |
 | fast | 14-09 per-service criticality list limited to details-view services | 2026-09-28 | dd10079 | — |
+| 260928-l4h | Host details as a collapsible right-hand pane beside the map (`?host=`), replacing the /details page | 2026-09-28 | 1b2a653 | [260928-l4h-host-details-right-hand-pane](./quick/260928-l4h-host-details-right-hand-pane/) |
 
 ## Deferred Items
 
