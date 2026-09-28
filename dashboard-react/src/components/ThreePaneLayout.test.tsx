@@ -86,4 +86,107 @@ describe("ThreePaneLayout", () => {
     fireEvent.click(restoreButton);
     expect(screen.getByText("Event history content")).toBeInTheDocument();
   });
+
+  describe("host details pane", () => {
+    it("renders no 'Host details' pane and no third splitter without a details prop", () => {
+      render(<ThreePaneLayout tree={<p>tree</p>} centreTop={<p>top</p>} centreBottom={<p>bottom</p>} />);
+      expect(screen.queryByText("Host details")).not.toBeInTheDocument();
+      expect(screen.getAllByRole("separator")).toHaveLength(2);
+      const grid = screen.getByText("top").closest("div.grid") as HTMLElement;
+      expect(grid.parentElement?.style.gridTemplateColumns.split(" ")).toHaveLength(3);
+    });
+
+    it("renders a 'Host details' pane, a resize separator, and Collapse/Close buttons when details is given", () => {
+      render(
+        <ThreePaneLayout
+          tree={<p>tree</p>}
+          centreTop={<p>top</p>}
+          centreBottom={<p>bottom</p>}
+          details={<p>web1 details</p>}
+          detailsKey="web1"
+          onCloseDetails={() => {}}
+        />,
+      );
+      expect(screen.getByText("web1 details")).toBeInTheDocument();
+      expect(screen.getByRole("separator", { name: /resize host details/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /close host details/i })).toBeInTheDocument();
+    });
+
+    it("Collapse swaps to an Expand rail for the details pane, and Close calls onCloseDetails", () => {
+      const onCloseDetails = vi.fn();
+      render(
+        <ThreePaneLayout
+          tree={<p>tree</p>}
+          centreTop={<p>top</p>}
+          centreBottom={<p>bottom</p>}
+          details={<p>web1 details</p>}
+          detailsKey="web1"
+          onCloseDetails={onCloseDetails}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /collapse host details/i }));
+      expect(screen.queryByText("web1 details")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /expand host details/i })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /close host details/i })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /expand host details/i }));
+      expect(screen.getByText("web1 details")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /close host details/i }));
+      expect(onCloseDetails).toHaveBeenCalledTimes(1);
+    });
+
+    it("changing detailsKey from one id to another while collapsed re-expands the pane", () => {
+      const { rerender } = render(
+        <ThreePaneLayout
+          tree={<p>tree</p>}
+          centreTop={<p>top</p>}
+          centreBottom={<p>bottom</p>}
+          details={<p>web1 details</p>}
+          detailsKey="web1"
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /collapse host details/i }));
+      expect(screen.queryByText("web1 details")).not.toBeInTheDocument();
+
+      rerender(
+        <ThreePaneLayout
+          tree={<p>tree</p>}
+          centreTop={<p>top</p>}
+          centreBottom={<p>bottom</p>}
+          details={<p>web2 details</p>}
+          detailsKey="web2"
+        />,
+      );
+      expect(screen.getByText("web2 details")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
+    });
+
+    it("mounting with a key and persisted collapsed=true stays collapsed (reload keeps remembered state)", () => {
+      localStorage.setItem(
+        "dashboard-react.paneLayout.v1",
+        JSON.stringify({
+          treeWidth: 320,
+          eventsHeight: 260,
+          treeCollapsed: false,
+          eventsCollapsed: false,
+          detailsWidth: 420,
+          detailsCollapsed: true,
+        }),
+      );
+      render(
+        <ThreePaneLayout
+          tree={<p>tree</p>}
+          centreTop={<p>top</p>}
+          centreBottom={<p>bottom</p>}
+          details={<p>web1 details</p>}
+          detailsKey="web1"
+        />,
+      );
+      expect(screen.queryByText("web1 details")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /expand host details/i })).toBeInTheDocument();
+    });
+  });
 });

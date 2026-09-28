@@ -416,3 +416,55 @@ describe("IndexRoute CriticalityEditor wiring (DASH-16)", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("1 change not yet applied");
   });
 });
+
+describe("IndexRoute host details pane (260928-l4h)", () => {
+  it("at /?host=web1 shows the pane with web1's details", () => {
+    act(() => {
+      useAppStore
+        .getState()
+        .handleMessage(
+          "lan/devices/web1/status",
+          encode({ id: "web1", state: "OK", timestamp: new Date().toISOString() }),
+        );
+    });
+    renderIndexAt("/?host=web1");
+    expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "web1" })).toBeInTheDocument();
+  });
+
+  it("at / there is no pane", () => {
+    renderIndex();
+    expect(screen.queryByText("Host details")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /collapse host details/i })).not.toBeInTheDocument();
+  });
+
+  it("Close removes ?host= but keeps ?incident=", () => {
+    act(() => {
+      useAppStore
+        .getState()
+        .handleMessage(
+          "lan/incidents/incident-h1/status",
+          encode({
+            id: "incident-h1",
+            root: "h1",
+            root_state: "DOWN",
+            inferred: false,
+            confirmed_down: [],
+            not_observable: [],
+            dependents: [],
+            worst_criticality: "high",
+            since: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+          }),
+        );
+    });
+    renderIndexAt("/?host=web1&incident=incident-h1");
+    const card = document.querySelector('[data-incident-id="incident-h1"]');
+    expect(card).toHaveClass("ring-2");
+
+    fireEvent.click(screen.getByRole("button", { name: /close host details/i }));
+
+    expect(screen.queryByRole("button", { name: /collapse host details/i })).not.toBeInTheDocument();
+    const cardAfter = document.querySelector('[data-incident-id="incident-h1"]');
+    expect(cardAfter).toHaveClass("ring-2");
+  });
+});

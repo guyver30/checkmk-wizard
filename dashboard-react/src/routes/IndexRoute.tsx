@@ -5,6 +5,7 @@ import { Snackbar } from "kone-design-system";
 import { CriticalityEditor } from "../components/CriticalityEditor";
 import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
+import { HostDetails } from "../components/HostDetails";
 import { IncidentList } from "../components/IncidentList";
 import { StatsStrip } from "../components/StatsStrip";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
@@ -68,8 +69,19 @@ export function IndexRoute() {
   const incidentRecord = useAppStore((s) => s.incidents);
   const incidents = useMemo(() => selectOpenIncidents(incidentRecord), [incidentRecord]);
   const incidentLookup = useMemo(() => buildIncidentLookup(incidents), [incidents]);
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const highlightedIncidentId = searchParams.get("incident");
+  // The right-hand host details pane (260928-l4h): present only while ?host= is set, opened
+  // from the map/tree/incident cards. Closing it clears just ?host=, leaving ?incident= (and
+  // any other param) untouched -- the two params coexist (operator decision 2).
+  const hostId = searchParams.get("host");
+  const onCloseDetails = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("host");
+      return next;
+    });
+  }, [setSearchParams]);
 
   const groups = useMemo(
     () => buildTree(devices, mode, nowMs, { orderBySeverity, incidentLookup }),
@@ -292,6 +304,9 @@ export function IndexRoute() {
           </div>
         }
         centreBottom={<EventHistory />}
+        details={hostId ? <HostDetails id={hostId} /> : undefined}
+        detailsKey={hostId}
+        onCloseDetails={onCloseDetails}
       />
       {snackbar && (
         <div className="fixed bottom-4 right-4 z-50" data-testid="snackbar">

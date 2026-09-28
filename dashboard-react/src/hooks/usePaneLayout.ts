@@ -2,17 +2,22 @@ import { useState } from "react";
 import { readJson, writeJson } from "../lib/guardedStorage";
 
 // Versioned so a future shape change to the persisted record can never be misread as a
-// valid one -- bump the suffix, not the key body, if the shape changes.
+// valid one -- bump the suffix, not the key body, if the shape changes. The details pane
+// fields added below (260928-l4h) do NOT bump this to v2: the addition is purely additive and
+// readInitialState's per-field fallback already handles a v1 record that predates them, so
+// bumping would needlessly discard an operator's saved tree/events sizes.
 const STORAGE_KEY = "dashboard-react.paneLayout.v1";
 
 const DEFAULTS = {
   treeWidth: 320,
   eventsHeight: 260,
+  detailsWidth: 420,
 } as const;
 
 export const PANE_BOUNDS = {
   tree: { min: 200, max: 640 },
   events: { min: 120, max: 600 },
+  details: { min: 280, max: 800 },
 } as const;
 
 interface PersistedLayout {
@@ -20,16 +25,20 @@ interface PersistedLayout {
   eventsHeight: number;
   treeCollapsed: boolean;
   eventsCollapsed: boolean;
+  detailsWidth: number;
+  detailsCollapsed: boolean;
 }
 
 interface PaneSizes {
   tree: number;
   events: number;
+  details: number;
 }
 
 interface PaneCollapsed {
   tree: boolean;
   events: boolean;
+  details: boolean;
 }
 
 type PaneKey = keyof PaneSizes;
@@ -57,10 +66,32 @@ function readInitialState(): { sizes: PaneSizes; collapsed: PaneCollapsed } {
       : DEFAULTS.eventsHeight;
   const treeCollapsed = typeof persisted.treeCollapsed === "boolean" ? persisted.treeCollapsed : false;
   const eventsCollapsed = typeof persisted.eventsCollapsed === "boolean" ? persisted.eventsCollapsed : false;
+  const detailsWidth =
+    typeof persisted.detailsWidth === "number"
+      ? clamp(persisted.detailsWidth, PANE_BOUNDS.details.min, PANE_BOUNDS.details.max)
+      : DEFAULTS.detailsWidth;
+  const detailsCollapsed =
+    typeof persisted.detailsCollapsed === "boolean" ? persisted.detailsCollapsed : false;
 
   return {
-    sizes: { tree: treeWidth, events: eventsHeight },
-    collapsed: { tree: treeCollapsed, events: eventsCollapsed },
+    sizes: { tree: treeWidth, events: eventsHeight, details: detailsWidth },
+    collapsed: { tree: treeCollapsed, events: eventsCollapsed, details: detailsCollapsed },
+  };
+}
+
+interface LayoutState {
+  sizes: PaneSizes;
+  collapsed: PaneCollapsed;
+}
+
+function toRecord(state: LayoutState): PersistedLayout {
+  return {
+    treeWidth: state.sizes.tree,
+    eventsHeight: state.sizes.events,
+    treeCollapsed: state.collapsed.tree,
+    eventsCollapsed: state.collapsed.events,
+    detailsWidth: state.sizes.details,
+    detailsCollapsed: state.collapsed.details,
   };
 }
 
@@ -81,12 +112,21 @@ export function usePaneLayout() {
       const next = { ...prev, collapsed: { ...prev.collapsed, [pane]: !prev.collapsed[pane] } };
       // Collapsing does not discard the stored size -- prev.sizes is carried through
       // unchanged, so restoring returns to the previous size rather than the default.
-      writeJson(STORAGE_KEY, {
-        treeWidth: next.sizes.tree,
-        eventsHeight: next.sizes.events,
-        treeCollapsed: next.collapsed.tree,
-        eventsCollapsed: next.collapsed.events,
-      });
+      writeJson(STORAGE_KEY, toRecord(next));
+      return next;
+    });
+  }
+
+  // Sets a pane's collapsed flag to false and persists -- a no-op state change if it's already
+  // expanded. Used by ThreePaneLayout to re-expand the details pane when a new host opens while
+  // it's collapsed (operator decision 3).
+  function expand(pane: PaneKey) {
+    setState((prev) => {
+      if (!prev.collapsed[pane]) {
+        return prev;
+      }
+      const next = { ...prev, collapsed: { ...prev.collapsed, [pane]: false } };
+      writeJson(STORAGE_KEY, toRecord(next));
       return next;
     });
   }
@@ -95,12 +135,7 @@ export function usePaneLayout() {
     // A refused write must never break the interaction and must never roll the in-memory
     // value back -- writeJson's return value is deliberately ignored. React state is already
     // the source of truth (D-26); storage is only how it survives a reload.
-    writeJson(STORAGE_KEY, {
-      treeWidth: state.sizes.tree,
-      eventsHeight: state.sizes.events,
-      treeCollapsed: state.collapsed.tree,
-      eventsCollapsed: state.collapsed.events,
-    });
+    writeJson(STORAGE_KEY, toRecord(state));
   }
 
   return {
@@ -108,6 +143,7 @@ export function usePaneLayout() {
     collapsed: state.collapsed,
     setSize,
     toggleCollapse,
+    expand,
     commit,
     bounds: PANE_BOUNDS,
   };

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { usePaneLayout } from "../hooks/usePaneLayout";
 import { Splitter } from "./Splitter";
 
@@ -6,6 +6,9 @@ export interface ThreePaneLayoutProps {
   tree: ReactNode;
   centreTop: ReactNode;
   centreBottom: ReactNode;
+  details?: ReactNode;
+  detailsKey?: string | null;
+  onCloseDetails?: () => void;
 }
 
 // Width/height a collapsed pane's rail occupies -- just enough for its restore button.
@@ -15,23 +18,36 @@ interface CollapsiblePaneProps {
   title: string;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  onClose?: () => void;
   children: ReactNode;
 }
 
-function CollapsiblePane({ title, collapsed, onToggleCollapse, children }: CollapsiblePaneProps) {
+function CollapsiblePane({ title, collapsed, onToggleCollapse, onClose, children }: CollapsiblePaneProps) {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg-surface">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-neutral-150 px-3 py-2">
         {!collapsed && <span className="truncate text-sm font-semibold text-fg-primary">{title}</span>}
-        <button
-          type="button"
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? `Expand ${title.toLowerCase()}` : `Collapse ${title.toLowerCase()}`}
-          onClick={onToggleCollapse}
-          className="shrink-0 rounded-sm border border-neutral-300 px-2 py-1 text-xs text-fg-secondary hover:bg-bg-subtle-hover"
-        >
-          {collapsed ? "Expand" : "Collapse"}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {!collapsed && onClose && (
+            <button
+              type="button"
+              aria-label={`Close ${title.toLowerCase()}`}
+              onClick={onClose}
+              className="shrink-0 rounded-sm border border-neutral-300 px-2 py-1 text-xs text-fg-secondary hover:bg-bg-subtle-hover"
+            >
+              Close
+            </button>
+          )}
+          <button
+            type="button"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? `Expand ${title.toLowerCase()}` : `Collapse ${title.toLowerCase()}`}
+            onClick={onToggleCollapse}
+            className="shrink-0 rounded-sm border border-neutral-300 px-2 py-1 text-xs text-fg-secondary hover:bg-bg-subtle-hover"
+          >
+            {collapsed ? "Expand" : "Collapse"}
+          </button>
+        </div>
       </div>
       {/* A collapsed pane unmounts its content -- only the rail with the restore button remains. */}
       {!collapsed && <div className="min-h-0 flex-1 overflow-auto">{children}</div>}
@@ -45,14 +61,44 @@ function CollapsiblePane({ title, collapsed, onToggleCollapse, children }: Colla
  * this wraps its pane contents as props rather than nesting layout structure inside them, so
  * later plans fill slots without ever restructuring this grid.
  */
-export function ThreePaneLayout({ tree, centreTop, centreBottom }: ThreePaneLayoutProps) {
-  const { sizes, collapsed, setSize, toggleCollapse, commit, bounds } = usePaneLayout();
+export function ThreePaneLayout({
+  tree,
+  centreTop,
+  centreBottom,
+  details,
+  detailsKey,
+  onCloseDetails,
+}: ThreePaneLayoutProps) {
+  const { sizes, collapsed, setSize, toggleCollapse, expand, commit, bounds } = usePaneLayout();
 
   const treeColumnWidth = collapsed.tree ? COLLAPSED_RAIL_PX : sizes.tree;
   const eventsRowHeight = collapsed.events ? COLLAPSED_RAIL_PX : sizes.events;
+  const detailsColumnWidth = collapsed.details ? COLLAPSED_RAIL_PX : sizes.details;
+
+  // Re-expand rule (operator decision 3): a NEW host opening (detailsKey changes to a truthy,
+  // different value) re-expands a collapsed pane -- the operator just asked to see a host, so a
+  // stale "collapsed" state shouldn't hide it. A reload (this ref starts at the mount-time key)
+  // or re-clicking the already-open host (detailsKey unchanged) never overrides a remembered
+  // collapsed state -- only the Expand button does those. Known limitation: re-clicking the
+  // already-open host while collapsed does not re-expand it, since the URL (and so detailsKey)
+  // doesn't change.
+  const previousDetailsKeyRef = useRef(detailsKey);
+  useEffect(() => {
+    if (detailsKey && detailsKey !== previousDetailsKeyRef.current) {
+      expand("details");
+    }
+    previousDetailsKeyRef.current = detailsKey;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- expand is a stable function from
+    // usePaneLayout (recreated each render, but its identity is never referenced by callers as
+    // a dependency elsewhere in this codebase); only detailsKey should re-run this.
+  }, [detailsKey]);
+
+  const gridTemplateColumns = details
+    ? `${treeColumnWidth}px 4px 1fr 4px ${detailsColumnWidth}px`
+    : `${treeColumnWidth}px 4px 1fr`;
 
   return (
-    <div className="grid h-full w-full" style={{ gridTemplateColumns: `${treeColumnWidth}px 4px 1fr` }}>
+    <div className="grid h-full w-full" style={{ gridTemplateColumns }}>
       <CollapsiblePane title="Device tree" collapsed={collapsed.tree} onToggleCollapse={() => toggleCollapse("tree")}>
         {tree}
       </CollapsiblePane>
@@ -98,6 +144,33 @@ export function ThreePaneLayout({ tree, centreTop, centreBottom }: ThreePaneLayo
           {centreBottom}
         </CollapsiblePane>
       </div>
+
+      {details && (
+        <>
+          {/* Mirrored-value pattern, same reasoning as the event-history splitter above: sizes.details
+              is the pane's own width, but this divider sits on the pane's LEFT edge, where dragging
+              LEFT (into the centre column) should widen it -- the opposite of Splitter's own
+              "dragging right always increases value" contract. */}
+          <Splitter
+            orientation="vertical"
+            value={bounds.details.min + bounds.details.max - sizes.details}
+            min={bounds.details.min}
+            max={bounds.details.max}
+            label="Resize host details"
+            onResize={(next) => setSize("details", bounds.details.min + bounds.details.max - next)}
+            onResizeCommit={commit}
+          />
+
+          <CollapsiblePane
+            title="Host details"
+            collapsed={collapsed.details}
+            onToggleCollapse={() => toggleCollapse("details")}
+            onClose={onCloseDetails}
+          >
+            {details}
+          </CollapsiblePane>
+        </>
+      )}
     </div>
   );
 }
