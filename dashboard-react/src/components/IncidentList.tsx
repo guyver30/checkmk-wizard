@@ -3,7 +3,7 @@
 // re-sorts them.
 
 import { useEffect, useRef } from "react";
-import { displayName } from "../lib/display";
+import { displayNameWithAddress } from "../lib/display";
 import type { Incident } from "../lib/incidents";
 import type { DevicePayload } from "../lib/types";
 import { IncidentCard } from "./IncidentCard";
@@ -40,7 +40,7 @@ export function IncidentList({ incidents, devices, nowMs, highlightedId }: Incid
     }
   }, [highlightedId, hasTarget]);
 
-  const nameFor = (id: string) => displayName(devices[id] ?? { id });
+  const nameFor = (id: string) => displayNameWithAddress(devices[id] ?? { id });
 
   if (incidents.length === 0) {
     return (

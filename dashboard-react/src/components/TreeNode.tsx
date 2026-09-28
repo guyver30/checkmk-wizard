@@ -119,7 +119,12 @@ export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
                       className="icon-warning-triangle-filled text-fg-warning"
                     />
                   )}
-                  <span className="flex-1 truncate text-fg-primary">{device.label}</span>
+                  <span
+                    className="flex-1 truncate text-fg-primary"
+                    title={device.address || undefined}
+                  >
+                    {device.label}
+                  </span>
                 </Link>
                 {device.dimmed && device.incidentId ? (
                   <Link to={incidentHref(search, device.incidentId)}>

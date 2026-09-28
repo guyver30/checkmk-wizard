@@ -5,7 +5,7 @@
 // value one hover (or `title`) away.
 
 import { Tooltip } from "kone-design-system";
-import { displayName, formatDateTime } from "../lib/display";
+import { displayNameWithAddress, formatDateTime } from "../lib/display";
 import { middleTruncate } from "../lib/truncate";
 import type { DevicePayload, EventEntry } from "../lib/types";
 import { StateBadgeForState } from "./StateBadge";
@@ -23,7 +23,7 @@ export function EventRow({ entry, device, labelBudget = DEFAULT_LABEL_BUDGET }: 
   // Alias-first (D-18) when the device is known to the store; a device absent from the store
   // (e.g. a "removed" event, or a message arriving before the retained status snapshot) falls
   // back to the raw id straight off the wire.
-  const rawLabel = device ? displayName(device) : deviceId;
+  const rawLabel = device ? displayNameWithAddress(device) : deviceId;
   const truncatedLabel = middleTruncate(rawLabel, labelBudget);
   const fromState = typeof entry?.from === "string" ? entry.from : "UNKNOWN";
   const toState = typeof entry?.to === "string" ? entry.to : "UNKNOWN";

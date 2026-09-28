@@ -164,6 +164,14 @@ describe("buildMapModel", () => {
     expect(model.nodes.find((n) => n.id === "h2")?.label).toBe("Topology Only Alias");
   });
 
+  it("appends the address in parentheses to the label when the status payload has one (quick 260928-m6f)", () => {
+    const statuses: Record<string, DevicePayload> = {
+      router: { id: "router", state: "OK", timestamp: FRESH_TIMESTAMP, address: "192.168.0.1" },
+    };
+    const model = buildMapModel([{ id: "router", parents: [] }], statuses, NOW_MS);
+    expect(model.nodes.find((n) => n.id === "router")?.label).toBe("router (192.168.0.1)");
+  });
+
   it("parses map_position into node.position, or null when absent/invalid", () => {
     const model = buildMapModel(
       [

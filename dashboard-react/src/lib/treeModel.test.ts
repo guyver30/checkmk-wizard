@@ -73,6 +73,17 @@ describe("buildTree", () => {
     });
   });
 
+  it("carries the address for a hover tooltip, but leaves label unchanged (quick 260928-m6f)", () => {
+    const devices: Record<string, DevicePayload> = {
+      router: { id: "router", device_type: "NetworkDevice", state: "OK", timestamp: FRESH_TIMESTAMP, address: "192.168.0.1" },
+    };
+    const tree = buildTree(devices, "type", NOW_MS);
+    expect(tree[0].children[0]).toMatchObject({
+      label: "router",
+      address: "192.168.0.1",
+    });
+  });
+
   it("reports worst: WARN and hatched: true when a group has one stale device and one WARN device", () => {
     const devices: Record<string, DevicePayload> = {
       stale1: { id: "stale1", device_type: "ACS", state: "OK", timestamp: STALE_TIMESTAMP },

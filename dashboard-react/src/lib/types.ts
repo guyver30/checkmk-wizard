@@ -15,6 +15,7 @@ export type DeviceState = "OK" | "PEND" | "WARN" | "UNKNOWN" | "CRIT" | "UNREACH
 export interface DevicePayload {
   id?: string;
   alias?: string;
+  address?: string;
   state?: string;
   host_state_raw?: string;
   device_type?: string;

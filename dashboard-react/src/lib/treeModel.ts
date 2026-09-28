@@ -9,7 +9,7 @@
 // functions only.
 
 import { buildGroupIndex, rollUpGroup, sortedGroupKeys, SEVERITY_RANK } from "./grouping";
-import { displayName, effectiveState, isTagGroupMissing } from "./display";
+import { displayAddress, displayName, effectiveState, isTagGroupMissing } from "./display";
 import { isDeviceStale } from "./staleness";
 import type { IncidentLookup } from "./incidents";
 import type { DevicePayload, GroupingMode } from "./types";
@@ -18,6 +18,7 @@ export interface TreeDeviceNode {
   kind: "device";
   id: string;
   label: string;
+  address: string;
   state: string;
   stale: boolean;
   deviceType: string | null | undefined;
@@ -81,6 +82,7 @@ export function buildTree(
           kind: "device" as const,
           id,
           label: displayName(device),
+          address: displayAddress(device),
           state: effectiveState(device),
           stale: isDeviceStale(device, nowMs),
           deviceType: device?.device_type,

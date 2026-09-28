@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   displayName,
+  displayAddress,
+  displayNameWithAddress,
   effectiveState,
   stateClass,
   stateIcon,
@@ -21,6 +23,45 @@ describe("displayName", () => {
 
   it("returns an empty string for a null/malformed payload", () => {
     expect(displayName(null)).toBe("");
+  });
+});
+
+describe("displayAddress", () => {
+  it("returns the address when the name differs from it", () => {
+    expect(displayAddress({ id: "router", address: "192.168.0.1" })).toBe("192.168.0.1");
+  });
+
+  it("returns empty when the id equals the address (no alias)", () => {
+    expect(displayAddress({ id: "192.168.0.5", address: "192.168.0.5" })).toBe("");
+  });
+
+  it("returns the address when an alias differs from the address", () => {
+    expect(displayAddress({ id: "192.168.0.5", alias: "NAS", address: "192.168.0.5" })).toBe(
+      "192.168.0.5",
+    );
+  });
+
+  it("returns empty for an empty, missing, non-string address, or null payload", () => {
+    expect(displayAddress({ id: "sw1", address: "" })).toBe("");
+    expect(displayAddress({ id: "sw1" })).toBe("");
+    expect(displayAddress({ id: "sw1", address: 42 as unknown as string })).toBe("");
+    expect(displayAddress(null)).toBe("");
+  });
+
+  it("trims surrounding whitespace before comparing and returning", () => {
+    expect(displayAddress({ id: "router", address: "  192.168.0.1  " })).toBe("192.168.0.1");
+  });
+});
+
+describe("displayNameWithAddress", () => {
+  it("appends the address in parentheses when present", () => {
+    expect(displayNameWithAddress({ id: "router", address: "192.168.0.1" })).toBe(
+      "router (192.168.0.1)",
+    );
+  });
+
+  it("equals displayName when there is no address to show", () => {
+    expect(displayNameWithAddress({ id: "sw1" })).toBe(displayName({ id: "sw1" }));
   });
 });
 

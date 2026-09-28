@@ -3,7 +3,7 @@ import type { BadgeColor, ProgressColor, TableColumn } from "kone-design-system"
 import { gaugeColor, otherMountsLabel, smartBadge } from "../lib/gauges";
 import { classifyAgentServices } from "../lib/agentDetail";
 import { compareServices } from "../lib/serviceSort";
-import { displayName } from "../lib/display";
+import { displayNameWithAddress } from "../lib/display";
 import { StateBadge, StateBadgeForState } from "./StateBadge";
 import { useAppStore } from "../store/useAppStore";
 import type { ServiceEntry } from "../lib/types";
@@ -191,7 +191,7 @@ export function HostDetails({ id }: { id: string }) {
     return (
       <div className="px-4 py-3">
         <div className="flex items-center gap-2">
-          <h1 className="text-xl font-semibold">{displayName(device)}</h1>
+          <h1 className="text-xl font-semibold">{displayNameWithAddress(device)}</h1>
           <StateBadge device={device} />
         </div>
 
@@ -244,7 +244,7 @@ export function HostDetails({ id }: { id: string }) {
   return (
     <div className="px-4 py-3">
       <div className="flex items-center gap-2">
-        <h1 className="text-xl font-semibold">{displayName(device)}</h1>
+        <h1 className="text-xl font-semibold">{displayNameWithAddress(device)}</h1>
         <StateBadge device={device} />
       </div>
 

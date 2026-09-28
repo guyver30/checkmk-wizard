@@ -11,7 +11,7 @@
 // No DOM access, no broker connection, no browser storage, no network calls -- pure
 // functions only.
 
-import { displayName, effectiveState } from "./display";
+import { displayName, displayNameWithAddress, effectiveState } from "./display";
 import { isDeviceStale } from "./staleness";
 import type { IncidentLookup } from "./incidents";
 import type { DevicePayload } from "./types";
@@ -112,7 +112,9 @@ export function buildMapModel(
   const nodes: MapNode[] = validEntries.map((entry) => {
     const status = safeStatuses[entry.id];
     const state = isDeviceStale(status, nowMs) ? "STALE" : effectiveState(status);
-    const label = status ? displayName(status) : displayName({ id: entry.id, alias: entry.alias });
+    const label = status
+      ? displayNameWithAddress(status)
+      : displayName({ id: entry.id, alias: entry.alias });
     const membership = incidentLookup.get(entry.id);
     return {
       id: entry.id,

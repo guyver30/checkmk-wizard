@@ -22,6 +22,28 @@ export function displayName(devicePayload: DevicePayload | null | undefined): st
   return typeof devicePayload.id === "string" ? devicePayload.id : "";
 }
 
+export function displayAddress(devicePayload: DevicePayload | null | undefined): string {
+  // OD-1/OD-2 (quick 260928-m6f): the host's IP, but only when it differs from the
+  // displayed name -- an IP-named host with no alias would otherwise show its own IP
+  // twice. Empty/missing/non-string address (unmanaged switch, or a payload from an
+  // older poller) degrades to "", same defensive-parse posture as displayName above.
+  if (!devicePayload || typeof devicePayload !== "object") {
+    return "";
+  }
+  const address = typeof devicePayload.address === "string" ? devicePayload.address.trim() : "";
+  if (!address || address === displayName(devicePayload)) {
+    return "";
+  }
+  return address;
+}
+
+export function displayNameWithAddress(devicePayload: DevicePayload | null | undefined): string {
+  // OD-4: `name (ip)` wherever displayAddress is non-empty, otherwise displayName unchanged.
+  const name = displayName(devicePayload);
+  const address = displayAddress(devicePayload);
+  return address ? `${name} (${address})` : name;
+}
+
 export function effectiveState(devicePayload: DevicePayload | null | undefined): string {
   // Pitfall 6 (11-RESEARCH.md): `state` structurally cannot contain "UNREACH" --
   // compute_overall_state() in scripts/mqtt_poller.py deliberately collapses raw host
