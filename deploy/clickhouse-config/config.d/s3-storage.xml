@@ -1,11 +1,13 @@
 <!--
     S3-tiered storage for the history database (D-23, D-40, D-41).
 
-    MinIO needs the bucket URL to end in a double slash (verified via ctx7,
-    clickhouse.com/docs/integrations/minio: "Note the double slash in the
-    endpoint tag, which is required to designate the bucket root") — set on
-    CH_S3_DISK_ENDPOINT itself (e.g. http://minio:9000/clickhouse-s3-disk//),
-    not here.
+    CH_S3_DISK_ENDPOINT is the bucket URL plus a key prefix ending in "/"
+    (http://minio:9000/clickhouse-s3-disk/data/), the form of the S3-disk
+    examples in clickhouse.com/docs/engines/table-engines/mergetree-family/
+    mergetree ("…/my-bucket/root-path/"). Bug fixed 2026-09-30 (first live
+    start): the double slash from clickhouse.com/docs/integrations/minio
+    ("…/tables//") made 26.9.4.3 refuse to start with "Code: 36. Invalid S3
+    key: '/' (http://minio:9000/clickhouse-s3-disk//)". Don't go back to it.
 
     Switching to AWS S3 later is a config change only (D-41): repoint
     CH_S3_DISK_ENDPOINT at the regional bucket URL and rotate S3_ACCESS_KEY /

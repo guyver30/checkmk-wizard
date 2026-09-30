@@ -210,10 +210,13 @@ services:
       - CH_WRITER_PASSWORD=${CH_WRITER_PASSWORD:-}
       - CH_READER_PASSWORD=${CH_READER_PASSWORD:-}
       - CH_GRAFANA_PASSWORD=${CH_GRAFANA_PASSWORD:-}
-      # Trailing double slash required by ClickHouse's MinIO S3-disk guide
-      # (deploy/clickhouse-config/config.d/s3-storage.xml cites the same doc).
-      # For AWS S3, repoint this at the regional bucket URL instead (D-41).
-      - CH_S3_DISK_ENDPOINT=http://minio:9000/clickhouse-s3-disk//
+      # Bucket URL plus a key prefix ending in "/" (objects land under data/).
+      # Bug fixed 2026-09-30 (first live start): the trailing double slash from
+      # ClickHouse's MinIO integration guide made 26.9.4.3 crash-loop with
+      # "Code: 36. Invalid S3 key: '/' (http://minio:9000/clickhouse-s3-disk//)";
+      # see deploy/clickhouse-config/config.d/s3-storage.xml. For AWS S3,
+      # repoint this at the regional bucket URL plus prefix instead (D-41).
+      - CH_S3_DISK_ENDPOINT=http://minio:9000/clickhouse-s3-disk/data/
       - S3_ACCESS_KEY=minioadmin
       - S3_SECRET_KEY=minioadmin
     # No `ports:` — HTTP 8123 stays on cmk_net only, like checkmk's own REST
