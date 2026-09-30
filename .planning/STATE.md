@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 Phase: 14.1 (Fleet History Store, Availability Rollups and Grafana) — EXECUTING
 Plan: 1 of 8
 Status: Executing Phase 14.1
-Last activity: 2026-09-30 -- Phase 14.1 execution started
+Last activity: 2026-09-30 - Completed quick task 260930-hpy: move topology_editor secret out of the browser bundle
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -119,6 +119,7 @@ None.
 | 260928-l4h | Host details as a collapsible right-hand pane beside the map (`?host=`), replacing the /details page; event history filters to the selected host, empty-space click deselects | 2026-09-28 | 6183a2e | [260928-l4h-host-details-right-hand-pane](./quick/260928-l4h-host-details-right-hand-pane/) |
 | 260928-m6f | Show host IP next to renamed hosts (poller publishes `address`; tree tooltip, `name (ip)` on cards/map/events/details) | 2026-09-28 | ae02bb4 | [260928-m6f-show-host-ip-next-to-renamed-hosts](./quick/260928-m6f-show-host-ip-next-to-renamed-hosts/) |
 | 260928-m6g | Topology map: faint always-visible 50px grid, snap-to-grid on edit-mode drag, parent-to-child edge hint | 2026-09-28 | 940285d | [260928-m6g-topology-map-grid-snap-and-edge-hint](./quick/260928-m6g-topology-map-grid-snap-and-edge-hint/) |
+| 260930-hpy | Move topology_editor secret out of the browser bundle (nginx injects it from deploy/.env; wizard provisions the user) | 2026-09-30 | 306f9e2 | [260930-hpy-move-topology-editor-secret-out-of-brows](./quick/260930-hpy-move-topology-editor-secret-out-of-brows/) |
 | fast | Switch MinIO image to cgr.dev/chainguard/minio pinned by digest (Docker Hub and quay.io both unpullable) | 2026-09-30 | c77c3fd | - |
 | fast | Add docs/DEPLOY-NEW-MACHINE.md new-machine deploy checklist, linked from README | 2026-09-30 | 62d64e0 | - |
 

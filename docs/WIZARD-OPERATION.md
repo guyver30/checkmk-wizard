@@ -71,7 +71,18 @@ for hosts that are no longer on the site. It does **not** clear the global
 `lan/events/recent` feed, though, so without a broker wipe the dashboard's
 history keeps the old site's events, shown as "unknown → unknown".
 
-Run from `deploy/`. Compose prefixes volume names with the project name
+`deploy/reset-site.sh` does all of this. It asks you to type the site name to
+confirm, then runs down, the volume removal and up. It waits for Checkmk to
+answer, reports `LIVESTATUS_TCP_TLS`, and lists the next steps. `--with-history`
+also removes `clickhouse_data`, and `--yes` skips the prompt. Afterwards,
+`deploy/run-wizard.sh` starts the wizard:
+
+```bash
+~/checkmk-stack/app/checkmk-wizard/deploy/reset-site.sh
+~/checkmk-stack/app/checkmk-wizard/deploy/run-wizard.sh
+```
+
+By hand, run from `deploy/`. Compose prefixes volume names with the project name
 (`deploy_`), so confirm the names with `podman volume ls` first:
 
 ```bash

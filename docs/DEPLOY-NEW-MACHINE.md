@@ -159,9 +159,19 @@ If either is empty, fix `deploy/.env`, then `podman compose down && podman compo
 ## 7. Run the wizard
 
 ```bash
+~/checkmk-stack/app/checkmk-wizard/deploy/run-wizard.sh
+```
+
+The script checks that `automation-worker` is running and that it received
+`CMK_REST_SECRET`, then runs `uv sync` and the wizard inside it. By hand, the same is:
+
+```bash
 podman compose exec worker bash -c "cd /app/checkmk-wizard && uv sync"
 podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && uv run checkmk-wizard"
 ```
+
+To start over later with a blank site, run `deploy/reset-site.sh`
+([`WIZARD-OPERATION.md`](WIZARD-OPERATION.md), "Starting over with a blank site").
 
 - **Site name** and **Checkmk host** (`checkmk:5000`) are pre-filled; press Enter.
 - **cmkadmin password:** type `cmkadmin`, accept the offer to change it, and choose a new one.
