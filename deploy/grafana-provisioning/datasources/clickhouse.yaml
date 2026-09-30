@@ -1,0 +1,26 @@
+# Field names verified via context7 (clickhouse/clickhouse-docs,
+# docs/integrations/data-visualization/grafana/config.md, checked 2026-09-30)
+# against the official ClickHouse Grafana plugin's provisioning YAML shape;
+# the `$VAR` environment-variable expansion in secureJsonData is verified via
+# context7 (grafana/grafana, docs/sources/administration/provisioning/index.md).
+apiVersion: 1
+
+datasources:
+  - name: ClickHouse (fleet history)
+    uid: clickhouse-fleet
+    type: grafana-clickhouse-datasource
+    isDefault: true
+    editable: false
+    jsonData:
+      host: clickhouse
+      port: 8123
+      protocol: http
+      secure: false
+      username: grafana_reader
+      defaultDatabase: history
+    secureJsonData:
+      # Read-only user (D-54/D-55) — never the writer or admin user. The
+      # value is expanded from the Grafana container's environment
+      # (CH_GRAFANA_PASSWORD, set via deploy/.env through compose), never a
+      # literal in this tracked file.
+      password: $CH_GRAFANA_PASSWORD

@@ -1,0 +1,140 @@
+{
+  "uid": "fleet-state-timeline",
+  "title": "Fleet state timeline",
+  "tags": ["fleet-history"],
+  "schemaVersion": 39,
+  "editable": false,
+  "timezone": "browser",
+  "refresh": "1m",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "folder",
+        "type": "query",
+        "label": "Folder",
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+        "query": {
+          "editorType": "sql",
+          "format": 2,
+          "rawSql": "SELECT DISTINCT folder FROM history.host_state ORDER BY folder"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true
+      },
+      {
+        "name": "host",
+        "type": "query",
+        "label": "Host",
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+        "query": {
+          "editorType": "sql",
+          "format": 2,
+          "rawSql": "SELECT DISTINCT host FROM history.service_state ORDER BY host"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "state-timeline",
+      "title": "Host state",
+      "description": "max(state) per interval — the worst state observed in that interval wins.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "UP", "color": "green" },
+                "1": { "text": "DOWN", "color": "red" },
+                "2": { "text": "UNREACHABLE", "color": "purple" }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT $__timeInterval(ts) AS time, host, max(state) AS state FROM history.host_state WHERE $__timeFilter(ts) AND folder IN (${folder:singlequote}) GROUP BY time, host ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "state-timeline",
+      "title": "In downtime",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "no", "color": "green" },
+                "1": { "text": "downtime", "color": "blue" }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT $__timeInterval(ts) AS time, host, max(in_downtime) AS in_downtime FROM history.host_state WHERE $__timeFilter(ts) AND folder IN (${folder:singlequote}) GROUP BY time, host ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "state-timeline",
+      "title": "Service state on ${host}",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "OK", "color": "green" },
+                "1": { "text": "WARN", "color": "yellow" },
+                "2": { "text": "CRIT", "color": "red" },
+                "3": { "text": "UNKNOWN", "color": "orange" }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT $__timeInterval(ts) AS time, service, max(state) AS state FROM history.service_state WHERE $__timeFilter(ts) AND host = '${host}' GROUP BY time, service ORDER BY time"
+        }
+      ]
+    }
+  ]
+}
