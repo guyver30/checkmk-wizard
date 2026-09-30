@@ -1125,6 +1125,153 @@ def test_clickhouse_command_posts_sql_as_body_and_returns_decoded_text():
     assert request.data == b"INSERT INTO FUNCTION s3(...) SELECT 1"
 
 
+# --- build_history_rows / write_history --------------------------------------
+#
+# Reuses the `_service()` helper (defined below, under "classify_host_services
+# / services_signature") and the `_snapshot()` helper (defined further below,
+# under "run_cycle") -- both are plain module-level functions, resolved at
+# call time, so their definition order relative to these tests does not
+# matter.
+
+
+_TS = datetime.datetime(2026, 9, 28, 1, 2, 3, tzinfo=datetime.UTC)
+
+
+def test_build_history_rows_stamps_every_row_with_the_same_utc_timestamp():
+    batch = poller.build_history_rows(
+        [_snapshot("web1", folder="vlan10")],
+        [_service("web1", "CPU utilization", "OK", perf_data={"util": {"value": 1.0}})],
+        _TS,
+    )
+    assert batch.host_state[0]["ts"] == "2026-09-28 01:02:03"
+    assert batch.service_state[0]["ts"] == "2026-09-28 01:02:03"
+    assert batch.metrics[0]["ts"] == "2026-09-28 01:02:03"
+
+
+def test_build_history_rows_converts_non_utc_ts_to_utc():
+    tz = datetime.timezone(datetime.timedelta(hours=8))  # Asia/Singapore offset
+    local_ts = datetime.datetime(2026, 9, 28, 9, 2, 3, tzinfo=tz)  # == 01:02:03 UTC
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], None, local_ts)
+    assert batch.host_state[0]["ts"] == "2026-09-28 01:02:03"
+
+
+def test_build_history_rows_host_state_code_mapping_and_in_downtime():
+    up, down, unreach, weird = (
+        _snapshot("web1", folder="vlan10", host_state_raw="UP"),
+        _snapshot("web2", folder="vlan10", host_state_raw="DOWN", in_downtime=True),
+        _snapshot("web3", folder="vlan10", host_state_raw="UNREACH"),
+        _snapshot("web4", folder="vlan10", host_state_raw="bogus"),
+    )
+    batch = poller.build_history_rows([up, down, unreach, weird], None, _TS)
+    rows_by_host = {row["host"]: row for row in batch.host_state}
+    assert rows_by_host["web1"] == {
+        "ts": "2026-09-28 01:02:03", "host": "web1", "folder": "vlan10", "state": 0, "in_downtime": 0
+    }
+    assert rows_by_host["web2"]["state"] == 1
+    assert rows_by_host["web2"]["in_downtime"] == 1
+    assert rows_by_host["web3"]["state"] == 2
+    assert rows_by_host["web4"]["state"] == 0
+
+
+def test_build_history_rows_service_state_raw_out_of_range_becomes_unknown():
+    service = _service("web1", "CPU utilization", "OK")
+    service.state_raw = 99
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], [service], _TS)
+    assert batch.service_state == [
+        {"ts": "2026-09-28 01:02:03", "host": "web1", "service": "CPU utilization", "state": 3}
+    ]
+
+
+def test_build_history_rows_metric_rows_carry_value_warn_crit():
+    service = _service(
+        "web1", "CPU utilization", "OK", perf_data={"util": {"value": 42.5, "warn": 80.0, "crit": 90.0}}
+    )
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], [service], _TS)
+    assert batch.metrics == [
+        {
+            "ts": "2026-09-28 01:02:03",
+            "host": "web1",
+            "service": "CPU utilization",
+            "metric": "util",
+            "value": 42.5,
+            "warn": 80.0,
+            "crit": 90.0,
+        }
+    ]
+
+
+def test_build_history_rows_skips_non_finite_metric_value_and_nulls_non_finite_thresholds():
+    service = _service(
+        "web1",
+        "CPU utilization",
+        "OK",
+        perf_data={
+            "bad_nan": {"value": float("nan")},
+            "bad_inf": {"value": float("inf")},
+            "bad_type": {"value": "not-a-number"},
+            "good": {"value": 1.0, "warn": float("nan"), "crit": float("inf")},
+        },
+    )
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], [service], _TS)
+    assert [row["metric"] for row in batch.metrics] == ["good"]
+    assert batch.metrics[0]["warn"] is None
+    assert batch.metrics[0]["crit"] is None
+
+
+def test_build_history_rows_no_row_has_a_key_outside_the_contract_columns():
+    service = _service(
+        "web1", "CPU utilization", "OK", plugin_output="should never appear", perf_data={"util": {"value": 1.0}}
+    )
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], [service], _TS)
+    assert set(batch.host_state[0]) == {"ts", "host", "folder", "state", "in_downtime"}
+    assert set(batch.service_state[0]) == {"ts", "host", "service", "state"}
+    assert set(batch.metrics[0]) == {"ts", "host", "service", "metric", "value", "warn", "crit"}
+
+
+def test_build_history_rows_services_none_yields_empty_service_and_metric_lists():
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], None, _TS)
+    assert batch.service_state == []
+    assert batch.metrics == []
+    assert len(batch.host_state) == 1
+
+
+def test_write_history_no_op_when_clickhouse_url_unset():
+    config = _make_config(clickhouse_url="")
+    batch = poller.HistoryBatch(metrics=[{"a": 1}], host_state=[{"a": 1}], service_state=[{"a": 1}])
+    with patch.object(poller, "_clickhouse_insert") as mock_insert:
+        poller.write_history(config, batch)
+    mock_insert.assert_not_called()
+
+
+def test_write_history_inserts_all_three_tables_separately():
+    config = _make_config(clickhouse_url="http://clickhouse:8123")
+    batch = poller.HistoryBatch(
+        metrics=[{"m": 1}], host_state=[{"h": 1}], service_state=[{"s": 1}]
+    )
+    with patch.object(poller, "_clickhouse_insert") as mock_insert:
+        poller.write_history(config, batch)
+    tables_called = [call.args[3] for call in mock_insert.call_args_list]
+    assert tables_called == ["history.metrics", "history.host_state", "history.service_state"]
+
+
+def test_write_history_metrics_failure_still_attempts_host_and_service_state_and_logs_warning(caplog):
+    config = _make_config(clickhouse_url="http://clickhouse:8123")
+    batch = poller.HistoryBatch(
+        metrics=[{"m": 1}], host_state=[{"h": 1}], service_state=[{"s": 1}]
+    )
+    with (
+        caplog.at_level("WARNING", logger=poller._logger.name),
+        patch.object(
+            poller,
+            "_clickhouse_insert",
+            side_effect=[poller.ClickHouseError("boom"), None, None],
+        ) as mock_insert,
+    ):
+        poller.write_history(config, batch)
+    assert mock_insert.call_count == 3
+    assert any("no data" in record.getMessage() for record in caplog.records)
+
+
 # --- build_hosts_query / select_host_columns --------------------------------
 
 

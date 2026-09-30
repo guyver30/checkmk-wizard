@@ -40,6 +40,7 @@ import argparse
 import datetime
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -282,6 +283,11 @@ OPTIONAL_SERVICE_COLUMNS = ("plugin_output", "perf_data")
 # Standard Nagios plugin return codes, used unchanged by Checkmk/Livestatus
 # for the `worst_service_state` column (verified: checkmk.com/werk/8003).
 _SERVICE_STATE_NAMES = {0: "OK", 1: "WARN", 2: "CRIT", 3: "UNKNOWN"}
+
+# Phase 14.1 (D-43): history.host_state's state encoding (0 UP, 1 DOWN,
+# 2 UNREACHABLE), matching `host_state_label()`'s "UP"/"DOWN"/"UNREACH"
+# labels (D-17) -- see `build_history_rows()` below.
+HOST_STATE_CODES = {"UP": 0, "DOWN": 1, "UNREACH": 2}
 
 # MQTT reserves `+`/`#` as wildcard characters and treats `/` as the
 # topic-level separator (T-09-01 topic-injection guard).
@@ -1494,6 +1500,145 @@ def _clickhouse_command(base_url: str, user: str, password: str, sql: str, timeo
         url, user=user, password=password, timeout=timeout, data=sql.encode("utf-8"), method="POST"
     )
     return body.decode(errors="replace")
+
+
+@dataclass
+class HistoryBatch:
+    """One poll cycle's rows, ready for `write_history()` (D-42/D-43)."""
+
+    metrics: list[dict] = field(default_factory=list)
+    host_state: list[dict] = field(default_factory=list)
+    service_state: list[dict] = field(default_factory=list)
+
+
+def build_history_rows(
+    snapshots: list[DeviceSnapshot],
+    services: list[ServiceSnapshot] | None,
+    ts: datetime.datetime,
+) -> HistoryBatch:
+    """Turn one cycle's already-fetched snapshots/services into ClickHouse rows.
+
+    Pure transform, never raises (matches `parse_perf_data()`'s posture
+    above): garbage/absent input degrades to an empty list for that row
+    kind, never an exception.
+
+    Decisions:
+    - `ts` is stamped identically on every row of the batch (one cycle,
+      one timestamp) as `"YYYY-MM-DD HH:MM:SS"` in UTC -- a naive or
+      non-UTC-aware `ts` is converted via `.astimezone(datetime.UTC)`
+      first, so a caller passing local time still lands correctly.
+    - Host rows: one per snapshot, every host (D-42's "every service"
+      companion for hosts) -- `is_publishable_device_id()` gates MQTT
+      topic safety, not history rows, which are keyed by plain table
+      columns, so it does not apply here. `host_state_raw` is mapped
+      through `HOST_STATE_CODES`; an unrecognized value (should not
+      happen, `host_state_label()` only ever returns UP/DOWN/UNREACH)
+      degrades to 0 (UP) rather than raising.
+    - Service rows: one per `ServiceSnapshot`, every service (D-42: no
+      `SERVICE_LIST_EXCLUDED_EXACT` filtering here -- that filtering is a
+      dashboard display concern, not a history-recording one).
+      `state_raw` outside the documented 0..3 range degrades to 3
+      (UNKNOWN).
+    - Metric rows: one per `perf_data` label. A label whose `value` is not
+      a finite `int`/`float` (NaN, inf, a `bool`, a string, ...) is
+      skipped entirely -- `math.isfinite()` on `int`/`float` only, `bool`
+      explicitly excluded despite being an `int` subclass so a
+      stray `True`/`False` value never becomes `1`/`0` silently. A
+      non-finite `warn`/`crit` becomes `None` rather than skipping the
+      whole row, since the value itself is still meaningful without
+      thresholds.
+    - Every row dict has exactly the contract's columns and no others (in
+      particular, `plugin_output` is never carried into a row) --
+      `ServiceSnapshot.plugin_output` and `DeviceSnapshot.device_type`/
+      `criticality`/etc. are deliberately not read here.
+    - `services=None` (services probe unavailable this cycle, D-12/D-13)
+      yields empty `service_state`/`metrics` lists; `host_state` is still
+      built from `snapshots`, which come from the poller's mandatory
+      Livestatus query and are always available when this function runs.
+    """
+    stamp = ts.astimezone(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _finite_or_none(raw: object) -> float | None:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        return raw if math.isfinite(raw) else None
+
+    host_rows = [
+        {
+            "ts": stamp,
+            "host": snapshot.id,
+            "folder": snapshot.folder,
+            "state": HOST_STATE_CODES.get(snapshot.host_state_raw, 0),
+            "in_downtime": 1 if snapshot.in_downtime else 0,
+        }
+        for snapshot in snapshots
+    ]
+
+    service_rows: list[dict] = []
+    metric_rows: list[dict] = []
+    for service in services or []:
+        state_raw = service.state_raw if service.state_raw in (0, 1, 2, 3) else 3
+        service_rows.append(
+            {
+                "ts": stamp,
+                "host": service.host_name,
+                "service": service.description,
+                "state": state_raw,
+            }
+        )
+        for metric, values in (service.perf_data or {}).items():
+            value = _finite_or_none(values.get("value") if isinstance(values, dict) else None)
+            if value is None:
+                continue
+            metric_rows.append(
+                {
+                    "ts": stamp,
+                    "host": service.host_name,
+                    "service": service.description,
+                    "metric": metric,
+                    "value": value,
+                    "warn": _finite_or_none(values.get("warn")),
+                    "crit": _finite_or_none(values.get("crit")),
+                }
+            )
+
+    return HistoryBatch(metrics=metric_rows, host_state=host_rows, service_state=service_rows)
+
+
+def write_history(config: PollerConfig, batch: HistoryBatch) -> None:
+    """Push one cycle's `HistoryBatch` to ClickHouse -- never raises (D-44/D-47).
+
+    A no-op when `config.clickhouse_url` is unset (the poller behaves
+    exactly as before Phase 14.1). Otherwise each of the three tables is
+    inserted in its own try/except so a failure on one (e.g. a bad metric
+    row) cannot also drop the host/service state rows availability
+    rollups depend on. No buffering, no retry, no file: an unreachable or
+    rejecting ClickHouse simply drops that cycle's rows for that table,
+    and the gap reads as "no data" downstream (D-47) rather than as up or
+    down.
+    """
+    if not config.clickhouse_url:
+        return
+    for table, rows in (
+        ("history.metrics", batch.metrics),
+        ("history.host_state", batch.host_state),
+        ("history.service_state", batch.service_state),
+    ):
+        try:
+            _clickhouse_insert(
+                config.clickhouse_url,
+                config.clickhouse_writer_user,
+                config.clickhouse_writer_password,
+                table,
+                rows,
+                config.clickhouse_timeout_seconds,
+            )
+        except ClickHouseError as exc:
+            _logger.warning(
+                "ClickHouse write to %s failed this cycle; the gap reads as no data (D-44/D-47): %s",
+                table,
+                exc,
+            )
 
 
 def available_host_columns(host: str, port: int, timeout: float) -> set[str]:
@@ -2728,6 +2873,13 @@ def run_forever(config: PollerConfig) -> int:
         config.mqtt_host,
         config.mqtt_port,
     )
+    # Phase 14.1 (D-44): a greppable line stating whether history writes are
+    # on, matching OPS-04's "healthy vs hung" reasoning above. Never logs
+    # clickhouse_writer_password -- only the URL, which carries no secret.
+    if config.clickhouse_url:
+        _logger.info("History writes enabled: clickhouse_url=%s", config.clickhouse_url)
+    else:
+        _logger.info("History writes disabled: CLICKHOUSE_URL is unset")
 
     stop_event = threading.Event()
 
@@ -2803,6 +2955,13 @@ def run_forever(config: PollerConfig) -> int:
                 services=services,
                 allow_stale_sweep=bool(snapshots) or (rest_ok and not last_host_config),
             )
+            # Runs after MQTT publishing (run_cycle above) so a slow or dead
+            # ClickHouse can never delay status (D-44). A skipped cycle
+            # (the LivestatusError branch above) writes nothing at all,
+            # which is the "no data" gap D-47 describes.
+            write_history(config, build_history_rows(
+                snapshots, services, datetime.datetime.now(datetime.UTC)
+            ))
         stop_event.wait(timeout=config.poll_interval_seconds)
 
     # Graceful stop must leave the same retained value the LWT would have
@@ -2966,6 +3125,12 @@ def main() -> int:
             services=once_services,
             allow_stale_sweep=bool(snapshots) or (once_rest_ok and not once_host_config),
         )
+        # Same D-44 placement as run_forever's loop: after MQTT publishing,
+        # so this one-shot verification path writes the same history a
+        # long-running cycle would.
+        write_history(config, build_history_rows(
+            snapshots, once_services, datetime.datetime.now(datetime.UTC)
+        ))
         shutdown_mqtt_client(client)
         return 0
 
