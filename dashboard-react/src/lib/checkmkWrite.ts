@@ -1,7 +1,7 @@
-// The one module in lib/ that makes network calls -- the same exception src/store/mqttClient.ts
-// is for the broker. Every browser write to Checkmk (parents, map_position, unmanaged-switch
-// hosts, activation) goes through the single `request()` choke point below, the TypeScript
-// port of `src/checkmk_wizard/api.py`'s `_request()` (lines 104-140).
+// One of the three lib/store modules that make network calls, alongside runtimeConfig.ts and
+// src/store/mqttClient.ts. Every browser write to Checkmk (parents, map_position,
+// unmanaged-switch hosts, activation) goes through the single `request()` choke point below,
+// the TypeScript port of `src/checkmk_wizard/api.py`'s `_request()` (lines 104-140).
 //
 // Amended 2026-09-30 (quick 260930-hpy): supersedes Phase 13 D-04's client-embedded
 // `topology_editor` credential. The browser no longer authenticates itself at all -- the
@@ -32,7 +32,8 @@
 // No DOM access, no broker connection, no browser storage -- the browser Fetch API is the
 // only I/O primitive used.
 
-import { CHECKMK_REST_ORIGIN, CHECKMK_SITE } from "./config";
+import { CHECKMK_REST_ORIGIN } from "./config";
+import { getRuntimeConfig } from "./runtimeConfig";
 import { type CriticalityTier, isCriticalityTier } from "./incidents";
 import {
   MAP_POSITION_LABEL,
@@ -66,7 +67,11 @@ export class CheckmkWriteError extends Error {
   }
 }
 
-const API_PREFIX = `${CHECKMK_REST_ORIGIN}/${CHECKMK_SITE}/check_mk/api/1.0`;
+// Built per call, not at module load: modules are evaluated before main.tsx's
+// loadRuntimeConfig() resolves, so a module-level constant would always see the default site.
+function apiPrefix(): string {
+  return `${CHECKMK_REST_ORIGIN}/${getRuntimeConfig().checkmkSite}/check_mk/api/1.0`;
+}
 const DEFAULT_EXPECT = [200, 201, 204];
 
 interface RequestOptions {
@@ -82,7 +87,7 @@ interface RequestOptions {
 // proxy) injects the scoped topology_editor credential server-side and overrides anything the
 // client sends, so the browser has nothing to leak into an error message, a Snackbar, or a log.
 async function request(method: string, path: string, opts?: RequestOptions): Promise<Response> {
-  const url = `${API_PREFIX}${path}`;
+  const url = `${apiPrefix()}${path}`;
   const expect = opts?.expect ?? DEFAULT_EXPECT;
   const headers: Record<string, string> = {
     Accept: "application/json",
@@ -168,7 +173,7 @@ async function updateHostAttributes(
   const getResp = await request("GET", path);
   const etag = getResp.headers.get("ETag");
   if (!etag) {
-    throw new CheckmkWriteError("GET", `${API_PREFIX}${path}`, getResp.status, "missing ETag header");
+    throw new CheckmkWriteError("GET", `${apiPrefix()}${path}`, getResp.status, "missing ETag header");
   }
   const json = (await getResp.json()) as { extensions?: { attributes?: Record<string, unknown> } };
   const attributes: Record<string, unknown> = { ...(json.extensions?.attributes ?? {}) };
@@ -421,7 +426,7 @@ export function activateChanges(): Promise<void> {
     if (!etag) {
       throw new CheckmkWriteError(
         "GET",
-        `${API_PREFIX}/domain-types/activation_run/collections/pending_changes`,
+        `${apiPrefix()}/domain-types/activation_run/collections/pending_changes`,
         pendingResp.status,
         "missing ETag header",
       );
@@ -431,7 +436,7 @@ export function activateChanges(): Promise<void> {
       "POST",
       "/domain-types/activation_run/actions/activate-changes/invoke",
       {
-        body: { redirect: false, sites: [CHECKMK_SITE], force_foreign_changes: false },
+        body: { redirect: false, sites: [getRuntimeConfig().checkmkSite], force_foreign_changes: false },
         headers: { "If-Match": etag },
         expect: [200, 201, 204],
       },
@@ -458,7 +463,7 @@ export function activateChanges(): Promise<void> {
 
     if (isRunning) {
       const pollPath = `/objects/activation_run/${encodeURIComponent(activation.id)}`;
-      throw new CheckmkWriteError("GET", `${API_PREFIX}${pollPath}`, 0, "activation timed out");
+      throw new CheckmkWriteError("GET", `${apiPrefix()}${pollPath}`, 0, "activation timed out");
     }
   });
 }

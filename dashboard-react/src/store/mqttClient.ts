@@ -20,7 +20,8 @@
 // `close` event, with the standard `min(max, base * 2**attempt) * jitter` formula.
 
 import mqtt, { type MqttClient } from "mqtt";
-import { WS_PORT, WS_USERNAME, WS_PASSWORD } from "../lib/config";
+import { WS_PORT } from "../lib/config";
+import { getRuntimeConfig } from "../lib/runtimeConfig";
 import { useAppStore } from "./useAppStore";
 
 export const BASE_DELAY_MS = 1000;
@@ -76,10 +77,11 @@ export function connect(deps: ConnectDeps = {}): void {
   // dashboard works unchanged from any LAN device -- nginx and mosquitto are published
   // from the same host.
   const url = `ws://${location.hostname}:${WS_PORT}`;
+  const { wsUsername, wsPassword } = getRuntimeConfig();
 
   client = connectFn(url, {
-    username: WS_USERNAME,
-    password: WS_PASSWORD,
+    username: wsUsername,
+    password: wsPassword,
     reconnectPeriod: 0, // disable mqtt.js's own fixed-interval retry -- see header comment
     clean: true, // default; retained-message delivery on SUBACK is independent of clean-session
   });

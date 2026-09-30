@@ -5,9 +5,15 @@ import { createRoot } from "react-dom/client";
 import "kone-design-system/style.css";
 import "./index.css";
 import App from "./App.tsx";
+import { loadRuntimeConfig } from "./lib/runtimeConfig";
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+// The runtime config must be loaded before App mounts: App's effect calls connect() and the
+// topology-editor probe runs on first render, both of which read getRuntimeConfig().
+// loadRuntimeConfig() never rejects, so no catch branch is needed here.
+void loadRuntimeConfig().then(() => {
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+});

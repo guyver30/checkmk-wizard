@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MqttClient } from "mqtt";
+import type { IClientOptions, MqttClient } from "mqtt";
 import {
   connect,
   disconnect,
@@ -96,7 +96,7 @@ describe("connect", () => {
 
     connect({ connectFn });
 
-    const [, options] = connectFn.mock.calls[0];
+    const [, options] = connectFn.mock.calls[0] as unknown as [string, IClientOptions];
     expect(options).toMatchObject({ username: "u2", password: "p2" });
   });
 
