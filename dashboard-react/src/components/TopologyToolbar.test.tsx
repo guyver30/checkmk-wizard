@@ -73,7 +73,7 @@ describe("TopologyToolbar", () => {
     const toggle = screen.getByRole("switch", { name: "Edit topology" });
     expect(toggle).toBeDisabled();
     expect(
-      screen.getByText("Editing is off until TOPOLOGY_EDITOR_SECRET is set in src/lib/config.ts."),
+      screen.getByText("Editing is off: set TOPOLOGY_EDITOR_SECRET in deploy/.env and run the wizard."),
     ).toBeInTheDocument();
   });
 });

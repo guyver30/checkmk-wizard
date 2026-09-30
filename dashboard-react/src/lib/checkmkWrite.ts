@@ -1,9 +1,15 @@
 // The one module in lib/ that makes network calls -- the same exception src/store/mqttClient.ts
 // is for the broker. Every browser write to Checkmk (parents, map_position, unmanaged-switch
 // hosts, activation) goes through the single `request()` choke point below, the TypeScript
-// port of `src/checkmk_wizard/api.py`'s `_request()` (lines 104-140). It authenticates as the
-// scoped `topology_editor` credential from `./config.ts` (D-04) -- never the wizard's own
-// full-power `automation` user.
+// port of `src/checkmk_wizard/api.py`'s `_request()` (lines 104-140).
+//
+// Amended 2026-09-30 (quick 260930-hpy): supersedes Phase 13 D-04's client-embedded
+// `topology_editor` credential. The browser no longer authenticates itself at all -- the
+// scoped `topology_editor` credential is injected by the dashboard's nginx (or the Vite
+// dev/preview proxy in local dev) from `TOPOLOGY_EDITOR_SECRET` in `deploy/.env`, per an
+// allow-list of exactly the REST calls this module makes (`deploy/dashboard-nginx.conf`).
+// `probeEditingAvailable()` below is how the SPA learns whether that server-side injection
+// is configured, since it can no longer read the secret's presence client-side.
 //
 // Functions ported from api.py, one-to-one:
 // - request()              <- CheckmkClient._request() (api.py:104-140)
@@ -26,12 +32,7 @@
 // No DOM access, no broker connection, no browser storage -- the browser Fetch API is the
 // only I/O primitive used.
 
-import {
-  CHECKMK_REST_ORIGIN,
-  CHECKMK_SITE,
-  TOPOLOGY_EDITOR_SECRET,
-  TOPOLOGY_EDITOR_USER,
-} from "./config";
+import { CHECKMK_REST_ORIGIN, CHECKMK_SITE } from "./config";
 import { type CriticalityTier, isCriticalityTier } from "./incidents";
 import {
   MAP_POSITION_LABEL,
@@ -75,15 +76,15 @@ interface RequestOptions {
 }
 
 // The single choke point every exported write/read funnels through (api.py:104-140's analog):
-// builds the URL, sets Authorization/Accept, JSON-encodes the body, normalises both a rejected
-// fetch (network failure, status 0) and a non-expected HTTP status into one CheckmkWriteError.
-// Deliberately never copies `headers` into the thrown error, so the Authorization header (and
-// therefore TOPOLOGY_EDITOR_SECRET) can never leak into an error message, a Snackbar, or a log.
+// builds the URL, sets Accept, JSON-encodes the body, normalises both a rejected fetch (network
+// failure, status 0) and a non-expected HTTP status into one CheckmkWriteError. No Authorization
+// header is set here (amended 2026-09-30, quick 260930-hpy) -- nginx (or the Vite dev/preview
+// proxy) injects the scoped topology_editor credential server-side and overrides anything the
+// client sends, so the browser has nothing to leak into an error message, a Snackbar, or a log.
 async function request(method: string, path: string, opts?: RequestOptions): Promise<Response> {
   const url = `${API_PREFIX}${path}`;
   const expect = opts?.expect ?? DEFAULT_EXPECT;
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${TOPOLOGY_EDITOR_USER} ${TOPOLOGY_EDITOR_SECRET}`,
     Accept: "application/json",
     ...opts?.headers,
   };
@@ -114,6 +115,23 @@ async function request(method: string, path: string, opts?: RequestOptions): Pro
     throw new CheckmkWriteError(method, url, response.status, body);
   }
   return response;
+}
+
+// Runtime replacement for the old compile-time isTopologyEditingConfigured() placeholder check
+// (amended 2026-09-30, quick 260930-hpy): since the browser no longer holds the credential, it
+// can only find out whether editing is available by asking Checkmk through the same proxy path
+// the rest of this module uses. GET /version must stay on nginx's GET allow-list
+// (deploy/dashboard-nginx.conf) for this probe to ever succeed. 200 means the injected
+// Authorization header authenticated; a Checkmk site with TOPOLOGY_EDITOR_SECRET unset answers
+// 401 to every /checkmk-api/ call (nginx still injects the header, just with an empty secret),
+// which resolves this to false, same as any other rejected status or a network failure.
+export async function probeEditingAvailable(): Promise<boolean> {
+  try {
+    await request("GET", "/version");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Serializes every write behind a module-level promise chain so two rapid edits can never

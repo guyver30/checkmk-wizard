@@ -6,7 +6,7 @@
 import { Banner, Button, Switch } from "kone-design-system";
 
 const CONFIGURATION_HINT =
-  "Editing is off until TOPOLOGY_EDITOR_SECRET is set in src/lib/config.ts.";
+  "Editing is off: set TOPOLOGY_EDITOR_SECRET in deploy/.env and run the wizard.";
 
 export interface TopologyToolbarProps {
   editMode: boolean;

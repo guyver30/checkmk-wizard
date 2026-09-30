@@ -12,13 +12,13 @@ import {
   isValidHostName,
   parseDependsOnLabel,
   parseServiceCriticalityLabel,
+  probeEditingAvailable,
   setCriticality,
   setMapPosition,
   setServiceCriticality,
   updateDependsOn,
   updateParents,
 } from "./checkmkWrite";
-import { TOPOLOGY_EDITOR_SECRET } from "./config";
 
 function mockResponse(
   status: number,
@@ -77,7 +77,57 @@ describe("request() choke point (exercised via the exported writers)", () => {
     expect(caught).toBeInstanceOf(CheckmkWriteError);
     expect(String(caught)).not.toContain("Bearer");
     expect(caught?.message).not.toContain("Bearer");
-    expect(String(caught)).not.toContain(TOPOLOGY_EDITOR_SECRET);
+  });
+
+  // Amended 2026-09-30 (quick 260930-hpy): the browser no longer authenticates itself at all --
+  // nginx (or the Vite dev/preview proxy) injects the topology_editor credential server-side.
+  it("sends no Authorization header on a GET request", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(200, { value: [] }, { ETag: "e" }));
+
+    await countPendingChanges();
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers.Authorization).toBeUndefined();
+  });
+
+  it("sends no Authorization header on a PUT request", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(200, { extensions: { attributes: {} } }, { ETag: "e" }),
+    );
+    fetchMock.mockResolvedValueOnce(mockResponse(200, {}));
+
+    await updateParents("h1", (parents) => [...parents, "sw"]);
+
+    const [, putInit] = fetchMock.mock.calls[1];
+    expect(putInit.headers.Authorization).toBeUndefined();
+  });
+});
+
+describe("probeEditingAvailable", () => {
+  it("resolves true on 200", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(200, { versions: { checkmk: "2.4.0p35" } }));
+
+    await expect(probeEditingAvailable()).resolves.toBe(true);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("/version");
+  });
+
+  it("resolves false on 401", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(401, { title: "Unauthorized" }));
+
+    await expect(probeEditingAvailable()).resolves.toBe(false);
+  });
+
+  it("resolves false on 500", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(500, { title: "boom" }));
+
+    await expect(probeEditingAvailable()).resolves.toBe(false);
+  });
+
+  it("resolves false (does not reject) when fetch itself rejects", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("network down"));
+
+    await expect(probeEditingAvailable()).resolves.toBe(false);
   });
 });
 

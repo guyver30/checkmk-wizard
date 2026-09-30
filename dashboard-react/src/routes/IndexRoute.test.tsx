@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IndexRoute } from "./IndexRoute";
@@ -9,19 +9,18 @@ import { useAppStore } from "../store/useAppStore";
 // Every write in edit mode goes through checkmkWrite.ts -- mocked here so these route-level
 // tests exercise IndexRoute's own wiring (what it calls, how it reacts to success/failure)
 // without making a real network call, the same convention TopologyMap.test.tsx already uses.
+//
+// probeEditingAvailable() (amended 2026-09-30, quick 260930-hpy) replaces the old
+// isTopologyEditingConfigured() config.ts mock below -- resolved true by default in the
+// top-level beforeEach so the Switch/toolbar tests don't also have to wait out the
+// disabled-until-probed window; TopologyToolbar.test.tsx and the dedicated
+// "editing unavailable" test further down already cover the disabled-hint state.
 vi.mock("../lib/checkmkWrite", () => ({
   countPendingChanges: vi.fn(),
   activateChanges: vi.fn(),
   setCriticality: vi.fn(),
+  probeEditingAvailable: vi.fn(),
 }));
-
-// isTopologyEditingConfigured() reads the placeholder secret in config.ts, which stays
-// unconfigured in this checkout -- forced true here so the Switch/toolbar tests below don't
-// need to also cover the disabled-hint state (TopologyToolbar.test.tsx already covers that).
-vi.mock("../lib/config", async () => {
-  const actual = await vi.importActual<typeof import("../lib/config")>("../lib/config");
-  return { ...actual, isTopologyEditingConfigured: () => true };
-});
 
 // TopologyMap itself is exercised by TopologyMap.test.tsx (including its real onEditSaved/
 // onEditFailed call sites via vis-network's manipulation toolbar); here it's replaced with a
@@ -55,6 +54,7 @@ const INITIAL_STATE = useAppStore.getState();
 
 beforeEach(() => {
   useAppStore.setState(INITIAL_STATE, true);
+  vi.mocked(checkmkWrite.probeEditingAvailable).mockReset().mockResolvedValue(true);
 });
 
 function encode(value: unknown): Uint8Array {
@@ -118,9 +118,23 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     expect(screen.getByTestId("topology-map")).toHaveAttribute("data-edit-mode", "false");
   });
 
+  it("when probeEditingAvailable resolves false, the switch stays disabled with the configuration hint, and CriticalityEditor never renders", async () => {
+    vi.mocked(checkmkWrite.probeEditingAvailable).mockReset().mockResolvedValue(false);
+    renderIndex();
+    await flush();
+
+    const toggle = screen.getByRole("switch", { name: "Edit topology" }) as HTMLInputElement;
+    expect(toggle).toBeDisabled();
+    expect(
+      screen.getByText("Editing is off: set TOPOLOGY_EDITOR_SECRET in deploy/.env and run the wizard."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Criticality & dependencies" })).not.toBeInTheDocument();
+  });
+
   it("edit mode gives the map the full centre: no incident list, event history or details pane; tree stays", async () => {
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValue(0);
     renderIndexAt("/?host=h1");
+    await flush(); // let the mount-time editingAvailable probe resolve before toggling
     expect(screen.getByRole("log", { name: /recent events/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
 
@@ -142,6 +156,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
   it("turning the switch on calls countPendingChanges once and shows its result as the pending count", async () => {
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValueOnce(2);
     renderIndex();
+    await flush(); // let the mount-time editingAvailable probe resolve before toggling
 
     fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
     await flush();
@@ -153,6 +168,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
   it("if countPendingChanges rejects, the pending count stays at the client value without an error Snackbar", async () => {
     vi.mocked(checkmkWrite.countPendingChanges).mockRejectedValueOnce(new Error("boom"));
     renderIndex();
+    await flush(); // let the mount-time editingAvailable probe resolve before toggling
 
     fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
     await flush();
@@ -164,6 +180,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
   it("an onEditSaved call from TopologyMap increments the pending count by 1", async () => {
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValueOnce(0);
     renderIndex();
+    await flush(); // let the mount-time editingAvailable probe resolve before toggling
 
     fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
     await flush();
@@ -178,6 +195,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValueOnce(2);
     vi.mocked(checkmkWrite.activateChanges).mockResolvedValueOnce(undefined);
     renderIndex();
+    await flush(); // let the mount-time editingAvailable probe resolve before toggling
 
     fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
     await flush();
@@ -200,6 +218,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValueOnce(2);
     vi.mocked(checkmkWrite.activateChanges).mockRejectedValueOnce(new Error("activation failed"));
     renderIndex();
+    await flush(); // let the mount-time editingAvailable probe resolve before toggling
 
     fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
     await flush();
@@ -241,6 +260,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
   it("5 minutes without interaction while in edit mode turns off the switch and shows an info Snackbar; a pointerdown at 4 min postpones it", async () => {
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValueOnce(0);
     renderIndex();
+    await flush(); // let the mount-time editingAvailable probe resolve before toggling
 
     fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
     await flush();
@@ -380,6 +400,8 @@ describe("IndexRoute CriticalityEditor wiring (DASH-16)", () => {
   it("with edit mode on, the panel renders under the toolbar; selecting a host via the map shows its criticality fields", async () => {
     renderIndex();
     seedTopology();
+    // Wait for the mount-time editingAvailable probe to resolve and enable the switch.
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Edit topology" })).toBeEnabled());
 
     await act(async () => {
       fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
@@ -396,6 +418,8 @@ describe("IndexRoute CriticalityEditor wiring (DASH-16)", () => {
     vi.mocked(checkmkWrite.setCriticality).mockResolvedValueOnce(undefined);
     renderIndex();
     seedTopology();
+    // Wait for the mount-time editingAvailable probe to resolve and enable the switch.
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Edit topology" })).toBeEnabled());
 
     await act(async () => {
       fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
