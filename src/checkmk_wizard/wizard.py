@@ -591,6 +591,23 @@ async def phase1_site_bringup() -> CheckmkConnection:
                 creds = site.SiteCredentials(site=site_name, automation_user="automation", automation_secret=secret)
                 _print_automation_secret_created(secret, from_env=env_secret is not None)
             except CheckmkAPIError as exc:
+                # status_code 0 = no HTTP response at all (api.py wraps
+                # httpx connection errors that way). Bug fixed 2026-09-30: a
+                # live run started while the checkmk container was still
+                # creating the site, and this branch told the operator the
+                # user "likely already exists" and asked for a secret that
+                # could not work. Nothing later in the run can succeed without
+                # the REST API, so stop with the real cause instead.
+                if exc.status_code == 0:
+                    target = f"{checkmk_host}:{checkmk_port}" if checkmk_port else checkmk_host
+                    console.print(
+                        f"[red]Checkmk at {target} is not reachable ({exc.body}). A new site "
+                        "takes a minute or two to create after `podman compose up -d`: wait "
+                        "until `podman logs checkmk` shows '### CONTAINER STARTED', check that "
+                        f"the site name '{site_name}' matches CMK_SITE_ID in deploy/.env, then "
+                        "re-run the wizard (deploy/run-wizard.sh waits for this).[/red]"
+                    )
+                    raise SystemExit(1) from exc
                 console.print(
                     f"[yellow]Could not auto-create the 'automation' user ({exc}) — likely "
                     "already exists from a previous run (set CMK_REST_SECRET in deploy/.env "

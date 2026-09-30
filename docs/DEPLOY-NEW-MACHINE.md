@@ -179,7 +179,12 @@ If either is empty, fix `deploy/.env`, then `podman compose down && podman compo
 ```
 
 The script checks that `automation-worker` is running and that it received
-`CMK_REST_SECRET`, then runs `uv sync` and the wizard inside it. By hand, the same is:
+`CMK_REST_SECRET`. It then waits up to 3 minutes for the `CMK_SITE_ID` site to answer
+on `checkmk:5000`, because a new site takes a minute or two to create after `up -d`. If
+Checkmk answers but has no site by that name, the script stops and lists the sites it
+does have. Finally it runs `uv sync` and the wizard inside the worker. If you start the
+wizard by hand while Checkmk is still unreachable, it now stops with a "not reachable"
+message instead of asking for an automation secret. By hand, the same is:
 
 ```bash
 podman compose exec worker bash -c "cd /app/checkmk-wizard && uv sync"

@@ -527,6 +527,35 @@ async def test_phase1_container_mode_falls_back_when_bootstrap_fails(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_phase1_container_mode_exits_when_checkmk_unreachable(monkeypatch, capsys):
+    # Regression for a live run (2026-09-30): the wizard started while the
+    # checkmk container was still creating the site. The GUI login failed with
+    # "All connection attempts failed" (status 0), yet the wizard said the
+    # 'automation' user "likely already exists" and asked for its secret. An
+    # unreachable Checkmk must stop the run with a reachability message instead.
+    answers = iter(["mysite", "checkmk:5000", "cmkadmin", False])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    _mock_container_mode_omd_calls(monkeypatch)
+
+    async def fake_bootstrap_unreachable(host, site_name, cmkadmin_password, **kwargs):
+        raise CheckmkAPIError("GET/POST", "http://checkmk:5000/mysite/check_mk/login.py", 0, "All connection attempts failed")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.bootstrap_automation_user", fake_bootstrap_unreachable)
+
+    with pytest.raises(SystemExit) as excinfo:
+        await phase1_site_bringup()
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "not reachable" in out
+    assert "likely already exists" not in out
+
+
+@pytest.mark.asyncio
 async def test_phase1_container_mode_resets_agent_registration_secret_via_cmkadmin_password(monkeypatch):
     """When no local 'agent_registration' secret is found, container mode
     resets it via REST using the same cmkadmin password, rather than
