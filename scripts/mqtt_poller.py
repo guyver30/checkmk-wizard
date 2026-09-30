@@ -54,6 +54,9 @@ import urllib.request
 import zoneinfo
 from dataclasses import dataclass, field
 
+import boto3
+import botocore.config
+import botocore.exceptions
 import paho.mqtt.client as mqtt
 
 DEFAULT_LIVESTATUS_PORT = 6557
@@ -402,6 +405,20 @@ class PollerConfig:
     clickhouse_writer_user: str = "poller_writer"
     clickhouse_writer_password: str = ""
     clickhouse_timeout_seconds: float = DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS
+    # Phase 14.1 (D-41/D-56/D-57). Appended after clickhouse_timeout_seconds
+    # so no positional PollerConfig(...) call site breaks. An empty
+    # s3_endpoint (the default) disables availability rollups entirely --
+    # maybe_run_rollups() below is a no-op until both CLICKHOUSE_URL and
+    # S3_ENDPOINT are set.
+    s3_endpoint: str = ""
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_region: str = "us-east-1"
+    s3_addressing_style: str = "path"
+    availability_bucket: str = DEFAULT_AVAILABILITY_BUCKET
+    rollup_tz: str = DEFAULT_ROLLUP_TZ
+    rollup_backfill_days: int = DEFAULT_ROLLUP_BACKFILL_DAYS
+    rollup_delay_minutes: int = DEFAULT_ROLLUP_DELAY_MINUTES
 
     def __repr__(self) -> str:
         # T-09-02: this object must be safe to log — never render the raw
@@ -430,7 +447,14 @@ class PollerConfig:
             f"clickhouse_url={self.clickhouse_url!r}, "
             f"clickhouse_writer_user={self.clickhouse_writer_user!r}, "
             "clickhouse_writer_password='***', "
-            f"clickhouse_timeout_seconds={self.clickhouse_timeout_seconds!r})"
+            f"clickhouse_timeout_seconds={self.clickhouse_timeout_seconds!r}, "
+            f"s3_endpoint={self.s3_endpoint!r}, "
+            "s3_access_key='***', "
+            "s3_secret_key='***', "
+            f"s3_region={self.s3_region!r}, "
+            f"availability_bucket={self.availability_bucket!r}, "
+            f"rollup_tz={self.rollup_tz!r}, "
+            f"rollup_backfill_days={self.rollup_backfill_days!r})"
         )
 
     @classmethod
@@ -469,6 +493,19 @@ class PollerConfig:
             clickhouse_timeout_seconds=_env_float(
                 "CLICKHOUSE_TIMEOUT_SECONDS", DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS
             ),
+            # Phase 14.1 (D-41/D-56): S3_* names are the same ones the
+            # worker service already sets in deploy/compose.yaml -- reused
+            # here rather than inventing a second set of variable names for
+            # the same MinIO/AWS S3 credentials.
+            s3_endpoint=os.environ.get("S3_ENDPOINT", ""),
+            s3_access_key=os.environ.get("S3_ACCESS_KEY", ""),
+            s3_secret_key=os.environ.get("S3_SECRET_KEY", ""),
+            s3_region=os.environ.get("S3_REGION", "us-east-1"),
+            s3_addressing_style=os.environ.get("S3_ADDRESSING_STYLE", "path"),
+            availability_bucket=os.environ.get("AVAILABILITY_BUCKET", DEFAULT_AVAILABILITY_BUCKET),
+            rollup_tz=os.environ.get("ROLLUP_TZ", DEFAULT_ROLLUP_TZ),
+            rollup_backfill_days=_env_int("ROLLUP_BACKFILL_DAYS", DEFAULT_ROLLUP_BACKFILL_DAYS),
+            rollup_delay_minutes=_env_int("ROLLUP_DELAY_MINUTES", DEFAULT_ROLLUP_DELAY_MINUTES),
         )
 
 
@@ -2032,6 +2069,287 @@ def availability_document_problems(doc: dict) -> list[str]:
         _check_entry(entry, "group")
 
     return problems
+
+
+class RollupError(RuntimeError):
+    """Raised when the availability rollup for a day cannot be safely written.
+
+    Caught at `run_rollups()`'s per-day call site and logged -- never
+    allowed to abort the rest of the backfill window or the poll loop
+    (D-44).
+    """
+
+
+def build_s3_client(config: PollerConfig):
+    """Build a `boto3` S3 client from `config`'s `S3_*` settings (D-41).
+
+    Plain S3 API only -- no MinIO-specific calls anywhere in this module.
+    Portable to AWS S3 by configuration alone: point `S3_ENDPOINT` at the
+    regional AWS endpoint (or leave it unset and let boto3 resolve AWS's
+    own default), set `S3_REGION`, and switch `S3_ADDRESSING_STYLE` to
+    "virtual" -- no code change is needed (D-41).
+    """
+    return boto3.client(
+        "s3",
+        endpoint_url=config.s3_endpoint,
+        aws_access_key_id=config.s3_access_key,
+        aws_secret_access_key=config.s3_secret_key,
+        region_name=config.s3_region,
+        config=botocore.config.Config(
+            signature_version="s3v4",
+            s3={"addressing_style": config.s3_addressing_style},
+            connect_timeout=5,
+            read_timeout=10,
+            retries={"max_attempts": 2},
+        ),
+    )
+
+
+def object_exists(s3, bucket: str, key: str) -> bool:
+    """True if `key` exists in `bucket`, checked via HEAD (never a GET, no body transfer)."""
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except botocore.exceptions.ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+
+
+def write_if_absent(s3, bucket: str, key: str, payload: bytes, content_type: str) -> bool:
+    """HEAD-before-PUT: write `payload` to `key` only if it does not already exist (D-52/D-57).
+
+    HEAD-before-PUT, not a conditional PUT (`If-None-Match`): MinIO's
+    support for the wildcard conditional-write semantic is
+    version-dependent (research Pitfall 2), while HEAD-before-PUT works
+    identically on every S3-compatible backend. The narrow TOCTOU window
+    this leaves is accepted -- the rollup job is a single writer, running
+    at most once per day per object.
+    """
+    if object_exists(s3, bucket, key):
+        return False
+    s3.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
+    return True
+
+
+# Phase 14.1: the rollup timezone name is interpolated directly into SQL
+# (`fetch_first_data_day()` below has no parameterized-identifier syntax to
+# fall back on, the same constraint `_clickhouse_insert`'s table allowlist
+# works around for table names) -- reject anything that is not
+# letters/underscores/hyphens/pluses separated by slashes before it ever
+# reaches a query.
+_TZ_NAME_RE = re.compile(r"^[A-Za-z_]+(/[A-Za-z_+-]+)*$")
+
+
+def _validate_tz_name(name: str) -> str:
+    """Return `name` unchanged if it looks like a safe IANA zone name, else raise `RollupError`."""
+    if not _TZ_NAME_RE.match(name or ""):
+        raise RollupError(f"Refusing to use unsafe timezone name in SQL: {name!r}")
+    return name
+
+
+def fetch_first_data_day(config: PollerConfig, tz_name: str) -> datetime.date | None:
+    """Return the earliest local calendar day with any `history.host_state` row, or `None` if empty.
+
+    Bounds D-52's backfill window from below: never roll up a day before
+    the fleet actually had data, which would otherwise report a
+    pre-deployment day as 100% no-data. `tz_name` must already be
+    validated by the caller (`run_rollups()`) since it is interpolated
+    into this query's SQL text.
+    """
+    rows = _clickhouse_query(
+        config.clickhouse_url,
+        config.clickhouse_writer_user,
+        config.clickhouse_writer_password,
+        f"SELECT toString(toDate(min(ts), '{tz_name}')) AS d, count() AS n FROM history.host_state",
+        config.clickhouse_timeout_seconds,
+    )
+    if not rows or int(rows[0].get("n", 0)) == 0:
+        return None
+    return datetime.date.fromisoformat(rows[0]["d"])
+
+
+def fetch_host_day_counts(
+    config: PollerConfig, start_utc: datetime.datetime, end_utc: datetime.datetime
+) -> list[dict]:
+    """Per-host up/down/unreach/downtime sample counts for `[start_utc, end_utc)` (D-51).
+
+    Computed fresh from ClickHouse's durable `history.host_state` table on
+    every call -- never from in-memory poller counters -- so a poller
+    restart mid-day cannot lose or corrupt that day's figures.
+    """
+    start_str = start_utc.strftime("%Y-%m-%d %H:%M:%S")
+    end_str = end_utc.strftime("%Y-%m-%d %H:%M:%S")
+    sql = (
+        "SELECT host, argMax(folder, ts) AS folder, "
+        "sumIf(samples, state = 0 AND in_downtime = 0) AS up_samples, "
+        "sumIf(samples, state = 1 AND in_downtime = 0) AS down_samples, "
+        "sumIf(samples, state = 2 AND in_downtime = 0) AS unreach_samples, "
+        "sumIf(samples, in_downtime = 1) AS downtime_samples "
+        "FROM history.host_state "
+        f"WHERE ts >= toDateTime('{start_str}', 'UTC') AND ts < toDateTime('{end_str}', 'UTC') "
+        "GROUP BY host ORDER BY host"
+    )
+    return _clickhouse_query(
+        config.clickhouse_url,
+        config.clickhouse_writer_user,
+        config.clickhouse_writer_password,
+        sql,
+        config.clickhouse_timeout_seconds,
+    )
+
+
+# Phase 14.1 (D-57): a single quote or backslash in an S3 credential would
+# break out of the SQL string literal `export_parquet()` builds below --
+# ClickHouse's `s3()` table function has no parameterized-credential form,
+# so this is the same defense-before-interpolation posture as
+# `_TZ_NAME_RE` above.
+_SQL_UNSAFE_CREDENTIAL_RE = re.compile(r"['\\]")
+
+
+def export_parquet(config: PollerConfig, day: datetime.date, parquet_key: str) -> None:
+    """Export `day`'s already-inserted `history.availability_daily` rows to Parquet (D-57).
+
+    ClickHouse writes the Parquet directly from the rows the poller just
+    inserted into `history.availability_daily`, so the JSON (written from
+    that same in-memory row list by `rollup_one_day()`) and this Parquet
+    twin carry identical figures by construction -- never a second,
+    independently-computed pass that could drift (research Anti-Patterns).
+
+    Refuses (`ClickHouseError`, no request sent) if the S3 access key or
+    secret contains a single quote or backslash, since both are
+    interpolated directly into the SQL statement's string literals. By
+    default ClickHouse refuses to overwrite an existing `s3()` object
+    (`s3_truncate_on_insert` is never set here) -- a second never-overwrite
+    layer behind `write_if_absent()`'s own `object_exists()` check.
+    Verified via context7 (clickhouse/clickhouse-docs,
+    docs/sql-reference/table-functions/s3.md: `INSERT INTO FUNCTION
+    s3(...)` fails on an existing key unless `s3_truncate_on_insert=1` is
+    set) and that `s3()` credentials are masked in ClickHouse's own query
+    logs (clickhouse/clickhouse-docs, docs/operations/server-configuration-
+    parameters/settings.md `query_masking_rules`: the server's built-in
+    default masking rules redact S3 URL credentials before they reach any
+    log). This poller never logs the credentials either.
+    """
+    if _SQL_UNSAFE_CREDENTIAL_RE.search(config.s3_access_key) or _SQL_UNSAFE_CREDENTIAL_RE.search(
+        config.s3_secret_key
+    ):
+        raise ClickHouseError("Refusing Parquet export: S3 credential contains an unsafe character")
+    s3_url = f"{config.s3_endpoint}/{config.availability_bucket}/{parquet_key}"
+    sql = (
+        f"INSERT INTO FUNCTION s3('{s3_url}', '{config.s3_access_key}', '{config.s3_secret_key}', "
+        "'Parquet') "
+        "SELECT day, entity_type, group_type, entity_key, folder, device_count, "
+        "up_minutes, down_minutes, unobserved_minutes, downtime_minutes, no_data_minutes, "
+        "up_pct, down_pct, unobserved_pct, downtime_pct, no_data_pct, availability_pct, "
+        "schema_version, generated_at "
+        "FROM history.availability_daily FINAL "
+        f"WHERE day = toDate('{day.isoformat()}') "
+        "ORDER BY entity_type, group_type, entity_key"
+    )
+    _clickhouse_command(
+        config.clickhouse_url,
+        config.clickhouse_writer_user,
+        config.clickhouse_writer_password,
+        sql,
+        config.clickhouse_timeout_seconds,
+    )
+
+
+def rollup_one_day(config: PollerConfig, s3, tz: zoneinfo.ZoneInfo, day: datetime.date) -> str:
+    """Compute and write one day's availability rollup if either object is missing (D-52/D-57).
+
+    Returns "skipped" when both the JSON and Parquet objects already
+    exist (never overwrite). Otherwise fetches this day's counts from
+    ClickHouse, computes the figures, inserts them into
+    `history.availability_daily`, exports the Parquet twin if missing,
+    then writes the JSON if missing, and returns "written". A day left
+    half-written by a prior run (only one of the two objects exists) is
+    completed here -- the existing object is never touched again.
+    """
+    json_key, parquet_key = rollup_object_keys(day)
+    json_exists = object_exists(s3, config.availability_bucket, json_key)
+    parquet_exists = object_exists(s3, config.availability_bucket, parquet_key)
+    if json_exists and parquet_exists:
+        return "skipped"
+
+    start_utc, end_utc = local_day_bounds(day, tz)
+    host_rows = fetch_host_day_counts(config, start_utc, end_utc)
+    rows = compute_daily_availability(
+        day, host_rows, config.poll_interval_seconds, int((end_utc - start_utc).total_seconds())
+    )
+
+    generated_at = datetime.datetime.now(datetime.UTC)
+    generated_at_str = generated_at.strftime("%Y-%m-%d %H:%M:%S")
+    _clickhouse_insert(
+        config.clickhouse_url,
+        config.clickhouse_writer_user,
+        config.clickhouse_writer_password,
+        "history.availability_daily",
+        [{**row, "generated_at": generated_at_str} for row in rows],
+        config.clickhouse_timeout_seconds,
+    )
+
+    if not parquet_exists:
+        export_parquet(config, day, parquet_key)
+
+    if not json_exists:
+        doc = availability_document(
+            day,
+            rows,
+            timezone_name=str(tz),
+            poll_interval_seconds=config.poll_interval_seconds,
+            generated_at_iso=generated_at.isoformat(),
+        )
+        problems = availability_document_problems(doc)
+        if problems:
+            raise RollupError(
+                f"Refusing to write availability document for {day}: {'; '.join(problems)}"
+            )
+        write_if_absent(
+            s3,
+            config.availability_bucket,
+            json_key,
+            json.dumps(doc).encode("utf-8"),
+            "application/json",
+        )
+
+    return "written"
+
+
+def run_rollups(
+    config: PollerConfig, s3, today_local: datetime.date
+) -> tuple[list[datetime.date], int]:
+    """Roll up every missing day back to the backfill floor, oldest first (D-52).
+
+    A day whose rollup raises is logged and skipped -- one bad day never
+    blocks the rest of the backfill window. A failure resolving the
+    fleet's first recorded day propagates to the caller
+    (`maybe_run_rollups()` below): without it there is no way to know
+    which days are even eligible.
+    """
+    tz_name = _validate_tz_name(config.rollup_tz)
+    tz = zoneinfo.ZoneInfo(tz_name)
+    first_data_day = fetch_first_data_day(config, tz_name)
+    written: list[datetime.date] = []
+    failures = 0
+    for day in rollup_days_to_check(today_local, first_data_day, config.rollup_backfill_days):
+        try:
+            result = rollup_one_day(config, s3, tz, day)
+        except (
+            ClickHouseError,
+            RollupError,
+            botocore.exceptions.BotoCoreError,
+            botocore.exceptions.ClientError,
+        ) as exc:
+            _logger.warning("Availability rollup for %s failed; will retry later: %s", day, exc)
+            failures += 1
+            continue
+        if result == "written":
+            written.append(day)
+            _logger.info("Availability rollup written for %s (JSON + Parquet)", day)
+    return written, failures
 
 
 def available_host_columns(host: str, port: int, timeout: float) -> set[str]:

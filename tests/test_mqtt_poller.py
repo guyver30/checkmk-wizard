@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import botocore.exceptions
 import pytest
 
 # scripts/ is not an importable package (no precedent in this repo for
@@ -588,6 +589,15 @@ _ENV_VARS = (
     "CLICKHOUSE_WRITER_USER",
     "CLICKHOUSE_WRITER_PASSWORD",
     "CLICKHOUSE_TIMEOUT_SECONDS",
+    "S3_ENDPOINT",
+    "S3_ACCESS_KEY",
+    "S3_SECRET_KEY",
+    "S3_REGION",
+    "S3_ADDRESSING_STYLE",
+    "AVAILABILITY_BUCKET",
+    "ROLLUP_TZ",
+    "ROLLUP_BACKFILL_DAYS",
+    "ROLLUP_DELAY_MINUTES",
 )
 
 
@@ -1518,6 +1528,269 @@ def test_availability_document_problems_detects_non_numeric_figure():
         "groups": [],
     }
     assert poller.availability_document_problems(doc) != []
+
+
+# --- Availability rollups: S3 writer, ClickHouse fetch, JSON+Parquet (Phase 14.1) ---
+
+
+def test_poller_config_from_env_s3_defaults_with_empty_environment(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    config = poller.PollerConfig.from_env()
+    assert config.s3_endpoint == ""
+    assert config.s3_access_key == ""
+    assert config.s3_secret_key == ""
+    assert config.s3_region == "us-east-1"
+    assert config.s3_addressing_style == "path"
+    assert config.availability_bucket == poller.DEFAULT_AVAILABILITY_BUCKET
+    assert config.rollup_tz == poller.DEFAULT_ROLLUP_TZ
+    assert config.rollup_backfill_days == poller.DEFAULT_ROLLUP_BACKFILL_DAYS
+    assert config.rollup_delay_minutes == poller.DEFAULT_ROLLUP_DELAY_MINUTES
+
+
+def test_poller_config_from_env_s3_reads_configured_values(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("S3_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("S3_ACCESS_KEY", "minioadmin")
+    monkeypatch.setenv("S3_SECRET_KEY", "s3cr3t")
+    monkeypatch.setenv("S3_REGION", "us-west-2")
+    monkeypatch.setenv("S3_ADDRESSING_STYLE", "virtual")
+    monkeypatch.setenv("AVAILABILITY_BUCKET", "custom-bucket")
+    monkeypatch.setenv("ROLLUP_TZ", "UTC")
+    monkeypatch.setenv("ROLLUP_BACKFILL_DAYS", "10")
+    monkeypatch.setenv("ROLLUP_DELAY_MINUTES", "7")
+    config = poller.PollerConfig.from_env()
+    assert config.s3_endpoint == "http://minio:9000"
+    assert config.s3_access_key == "minioadmin"
+    assert config.s3_secret_key == "s3cr3t"
+    assert config.s3_region == "us-west-2"
+    assert config.s3_addressing_style == "virtual"
+    assert config.availability_bucket == "custom-bucket"
+    assert config.rollup_tz == "UTC"
+    assert config.rollup_backfill_days == 10
+    assert config.rollup_delay_minutes == 7
+
+
+def test_poller_config_repr_never_contains_s3_secret_or_access_key_values(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("S3_ACCESS_KEY", "AKIASECRETVALUE")
+    monkeypatch.setenv("S3_SECRET_KEY", "verysecrets3value")
+    config = poller.PollerConfig.from_env()
+    rendered = repr(config)
+    assert "AKIASECRETVALUE" not in rendered
+    assert "verysecrets3value" not in rendered
+    assert "s3_access_key='***'" in rendered
+    assert "s3_secret_key='***'" in rendered
+
+
+def _client_error(code: str):
+    return botocore.exceptions.ClientError({"Error": {"Code": code}}, "HeadObject")
+
+
+class _FakeS3:
+    """Minimal in-memory S3 fake (head_object/put_object only) -- no moto, per PATTERNS.md."""
+
+    def __init__(self):
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def head_object(self, Bucket, Key):
+        if (Bucket, Key) not in self.objects:
+            raise _client_error("404")
+
+    def put_object(self, Bucket, Key, Body, ContentType=None):
+        self.objects[(Bucket, Key)] = Body
+
+
+def test_write_if_absent_first_call_puts_and_returns_true():
+    s3 = _FakeS3()
+    result = poller.write_if_absent(s3, "bucket", "key.json", b"hello", "application/json")
+    assert result is True
+    assert s3.objects[("bucket", "key.json")] == b"hello"
+
+
+def test_write_if_absent_second_call_returns_false_and_leaves_bytes_unchanged():
+    s3 = _FakeS3()
+    poller.write_if_absent(s3, "bucket", "key.json", b"hello", "application/json")
+    result = poller.write_if_absent(s3, "bucket", "key.json", b"changed", "application/json")
+    assert result is False
+    assert s3.objects[("bucket", "key.json")] == b"hello"
+
+
+def test_write_if_absent_head_error_other_than_404_reraises():
+    class _BrokenS3(_FakeS3):
+        def head_object(self, Bucket, Key):
+            raise _client_error("403")
+
+    with pytest.raises(botocore.exceptions.ClientError):
+        poller.write_if_absent(_BrokenS3(), "bucket", "key.json", b"hello", "application/json")
+
+
+def _rollup_config(**overrides) -> "poller.PollerConfig":
+    defaults = {
+        "clickhouse_url": "http://clickhouse:8123",
+        "clickhouse_writer_user": "poller_writer",
+        "clickhouse_writer_password": "secret",
+        "s3_endpoint": "http://minio:9000",
+        "s3_access_key": "minioadmin",
+        "s3_secret_key": "minioadmin",
+        "availability_bucket": "fleet-availability",
+        "rollup_tz": "Asia/Singapore",
+    }
+    defaults.update(overrides)
+    return _make_config(**defaults)
+
+
+def test_rollup_one_day_both_keys_present_returns_skipped_and_makes_no_clickhouse_call():
+    s3 = _FakeS3()
+    day = datetime.date(2026, 9, 27)
+    json_key, parquet_key = poller.rollup_object_keys(day)
+    s3.objects[("fleet-availability", json_key)] = b"{}"
+    s3.objects[("fleet-availability", parquet_key)] = b"parquet"
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    with (
+        patch.object(poller, "_clickhouse_query") as mock_query,
+        patch.object(poller, "_clickhouse_insert") as mock_insert,
+        patch.object(poller, "_clickhouse_command") as mock_command,
+    ):
+        result = poller.rollup_one_day(_rollup_config(), s3, tz, day)
+    assert result == "skipped"
+    mock_query.assert_not_called()
+    mock_insert.assert_not_called()
+    mock_command.assert_not_called()
+
+
+def test_rollup_one_day_writes_json_and_parquet_when_neither_exists():
+    s3 = _FakeS3()
+    day = datetime.date(2026, 9, 27)
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    start_utc, end_utc = poller.local_day_bounds(day, tz)
+    host_row = {
+        "host": "a",
+        "folder": "",
+        "up_samples": "5760",
+        "down_samples": "0",
+        "unreach_samples": "0",
+        "downtime_samples": "0",
+    }
+    with (
+        patch.object(poller, "_clickhouse_query", return_value=[host_row]) as mock_query,
+        patch.object(poller, "_clickhouse_insert") as mock_insert,
+        patch.object(poller, "_clickhouse_command") as mock_command,
+    ):
+        result = poller.rollup_one_day(_rollup_config(), s3, tz, day)
+    assert result == "written"
+    called_sql = mock_query.call_args.args[3]
+    assert start_utc.strftime("%Y-%m-%d %H:%M:%S") in called_sql
+    assert end_utc.strftime("%Y-%m-%d %H:%M:%S") in called_sql
+    assert mock_insert.call_args.args[3] == "history.availability_daily"
+    command_sql = mock_command.call_args.args[3]
+    json_key, parquet_key = poller.rollup_object_keys(day)
+    assert "INSERT INTO FUNCTION s3(" in command_sql
+    assert parquet_key in command_sql
+    assert "fleet-availability" in command_sql
+    assert "'Parquet'" in command_sql
+    assert "FROM history.availability_daily FINAL WHERE day = " in command_sql
+    assert ("fleet-availability", json_key) in s3.objects
+
+
+def test_rollup_one_day_only_json_present_runs_parquet_export_only():
+    s3 = _FakeS3()
+    day = datetime.date(2026, 9, 27)
+    json_key, _parquet_key = poller.rollup_object_keys(day)
+    s3.objects[("fleet-availability", json_key)] = b"{}"
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    with (
+        patch.object(poller, "_clickhouse_query", return_value=[]),
+        patch.object(poller, "_clickhouse_insert"),
+        patch.object(poller, "_clickhouse_command") as mock_command,
+    ):
+        result = poller.rollup_one_day(_rollup_config(), s3, tz, day)
+    assert result == "written"
+    mock_command.assert_called_once()
+    assert s3.objects[("fleet-availability", json_key)] == b"{}"
+
+
+def test_rollup_one_day_only_parquet_present_runs_json_put_only():
+    s3 = _FakeS3()
+    day = datetime.date(2026, 9, 27)
+    json_key, parquet_key = poller.rollup_object_keys(day)
+    s3.objects[("fleet-availability", parquet_key)] = b"parquet-bytes"
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    with (
+        patch.object(poller, "_clickhouse_query", return_value=[]),
+        patch.object(poller, "_clickhouse_insert"),
+        patch.object(poller, "_clickhouse_command") as mock_command,
+    ):
+        result = poller.rollup_one_day(_rollup_config(), s3, tz, day)
+    assert result == "written"
+    mock_command.assert_not_called()
+    assert ("fleet-availability", json_key) in s3.objects
+    assert s3.objects[("fleet-availability", parquet_key)] == b"parquet-bytes"
+
+
+def test_rollup_one_day_invalid_document_raises_rollup_error_and_nothing_is_put():
+    s3 = _FakeS3()
+    day = datetime.date(2026, 9, 27)
+    json_key, parquet_key = poller.rollup_object_keys(day)
+    s3.objects[("fleet-availability", parquet_key)] = b"parquet-bytes"
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    with (
+        patch.object(poller, "_clickhouse_query", return_value=[]),
+        patch.object(poller, "_clickhouse_insert"),
+        patch.object(poller, "availability_document_problems", return_value=["bad schema_version"]),
+        pytest.raises(poller.RollupError),
+    ):
+        poller.rollup_one_day(_rollup_config(), s3, tz, day)
+    assert ("fleet-availability", json_key) not in s3.objects
+
+
+def test_export_parquet_access_key_with_quote_raises_without_request():
+    config = _rollup_config(s3_access_key="bad'key")
+    parquet_key = "availability_parquet/date=2026-09-27/availability.parquet"
+    with (
+        patch.object(poller, "_clickhouse_command") as mock_command,
+        pytest.raises(poller.ClickHouseError),
+    ):
+        poller.export_parquet(config, datetime.date(2026, 9, 27), parquet_key)
+    mock_command.assert_not_called()
+
+
+def test_export_parquet_secret_key_with_quote_raises_without_request():
+    config = _rollup_config(s3_secret_key="bad'secret")
+    parquet_key = "availability_parquet/date=2026-09-27/availability.parquet"
+    with (
+        patch.object(poller, "_clickhouse_command") as mock_command,
+        pytest.raises(poller.ClickHouseError),
+    ):
+        poller.export_parquet(config, datetime.date(2026, 9, 27), parquet_key)
+    mock_command.assert_not_called()
+
+
+def test_run_rollups_continues_past_a_failing_day():
+    config = _rollup_config()
+    s3 = _FakeS3()
+    with (
+        patch.object(poller, "fetch_first_data_day", return_value=datetime.date(2026, 9, 20)),
+        patch.object(
+            poller,
+            "rollup_one_day",
+            side_effect=[poller.RollupError("boom"), "written", "skipped"],
+        ),
+    ):
+        written, failures = poller.run_rollups(config, s3, datetime.date(2026, 9, 23))
+    assert failures == 1
+    assert len(written) == 1
+
+
+def test_fetch_first_data_day_returns_none_when_table_empty():
+    config = _rollup_config()
+    with patch.object(poller, "_clickhouse_query", return_value=[{"d": "1970-01-01", "n": "0"}]):
+        assert poller.fetch_first_data_day(config, "Asia/Singapore") is None
+
+
+def test_fetch_first_data_day_returns_date_when_table_has_rows():
+    config = _rollup_config()
+    with patch.object(poller, "_clickhouse_query", return_value=[{"d": "2026-09-20", "n": "1000"}]):
+        assert poller.fetch_first_data_day(config, "Asia/Singapore") == datetime.date(2026, 9, 20)
 
 
 # --- build_hosts_query / select_host_columns --------------------------------
