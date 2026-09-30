@@ -365,15 +365,16 @@ services:
       - cmk_net
 
   # 6. Live Dashboard — static nginx, no server-side process. Per-deployment
-  # dashboard settings live in dashboard-react/src/lib/config.ts (baked in at
-  # build time), not in an environment: block here (D-01/D-02/D-20) — except
-  # TOPOLOGY_EDITOR_SECRET below, which is deliberately NOT baked into
-  # config.ts (amended 2026-09-30, quick 260930-hpy): nginx injects it
-  # server-side per request, so it never reaches the browser bundle.
+  # dashboard settings (Checkmk site name, read-only broker credentials,
+  # TOPOLOGY_EDITOR_SECRET) all come from this environment: block, rendered by
+  # deploy/dashboard-nginx.conf at container start (amended 2026-09-30, quick
+  # 260930-ixs) — none of them is baked into the image, so the same image
+  # runs on every machine.
   dashboard:
     # React dashboard, built into its own nginx image (cutover 2026-09-28; it
     # replaced the vanilla ../dashboard bind mount). Rebuild after every
-    # `git pull` or config.ts edit: `podman compose build dashboard`.
+    # `git pull` (code changes only; per-machine settings come from
+    # deploy/.env at container start): `podman compose build dashboard`.
     build:
       context: ..
       dockerfile: deploy/dashboard.Containerfile
@@ -396,6 +397,12 @@ services:
       # Authorization header on the allow-listed /checkmk-api/ REST calls
       # (deploy/dashboard-nginx.conf) — it never reaches the browser.
       - TOPOLOGY_EDITOR_SECRET=${TOPOLOGY_EDITOR_SECRET:-}
+      # Added 2026-09-30 (quick 260930-ixs): rendered into the /config.json
+      # location in deploy/dashboard-nginx.conf, which the SPA loads at
+      # startup (dashboard-react/src/lib/runtimeConfig.ts).
+      - CMK_SITE_ID=${CMK_SITE_ID:-dmc}
+      - WS_USERNAME=${WS_USERNAME:-wsreader}
+      - WS_PASSWORD=${WS_PASSWORD:-wsreader}
     ports:
       - "8090:80"       # dashboard UI — host 8090 is clear of 8080/8000/6556
                           # checkmk, 1883 mqtt, 9000/9001 minio and 9002
