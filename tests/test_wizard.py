@@ -3814,6 +3814,62 @@ async def test_phase7_state_table_lists_every_host_on_the_site(monkeypatch, tmp_
     assert "✓" in out
 
 
+async def _run_phase7_with_livestatus(monkeypatch, tmp_path, query):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("checkmk_wizard.wizard.livestatus.query_host_states", query)
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
+    promoted = OnboardedHost(ip="192.168.0.1", hostname="router", folder="/", os_family="ping")
+    with respx.mock:
+        _mock_activation_routes()
+        _mock_list_hosts([_host("router", "192.168.0.1")])
+        respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"value": []})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase7_activation(client, CONN, [promoted])
+
+
+@pytest.mark.asyncio
+async def test_phase7_livestatus_reset_warns_and_still_writes_snapshot(monkeypatch, tmp_path, capsys):
+    # Regression for a live crash (2026-09-30): Livestatus reset the connection
+    # ("[Errno 104] Connection reset by peer") right after Phase 7's activation,
+    # and the unhandled ConnectionResetError aborted the run with a traceback
+    # before the config snapshot was written. The health check is a read-only
+    # report, so it must degrade to a warning like every other best-effort step.
+    def reset(host, names):
+        raise ConnectionResetError(104, "Connection reset by peer")
+
+    await _run_phase7_with_livestatus(monkeypatch, tmp_path, reset)
+
+    out = capsys.readouterr().out
+    assert "LIVESTATUS_TCP_TLS" in out
+    assert "unknown" in out
+    assert list(tmp_path.glob("config_snapshot_*.json"))
+
+
+@pytest.mark.asyncio
+async def test_phase7_livestatus_retries_after_transient_reset(monkeypatch, tmp_path, capsys):
+    # Activation reloads the monitoring core, so the first query can hit a reset
+    # while the core is restarting; a retry must pick up the real states.
+    calls = []
+
+    def flaky(host, names):
+        calls.append(host)
+        if len(calls) == 1:
+            raise ConnectionResetError(104, "Connection reset by peer")
+        return {"router": 0}
+
+    await _run_phase7_with_livestatus(monkeypatch, tmp_path, flaky)
+
+    out = capsys.readouterr().out
+    assert len(calls) == 2
+    assert "UP" in out
+    assert "LIVESTATUS_TCP_TLS" not in out
+
+
 @pytest.mark.asyncio
 async def test_activate_pending_changes_success(capsys):
     with respx.mock:

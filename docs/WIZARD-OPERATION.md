@@ -1585,6 +1585,18 @@ a different mechanism than the plan's wording, but the same outcome
      (`line.partition(";")`, `livestatus.py:44`).
    - Maps state `0→UP`, `1→DOWN`, `2→UNREACHABLE`, anything else →
      `"unknown"`, and prints a table.
+   - **Never aborts the run (fixed 2026-09-30).** The query goes through
+     `_query_host_states_best_effort()`. It retries any socket error after
+     3, 5 and 10 seconds, because activation reloads the monitoring core and
+     a query that arrives mid-restart gets "Connection reset by peer". If
+     every attempt fails, it prints a yellow warning, every host shows
+     `unknown`, and the snapshot (step 4) is still written. Before this fix,
+     the reset crashed the wizard with a traceback at the very end, after
+     everything had already been activated. If the warning appears on every
+     run, the likely cause is `LIVESTATUS_TCP_TLS=on`: the TLS listener resets
+     plain LQL. Check it with `podman compose exec checkmk omd config <site>
+     show LIVESTATUS_TCP_TLS`, which should print `off`. See the Podman setup
+     doc §5 for the fix.
 3. Pulls the site's **actual current** host/folder configuration —
    `client.list_hosts()` → `GET /domain-types/host_config/collections/all`
    and `client.list_folders()` → `GET

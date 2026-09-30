@@ -2776,6 +2776,38 @@ def _verify_expected_services(host: OnboardedHost, discovery_result: dict) -> No
 
 # ── Phase 7: Activation & validation ────────────────────────────────────
 
+_LIVESTATUS_RETRY_DELAYS_SECONDS = (3, 5, 10)
+
+
+async def _query_host_states_best_effort(host: str, host_names: list[str]) -> dict[str, int]:
+    """Query host states for the post-activation table, never raising.
+
+    Bug fixed 2026-09-30: a live container-mode run crashed at the very end
+    with an unhandled "ConnectionResetError: [Errno 104] Connection reset by
+    peer" from this query, losing the host-state table and the config snapshot
+    written after it, although every change had already been activated. Two
+    causes produce that reset: activation reloads the monitoring core, so a
+    query right after it can land mid-restart (transient, hence the retries);
+    and LIVESTATUS_TCP_TLS=on, where the TLS listener resets plain LQL
+    (permanent, hence the hint). The table is a read-only report, so after the
+    retries it degrades to "unknown" states instead of aborting the run.
+    """
+    for delay in (*_LIVESTATUS_RETRY_DELAYS_SECONDS, None):
+        try:
+            return livestatus.query_host_states(host, host_names)
+        except OSError as exc:
+            last_error = exc
+        if delay is not None:
+            await asyncio.sleep(delay)
+    console.print(
+        f"[yellow]Could not read host states from Livestatus on {host}:{livestatus.DEFAULT_PORT} "
+        f"({last_error}); the table below shows 'unknown'. Everything above is already activated. "
+        "If this persists, check that LIVESTATUS_TCP_TLS is off: "
+        "`podman compose exec checkmk omd config <site> show LIVESTATUS_TCP_TLS` "
+        "(expect 'off').[/yellow]"
+    )
+    return {}
+
 
 async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]) -> None:
     console.rule("[bold]Phase 7 — Activation & Validation")
@@ -2820,7 +2852,7 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
     if rows:
         # Livestatus (6557) is a different protocol/port than the REST/GUI
         # port — always the bare host, never connection.port.
-        states = livestatus.query_host_states(connection.host, [name for name, _ in rows])
+        states = await _query_host_states_best_effort(connection.host, [name for name, _ in rows])
         table = Table(title="Post-activation host state")
         table.add_column("Host")
         table.add_column("Folder")
