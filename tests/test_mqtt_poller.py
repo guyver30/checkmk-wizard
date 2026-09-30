@@ -3,6 +3,7 @@ import importlib.util
 import json
 import sys
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -581,6 +582,10 @@ _ENV_VARS = (
     "CMK_SITE_ID",
     "CMK_REST_USERNAME",
     "CMK_REST_SECRET",
+    "CLICKHOUSE_URL",
+    "CLICKHOUSE_WRITER_USER",
+    "CLICKHOUSE_WRITER_PASSWORD",
+    "CLICKHOUSE_TIMEOUT_SECONDS",
 )
 
 
@@ -901,6 +906,370 @@ def test_fetch_host_folders_derives_from_fetch_host_config():
         result = poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
     assert result == {"sw1": "vlan10"}
     assert mock_urlopen.call_count == 1
+
+
+# --- ClickHouse config fields ------------------------------------------------
+
+
+def test_poller_config_from_env_clickhouse_defaults_with_empty_environment(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    config = poller.PollerConfig.from_env()
+    assert config.clickhouse_url == ""
+    assert config.clickhouse_writer_user == "poller_writer"
+    assert config.clickhouse_writer_password == ""
+    assert config.clickhouse_timeout_seconds == 5.0
+
+
+def test_poller_config_from_env_clickhouse_url_trailing_slash_stripped(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("CLICKHOUSE_URL", "http://clickhouse:8123/")
+    config = poller.PollerConfig.from_env()
+    assert config.clickhouse_url == "http://clickhouse:8123"
+
+
+def test_poller_config_from_env_clickhouse_timeout_falls_back_on_bad_value(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("CLICKHOUSE_TIMEOUT_SECONDS", "abc")
+    config = poller.PollerConfig.from_env()
+    assert config.clickhouse_timeout_seconds == 5.0
+
+
+def test_poller_config_repr_never_contains_the_clickhouse_password_value(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("CLICKHOUSE_URL", "http://clickhouse:8123")
+    monkeypatch.setenv("CLICKHOUSE_WRITER_PASSWORD", "ch-s3cr3t")
+    config = poller.PollerConfig.from_env()
+    rendered = repr(config)
+    assert "ch-s3cr3t" not in rendered
+    assert "clickhouse_writer_password='***'" in rendered
+    assert "clickhouse_url='http://clickhouse:8123'" in rendered
+
+
+# --- ClickHouse HTTP choke point ---------------------------------------------
+
+
+def test_clickhouse_insert_posts_jsoneachrow_body():
+    rows = [{"ts": "2026-09-28 01:02:03", "host": "web1", "service": "CPU", "metric": "util", "value": 1.0, "warn": None, "crit": None}]
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"")) as mock_urlopen:
+        poller._clickhouse_insert(
+            "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", rows, 5.0
+        )
+    assert mock_urlopen.call_count == 1
+    request = mock_urlopen.call_args[0][0]
+    decoded_query = urllib.parse.unquote(request.full_url.split("?query=", 1)[1])
+    assert decoded_query == "INSERT INTO history.metrics FORMAT JSONEachRow"
+    assert request.get_method() == "POST"
+    assert request.data == json.dumps(rows[0], allow_nan=False).encode("utf-8")
+    assert request.get_header("X-clickhouse-user") == "poller_writer"
+    assert request.get_header("X-clickhouse-key") == "s3cr3t"
+    assert "s3cr3t" not in request.full_url
+
+
+def test_clickhouse_insert_joins_multiple_rows_with_newlines():
+    rows = [
+        {"ts": "2026-09-28 01:02:03", "host": "web1", "folder": "vlan10", "state": 0, "in_downtime": 0},
+        {"ts": "2026-09-28 01:02:03", "host": "web2", "folder": "vlan10", "state": 1, "in_downtime": 0},
+    ]
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"")) as mock_urlopen:
+        poller._clickhouse_insert(
+            "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.host_state", rows, 5.0
+        )
+    request = mock_urlopen.call_args[0][0]
+    expected = "\n".join(json.dumps(row, allow_nan=False) for row in rows).encode("utf-8")
+    assert request.data == expected
+
+
+def test_clickhouse_insert_empty_rows_makes_no_request():
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        poller._clickhouse_insert(
+            "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [], 5.0
+        )
+    mock_urlopen.assert_not_called()
+
+
+def test_clickhouse_insert_unlisted_table_raises_without_a_request():
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123",
+                "poller_writer",
+                "s3cr3t",
+                "system.query_log",
+                [{"a": 1}],
+                5.0,
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+    mock_urlopen.assert_not_called()
+
+
+def test_clickhouse_insert_nan_value_raises_without_a_request():
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123",
+                "poller_writer",
+                "s3cr3t",
+                "history.metrics",
+                [{"value": float("nan")}],
+                5.0,
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+    mock_urlopen.assert_not_called()
+
+
+def test_clickhouse_insert_connection_failure_becomes_clickhouse_error():
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError as exc:
+            assert isinstance(exc.__cause__, OSError)
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_insert_url_error_becomes_clickhouse_error():
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("no route")):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_insert_timeout_becomes_clickhouse_error():
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_insert_http_error_message_includes_response_body():
+    http_error = urllib.error.HTTPError(
+        url="http://clickhouse:8123/?query=x",
+        code=500,
+        msg="Internal Server Error",
+        hdrs=None,
+        fp=MagicMock(read=MagicMock(return_value=b"Table history.metrics doesn't exist")),
+    )
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError as exc:
+            assert "Table history.metrics doesn't exist" in str(exc)
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_insert_http_error_with_no_body_does_not_raise_a_different_exception():
+    http_error = urllib.error.HTTPError(
+        url="http://clickhouse:8123/?query=x", code=403, msg="Forbidden", hdrs=None, fp=None
+    )
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_query_parses_jsoneachrow_response_and_uses_get():
+    body = b'{"host":"web1","state":0}\n{"host":"web2","state":1}\n'
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(body)) as mock_urlopen:
+        result = poller._clickhouse_query(
+            "http://clickhouse:8123", "reader", "s3cr3t", "SELECT host, state FROM history.host_state", 5.0
+        )
+    assert result == [{"host": "web1", "state": 0}, {"host": "web2", "state": 1}]
+    request = mock_urlopen.call_args[0][0]
+    assert request.get_method() == "GET"
+    decoded_query = urllib.parse.unquote(request.full_url.split("?query=", 1)[1])
+    assert decoded_query == "SELECT host, state FROM history.host_state FORMAT JSONEachRow"
+
+
+def test_clickhouse_query_empty_body_returns_empty_list():
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"")):
+        result = poller._clickhouse_query(
+            "http://clickhouse:8123", "reader", "s3cr3t", "SELECT 1", 5.0
+        )
+    assert result == []
+
+
+def test_clickhouse_command_posts_sql_as_body_and_returns_decoded_text():
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"Ok.\n")) as mock_urlopen:
+        result = poller._clickhouse_command(
+            "http://clickhouse:8123", "poller_writer", "s3cr3t", "INSERT INTO FUNCTION s3(...) SELECT 1", 5.0
+        )
+    assert result == "Ok.\n"
+    request = mock_urlopen.call_args[0][0]
+    assert request.get_method() == "POST"
+    assert request.data == b"INSERT INTO FUNCTION s3(...) SELECT 1"
+
+
+# --- build_history_rows / write_history --------------------------------------
+#
+# Reuses the `_service()` helper (defined below, under "classify_host_services
+# / services_signature") and the `_snapshot()` helper (defined further below,
+# under "run_cycle") -- both are plain module-level functions, resolved at
+# call time, so their definition order relative to these tests does not
+# matter.
+
+
+_TS = datetime.datetime(2026, 9, 28, 1, 2, 3, tzinfo=datetime.UTC)
+
+
+def test_build_history_rows_stamps_every_row_with_the_same_utc_timestamp():
+    batch = poller.build_history_rows(
+        [_snapshot("web1", folder="vlan10")],
+        [_service("web1", "CPU utilization", "OK", perf_data={"util": {"value": 1.0}})],
+        _TS,
+    )
+    assert batch.host_state[0]["ts"] == "2026-09-28 01:02:03"
+    assert batch.service_state[0]["ts"] == "2026-09-28 01:02:03"
+    assert batch.metrics[0]["ts"] == "2026-09-28 01:02:03"
+
+
+def test_build_history_rows_converts_non_utc_ts_to_utc():
+    tz = datetime.timezone(datetime.timedelta(hours=8))  # Asia/Singapore offset
+    local_ts = datetime.datetime(2026, 9, 28, 9, 2, 3, tzinfo=tz)  # == 01:02:03 UTC
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], None, local_ts)
+    assert batch.host_state[0]["ts"] == "2026-09-28 01:02:03"
+
+
+def test_build_history_rows_host_state_code_mapping_and_in_downtime():
+    up, down, unreach, weird = (
+        _snapshot("web1", folder="vlan10", host_state_raw="UP"),
+        _snapshot("web2", folder="vlan10", host_state_raw="DOWN", in_downtime=True),
+        _snapshot("web3", folder="vlan10", host_state_raw="UNREACH"),
+        _snapshot("web4", folder="vlan10", host_state_raw="bogus"),
+    )
+    batch = poller.build_history_rows([up, down, unreach, weird], None, _TS)
+    rows_by_host = {row["host"]: row for row in batch.host_state}
+    assert rows_by_host["web1"] == {
+        "ts": "2026-09-28 01:02:03", "host": "web1", "folder": "vlan10", "state": 0, "in_downtime": 0
+    }
+    assert rows_by_host["web2"]["state"] == 1
+    assert rows_by_host["web2"]["in_downtime"] == 1
+    assert rows_by_host["web3"]["state"] == 2
+    assert rows_by_host["web4"]["state"] == 0
+
+
+def test_build_history_rows_service_state_raw_out_of_range_becomes_unknown():
+    service = _service("web1", "CPU utilization", "OK")
+    service.state_raw = 99
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], [service], _TS)
+    assert batch.service_state == [
+        {"ts": "2026-09-28 01:02:03", "host": "web1", "service": "CPU utilization", "state": 3}
+    ]
+
+
+def test_build_history_rows_metric_rows_carry_value_warn_crit():
+    service = _service(
+        "web1", "CPU utilization", "OK", perf_data={"util": {"value": 42.5, "warn": 80.0, "crit": 90.0}}
+    )
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], [service], _TS)
+    assert batch.metrics == [
+        {
+            "ts": "2026-09-28 01:02:03",
+            "host": "web1",
+            "service": "CPU utilization",
+            "metric": "util",
+            "value": 42.5,
+            "warn": 80.0,
+            "crit": 90.0,
+        }
+    ]
+
+
+def test_build_history_rows_skips_non_finite_metric_value_and_nulls_non_finite_thresholds():
+    service = _service(
+        "web1",
+        "CPU utilization",
+        "OK",
+        perf_data={
+            "bad_nan": {"value": float("nan")},
+            "bad_inf": {"value": float("inf")},
+            "bad_type": {"value": "not-a-number"},
+            "good": {"value": 1.0, "warn": float("nan"), "crit": float("inf")},
+        },
+    )
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], [service], _TS)
+    assert [row["metric"] for row in batch.metrics] == ["good"]
+    assert batch.metrics[0]["warn"] is None
+    assert batch.metrics[0]["crit"] is None
+
+
+def test_build_history_rows_no_row_has_a_key_outside_the_contract_columns():
+    service = _service(
+        "web1", "CPU utilization", "OK", plugin_output="should never appear", perf_data={"util": {"value": 1.0}}
+    )
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], [service], _TS)
+    assert set(batch.host_state[0]) == {"ts", "host", "folder", "state", "in_downtime"}
+    assert set(batch.service_state[0]) == {"ts", "host", "service", "state"}
+    assert set(batch.metrics[0]) == {"ts", "host", "service", "metric", "value", "warn", "crit"}
+
+
+def test_build_history_rows_services_none_yields_empty_service_and_metric_lists():
+    batch = poller.build_history_rows([_snapshot("web1", folder="vlan10")], None, _TS)
+    assert batch.service_state == []
+    assert batch.metrics == []
+    assert len(batch.host_state) == 1
+
+
+def test_write_history_no_op_when_clickhouse_url_unset():
+    config = _make_config(clickhouse_url="")
+    batch = poller.HistoryBatch(metrics=[{"a": 1}], host_state=[{"a": 1}], service_state=[{"a": 1}])
+    with patch.object(poller, "_clickhouse_insert") as mock_insert:
+        poller.write_history(config, batch)
+    mock_insert.assert_not_called()
+
+
+def test_write_history_inserts_all_three_tables_separately():
+    config = _make_config(clickhouse_url="http://clickhouse:8123")
+    batch = poller.HistoryBatch(
+        metrics=[{"m": 1}], host_state=[{"h": 1}], service_state=[{"s": 1}]
+    )
+    with patch.object(poller, "_clickhouse_insert") as mock_insert:
+        poller.write_history(config, batch)
+    tables_called = [call.args[3] for call in mock_insert.call_args_list]
+    assert tables_called == ["history.metrics", "history.host_state", "history.service_state"]
+
+
+def test_write_history_metrics_failure_still_attempts_host_and_service_state_and_logs_warning(caplog):
+    config = _make_config(clickhouse_url="http://clickhouse:8123")
+    batch = poller.HistoryBatch(
+        metrics=[{"m": 1}], host_state=[{"h": 1}], service_state=[{"s": 1}]
+    )
+    with (
+        caplog.at_level("WARNING", logger=poller._logger.name),
+        patch.object(
+            poller,
+            "_clickhouse_insert",
+            side_effect=[poller.ClickHouseError("boom"), None, None],
+        ) as mock_insert,
+    ):
+        poller.write_history(config, batch)
+    assert mock_insert.call_count == 3
+    assert any("no data" in record.getMessage() for record in caplog.records)
 
 
 # --- build_hosts_query / select_host_columns --------------------------------
