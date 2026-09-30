@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # scripts/ is not an importable package (no precedent in this repo for
 # importing a scripts/*.py module from tests/ — scripts/smoke_test_broker.py
 # has no test file at all), so load it directly from its file path.
@@ -1270,6 +1272,252 @@ def test_write_history_metrics_failure_still_attempts_host_and_service_state_and
         poller.write_history(config, batch)
     assert mock_insert.call_count == 3
     assert any("no data" in record.getMessage() for record in caplog.records)
+
+
+# --- Availability rollups: day math and figures (Phase 14.1, D-45..D-53) ----
+
+
+def test_local_day_bounds_singapore_midnight_to_midnight_utc():
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    start, end = poller.local_day_bounds(datetime.date(2026, 9, 27), tz)
+    assert start == datetime.datetime(2026, 9, 26, 16, 0, tzinfo=datetime.UTC)
+    assert end == datetime.datetime(2026, 9, 27, 16, 0, tzinfo=datetime.UTC)
+    assert start.tzinfo is not None and end.tzinfo is not None
+
+
+def test_rollup_days_to_check_ascending_within_backfill_window():
+    days = poller.rollup_days_to_check(
+        today_local=datetime.date(2026, 9, 28),
+        first_data_day=datetime.date(2026, 9, 20),
+        backfill_days=28,
+    )
+    assert days == [datetime.date(2026, 9, 20) + datetime.timedelta(days=i) for i in range(8)]
+
+
+def test_rollup_days_to_check_no_first_data_day_returns_empty():
+    assert poller.rollup_days_to_check(datetime.date(2026, 9, 28), None, 28) == []
+
+
+def test_rollup_days_to_check_first_data_day_today_returns_empty():
+    today = datetime.date(2026, 9, 28)
+    assert poller.rollup_days_to_check(today, today, 28) == []
+
+
+def test_rollup_days_to_check_first_data_day_far_in_past_clamps_to_backfill_window():
+    today = datetime.date(2026, 9, 28)
+    first = today - datetime.timedelta(days=60)
+    days = poller.rollup_days_to_check(today, first, 28)
+    assert len(days) == 28
+    assert days[0] == today - datetime.timedelta(days=28)
+    assert days[-1] == today - datetime.timedelta(days=1)
+
+
+def test_rollup_object_keys_hive_style_parquet_prefix():
+    json_key, parquet_key = poller.rollup_object_keys(datetime.date(2026, 9, 7))
+    assert json_key == "availability/2026/09/2026-09-07.json"
+    assert parquet_key == "availability_parquet/date=2026-09-07/availability.parquet"
+
+
+def _host_row(host="h1", folder="", **counts):
+    row = {"host": host, "folder": folder, "up_samples": 0, "down_samples": 0,
+           "unreach_samples": 0, "downtime_samples": 0}
+    row.update(counts)
+    return row
+
+
+def _device_row(rows, host="h1"):
+    return next(r for r in rows if r["entity_type"] == "device" and r["entity_key"] == host)
+
+
+def _fleet_row(rows):
+    return next(r for r in rows if r["group_type"] == "fleet")
+
+
+def test_compute_daily_availability_all_up_day():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(up_samples=5760)], 15
+    )
+    device = _device_row(rows)
+    assert device["up_minutes"] == 1440
+    assert device["up_pct"] == 100
+    assert device["availability_pct"] == 100
+    assert device["no_data_minutes"] == 0
+
+
+def test_compute_daily_availability_half_up_half_down():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(up_samples=2880, down_samples=2880)], 15
+    )
+    device = _device_row(rows)
+    assert device["availability_pct"] == 50
+    assert device["up_pct"] == 50
+    assert device["down_pct"] == 50
+
+
+def test_compute_daily_availability_unreachable_excluded_from_availability():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(up_samples=2880, unreach_samples=2880)], 15
+    )
+    device = _device_row(rows)
+    assert device["availability_pct"] == 100
+    assert device["unobserved_pct"] == 50
+
+
+def test_compute_daily_availability_downtime_excluded_from_availability():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(up_samples=2880, downtime_samples=2880)], 15
+    )
+    device = _device_row(rows)
+    assert device["availability_pct"] == 100
+    assert device["downtime_minutes"] == 720
+    assert device["downtime_pct"] == 50
+
+
+def test_compute_daily_availability_partial_samples_report_no_data():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(up_samples=2880)], 15
+    )
+    device = _device_row(rows)
+    assert device["no_data_minutes"] == 720
+    assert device["no_data_pct"] == 50
+    assert device["availability_pct"] == 100
+
+
+def test_compute_daily_availability_zero_samples_is_all_no_data():
+    rows = poller.compute_daily_availability(datetime.date(2026, 9, 27), [_host_row()], 15)
+    device = _device_row(rows)
+    assert device["no_data_pct"] == 100
+    assert device["availability_pct"] is None
+
+
+def test_compute_daily_availability_more_samples_than_a_day_holds():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(up_samples=10000)], 15
+    )
+    device = _device_row(rows)
+    assert device["no_data_minutes"] == 0
+    total_pct = (
+        device["up_pct"] + device["down_pct"] + device["unobserved_pct"]
+        + device["downtime_pct"] + device["no_data_pct"]
+    )
+    assert total_pct == pytest.approx(100, abs=0.01)
+
+
+def test_compute_daily_availability_folder_row_sums_two_hosts():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27),
+        [
+            _host_row(host="a", folder="/servers", up_samples=5760),
+            _host_row(host="b", folder="/servers", up_samples=2880, down_samples=2880),
+        ],
+        15,
+    )
+    folder_row = next(r for r in rows if r["group_type"] == "folder")
+    assert folder_row["entity_key"] == "/servers"
+    assert folder_row["device_count"] == 2
+    assert folder_row["up_minutes"] == 1440 + 720
+    assert folder_row["down_minutes"] == 720
+    assert folder_row["availability_pct"] == pytest.approx(
+        (1440 + 720) / (1440 + 720 + 720) * 100, abs=0.01
+    )
+
+
+def test_compute_daily_availability_empty_folder_grouped_under_no_folder_key():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(host="a", folder="", up_samples=5760)], 15
+    )
+    folder_row = next(r for r in rows if r["group_type"] == "folder")
+    assert folder_row["entity_key"] == poller.FOLDERLESS_GROUP_KEY
+
+
+def test_compute_daily_availability_fleet_row_always_present_and_last():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(host="a", up_samples=5760)], 15
+    )
+    assert rows[-1]["group_type"] == "fleet"
+    assert rows[-1]["entity_key"] == poller.FLEET_GROUP_KEY
+
+
+def test_compute_daily_availability_empty_host_list_yields_only_fleet_row():
+    rows = poller.compute_daily_availability(datetime.date(2026, 9, 27), [], 15)
+    assert len(rows) == 1
+    fleet = rows[0]
+    assert fleet["group_type"] == "fleet"
+    assert fleet["device_count"] == 0
+    assert fleet["no_data_pct"] == 100
+    assert fleet["availability_pct"] is None
+
+
+def test_compute_daily_availability_string_sample_counts_accepted():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(up_samples="5760")], 15
+    )
+    assert _device_row(rows)["up_minutes"] == 1440
+
+
+def test_compute_daily_availability_devices_before_folders_before_fleet():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27),
+        [_host_row(host="a", folder="/x", up_samples=5760)],
+        15,
+    )
+    kinds = [(r["entity_type"], r["group_type"]) for r in rows]
+    assert kinds == [("device", ""), ("group", "folder"), ("group", "fleet")]
+
+
+def test_availability_document_shape_matches_schema():
+    rows = poller.compute_daily_availability(
+        datetime.date(2026, 9, 27), [_host_row(host="a", folder="/x", up_samples=5760)], 15
+    )
+    doc = poller.availability_document(
+        datetime.date(2026, 9, 27),
+        rows,
+        timezone_name="Asia/Singapore",
+        poll_interval_seconds=15,
+        generated_at_iso="2026-09-28T00:05:00+00:00",
+    )
+    assert doc["schema_version"] == poller.AVAILABILITY_SCHEMA_VERSION
+    assert doc["date"] == "2026-09-27"
+    assert doc["timezone"] == "Asia/Singapore"
+    assert doc["poll_interval_seconds"] == 15
+    assert doc["generated_at"] == "2026-09-28T00:05:00+00:00"
+    assert len(doc["devices"]) == 1
+    assert doc["devices"][0]["host"] == "a"
+    assert len(doc["groups"]) == 2
+    assert poller.availability_document_problems(doc) == []
+
+
+def test_availability_document_problems_detects_wrong_schema_version():
+    doc = {"schema_version": 99, "date": "2026-09-27", "devices": [], "groups": []}
+    assert poller.availability_document_problems(doc) != []
+
+
+def test_availability_document_problems_detects_bad_date():
+    doc = {"schema_version": poller.AVAILABILITY_SCHEMA_VERSION, "date": "not-a-date",
+           "devices": [], "groups": []}
+    assert poller.availability_document_problems(doc) != []
+
+
+def test_availability_document_problems_detects_pct_out_of_range():
+    doc = {
+        "schema_version": poller.AVAILABILITY_SCHEMA_VERSION,
+        "date": "2026-09-27",
+        "devices": [{"up_pct": 150, "down_pct": 0, "unobserved_pct": 0, "downtime_pct": 0,
+                     "no_data_pct": 0, "availability_pct": None}],
+        "groups": [],
+    }
+    assert poller.availability_document_problems(doc) != []
+
+
+def test_availability_document_problems_detects_non_numeric_figure():
+    doc = {
+        "schema_version": poller.AVAILABILITY_SCHEMA_VERSION,
+        "date": "2026-09-27",
+        "devices": [{"up_pct": "100", "down_pct": 0, "unobserved_pct": 0, "downtime_pct": 0,
+                     "no_data_pct": 0, "availability_pct": None}],
+        "groups": [],
+    }
+    assert poller.availability_document_problems(doc) != []
 
 
 # --- build_hosts_query / select_host_columns --------------------------------
