@@ -79,7 +79,17 @@ services:
 
   # 3. MinIO S3 Object Storage
   minio:
-    image: minio/minio:latest
+    # Bug fixed 2026-09-30: minio/minio was removed from Docker Hub
+    # (2026-09-11), so a fresh pull of the old minio/minio:latest 404s.
+    # quay.io/minio/minio is no fallback either: its registry API now answers
+    # UNAUTHORIZED to anonymous pulls (a control repo on quay.io still worked).
+    # Chainguard's free tier only publishes :latest, so it is pinned by digest
+    # (index digest verified against the cgr.dev registry API, 2026-09-30).
+    # Its entrypoint is /usr/bin/minio (so `command:` below is unchanged) and it
+    # runs as non-root UID 65532; the image's /data is mode 777, so a fresh
+    # minio_data volume works. A volume written by the old root-run image needs
+    # `podman unshare chown -R 65532:65532 <volume mountpoint>` once.
+    image: cgr.dev/chainguard/minio:latest@sha256:71674988a1c7ddd5724928633199152b11e4ddefd6c6ce2d60772ff4a8f22ca9
     container_name: minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
