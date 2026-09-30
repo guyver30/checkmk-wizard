@@ -73,6 +73,10 @@ commit them.
 - `CHECKMK_BASE_URL`: change `http://<HOST_IP>:8080` to this machine's address. The
   "View in Checkmk" link stays disabled until you do.
 - `CHECKMK_SITE`: must match `CMK_SITE_ID`.
+- `TOPOLOGY_EDITOR_SECRET`: leave it as `"<TOPOLOGY_EDITOR_SECRET>"` for now. The secret
+  doesn't exist until `scripts/provision_topology_editor.py` runs after the wizard (§8, step 3).
+  Until then the map's "Edit topology" switch stays disabled. Unlike `WS_PASSWORD`, this
+  credential can **write** to Checkmk (edit and add hosts, activate changes), so never commit it.
 
 ## 4. Default credentials in tracked files
 
@@ -187,8 +191,10 @@ See [`WIZARD-OPERATION.md`](WIZARD-OPERATION.md) for the full phase-by-phase wal
    podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/provision_topology_editor.py"
    ```
 
-   It prints a secret once. Put it in `TOPOLOGY_EDITOR_SECRET` in
-   `dashboard-react/src/lib/config.ts` (don't commit it), then rebuild:
+   It prints a secret once. In `dashboard-react/src/lib/config.ts`, replace the placeholder
+   (`export const TOPOLOGY_EDITOR_SECRET = TOPOLOGY_EDITOR_SECRET_PLACEHOLDER;`) with the
+   printed value in quotes (don't commit it), then rebuild. The value is baked into the image,
+   so a rebuild is required:
 
    ```bash
    podman compose build dashboard && podman compose down && podman compose up -d
