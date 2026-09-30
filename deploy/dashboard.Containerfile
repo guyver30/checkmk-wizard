@@ -6,8 +6,13 @@
 # result with nginx, so no Node process runs in the deployed stack.
 #
 # The build copies the working tree, so a locally edited
-# dashboard-react/src/lib/config.ts (CHECKMK_BASE_URL, TOPOLOGY_EDITOR_SECRET) is
-# baked into the image. Rebuild after editing it or after every `git pull`.
+# dashboard-react/src/lib/config.ts (CHECKMK_BASE_URL) is baked into the image.
+# Rebuild after editing it or after every `git pull`.
+#
+# Amended 2026-09-30 (quick 260930-hpy): config.ts no longer carries
+# TOPOLOGY_EDITOR_SECRET -- the credential comes from deploy/.env at container
+# start, via the nginx template below (${TOPOLOGY_EDITOR_SECRET}), never baked
+# into this image.
 
 FROM docker.io/library/node:22-alpine AS build
 WORKDIR /src
@@ -22,8 +27,9 @@ RUN npm --prefix dashboard-react ci \
 
 FROM docker.io/library/nginx:alpine
 # Installed as a template, not a static conf.d file: deploy/dashboard-nginx.conf
-# references ${CH_READER_PASSWORD} and ${NGINX_LOCAL_RESOLVERS}, which the official
-# nginx image's own entrypoint renders via envsubst at container start (verified
+# references ${CH_READER_PASSWORD}, ${NGINX_LOCAL_RESOLVERS} and
+# ${TOPOLOGY_EDITOR_SECRET}, which the official nginx image's own entrypoint
+# renders via envsubst at container start (verified
 # 2026-09-30 against github.com/nginxinc/docker-nginx
 # entrypoint/20-envsubst-on-templates.sh). This only substitutes variables actually
 # present in the container's environment, so nginx's own $uri/$arg_*/$is_args/$args

@@ -15,8 +15,7 @@ import { useEditIdleTimeout } from "../hooks/useEditIdleTimeout";
 import { useGroupingPrefs } from "../hooks/useGroupingPrefs";
 import { useNowTick } from "../hooks/useNowTick";
 import { displayedServices } from "../lib/agentDetail";
-import { activateChanges, countPendingChanges } from "../lib/checkmkWrite";
-import { isTopologyEditingConfigured } from "../lib/config";
+import { activateChanges, countPendingChanges, probeEditingAvailable } from "../lib/checkmkWrite";
 import { buildIncidentLookup, selectOpenIncidents } from "../lib/incidents";
 import { buildTree } from "../lib/treeModel";
 import type { GroupingMode, TopologyNode } from "../lib/types";
@@ -126,6 +125,25 @@ export function IndexRoute() {
   const [pendingCount, setPendingCount] = useState(0);
   const [applying, setApplying] = useState(false);
   const [snackbar, setSnackbar] = useState<SnackbarState | null>(null);
+
+  // Amended 2026-09-30 (quick 260930-hpy): editing availability is no longer a
+  // compile-time config.ts placeholder check -- it is a runtime probe against
+  // nginx's allow-listed GET /version (probeEditingAvailable()), since the
+  // topology_editor credential itself never reaches the browser bundle at
+  // all now. Starts false so the switch/editor stay off until the probe
+  // resolves; the cancelled flag avoids setting state after unmount.
+  const [editingAvailable, setEditingAvailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    probeEditingAvailable().then((available) => {
+      if (!cancelled) {
+        setEditingAvailable(available);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // DASH-16: the host currently selected for the "Criticality & dependencies" panel -- a map
   // click (TopologyMap's onSelectHost) or the panel's own "Device" picker, while in edit mode.
@@ -282,9 +300,9 @@ export function IndexRoute() {
                 pendingCount={pendingCount}
                 applying={applying}
                 onApply={onApply}
-                editingConfigured={isTopologyEditingConfigured()}
+                editingConfigured={editingAvailable}
               />
-              {editMode && isTopologyEditingConfigured() && (
+              {editMode && editingAvailable && (
                 <CriticalityEditor
                   hostIds={hostIds}
                   nameFor={nameFor}

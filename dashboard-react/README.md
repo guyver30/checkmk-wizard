@@ -90,19 +90,27 @@ The remaining constants in `src/lib/config.ts`:
 - `HISTORY_MAX_ENTRIES` — mirrors the poller's per-device history bound (20); it does not
   bound the global event feed (see "Event history" below).
 - `CHECKMK_SITE` — the Checkmk site name used to build deep links.
-- `TOPOLOGY_EDITOR_SECRET` — ships as the literal placeholder `<TOPOLOGY_EDITOR_SECRET>`.
-  Unlike `WS_USERNAME`/`WS_PASSWORD`, this credential is WRITE-capable: it edits/adds
-  Checkmk hosts and activates its own pending changes (map edit mode, 13-06/13-07). Paste in
-  the secret printed once by `scripts/provision_topology_editor.py`; edit-mode writes stay
-  disabled (`isTopologyEditingConfigured()` returns `false`) until you do.
 - `CHECKMK_REST_ORIGIN` — the same-origin `/checkmk-api` path prefix the browser calls
   instead of `CHECKMK_BASE_URL` directly, because Checkmk does not answer CORS preflights
   (13-01 VERDICT V-CORS). `vite.config.ts`'s `server.proxy`/`preview.proxy` forward it to
   Checkmk; set `CHECKMK_PROXY_TARGET` if Checkmk isn't reachable at `http://localhost:8080`
   from wherever `vite dev`/`vite preview` runs.
-- `TOPOLOGY_EDITOR_USER` — the fixed username (`topology_editor`) of the scoped write
-  credential `scripts/provision_topology_editor.py` provisions. Not normally edited; listed
-  here because it pairs with `TOPOLOGY_EDITOR_SECRET` above in every `checkmkWrite.ts` call.
+
+**No `topology_editor` credential is configured in this file anymore** (amended 2026-09-30,
+quick 260930-hpy — supersedes Phase 13 D-04). The dashboard's write path to Checkmk carries
+no client-side secret at all:
+
+- In production, `deploy/dashboard-nginx.conf` injects the scoped `topology_editor`
+  credential from `TOPOLOGY_EDITOR_SECRET` in `deploy/.env`, only on an allow-list of the
+  exact REST calls `src/lib/checkmkWrite.ts` makes; everything else under `/checkmk-api/`
+  returns 403.
+- The SPA never knows the secret's value. It learns whether editing is available with a
+  runtime probe (`probeEditingAvailable()` in `checkmkWrite.ts`, a `GET
+  /checkmk-api/<site>/check_mk/api/1.0/version` — 200 means the injected credential worked,
+  401/other/network-error means it didn't), not a compile-time config.ts placeholder check.
+- For local dev, export `TOPOLOGY_EDITOR_SECRET` (and `CHECKMK_PROXY_TARGET` if needed)
+  before `npm run dev`/`npm run preview` — `vite.config.ts`'s proxy injects the same header
+  the production nginx does, from your shell's environment.
 
 ## 5. Topology map and editing
 
@@ -322,8 +330,11 @@ changes.
    §2 builds in a Node stage and serves `dist/` from `nginx:alpine`.
 2. `deploy/dashboard-nginx.conf` adds the SPA fallback (`try_files $uri $uri/ /index.html;`), so
    a cold-loaded `/?host=...` (or old `/details?id=...`) bookmark works.
-3. The same file adds the `/checkmk-api/` forwarding rule (`proxy_pass http://checkmk:5000/;`),
-   the production twin of `vite.config.ts`'s dev/preview proxy.
+3. The same file adds the `/checkmk-api/` forwarding rule, the production twin of
+   `vite.config.ts`'s dev/preview proxy. Amended 2026-09-30 (quick 260930-hpy): it is now a
+   method+path allow-list of three regex locations (not a single `proxy_pass`), each
+   injecting the scoped `topology_editor` credential server-side from `TOPOLOGY_EDITOR_SECRET`;
+   everything else under `/checkmk-api/` returns 403. See §4 above.
 4. Deploying an update: `git pull`, then
    `cd deploy && podman compose build dashboard && podman compose down && podman compose up -d`.
    `src/lib/config.ts` is baked in at build time, so rebuild after editing it too.

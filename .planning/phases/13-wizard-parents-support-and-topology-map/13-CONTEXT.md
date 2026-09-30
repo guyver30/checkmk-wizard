@@ -72,6 +72,12 @@ host attribute. Checkmk's REST/GUI port is already LAN-published (`8080:5000` in
   reuse of the wizard's own full-power `automation` user from `bootstrap_automation_user()` —
   exact Checkmk role/permission shape needs live verification.
 
+  **Amended 2026-09-30 (quick 260930-hpy, user-approved):** the client-embedded-credential
+  half of this decision is superseded — the `topology_editor` secret now lives only in
+  `deploy/.env`, is provisioned by the wizard after Phase 1, and is injected by the
+  dashboard's nginx on an allow-list of the REST calls the dashboard makes; the browser
+  itself holds no secret. Not to be re-litigated.
+
 ### Unmanaged (non-Checkmk-agent) switches
 - **D-05:** An unmanaged switch (no agent, not reliably pingable, added purely to complete
   the topology picture) is onboarded as a **real Checkmk host**, one per switch — not a

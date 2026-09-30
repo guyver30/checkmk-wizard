@@ -62,6 +62,7 @@ uv run python -c "import secrets; print(secrets.token_urlsafe(24))"   # value fo
 | Variable | Value | Why it matters |
 |---|---|---|
 | `CMK_REST_SECRET` | The random value generated above | Shared by the worker and the poller. The wizard's Phase 1 sets it as the `automation` user's secret. Empty means the dashboard shows no folders. |
+| `TOPOLOGY_EDITOR_SECRET` | `uv run python -c "import secrets; print(secrets.token_urlsafe(24))"` (a separate random value) | Amended 2026-09-30, quick 260930-hpy: read by the worker (the wizard creates/rotates the scoped `topology_editor` user to it right after Phase 1) and by the dashboard's nginx (injected server-side into the allow-listed `/checkmk-api/` calls — never sent to the browser). Empty keeps the map's "Edit topology" switch disabled. |
 | `CMK_PUBLIC_HOST` | This machine's LAN IP or DNS name | Agents register against `<this>:8000` (wizard Phase 5). |
 | `CMK_SITE_ID` | Optional, default `dmc` | The site is created with this name on the first start. Renaming it later needs `omd mv` (§3 "Choosing the site name"). |
 
@@ -73,10 +74,9 @@ commit them.
 - `CHECKMK_BASE_URL`: change `http://<HOST_IP>:8080` to this machine's address. The
   "View in Checkmk" link stays disabled until you do.
 - `CHECKMK_SITE`: must match `CMK_SITE_ID`.
-- `TOPOLOGY_EDITOR_SECRET`: leave it as `"<TOPOLOGY_EDITOR_SECRET>"` for now. The secret
-  doesn't exist until `scripts/provision_topology_editor.py` runs after the wizard (§8, step 3).
-  Until then the map's "Edit topology" switch stays disabled. Unlike `WS_PASSWORD`, this
-  credential can **write** to Checkmk (edit and add hosts, activate changes), so never commit it.
+
+(Amended 2026-09-30, quick 260930-hpy: the `topology_editor` write credential is no longer
+configured here — see `TOPOLOGY_EDITOR_SECRET` in the `deploy/.env` table above.)
 
 ## 4. Default credentials in tracked files
 
@@ -185,20 +185,11 @@ See [`WIZARD-OPERATION.md`](WIZARD-OPERATION.md) for the full phase-by-phase wal
    - Checkmk UI at `http://<this machine>:8080/<site>/`: log in with the new cmkadmin password.
    - Dashboard at `http://<this machine>:8090`: devices appear, each with its folder.
 
-3. Optional, to enable the dashboard's map edit mode:
-
-   ```bash
-   podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/provision_topology_editor.py"
-   ```
-
-   It prints a secret once. In `dashboard-react/src/lib/config.ts`, replace the placeholder
-   (`export const TOPOLOGY_EDITOR_SECRET = TOPOLOGY_EDITOR_SECRET_PLACEHOLDER;`) with the
-   printed value in quotes (don't commit it), then rebuild. The value is baked into the image,
-   so a rebuild is required:
-
-   ```bash
-   podman compose build dashboard && podman compose down && podman compose up -d
-   ```
+3. Nothing to do. If `TOPOLOGY_EDITOR_SECRET` is set in `deploy/.env` (§3), the wizard
+   provisions the scoped `topology_editor` Checkmk user to that value right after Phase 1,
+   and the dashboard's map "Edit topology" switch is already enabled after step 1's restart.
+   `scripts/provision_topology_editor.py` remains a manual fallback (it reads the same env
+   var) if you need to (re)provision it without running the whole wizard.
 
 ## 9. Start the stack automatically at boot
 

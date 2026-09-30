@@ -185,7 +185,8 @@ the image at build time**. Edit it once, before the first build:
   `deploy/gen-mosquitto-passwd.sh`) before exposing this stack beyond a trusted LAN. The grant
   behind them is read-only (`topic read lan/#` in `deploy/mosquitto.acl`), so the exposure is
   bounded to reading the device list, never writing to the broker.
-- `TOPOLOGY_EDITOR_SECRET` — see the next note.
+- `TOPOLOGY_EDITOR_SECRET` — no longer configured here (amended 2026-09-30, quick 260930-hpy);
+  see the next note.
 
 After editing `config.ts`, or after every `git pull`, rebuild the image and restart the stack
 (a full down/up, not a single-service restart; see §5.1 "A third signature"):
@@ -197,34 +198,37 @@ cd deploy && podman compose build dashboard && podman compose down && podman com
 The old vanilla dashboard (`dashboard/`) was deleted from the repo on 2026-09-30. For
 development with hot reload, see `dashboard-react/README.md` §3.
 
-**Note on the topology editor credential (Phase 13):** the dashboard's map edit mode (§7's
-"Topology map check") writes directly to Checkmk's REST API from the browser, using a
-dedicated, narrowly-scoped `topology_editor` credential — never the wizard's own full-power
-`automation` user. Provision it once per deployment, from inside the `worker` container:
+**Note on the topology editor credential (amended 2026-09-30, quick 260930-hpy — supersedes
+Phase 13's client-embedded credential):** the dashboard's map edit mode (§7's "Topology map
+check") writes to Checkmk's REST API through the dashboard's own nginx, which injects a
+dedicated, narrowly-scoped `topology_editor` credential server-side — the browser itself never
+holds this secret. Four things to know:
 
-```bash
-podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/provision_topology_editor.py"
-```
-
-`CMK_REST_SECRET` must already be set in the `worker` container's environment (the wizard's own
-admin automation secret — the same one `poller` uses, chosen in `deploy/.env` before the first
-wizard run, see above), since this script uses it
-server-side to create the new scoped role and user. If the site's role-management REST
-endpoints are unavailable on your Checkmk version (13-01's live probe found them present on
-2.4.0p35/p36; a future version may differ), the script prints a manual WATO procedure instead
-of failing silently — do that by hand in the Checkmk UI (Setup > Users > Roles & Permissions),
-then re-run the script so it can still create the automation user against the role you just
-created.
-
-The script prints the new user's automation secret exactly once. Paste it into
-`TOPOLOGY_EDITOR_SECRET` in `dashboard-react/src/lib/config.ts` (a local edit — do not commit
-it). Until that placeholder is replaced, edit mode's writes stay disabled.
+1. **Where it lives:** `TOPOLOGY_EDITOR_SECRET` in `deploy/.env` (gitignored). The worker
+   container reads it (the wizard provisions from it) and the dashboard container reads it
+   (nginx injects it as the `Authorization` header).
+2. **What enforces the scope:** `deploy/dashboard-nginx.conf` allow-lists the exact
+   method+path pairs the dashboard's SPA calls (host read/write, unmanaged-switch creation,
+   pending-changes count, activation) and injects the credential only on those; every other
+   `/checkmk-api/` request — including anything against `user_config`, `user_role`, rulesets,
+   or a `DELETE` on a host — returns 403 before it ever reaches Checkmk.
+3. **How it's provisioned:** the wizard creates or rotates the scoped `topology_editor`
+   Checkmk role and user to `TOPOLOGY_EDITOR_SECRET`'s value right after Phase 1, best-effort
+   (a failure here never aborts the wizard run). `scripts/provision_topology_editor.py` remains
+   a manual fallback that reads the same env var, for provisioning without a full wizard run.
+4. **How to rotate it:** edit `TOPOLOGY_EDITOR_SECRET` in `deploy/.env`, re-run the wizard (or
+   `scripts/provision_topology_editor.py`), then a full `podman compose down && podman compose
+   up -d`. Do not restart a single container on its own (`podman compose restart dashboard` or
+   `restart worker`) — a single-service restart has been observed to break Checkmk's own egress
+   (§5.1 "A third signature"); always use the full down/up.
 
 Blast radius: the `topology_editor` credential can edit host attributes (`parents`,
 `map_position`), add new hosts, and activate its own pending changes. It cannot manage users,
 edit global settings or rulesets, and — critically — cannot activate another operator's
 pending changes (`wato.activateforeign` is deliberately not granted), so a topology edit can
-never accidentally push someone else's unreviewed configuration change live.
+never accidentally push someone else's unreviewed configuration change live. With the secret no
+longer reaching the browser at all, a leaked/exfiltrated frontend has nothing to steal in the
+first place.
 
 **Note on `CMK_REST_SECRET` (poller):** the `poller` service now makes an authenticated Checkmk REST call every poll cycle to read each host's folder, alongside its unauthenticated Livestatus query. `deploy/compose.yaml` ships `CMK_REST_USERNAME=automation` and interpolates `CMK_REST_SECRET` from `deploy/.env`, which is gitignored so the real secret never lands in a tracked file. You choose the secret yourself, up front: copy `deploy/.env.example` to `deploy/.env`, set `CMK_REST_SECRET` to a long random value (`uv run python -c "import secrets; print(secrets.token_urlsafe(24))"`) before `podman compose up`, and the wizard's Phase 1 (see §8.3) pushes that exact value into Checkmk as the `automation` user's secret — creating the user, or updating the secret of an existing one on a re-run. Both `worker` and `poller` read the same value from `deploy/.env`; run `podman compose up -d poller` after changing it. If you leave it empty, the wizard falls back to generating a random secret and printing it once, which you then copy into `deploy/.env` by hand. `CMK_REST_SECRET` defaults to empty rather than refusing to start compose: a forgotten or missing secret leaves folder enrichment degraded (empty `folder` on every device) rather than blocking the stack, because a hard `:?` guard would also block `checkmk` and `mosquitto` from starting on a first-time deployment — before the automation secret this variable demands can even exist. A *wrong* secret degrades the same way (empty `folder` on every device) — see §7. Like `CMK_PASSWORD` above, rotate it before exposing this stack beyond a trusted LAN.
 
@@ -731,7 +735,7 @@ Then, on the fresh site:
 1. Make sure `deploy/.env` holds a `CMK_REST_SECRET` (any long random value, e.g. `openssl rand -base64 24`) **before** running the wizard. The wizard creates the `automation` user with that secret, so the worker and poller need no hand-copying afterwards. Restart the poller if it started before you set the value.
 2. Livestatus-over-TCP comes up on its own, in plain text (`CMK_LIVESTATUS_TCP=on` plus the pre-start hook in `compose.yaml`, see §5); check with `podman compose exec checkmk omd config dmc show LIVESTATUS_TCP` (expect `on`) and `podman compose exec checkmk omd config dmc show LIVESTATUS_TCP_TLS` (expect `off`).
 3. Run the wizard (§8.3).
-4. Re-run the topology-editor provisioning script if you use the editable topology map: the `topology_editor` role and user lived in the deleted site.
+4. Nothing to do for the topology editor if you use the editable topology map: the `topology_editor` role and user lived in the deleted site, but the wizard re-provisions them from `TOPOLOGY_EDITOR_SECRET` as part of step 3's run (amended 2026-09-30, quick 260930-hpy — previously required a manual re-run of `scripts/provision_topology_editor.py` here).
 5. Hard-refresh the dashboard (Ctrl+Shift+R).
 
 Everything on the old site is gone after this, including the monitoring history (RRD data) — there is no undo.

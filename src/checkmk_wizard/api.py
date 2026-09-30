@@ -27,6 +27,81 @@ class CheckmkAPIError(RuntimeError):
         super().__init__(f"{method} {url} -> {status_code}: {body}")
 
 
+# -- topology_editor: the dashboard's scoped role/user ----------------------
+#
+# Moved here from scripts/provision_topology_editor.py (quick 260930-hpy,
+# 2026-09-30): the wizard now provisions/rotates this role and user right
+# after Phase 1 (wizard.py:_provision_topology_editor), so the logic lives
+# alongside every other CheckmkClient method instead of duplicated in a
+# standalone script. The script itself becomes a thin manual-fallback caller
+# of these same names.
+#
+# Why a separate scoped user, not the wizard's admin automation user: the
+# dashboard's write path must never carry the wizard's own full admin-role
+# `automation` user from bootstrap_automation_user() -- a compromised
+# topology_editor credential would otherwise carry full admin power (user
+# management, global settings, rulesets), not just "edit hosts and activate
+# my own changes". This role is scoped to exactly TOPOLOGY_EDITOR_PERMISSIONS
+# (13-01 VERDICT V-PERMS) and nothing more (RESEARCH.md Anti-Patterns,
+# Security Domain V4): `wato.activateforeign` and every `wato.users`/
+# `wato.global`/`wato.rulesets` id are deliberately excluded.
+
+TOPOLOGY_EDITOR_ROLE_ID = "topology_editor"
+TOPOLOGY_EDITOR_ROLE_ALIAS = "Topology editor (dashboard)"
+# The built-in role topology_editor is cloned from -- least-privileged
+# non-admin built-in role (RESEARCH.md Pitfall 4: "clone user, name it
+# e.g. topology_editor, enable only host-edit and activate-changes
+# permissions").
+TOPOLOGY_EDITOR_BASE_ROLE_ID = "user"
+TOPOLOGY_EDITOR_USER_ID = "topology_editor"
+
+# 13-01's VERDICT V-PERMS (2026-09-23) listed six ids derived from which
+# wato.* permissions the ADMIN role happened to have enabled -- it never
+# live-tested the scoped role itself. Live UAT (2026-09-23) found that six
+# was incomplete: a freshly-cloned role with no folder contact-group
+# membership got a blanket 404 on GET /objects/host_config/{name} for
+# every host, because `wato.all_folders` only grants WRITE access to every
+# folder -- it does not make the role able to SEE (discover) a host it
+# isn't a contact for in the first place. `wato.see_all_folders` is the
+# separate "see" counterpart to `wato.all_folders`'s "write", and without
+# it a scoped role can edit nothing because it can't find anything.
+# `wato.activateforeign` is present on the admin role too but is
+# deliberately EXCLUDED -- a scoped write role must only activate its own
+# changes, never someone else's.
+TOPOLOGY_EDITOR_PERMISSIONS: tuple[str, ...] = (
+    "wato.use",
+    "wato.edit",
+    "wato.all_folders",
+    "wato.see_all_folders",
+    "wato.edit_hosts",
+    "wato.manage_hosts",
+    "wato.activate",
+)
+
+
+def build_role_permissions(perm_ids: tuple[str, ...]) -> dict[str, str]:
+    """Map each permission id to `"yes"` (enabled) -- `EditUserRole.new_permissions`'s shape."""
+    return {perm_id: "yes" for perm_id in perm_ids}
+
+
+def build_topology_editor_user_body(username: str, secret: str) -> dict[str, Any]:
+    """`POST /domain-types/user_config/collections/all` body, `roles: [TOPOLOGY_EDITOR_ROLE_ID]` --
+    never `["admin"]` (T-13-09). Kept for scripts/provision_topology_editor.py's
+    manual-fallback path; `CheckmkClient.upsert_automation_user()` builds its
+    own body inline since it accepts an arbitrary `roles`/`fullname` pair.
+    """
+    return {
+        "username": username,
+        "fullname": TOPOLOGY_EDITOR_ROLE_ALIAS,
+        "auth_option": {
+            "auth_type": "automation",
+            "secret": secret,
+            "store_automation_secret": True,
+        },
+        "roles": [TOPOLOGY_EDITOR_ROLE_ID],
+    }
+
+
 def _site_base(proto: str, host: str, port: int | None, site: str) -> str:
     """Build the site's HTTP base URL (everything up to and including
     `check_mk`), the single place the netloc is assembled for
@@ -356,6 +431,128 @@ class CheckmkClient:
             "POST", "/domain-types/host_tag_group/collections/all", json_body=body
         )
         return resp.json()
+
+    # -- topology_editor: dashboard's scoped role/user provisioning ---------
+
+    async def ensure_topology_editor_role(self) -> None:
+        """Idempotently clone `TOPOLOGY_EDITOR_ROLE_ID` off
+        `TOPOLOGY_EDITOR_BASE_ROLE_ID` and (re)assert its exact permission
+        set every call, so the role stays in sync even if it drifted via
+        the GUI. Skips the clone step (only) if the role already exists;
+        the permission PUT always runs regardless.
+
+        No `If-Match` on the role PUT -- live-verified against Checkmk
+        2.4.0p35's own endpoint source: `edit_userrole`'s `@Endpoint(...)`
+        registration passes no `etag=` argument, so `ETagBehaviour`
+        defaults to `None`, unlike `host_config`'s PUT.
+        """
+        get_resp = await self._request(
+            "GET", f"/objects/user_role/{TOPOLOGY_EDITOR_ROLE_ID}", expect=(200, 404)
+        )
+        if get_resp.status_code == 404:
+            await self._request(
+                "POST",
+                "/domain-types/user_role/collections/all",
+                json_body={
+                    "role_id": TOPOLOGY_EDITOR_BASE_ROLE_ID,
+                    "new_role_id": TOPOLOGY_EDITOR_ROLE_ID,
+                    "new_alias": TOPOLOGY_EDITOR_ROLE_ALIAS,
+                },
+            )
+        await self._request(
+            "PUT",
+            f"/objects/user_role/{TOPOLOGY_EDITOR_ROLE_ID}",
+            json_body={"new_permissions": build_role_permissions(TOPOLOGY_EDITOR_PERMISSIONS)},
+            expect=(200, 204),
+        )
+
+    async def user_exists(self, username: str) -> bool:
+        resp = await self._request(
+            "GET", f"/objects/user_config/{username}", expect=(200, 404)
+        )
+        return resp.status_code == 200
+
+    async def upsert_automation_user(
+        self, username: str, secret: str, *, roles: list[str], fullname: str
+    ) -> bool:
+        """Create or rotate an automation user's secret, mirroring
+        `bootstrap_automation_user()`'s pre-seeded create-or-update shape
+        but generalized to any `username`/`roles`/`fullname`, and routed
+        entirely through `_request()` instead of a bare httpx client --
+        unlike `bootstrap_automation_user()`, no GUI-session cmkadmin
+        bootstrap is needed here, since this `CheckmkClient` already
+        carries a working automation credential by the time this runs.
+
+        On an existing user (GET 200), only `auth_option` is PUT with the
+        GET's `ETag` (a missing ETag raises `CheckmkAPIError`) -- roles and
+        fullname are left untouched, same as `bootstrap_automation_user()`.
+        On a missing user (GET 404), the full body is POSTed.
+
+        Returns True when the user was created, False when an existing
+        user's secret was rotated.
+        """
+        get_resp = await self._request(
+            "GET", f"/objects/user_config/{username}", expect=(200, 404)
+        )
+        if get_resp.status_code == 200:
+            etag = get_resp.headers.get("ETag")
+            if not etag:
+                raise CheckmkAPIError(
+                    "GET", str(get_resp.url), get_resp.status_code, "missing ETag header"
+                )
+            await self._request(
+                "PUT",
+                f"/objects/user_config/{username}",
+                json_body={
+                    "auth_option": {
+                        "auth_type": "automation",
+                        "secret": secret,
+                        "store_automation_secret": True,
+                    }
+                },
+                extra_headers={"If-Match": etag},
+                expect=(200,),
+            )
+            return False
+
+        await self._request(
+            "POST",
+            "/domain-types/user_config/collections/all",
+            json_body={
+                "username": username,
+                "fullname": fullname,
+                "auth_option": {
+                    "auth_type": "automation",
+                    "secret": secret,
+                    "store_automation_secret": True,
+                },
+                "roles": roles,
+            },
+            expect=(200, 201),
+        )
+        return True
+
+    async def provision_topology_editor(self, secret: str) -> bool:
+        """Provision (or rotate) the dashboard's scoped `topology_editor`
+        Checkmk role and automation user to `secret`.
+
+        Supersedes Phase 13 D-04's client-embedded credential as of
+        2026-09-30 (quick 260930-hpy): the secret now lives only in
+        `deploy/.env` and is injected by the dashboard's nginx, never in
+        the browser bundle. The role stays narrowly scoped
+        (`TOPOLOGY_EDITOR_PERMISSIONS`) as defence in depth even though the
+        credential itself is no longer directly exposed to the browser.
+
+        Returns True when the user was created, False when rotated --
+        same contract as `upsert_automation_user()`.
+        """
+        await self.ensure_topology_editor_role()
+        return await self.upsert_automation_user(
+            TOPOLOGY_EDITOR_USER_ID,
+            secret,
+            roles=[TOPOLOGY_EDITOR_ROLE_ID],
+            fullname=TOPOLOGY_EDITOR_ROLE_ALIAS,
+        )
 
 
 # -- Phase 1: bootstrap the 'automation' REST user ---------------------------

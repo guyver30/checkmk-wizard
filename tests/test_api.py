@@ -7,6 +7,11 @@ import respx
 from httpx import Response
 
 from checkmk_wizard.api import (
+    TOPOLOGY_EDITOR_BASE_ROLE_ID,
+    TOPOLOGY_EDITOR_PERMISSIONS,
+    TOPOLOGY_EDITOR_ROLE_ALIAS,
+    TOPOLOGY_EDITOR_ROLE_ID,
+    TOPOLOGY_EDITOR_USER_ID,
     CheckmkAPIError,
     CheckmkClient,
     CheckmkConnection,
@@ -790,3 +795,183 @@ async def test_change_cmkadmin_password_raises_on_failed_login():
         respx.post(LOGIN_URL).mock(return_value=Response(200, text="login page again"))
         with pytest.raises(CheckmkAPIError):
             await change_cmkadmin_password("cmk.example", "mysite", "wrongpw", "N3wSecure!Pass")
+
+
+# --- topology_editor provisioning (quick 260930-hpy) -------------------------
+
+_ROLE_URL = f"{BASE}/objects/user_role/{TOPOLOGY_EDITOR_ROLE_ID}"
+_TOPOLOGY_USER_URL = f"{BASE}/objects/user_config/{TOPOLOGY_EDITOR_USER_ID}"
+
+
+def test_topology_editor_permissions_excludes_dangerous_ids():
+    assert "wato.activateforeign" not in TOPOLOGY_EDITOR_PERMISSIONS
+    excluded_prefixes = ("wato.users", "wato.global", "wato.rulesets")
+    assert not any(
+        perm_id.startswith(prefix) for perm_id in TOPOLOGY_EDITOR_PERMISSIONS for prefix in excluded_prefixes
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_topology_editor_role_clones_and_sets_permissions_when_missing():
+    with respx.mock:
+        respx.get(_ROLE_URL).mock(return_value=Response(404, json={"title": "Not Found"}))
+        clone_route = respx.post(f"{BASE}/domain-types/user_role/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        put_route = respx.put(_ROLE_URL).mock(return_value=Response(204))
+        async with CheckmkClient(CONN) as client:
+            await client.ensure_topology_editor_role()
+
+    assert json.loads(clone_route.calls.last.request.content) == {
+        "role_id": TOPOLOGY_EDITOR_BASE_ROLE_ID,
+        "new_role_id": TOPOLOGY_EDITOR_ROLE_ID,
+        "new_alias": TOPOLOGY_EDITOR_ROLE_ALIAS,
+    }
+    assert json.loads(put_route.calls.last.request.content) == {
+        "new_permissions": {perm_id: "yes" for perm_id in TOPOLOGY_EDITOR_PERMISSIONS}
+    }
+    # No If-Match on the role PUT -- edit_userrole's ETagBehaviour is None.
+    assert "If-Match" not in put_route.calls.last.request.headers
+
+
+@pytest.mark.asyncio
+async def test_ensure_topology_editor_role_skips_clone_when_already_exists():
+    with respx.mock:
+        respx.get(_ROLE_URL).mock(return_value=Response(200, json={}))
+        clone_route = respx.post(f"{BASE}/domain-types/user_role/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        put_route = respx.put(_ROLE_URL).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await client.ensure_topology_editor_role()
+
+    assert not clone_route.called
+    assert put_route.called
+
+
+@pytest.mark.asyncio
+async def test_user_exists_true_on_200():
+    with respx.mock:
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            assert await client.user_exists(TOPOLOGY_EDITOR_USER_ID) is True
+
+
+@pytest.mark.asyncio
+async def test_user_exists_false_on_404():
+    with respx.mock:
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(404, json={"title": "Not Found"}))
+        async with CheckmkClient(CONN) as client:
+            assert await client.user_exists(TOPOLOGY_EDITOR_USER_ID) is False
+
+
+@pytest.mark.asyncio
+async def test_upsert_automation_user_creates_when_missing():
+    with respx.mock:
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(404, json={"title": "Not Found"}))
+        create_route = respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            created = await client.upsert_automation_user(
+                TOPOLOGY_EDITOR_USER_ID, "s3cret", roles=[TOPOLOGY_EDITOR_ROLE_ID], fullname=TOPOLOGY_EDITOR_ROLE_ALIAS
+            )
+
+    assert created is True
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["roles"] == [TOPOLOGY_EDITOR_ROLE_ID]
+    assert body["username"] == TOPOLOGY_EDITOR_USER_ID
+    assert body["fullname"] == TOPOLOGY_EDITOR_ROLE_ALIAS
+    assert body["auth_option"] == {
+        "auth_type": "automation",
+        "secret": "s3cret",
+        "store_automation_secret": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_upsert_automation_user_rotates_secret_when_existing():
+    with respx.mock:
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(200, json={}, headers={"ETag": '"u-etag"'}))
+        put_route = respx.put(_TOPOLOGY_USER_URL).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            created = await client.upsert_automation_user(
+                TOPOLOGY_EDITOR_USER_ID, "n3w-s3cret", roles=[TOPOLOGY_EDITOR_ROLE_ID], fullname=TOPOLOGY_EDITOR_ROLE_ALIAS
+            )
+
+    assert created is False
+    assert put_route.calls.last.request.headers["If-Match"] == '"u-etag"'
+    assert json.loads(put_route.calls.last.request.content) == {
+        "auth_option": {
+            "auth_type": "automation",
+            "secret": "n3w-s3cret",
+            "store_automation_secret": True,
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_upsert_automation_user_existing_missing_etag_raises():
+    with respx.mock:
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            with pytest.raises(CheckmkAPIError):
+                await client.upsert_automation_user(
+                    TOPOLOGY_EDITOR_USER_ID, "s3cret", roles=[TOPOLOGY_EDITOR_ROLE_ID], fullname=TOPOLOGY_EDITOR_ROLE_ALIAS
+                )
+
+
+@pytest.mark.asyncio
+async def test_upsert_automation_user_rejected_post_raises():
+    with respx.mock:
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(404, json={"title": "Not Found"}))
+        respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(400, json={"title": "bad body"})
+        )
+        async with CheckmkClient(CONN) as client:
+            with pytest.raises(CheckmkAPIError):
+                await client.upsert_automation_user(
+                    TOPOLOGY_EDITOR_USER_ID, "s3cret", roles=[TOPOLOGY_EDITOR_ROLE_ID], fullname=TOPOLOGY_EDITOR_ROLE_ALIAS
+                )
+
+
+@pytest.mark.asyncio
+async def test_upsert_automation_user_rejected_put_raises():
+    with respx.mock:
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(200, json={}, headers={"ETag": '"u-etag"'}))
+        respx.put(_TOPOLOGY_USER_URL).mock(return_value=Response(400, json={"title": "bad secret"}))
+        async with CheckmkClient(CONN) as client:
+            with pytest.raises(CheckmkAPIError):
+                await client.upsert_automation_user(
+                    TOPOLOGY_EDITOR_USER_ID, "s3cret", roles=[TOPOLOGY_EDITOR_ROLE_ID], fullname=TOPOLOGY_EDITOR_ROLE_ALIAS
+                )
+
+
+@pytest.mark.asyncio
+async def test_provision_topology_editor_ensures_role_then_upserts_user():
+    with respx.mock:
+        respx.get(_ROLE_URL).mock(return_value=Response(200, json={}))
+        respx.put(_ROLE_URL).mock(return_value=Response(204))
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(404, json={"title": "Not Found"}))
+        create_route = respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            created = await client.provision_topology_editor("s3cret")
+
+    assert created is True
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["roles"] == [TOPOLOGY_EDITOR_ROLE_ID]
+
+
+@pytest.mark.asyncio
+async def test_provision_topology_editor_returns_false_when_rotated():
+    with respx.mock:
+        respx.get(_ROLE_URL).mock(return_value=Response(200, json={}))
+        respx.put(_ROLE_URL).mock(return_value=Response(204))
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(200, json={}, headers={"ETag": '"u-etag"'}))
+        respx.put(_TOPOLOGY_USER_URL).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            created = await client.provision_topology_editor("s3cret")
+
+    assert created is False

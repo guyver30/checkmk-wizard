@@ -1,6 +1,10 @@
 import importlib.util
+import json
 import sys
 from pathlib import Path
+
+import respx
+from httpx import Response
 
 # scripts/ is not an importable package -- same reasoning and pattern as
 # tests/test_mqtt_poller.py's own module-loading header.
@@ -11,6 +15,16 @@ _SPEC = importlib.util.spec_from_file_location(
 provisioner = importlib.util.module_from_spec(_SPEC)
 sys.modules["provision_topology_editor"] = provisioner
 _SPEC.loader.exec_module(provisioner)
+
+_BASE = "http://cmk.example:5000/mysite/check_mk/api/v1"
+
+
+def _set_rest_env(monkeypatch):
+    monkeypatch.setenv("CMK_REST_SECRET", "automation-secret")
+    monkeypatch.setenv("CMK_REST_HOST", "cmk.example")
+    monkeypatch.setenv("CMK_REST_PORT", "5000")
+    monkeypatch.setenv("CMK_SITE_ID", "mysite")
+    monkeypatch.setenv("CMK_REST_USERNAME", "automation")
 
 
 # --- build_role_permissions --------------------------------------------------
@@ -97,3 +111,98 @@ def test_generate_secret_differs_between_calls():
 def test_main_fails_fast_when_secret_env_var_missing(monkeypatch):
     monkeypatch.delenv("CMK_REST_SECRET", raising=False)
     assert provisioner.main() == 1
+
+
+def test_main_provisions_with_topology_editor_secret_creates_when_missing(monkeypatch, capsys):
+    _set_rest_env(monkeypatch)
+    monkeypatch.setenv("TOPOLOGY_EDITOR_SECRET", "topo-secret-value")
+    with respx.mock:
+        respx.get(f"{_BASE}/objects/user_role/topology_editor").mock(return_value=Response(200, json={}))
+        respx.put(f"{_BASE}/objects/user_role/topology_editor").mock(return_value=Response(204))
+        respx.get(f"{_BASE}/objects/user_config/topology_editor").mock(
+            return_value=Response(404, json={"title": "Not Found"})
+        )
+        create_route = respx.post(f"{_BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        respx.get(f"{_BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(200, json={"value": []}, headers={"ETag": '"etag1"'})
+        )
+        respx.post(f"{_BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(200, json={"id": "run1", "extensions": {"is_running": False}})
+        )
+        result = provisioner.main()
+
+    assert result == 0
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["auth_option"]["secret"] == "topo-secret-value"
+    out = capsys.readouterr().out
+    assert "topo-secret-value" not in out
+
+
+def test_main_provisions_with_topology_editor_secret_rotates_when_existing(monkeypatch, capsys):
+    _set_rest_env(monkeypatch)
+    monkeypatch.setenv("TOPOLOGY_EDITOR_SECRET", "topo-secret-value")
+    with respx.mock:
+        respx.get(f"{_BASE}/objects/user_role/topology_editor").mock(return_value=Response(200, json={}))
+        respx.put(f"{_BASE}/objects/user_role/topology_editor").mock(return_value=Response(204))
+        respx.get(f"{_BASE}/objects/user_config/topology_editor").mock(
+            return_value=Response(200, json={}, headers={"ETag": '"u-etag"'})
+        )
+        put_route = respx.put(f"{_BASE}/objects/user_config/topology_editor").mock(
+            return_value=Response(200, json={})
+        )
+        respx.get(f"{_BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(200, json={"value": []}, headers={"ETag": '"etag1"'})
+        )
+        respx.post(f"{_BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(200, json={"id": "run1", "extensions": {"is_running": False}})
+        )
+        result = provisioner.main()
+
+    assert result == 0
+    assert put_route.calls.last.request.headers["If-Match"] == '"u-etag"'
+    body = json.loads(put_route.calls.last.request.content)
+    assert body["auth_option"]["secret"] == "topo-secret-value"
+    out = capsys.readouterr().out
+    assert "topo-secret-value" not in out
+
+
+def test_main_without_topology_editor_secret_reports_existing_user_not_rotated(monkeypatch, capsys):
+    _set_rest_env(monkeypatch)
+    monkeypatch.delenv("TOPOLOGY_EDITOR_SECRET", raising=False)
+    with respx.mock:
+        respx.get(f"{_BASE}/objects/user_role/topology_editor").mock(return_value=Response(200, json={}))
+        respx.put(f"{_BASE}/objects/user_role/topology_editor").mock(return_value=Response(204))
+        respx.get(f"{_BASE}/objects/user_config/topology_editor").mock(return_value=Response(200, json={}))
+        result = provisioner.main()
+
+    assert result == 0
+    assert "secret not rotated" in capsys.readouterr().out
+
+
+def test_main_without_topology_editor_secret_creates_and_prints_generated_secret(monkeypatch, capsys):
+    _set_rest_env(monkeypatch)
+    monkeypatch.delenv("TOPOLOGY_EDITOR_SECRET", raising=False)
+    with respx.mock:
+        respx.get(f"{_BASE}/objects/user_role/topology_editor").mock(return_value=Response(200, json={}))
+        respx.put(f"{_BASE}/objects/user_role/topology_editor").mock(return_value=Response(204))
+        respx.get(f"{_BASE}/objects/user_config/topology_editor").mock(
+            return_value=Response(404, json={"title": "Not Found"})
+        )
+        create_route = respx.post(f"{_BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        respx.get(f"{_BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(200, json={"value": []}, headers={"ETag": '"etag1"'})
+        )
+        respx.post(f"{_BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(200, json={"id": "run1", "extensions": {"is_running": False}})
+        )
+        result = provisioner.main()
+
+    assert result == 0
+    body = json.loads(create_route.calls.last.request.content)
+    out = capsys.readouterr().out
+    assert body["auth_option"]["secret"] in out
+    assert "TOPOLOGY_EDITOR_SECRET" in out
