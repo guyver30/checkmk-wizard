@@ -19,6 +19,7 @@ import {
   updateDependsOn,
   updateParents,
 } from "./checkmkWrite";
+import { __setRuntimeConfigForTests } from "./runtimeConfig";
 
 function mockResponse(
   status: number,
@@ -44,6 +45,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  // Reset the runtime config so a non-default checkmkSite set by one test can never leak
+  // into the next test's "dmc" assertions.
+  __setRuntimeConfigForTests();
 });
 
 describe("request() choke point (exercised via the exported writers)", () => {
@@ -600,5 +604,31 @@ describe("activateChanges", () => {
 
     await assertion;
     expect(callCount).toBe(62);
+  });
+});
+
+describe("runtime config (quick 260930-ixs)", () => {
+  it("builds request URLs from the runtime-configured checkmkSite, not the dmc default", async () => {
+    __setRuntimeConfigForTests({ checkmkSite: "mysite" });
+    fetchMock.mockResolvedValueOnce(mockResponse(200, { value: [] }, { ETag: "e" }));
+
+    await countPendingChanges();
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("/checkmk-api/mysite/check_mk/api/1.0");
+  });
+
+  it("sends the runtime-configured checkmkSite in activateChanges' sites list", async () => {
+    __setRuntimeConfigForTests({ checkmkSite: "mysite" });
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(200, { value: [{ id: "1" }] }, { ETag: "etag-pending" }),
+    );
+    fetchMock.mockResolvedValueOnce(mockResponse(204, undefined));
+
+    await activateChanges();
+
+    const [, init] = fetchMock.mock.calls[1];
+    const body = JSON.parse(init.body);
+    expect(body.sites).toEqual(["mysite"]);
   });
 });

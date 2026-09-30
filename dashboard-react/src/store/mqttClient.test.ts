@@ -9,6 +9,7 @@ import {
   __resetForTests,
 } from "./mqttClient";
 import { useAppStore } from "./useAppStore";
+import { __setRuntimeConfigForTests } from "../lib/runtimeConfig";
 
 // A hand-written fake mqtt.js client: an on(event, handler) recorder plus subscribe/
 // reconnect/end spies, matching the minimum surface mqttClient.ts touches.
@@ -50,6 +51,9 @@ beforeEach(() => {
 afterEach(() => {
   disconnect();
   __resetForTests();
+  // Reset the runtime config so a non-default wsUsername/wsPassword set by one test can
+  // never leak into another test's connect() call.
+  __setRuntimeConfigForTests();
 });
 
 describe("SUBSCRIBE_TOPICS", () => {
@@ -83,6 +87,17 @@ describe("connect", () => {
 
     expect(fake.subscribe).toHaveBeenCalledWith(SUBSCRIBE_TOPICS);
     expect(useAppStore.getState().connection.phase).toBe("connected");
+  });
+
+  it("passes the runtime-configured wsUsername/wsPassword to connectFn (quick 260930-ixs)", () => {
+    __setRuntimeConfigForTests({ wsUsername: "u2", wsPassword: "p2" });
+    const fake = createFakeClient();
+    const connectFn = vi.fn(() => fake as unknown as MqttClient);
+
+    connect({ connectFn });
+
+    const [, options] = connectFn.mock.calls[0];
+    expect(options).toMatchObject({ username: "u2", password: "p2" });
   });
 
   it("drops incidents on reconnect so ones closed while disconnected don't linger", () => {
