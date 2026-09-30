@@ -66,16 +66,17 @@
 
 ### Fleet History
 
-- [ ] **HIST-01**: The poller exposes every parsed `perf_data` metric from every service it already reads as TSDB series, labelled at least by host and service description and metric name, and never by a free-text or high-cardinality field (14.1-CONTEXT D-42)
-- [ ] **HIST-02**: The poller exposes a per-host state series (UP/DOWN/UNREACHABLE, from `host_state_raw`) with a separate downtime-flag series, and a per-service state series (OK/WARN/CRIT/UNKNOWN), so availability and Grafana state timelines can be derived from the TSDB (D-43)
-- [ ] **HIST-03**: The poller's history write path adds no on-disk state to the poller container: samples are served from memory on a `/metrics` endpoint that the TSDB scrapes, and stop being served when the poller's Livestatus data goes stale, so a gap reads as "no data" (D-44, D-47)
-- [ ] **HIST-04**: A Prometheus + Thanos stack in the compose file keeps recent raw data on a local volume, uploads blocks to MinIO, keeps raw resolution about 30 days, downsamples, and retains 3 years in total, with one read-only query API (Thanos Query) for every consumer (D-21, D-23, D-40)
-- [ ] **HIST-05**: The TSDB long-term tier and the rollup writer work against MinIO or AWS S3 by configuration only (endpoint, region, credentials), with no MinIO-specific API calls, reusing the existing MinIO root credentials (D-41, D-56)
-- [ ] **HIST-06**: Shortly after local midnight (Asia/Singapore) the poller computes the previous day's availability from the TSDB state series and writes one JSON object per day (`availability/YYYY/MM/YYYY-MM-DD.json`, with `schema_version`) holding per-device and per-folder UP %, DOWN %, UNOBSERVED % (UNREACHABLE), availability = UP / (UP + DOWN), downtime minutes excluded from the denominator, and no-data minutes counted as neither up nor down; the group key is generic so later location groups need no format change (D-45..D-49, D-51, D-53)
-- [ ] **HIST-07**: On startup and at each midnight the rollup job writes every missing day object back as far as raw retention allows (about 30 days), and never overwrites an existing day object (D-52)
-- [ ] **HIST-08**: The dashboard's nginx exposes a same-origin, GET-only allowlist of Thanos Query read paths and the rollup objects; every other path under those prefixes, every write method, and every admin/delete endpoint is unreachable through it, and no storage credential reaches the browser (D-24, D-54, D-56)
+- [ ] **HIST-01**: The poller writes every parsed `perf_data` metric from every service it already reads to ClickHouse (`history.metrics`), keyed by host, service description and metric name as LowCardinality columns, never by a free-text or high-cardinality field (D-42)
+- [ ] **HIST-02**: The poller writes a per-host state series (UP/DOWN/UNREACHABLE from `host_state_raw`, with a downtime flag and the host's folder) and a per-service state series (OK/WARN/CRIT/UNKNOWN) to ClickHouse, so availability and Grafana state timelines derive from them (D-43)
+- [ ] **HIST-03**: The poller pushes each poll cycle's rows to ClickHouse's HTTP interface as one `INSERT ... FORMAT JSONEachRow` POST per table, adds no on-disk state to the poller container, and drops that cycle's rows (no buffer, no retry) when ClickHouse is unreachable, so the gap reads as "no data" and MQTT publishing is never interrupted (D-44, D-47)
+- [ ] **HIST-04**: A single ClickHouse container stores the history tables under a storage policy with a local volume and an S3 volume: raw rows about 30 days, then TTL GROUP BY downsampling (5-minute, then 1-hour), parts moved to the S3 volume after 31 days by TTL TO VOLUME, deleted after 3 years; ClickHouse's own HTTP interface (internal port 8123, not published) is the one query surface for every consumer (D-21, D-23, D-40, D-40b)
+- [ ] **HIST-05**: ClickHouse's S3 disk, the rollup JSON writer and the Parquet export work against MinIO or AWS S3 by configuration only (endpoint, region, credentials), with no MinIO-specific API calls in the poller or ClickHouse, reusing the existing MinIO root credentials; compose pins the MinIO images to Chainguard (cgr.dev) digests because minio/minio was removed from Docker Hub and quay.io/minio is no longer public (D-41, D-56)
+- [ ] **HIST-06**: Shortly after local midnight (Asia/Singapore) the poller computes the previous day's availability via SQL against ClickHouse's state tables and writes one JSON object per day (`availability/YYYY/MM/YYYY-MM-DD.json`, with `schema_version`) holding per-device and per-folder UP %, DOWN %, UNOBSERVED % (UNREACHABLE), availability = UP / (UP + DOWN), downtime minutes excluded from the denominator, and no-data minutes counted as neither up nor down; the group key is generic so later location groups need no format change (D-45..D-49, D-51, D-53)
+- [ ] **HIST-07**: On startup and at each midnight the rollup job writes every missing day object back as far as raw retention allows (about 30 days), and never overwrites an existing day object (both the JSON and the Parquet object) (D-52)
+- [ ] **HIST-07a**: The rollup job also writes each day's figures as Parquet to `availability_parquet/date=YYYY-MM-DD/availability.parquet` in the same bucket, exported by ClickHouse (`INSERT INTO FUNCTION s3(..., 'Parquet')`) from the same rows the JSON was built from; never-overwrite applies to both objects and a day counts as written only when both exist (D-57)
+- [ ] **HIST-08**: nginx exposes a same-origin, GET-only allowlist: `/ch-api/` to ClickHouse's HTTP query endpoint, authenticated server-side as the dedicated `dashboard_reader` user (settings profile `readonly = 1`, SELECT on the history database only), and `/availability/` to the rollup JSON and Parquet objects; every other path under those prefixes, every write method, client-supplied ClickHouse credentials and every admin/delete endpoint are unreachable through it, and no storage or database credential reaches the browser (D-24, D-54, D-56)
 - [ ] **HIST-09**: A standalone live smoke-test script proves the read path answers a real query and serves a rollup object, and that write, admin and delete operations are rejected through it and on the rollup bucket (D-54)
-- [ ] **HIST-10**: Grafana runs alongside the dashboard with a provisioned Thanos datasource and three provisioned dashboards (host metrics explorer, fleet state timeline, availability); login is required with the admin password from `deploy/.env`, anonymous access is off, and Grafana refuses to start with a default password (D-22, D-55)
+- [ ] **HIST-10**: Grafana runs alongside the dashboard with a provisioned ClickHouse datasource (official `grafana-clickhouse-datasource` plugin, read-only `grafana_reader` user) and three provisioned dashboards (host metrics explorer, fleet state timeline, availability); login is required with the admin password from `deploy/.env`, anonymous access is off, and Grafana refuses to start with a default password (D-22, D-55)
 - [ ] **HIST-11**: PROJECT.md and CLAUDE.md record the amendment to the "no new backend for the dashboard" constraint, and the "Time-series graphing/charting" Out of Scope rows are narrowed to match (D-24)
 
 ## v2 Requirements
@@ -161,14 +162,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HIST-05 | Phase 14.1 | Pending |
 | HIST-06 | Phase 14.1 | Pending |
 | HIST-07 | Phase 14.1 | Pending |
+| HIST-07a | Phase 14.1 | Pending |
 | HIST-08 | Phase 14.1 | Pending |
 | HIST-09 | Phase 14.1 | Pending |
 | HIST-10 | Phase 14.1 | Pending |
 | HIST-11 | Phase 14.1 | Pending |
 
 **Coverage:**
-- v1 requirements: 55 total
-- Mapped to phases: 55 ✓
+- v1 requirements: 56 total
+- Mapped to phases: 56 ✓
 - Unmapped: 0
 
 ---
@@ -187,3 +189,5 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Phase 14 requirement note (2026-09-26, minted after `/bm:discuss-phase 14`): ROADMAP.md's Phase 14 entry carried `Requirements: TBD` over seven scope items. The discussion split it into three phases (14-CONTEXT.md D-01), so these IDs cover only Phase 14's share: root-cause collapse (PLR-14, PLR-15, DASH-15), incident publishing plus the criticality and dependency model (PLR-16, DASH-14, DASH-16) and kiosk mode (DASH-17). History, availability rollups and Grafana belong to Phase 14.1; prediction and narration belong to Phase 14.2. Both still carry `Requirements: TBD`. Two consequences for 14.1: the "Time-series graphing/charting" Out of Scope row will need narrowing when 14.1 is planned, and so will the "no server-side application" constraint in PROJECT.md (D-24). The coverage count was corrected in the same pass: it had read 31 since 2026-09-05 and was never updated as Phases 12 and 13 minted IDs. The real total before this pass was 37; it is now 44.*
 
 *Phase 14.1 requirement note (2026-09-28, minted during `/bm:plan-phase 14.1`): ROADMAP.md's Phase 14.1 entry carried `Requirements: TBD`. HIST-01..HIST-11 were minted from `14.1-RESEARCH.md`'s proposed table, reworded against `14.1-CONTEXT.md` D-40..D-56 and the carried D-20..D-24. Coverage is now 55. HIST-11 owns narrowing the "Time-series graphing/charting" Out of Scope row, which Phase 14's note anticipated. Dashboard history views stay out of scope (D-50).*
+
+*Phase 14.1 re-plan note (2026-09-28): 14.1-CONTEXT.md D-40 (revised) replaced Prometheus + Thanos with ClickHouse and D-57 added Parquet rollups. HIST-01..08 and HIST-10 were reworded for the ClickHouse design and HIST-07a was minted for D-57; coverage is now 56. The superseded plans were replanned from scratch.*

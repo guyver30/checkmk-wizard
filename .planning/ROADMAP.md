@@ -383,14 +383,14 @@ Plans:
 
 ### Phase 14.1: Fleet History Store, Availability Rollups and Grafana (INSERTED)
 
-**Goal:** The fleet gains long-term history: the poller writes metrics to a TSDB whose long-term tier is MinIO, writes one daily availability rollup object per day to MinIO, and the dashboard (read-only over HTTP) and an analyst-facing Grafana both read that history
-**Requirements**: HIST-01, HIST-02, HIST-03, HIST-04, HIST-05, HIST-06, HIST-07, HIST-08, HIST-09, HIST-10, HIST-11
+**Goal:** The fleet gains long-term history: the poller writes metrics to a ClickHouse store whose long-term tier is MinIO, writes each day's availability rollup to MinIO as JSON and Parquet, and the dashboard (read-only over HTTP) and an analyst-facing Grafana both read that history
+**Requirements**: HIST-01, HIST-02, HIST-03, HIST-04, HIST-05, HIST-06, HIST-07, HIST-07a, HIST-08, HIST-09, HIST-10, HIST-11
 **Depends on:** Phase 14
 **Locked inputs** (from `.planning/phases/14-fleet-intelligence/14-CONTEXT.md`, split out of Phase 14 by D-01/D-02):
   - D-20: Checkmk edition is fixed at Raw, so the poller writes metric history (no Checkmk-native export)
   - D-21: retention 3 years, downsampled (raw resolution roughly 30 days)
   - D-22: Grafana sits alongside the dashboard, for analysts; optional, never replaces it
-  - D-23: TSDB container in the compose stack with MinIO as long-term tier; product choice is for research
+  - D-23: TSDB container in the compose stack with MinIO as long-term tier; product choice is for research (resolved 2026-09-28: ClickHouse, see 14.1-CONTEXT.md D-40)
   - D-24: the dashboard queries the TSDB over HTTP, read-only. This amends the "no new backend" constraint, so PROJECT.md and CLAUDE.md must be updated during planning. The access mechanism is for research
 **Plans:** 8 plans
 
