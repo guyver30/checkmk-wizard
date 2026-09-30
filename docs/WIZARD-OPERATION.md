@@ -548,6 +548,42 @@ running 2.4.0p35 CE site: login → create user → Bearer-auth with the new
 secret → `automation.secret` file appears on disk at the path
 `site.read_automation_secret()` already reads.
 
+### Troubleshooting: the wizard asks for "Automation secret:" although `CMK_REST_SECRET` is set
+
+In container mode the wizard applies `CMK_REST_SECRET` **only** through the
+cmkadmin login (`wizard.py:564-599`). It logs in as `cmkadmin`, then creates
+the `automation` user, or updates it to the env secret if it already exists.
+If that path doesn't run, or fails, the wizard falls through to the manual
+"Automation secret:" prompt (`wizard.py:615-636`). There are three causes:
+
+1. **The cmkadmin password prompt was left blank.** Blank means "skip the
+   bootstrap". The wizard then never reads `CMK_REST_SECRET` and goes
+   straight to the manual prompt. Enter the cmkadmin password instead: the
+   compose default `cmkadmin` on a new site, or the one you set on an earlier
+   run.
+2. **The bootstrap failed.** A yellow line just above the prompt reads
+   "Could not auto-create the 'automation' user (…)", and the text in
+   brackets gives the reason. The most common one is a wrong cmkadmin
+   password, because it was changed on an earlier run.
+3. **The worker container doesn't have the variable.** `deploy/.env` is read
+   only when compose creates the container, so a value added or changed
+   later doesn't reach an already-running worker. Check it (this prints only
+   the length; `0` means empty):
+
+   ```bash
+   podman compose exec worker bash -c 'echo ${#CMK_REST_SECRET}'
+   ```
+
+   If it prints `0`, run `podman compose down && podman compose up -d` from
+   `deploy/` and start the wizard again. The poller reads the same variable,
+   so it needs the full restart anyway.
+
+In all three cases, pasting the value from `deploy/.env` at the prompt is a
+safe way to carry on. It is the secret the `automation` user needs to have.
+Only if the `automation` user was never given that value (cause 1 on a new
+site) will the rest of the run fail with authentication errors. In that case,
+run the wizard again and enter the cmkadmin password.
+
 ## Phase 2 — Folder Structure (`wizard.py:257-390`; `_network_scan_attributes` at `wizard.py:257-280`, `phase2_folders` at `wizard.py:285-390`)
 
 **Changed 2026-08-25: folders now carry their own subnet, one at a time,**
