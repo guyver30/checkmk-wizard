@@ -80,10 +80,10 @@ The constants in `src/lib/config.ts`:
 
 - `WS_PORT` — the Mosquitto WebSockets listener port.
 - `DEFAULT_CHECKMK_SITE` / `DEFAULT_WS_USERNAME` / `DEFAULT_WS_PASSWORD` — the fallbacks
-  `runtimeConfig.ts` uses whenever `/config.json` is missing, unreachable or invalid; also
-  the disposable read-only broker credentials checked in deliberately (same convention as
-  `cmkadmin`/`cmkadmin` and `deploy/mosquitto.passwd`). Rotate `WS_PASSWORD` in `deploy/.env`
-  before exposing the dashboard beyond a trusted LAN.
+  `runtimeConfig.ts` uses whenever `/config.json` is missing, unreachable or invalid (dev/
+  vitest only). In production, `WS_PASSWORD` is generated into `deploy/.env` by
+  `deploy/init-env.sh` and fed to both the broker and `/config.json` (quick 260930-jj4).
+  Rotate by editing `deploy/.env`, then `podman compose down && podman compose up -d`.
 - `POLL_INTERVAL_SECONDS` (15) / `STALENESS_FACTOR` (3) — must be kept in step with
   `scripts/mqtt_poller.py`'s own defaults; a mismatch would make staleness flip at the wrong
   time.

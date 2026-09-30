@@ -97,8 +97,8 @@ podman compose up -d
   only at startup, and restarting a single container once cut Checkmk off
   from the LAN.
 - Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's
-  users and ACL are bind-mounted files (`mosquitto.passwd`, `mosquitto.acl`),
-  so they survive the wipe.
+  ACL is a bind-mounted file (`mosquitto.acl`); its users are regenerated
+  from `deploy/.env` at every start (quick 260930-jj4) — both survive the wipe.
 - Agents on target hosts are still registered to the deleted site. Run
   `cmk-agent-ctl delete-all` on each of them before re-onboarding (the same
   warning Phase 1's delete path prints).
@@ -107,10 +107,14 @@ podman compose up -d
   same step if the history should go too.
 
 To clear **only** the events feed and keep everything else in the broker,
-publish an empty retained message. The poller rebuilds the feed from empty:
+publish an empty retained message. The poller rebuilds the feed from empty.
+`$MQTT_POLLER_PASSWORD` is expanded by the host shell (from `deploy/.env`,
+sourced first) before `podman exec` runs, so the container never needs the
+variable in its own environment:
 
 ```bash
-podman exec mosquitto mosquitto_pub -h localhost -u poller -P '<poller password>' -t lan/events/recent -r -n
+set -a; . deploy/.env; set +a
+podman exec mosquitto mosquitto_pub -h localhost -u poller -P "$MQTT_POLLER_PASSWORD" -t lan/events/recent -r -n
 ```
 
 Then, on the fresh site: make sure `deploy/.env` has `CMK_REST_SECRET` set,
