@@ -103,10 +103,14 @@ podman exec mosquitto mosquitto_pub -h localhost -u poller -P '<poller password>
 ```
 
 Then, on the fresh site: make sure `deploy/.env` has `CMK_REST_SECRET` set,
-run the wizard (Phase 1 creates the `automation` user with that secret), re-run
-`scripts/provision_topology_editor.py` if you use the map's edit mode (its user
-was in the deleted site), and hard-refresh the dashboard (Ctrl+Shift+R). There
-is no undo: the old site's hosts, rules and monitoring history (RRDs) are gone.
+run the wizard (Phase 1 creates the `automation` user with that secret). If you
+use the map's edit mode, nothing extra is needed even though its
+`topology_editor` user was in the deleted site: with `TOPOLOGY_EDITOR_SECRET`
+also set in `deploy/.env`, the same wizard run re-provisions it right after
+Phase 1 (amended 2026-09-30, quick 260930-hpy — previously required a manual
+re-run of `scripts/provision_topology_editor.py` here). Hard-refresh the
+dashboard (Ctrl+Shift+R) afterwards. There is no undo: the old site's hosts,
+rules and monitoring history (RRDs) are gone.
 The full rationale is in
 [Podman setup §8.5](<Podman setup for checkmk, minio, mosquitto, worker.md#85-starting-over-with-a-blank-site>).
 
@@ -583,6 +587,44 @@ safe way to carry on. It is the secret the `automation` user needs to have.
 Only if the `automation` user was never given that value (cause 1 on a new
 site) will the rest of the run fail with authentication errors. In that case,
 run the wizard again and enter the cmkadmin password.
+
+### Topology editor provisioning (after Phase 1)
+
+Added 2026-09-28, amended 2026-09-30 (quick 260930-hpy — supersedes Phase
+13 D-04's client-embedded credential). As the very first statement inside
+`run()`'s `CheckmkClient` block — right after Phase 1 hands back a working
+connection, before Phase 2 starts — the wizard provisions the dashboard's
+scoped `topology_editor` Checkmk role and user
+(`_provision_topology_editor()`, `wizard.py`):
+
+- **Env var:** reads `TOPOLOGY_EDITOR_SECRET` from `deploy/.env`.
+- **Create vs. rotate:** calls `CheckmkClient.provision_topology_editor()`,
+  which idempotently ensures the scoped role's permissions
+  (`TOPOLOGY_EDITOR_PERMISSIONS`, `api.py`) and then either creates the
+  `topology_editor` automation user (first run) or rotates its secret to
+  match `.env` (a re-run) — the same create-or-update shape
+  `bootstrap_automation_user()` uses for the `automation` user. A green
+  line reports "created" or "updated with TOPOLOGY_EDITOR_SECRET from the
+  environment"; the secret value itself is never echoed, same rule as
+  `_print_automation_secret_created()`.
+- **Unset skip:** an empty or unset `TOPOLOGY_EDITOR_SECRET` makes zero
+  REST calls and prints one dim note instead — the dashboard's "Edit
+  topology" switch then stays disabled (it now decides this at runtime via
+  a `GET /version` probe through `/checkmk-api/`, not a compile-time
+  config.ts check).
+- **Never fatal:** any `CheckmkAPIError` here is caught, printed as a
+  yellow warning naming `scripts/provision_topology_editor.py` as the
+  manual fallback, and swallowed — the whole point of running this so
+  early is that a dashboard-provisioning hiccup must never block Phase 2
+  onward.
+- **Immediate activation:** on success, the wizard also calls
+  `_activate_pending_changes()` right away, so the new/rotated user is
+  live even if the operator stops the wizard before Phase 7's own
+  activation.
+- **Fallback script:** `scripts/provision_topology_editor.py` reads the
+  same `TOPOLOGY_EDITOR_SECRET` (plus the usual `CMK_REST_*` connection
+  vars) and does the same create-or-rotate, for provisioning without
+  running the whole wizard.
 
 ## Phase 2 — Folder Structure (`wizard.py:257-390`; `_network_scan_attributes` at `wizard.py:257-280`, `phase2_folders` at `wizard.py:285-390`)
 
