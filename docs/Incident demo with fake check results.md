@@ -15,14 +15,15 @@ Live-verified against a real Checkmk 2.4.0p36.cre site on 2026-09-26 (plan 14-05
 2. The React dashboard is served by the stack's `dashboard` service: open `http://<HOST_IP>:8090/`.
    If you pulled new code, rebuild it first
    (`cd deploy && podman compose build dashboard && podman compose down && podman compose up -d`).
-3. `TOPOLOGY_EDITOR_SECRET` is provisioned in `dashboard-react/src/lib/config.ts` — not required
-   for this demo's fake-check-result flow, but if the site was rebuilt since the secret was last
-   provisioned, every dashboard write (including this doc's cleanup verification) will 401.
-   **Symptom:** the browser console/network tab shows `401` on any REST write, or provisioning
-   output complains the `topology_editor` user doesn't exist. **Fix:** re-run
+3. `TOPOLOGY_EDITOR_SECRET` is set in `deploy/.env` and provisioned into Checkmk — not required
+   for this demo's fake-check-result flow, but if the Checkmk site was rebuilt since the secret
+   was last provisioned, every dashboard write (including this doc's cleanup verification) will
+   401. **Symptom:** the browser console/network tab shows `401` on any REST write, or
+   provisioning output complains the `topology_editor` user doesn't exist. **Fix:** re-run
    `podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/provision_topology_editor.py"`
-   and paste the freshly printed secret into `config.ts` (see the deployment doc's "Note on the
-   topology editor credential" for the full procedure).
+   (or re-run the wizard) with the value already in `deploy/.env`, then
+   `cd deploy && podman compose down && podman compose up -d` (see the deployment doc's "Note on
+   the topology editor credential" for the full procedure).
 4. Pick a handful of hosts you're comfortable faking DOWN for a few minutes: one plain host with
    no children, one managed switch/host with children (parents set via the topology editor), and
    one **unmanaged** switch (Add Node, Phase 13) with at least two children. Faking a real

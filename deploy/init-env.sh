@@ -123,8 +123,13 @@ echo "deploy/.env (secret values are not printed):"
 printf '  %s\n' "${summary[@]}"
 cat <<EOF
 
-Still manual, in dashboard-react/src/lib/config.ts (don't commit it):
-  CHECKMK_BASE_URL = "http://$public_host:8080"
-  CHECKMK_SITE     = "$site"
-Then: cd deploy && podman compose build dashboard && podman compose up -d
+Next steps:
+  cd deploy && podman compose down && podman compose up -d
+  (a full down/up, never a single-service restart -- see the project memory
+  about single-container restarts breaking Checkmk egress)
+  \`podman compose build dashboard\` is only needed after pulling code changes.
+
+  Optional: to rotate the read-only dashboard broker password, set WS_PASSWORD
+  in deploy/.env and regenerate deploy/mosquitto.passwd with
+  \`WS_PASSWORD=... deploy/gen-mosquitto-passwd.sh\`.
 EOF

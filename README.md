@@ -189,9 +189,9 @@ or actual SSH connections — that requires a real lab environment.
 
 A backend-less React + TypeScript web dashboard (`dashboard-react/`) visualizes the resulting
 Checkmk-monitored network topology and device status in real time over MQTT, with a live editable
-topology map, served on port 8090 alongside the rest of the stack. See
-[`dashboard-react/README.md`](dashboard-react/README.md) for building it and the one file an
-operator edits per deployment (`src/lib/config.ts`), and
+topology map, served on port 8090 alongside the rest of the stack. Per-deployment dashboard
+settings come from `deploy/.env` at container start, not from an edited source file. See
+[`dashboard-react/README.md`](dashboard-react/README.md) for building it, and
 [`docs/Podman setup for checkmk, minio, mosquitto, worker.md`](<docs/Podman setup for checkmk, minio, mosquitto, worker.md>)
 for how it fits into the wider deployment. To deploy the whole stack on a new machine, follow the
 checklist in [`docs/DEPLOY-NEW-MACHINE.md`](docs/DEPLOY-NEW-MACHINE.md).

@@ -67,34 +67,32 @@ Then open `http://<HOST_IP>:5173/` from a LAN browser.
 - Stop with Ctrl+C. `--rm` removes the container, so a `git pull` followed by re-running the
   command picks up new code.
 
-## 4. Configuration — `src/lib/config.ts`
+## 4. Configuration — runtime `/config.json` and `src/lib/config.ts`
 
-This is the one file an operator edits per deployment. Read it before deploying.
+Per-deployment values (`checkmkSite`, `wsUsername`, `wsPassword`) are loaded at startup from
+`/config.json` (`src/lib/runtimeConfig.ts`), which the production nginx renders from
+`deploy/.env` (`CMK_SITE_ID`, `WS_USERNAME`, `WS_PASSWORD` — see `deploy/dashboard-nginx.conf`).
+Under `vite dev`/`vite preview` there is no `/config.json`, so the defaults `dmc`/`wsreader`/
+`wsreader` apply. `src/lib/config.ts` holds only constants and those defaults, and is never
+edited per deployment (amended 2026-09-30, quick 260930-ixs).
 
-**`CHECKMK_BASE_URL`** ships as the literal placeholder `http://<HOST_IP>:8080`. The "View in
-Checkmk" deep link disables itself while this placeholder is present (same rule as the vanilla
-dashboard's D-20) — the visible symptom of forgetting to edit it is a link that merely **looks
-broken**, not an error message. The browser cannot derive this value itself: the poller
-(`scripts/mqtt_poller.py`) reaches Checkmk over the container-internal name `checkmk:5000`,
-which no LAN browser can resolve, so a human-facing URL has to be supplied separately.
-
-The remaining constants in `src/lib/config.ts`:
+The constants in `src/lib/config.ts`:
 
 - `WS_PORT` — the Mosquitto WebSockets listener port.
-- `WS_USERNAME` / `WS_PASSWORD` — deliberately-committed disposable read-only broker
-  credentials (same convention as `cmkadmin`/`cmkadmin` and
-  `deploy/mosquitto.passwd`). Rotate them before exposing the dashboard beyond a trusted LAN.
+- `DEFAULT_CHECKMK_SITE` / `DEFAULT_WS_USERNAME` / `DEFAULT_WS_PASSWORD` — the fallbacks
+  `runtimeConfig.ts` uses whenever `/config.json` is missing, unreachable or invalid; also
+  the disposable read-only broker credentials checked in deliberately (same convention as
+  `cmkadmin`/`cmkadmin` and `deploy/mosquitto.passwd`). Rotate `WS_PASSWORD` in `deploy/.env`
+  before exposing the dashboard beyond a trusted LAN.
 - `POLL_INTERVAL_SECONDS` (15) / `STALENESS_FACTOR` (3) — must be kept in step with
   `scripts/mqtt_poller.py`'s own defaults; a mismatch would make staleness flip at the wrong
   time.
 - `HISTORY_MAX_ENTRIES` — mirrors the poller's per-device history bound (20); it does not
   bound the global event feed (see "Event history" below).
-- `CHECKMK_SITE` — the Checkmk site name used to build deep links.
-- `CHECKMK_REST_ORIGIN` — the same-origin `/checkmk-api` path prefix the browser calls
-  instead of `CHECKMK_BASE_URL` directly, because Checkmk does not answer CORS preflights
-  (13-01 VERDICT V-CORS). `vite.config.ts`'s `server.proxy`/`preview.proxy` forward it to
-  Checkmk; set `CHECKMK_PROXY_TARGET` if Checkmk isn't reachable at `http://localhost:8080`
-  from wherever `vite dev`/`vite preview` runs.
+- `CHECKMK_REST_ORIGIN` — the same-origin `/checkmk-api` path prefix the browser calls,
+  because Checkmk does not answer CORS preflights (13-01 VERDICT V-CORS). `vite.config.ts`'s
+  `server.proxy`/`preview.proxy` forward it to Checkmk; set `CHECKMK_PROXY_TARGET` if Checkmk
+  isn't reachable at `http://localhost:8080` from wherever `vite dev`/`vite preview` runs.
 
 **No `topology_editor` credential is configured in this file anymore** (amended 2026-09-30,
 quick 260930-hpy — supersedes Phase 13 D-04). The dashboard's write path to Checkmk carries
@@ -337,6 +335,8 @@ changes.
    everything else under `/checkmk-api/` returns 403. See §4 above.
 4. Deploying an update: `git pull`, then
    `cd deploy && podman compose build dashboard && podman compose down && podman compose up -d`.
-   `src/lib/config.ts` is baked in at build time, so rebuild after editing it too.
-5. The old vanilla `dashboard/` (and its `docs/mockup/` preview harness) was deleted on
+5. Added 2026-09-30 (quick 260930-ixs): `deploy/dashboard-nginx.conf` adds an exact-match
+   `/config.json` location, rendered from `deploy/.env` (`CMK_SITE_ID`, `WS_USERNAME`,
+   `WS_PASSWORD`), which `src/lib/runtimeConfig.ts` loads before first render. See §4 above.
+6. The old vanilla `dashboard/` (and its `docs/mockup/` preview harness) was deleted on
    2026-09-30.

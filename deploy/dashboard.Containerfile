@@ -5,9 +5,10 @@
 # and the SPA, following dashboard-react/README.md §2; stage 2 serves the static
 # result with nginx, so no Node process runs in the deployed stack.
 #
-# The build copies the working tree, so a locally edited
-# dashboard-react/src/lib/config.ts (CHECKMK_BASE_URL) is baked into the image.
-# Rebuild after editing it or after every `git pull`.
+# The image contains no per-machine settings: the Checkmk site name and the
+# read-only broker credentials come from deploy/.env via /config.json at
+# container start (amended 2026-09-30, quick 260930-ixs), same as
+# TOPOLOGY_EDITOR_SECRET below. Rebuild after every `git pull`.
 #
 # Amended 2026-09-30 (quick 260930-hpy): config.ts no longer carries
 # TOPOLOGY_EDITOR_SECRET -- the credential comes from deploy/.env at container
