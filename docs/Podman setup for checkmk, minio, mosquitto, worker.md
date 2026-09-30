@@ -163,6 +163,8 @@ podman compose up -d
 
 The volume name depends on the compose project name; check it with `podman volume ls`.
 
+The one-shot `minio-init` job (Phase 14.1, creates the `clickhouse-s3-disk` and `fleet-availability` buckets on every `up`) uses `cgr.dev/chainguard/minio-client:latest-dev`, pinned by digest — the `-dev` variant specifically, because it ships a shell and `sleep` that the plain `latest` variant's image layers lack. If Chainguard's free-tier images also stop being pullable, the fallback is the same as MinIO's own: cache the last-known-good image locally, or move the bucket store to AWS S3 (D-41), which needs no code change.
+
 **Note on the dashboard (React, served on 8090 since 2026-09-28):** the `dashboard` service (§6)
 builds `dashboard-react/` into its own nginx image (`deploy/dashboard.Containerfile`, build context
 = the repo root). The image build compiles `design-system/` and the SPA inside a Node container, so
@@ -225,6 +227,38 @@ pending changes (`wato.activateforeign` is deliberately not granted), so a topol
 never accidentally push someone else's unreviewed configuration change live.
 
 **Note on `CMK_REST_SECRET` (poller):** the `poller` service now makes an authenticated Checkmk REST call every poll cycle to read each host's folder, alongside its unauthenticated Livestatus query. `deploy/compose.yaml` ships `CMK_REST_USERNAME=automation` and interpolates `CMK_REST_SECRET` from `deploy/.env`, which is gitignored so the real secret never lands in a tracked file. You choose the secret yourself, up front: copy `deploy/.env.example` to `deploy/.env`, set `CMK_REST_SECRET` to a long random value (`uv run python -c "import secrets; print(secrets.token_urlsafe(24))"`) before `podman compose up`, and the wizard's Phase 1 (see §8.3) pushes that exact value into Checkmk as the `automation` user's secret — creating the user, or updating the secret of an existing one on a re-run. Both `worker` and `poller` read the same value from `deploy/.env`; run `podman compose up -d poller` after changing it. If you leave it empty, the wizard falls back to generating a random secret and printing it once, which you then copy into `deploy/.env` by hand. `CMK_REST_SECRET` defaults to empty rather than refusing to start compose: a forgotten or missing secret leaves folder enrichment degraded (empty `folder` on every device) rather than blocking the stack, because a hard `:?` guard would also block `checkmk` and `mosquitto` from starting on a first-time deployment — before the automation secret this variable demands can even exist. A *wrong* secret degrades the same way (empty `folder` on every device) — see §7. Like `CMK_PASSWORD` above, rotate it before exposing this stack beyond a trusted LAN.
+
+### History store secrets (Phase 14.1)
+
+Five new secrets in `deploy/.env` back the ClickHouse history store and Grafana added in Phase 14.1 — `deploy/.env.example` documents all five inline:
+
+| Variable | Read by | Purpose |
+| --- | --- | --- |
+| `CH_ADMIN_PASSWORD` | `clickhouse` (init scripts, operator CLI) | `ch_admin`, ClickHouse's own admin user |
+| `CH_WRITER_PASSWORD` | `poller` | `poller_writer`, INSERT/SELECT on `history.*` plus the S3 export privilege |
+| `CH_READER_PASSWORD` | `dashboard` (nginx, `/ch-api/`) | `dashboard_reader`, SELECT-only, never reaches the browser |
+| `CH_GRAFANA_PASSWORD` | `grafana` | `grafana_reader`, SELECT-only, used by the provisioned ClickHouse datasource |
+| `GRAFANA_ADMIN_PASSWORD` | `grafana` | Grafana's own admin login |
+
+Generate each the same way as `CMK_REST_SECRET` above:
+
+```bash
+uv run python -c "import secrets; print(secrets.token_urlsafe(24))"
+```
+
+**All five must be set in `deploy/.env` BEFORE the first `podman compose up`.** ClickHouse's `docker-entrypoint-initdb.d` scripts (`deploy/clickhouse-config/initdb/`) — which create `ch_admin` and the three read/write users — run only once, on the first start of an empty `clickhouse_data` volume. An empty `CH_*` password at that point means the corresponding user is created with an empty or broken password, and setting the variable afterwards does not fix it. If that happens, recover with:
+
+```bash
+podman compose down
+podman volume rm deploy_clickhouse_data   # confirm the exact name with: podman volume ls
+podman compose up -d
+```
+
+(the volume name is prefixed with the compose project name, same caveat as `deploy_checkmk_data` in §8.5). This deletes any history recorded so far — there is no in-place password reset for a ClickHouse user whose settings profile already applied, short of `ALTER USER` (see `deploy/.env.example`'s rotation note).
+
+`grafana` refuses to start while `GRAFANA_ADMIN_PASSWORD` is empty or literally `admin` — its entrypoint guard exits before handing off to Grafana's own startup, so an empty-password deployment fails loudly (`podman compose logs grafana`) instead of coming up with a default credential.
+
+**Note on the history store (ClickHouse, MinIO, Parquet):** `clickhouse` keeps roughly 30 days of raw poller-written rows on its local volume, downsamples aging rows to 5-minute then 1-hour aggregates in place, moves parts older than 31 days to the `clickhouse-s3-disk` bucket on `minio`, and deletes anything older than 3 years. The poller writes one INSERT batch per poll cycle and drops it if ClickHouse is unreachable at that moment — the gap simply reads as "no data" later, never as up or down (no local buffering or retry queue). Once a day, shortly after local midnight (`ROLLUP_TZ`, default `Asia/Singapore`), the poller computes the previous day's availability from `history.host_state` and writes it once to the `fleet-availability` bucket as both JSON (`availability/YYYY/MM/YYYY-MM-DD.json`) and Parquet (`availability_parquet/date=YYYY-MM-DD/availability.parquet`); missing days are backfilled up to `ROLLUP_BACKFILL_DAYS` (default 28) and an existing day object is never overwritten. Switching the whole store from MinIO to AWS S3 later is a configuration change only — endpoint, region and credentials in `deploy/compose.yaml` and `deploy/clickhouse-config/config.d/s3-storage.xml` — not a code change.
 
 ### Choosing the site name
 
@@ -376,11 +410,18 @@ This was seen once and not re-run to confirm. Until it's shown to be safe, apply
 | **MinIO S3** | `http://<HOST_IP>:9000` | `http://minio:9000` |
 | **MinIO Console** | `http://<HOST_IP>:9001` | *N/A (Browser only)* |
 | **Live Dashboard** (React) | `http://<HOST_IP>:8090/` | *N/A (Browser only — served by the `dashboard` nginx service)* |
+| **ClickHouse HTTP** | *N/A (not published — internal only, like Livestatus above)* | `clickhouse:8123` |
+| **Grafana** (Phase 14.1) | `http://<HOST_IP>:3000/` (login required, no anonymous access) | `http://grafana:3000/` |
 
 The dashboard's browser JavaScript talks to Mosquitto's WebSockets listener (`ws://<HOST_IP>:9002`
 above) directly from the LAN client, so 9002 must stay reachable from wherever the dashboard is
-opened. The `dashboard` nginx service on 8090 serves the static files and forwards only
-`/checkmk-api/` to Checkmk's REST API (for map edit mode). It proxies nothing else.
+opened. The `dashboard` nginx service on 8090 serves the static files and forwards
+`/checkmk-api/` to Checkmk's REST API (for map edit mode), and, since Phase 14.1, two more
+same-origin GET-only read paths: `/ch-api/` (ClickHouse's HTTP interface, authenticated as the
+read-only `dashboard_reader` user) and `/availability/` (the daily rollup JSON/Parquet objects in
+the `fleet-availability` MinIO bucket). It proxies nothing else, and no dashboard views read
+these two paths yet (D-50) — they exist only to prove the read path works, verified by the
+history read-path smoke test in §7.
 
 Default credentials:
 
@@ -543,6 +584,16 @@ mosquitto_sub -h <host> -p 1883 -u poller -P poller -t 'lan/devices/<host>/statu
 ```
 
 Live-verified 2026-09-08 (deleting `192.168.0.215`): a zero-length retained publish is a *clear*, not a delivered empty message, so `mosquitto_sub` without `-C`/`-W` would simply hang with no output. `-C 1 -W 5` makes that observable: the subscribe times out ("Timed out", RC 27) with no message received, which is what confirms the retained status was cleared. Also confirm the host is gone from `lan/devices/topology` and that a `removed` event appears in `lan/events/recent`.
+
+### History read-path smoke test (Phase 14.1)
+
+[`scripts/smoke_test_history_proxy.py`](../scripts/smoke_test_history_proxy.py) proves the read-only ClickHouse/rollup HTTP path (HIST-08/HIST-09/HIST-10): that `/ch-api/` and `/availability/` answer GET reads as the read-only `dashboard_reader` identity, that every write/admin/system-table/credential-override path through them is refused, and that Grafana requires login. From the repo checkout on the deployment host:
+
+```bash
+uv run python scripts/smoke_test_history_proxy.py --host <podman-host> --grafana-password "$GRAFANA_ADMIN_PASSWORD"
+```
+
+The rollup-object checks need at least one day's availability rollup to already exist in `fleet-availability` — the poller backfills on startup once it has a previous local day's data in ClickHouse, so run this after the stack has been up across at least one local midnight (Asia/Singapore), or after confirming a rollup object exists by hand (`mc ls local/fleet-availability/availability/` from inside a MinIO client, or an `/availability/...` GET once you know a date). As with the broker and poller smoke tests, if you change poller code or need to re-apply a compose change, restart the whole stack (`podman compose down && podman compose up -d`) rather than a single service — see §5.1.
 
 ### Dashboard check (Phase 11)
 
