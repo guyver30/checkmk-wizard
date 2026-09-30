@@ -265,6 +265,11 @@ services:
       - CMK_REST_PORT=5000
       - CMK_REST_USERNAME=automation
       - CMK_REST_SECRET=${CMK_REST_SECRET:-}
+      # Amended 2026-09-30 (quick 260930-hpy): the wizard pushes this value
+      # into Checkmk as the scoped topology_editor user's secret right
+      # after Phase 1 (src/checkmk_wizard/wizard.py:_provision_topology_editor),
+      # same create-or-rotate pattern as CMK_REST_SECRET above.
+      - TOPOLOGY_EDITOR_SECRET=${TOPOLOGY_EDITOR_SECRET:-}
     command: >
       bash -c "pip install --no-cache-dir uv &&
                tail -f /dev/null"
@@ -361,7 +366,10 @@ services:
 
   # 6. Live Dashboard — static nginx, no server-side process. Per-deployment
   # dashboard settings live in dashboard-react/src/lib/config.ts (baked in at
-  # build time), not in an environment: block here (D-01/D-02/D-20).
+  # build time), not in an environment: block here (D-01/D-02/D-20) — except
+  # TOPOLOGY_EDITOR_SECRET below, which is deliberately NOT baked into
+  # config.ts (amended 2026-09-30, quick 260930-hpy): nginx injects it
+  # server-side per request, so it never reaches the browser bundle.
   dashboard:
     # React dashboard, built into its own nginx image (cutover 2026-09-28; it
     # replaced the vanilla ../dashboard bind mount). Rebuild after every
@@ -384,6 +392,10 @@ services:
     environment:
       - CH_READER_PASSWORD=${CH_READER_PASSWORD:-}
       - NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
+      # Amended 2026-09-30 (quick 260930-hpy): nginx injects this as the
+      # Authorization header on the allow-listed /checkmk-api/ REST calls
+      # (deploy/dashboard-nginx.conf) — it never reaches the browser.
+      - TOPOLOGY_EDITOR_SECRET=${TOPOLOGY_EDITOR_SECRET:-}
     ports:
       - "8090:80"       # dashboard UI — host 8090 is clear of 8080/8000/6556
                           # checkmk, 1883 mqtt, 9000/9001 minio and 9002

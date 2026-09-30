@@ -63,6 +63,7 @@ from checkmk_wizard.wizard import (
     _prompt_threshold_levels,
     _resolve_agent_registration_server,
     _pending_hosts,
+    _provision_topology_editor,
     _retag_existing_hosts,
     _retaggable_hosts,
     _run_retag_screen,
@@ -3982,6 +3983,92 @@ async def test_activate_pending_changes_failure(capsys):
             result = await _activate_pending_changes(client, CONN)
     assert result is False
     assert "Activation failed" in capsys.readouterr().out
+
+
+_TOPOLOGY_ROLE_URL = f"{BASE}/objects/user_role/topology_editor"
+_TOPOLOGY_USER_URL = f"{BASE}/objects/user_config/topology_editor"
+
+
+@pytest.mark.asyncio
+async def test_provision_topology_editor_skips_with_dim_note_when_secret_unset(monkeypatch, capsys):
+    monkeypatch.delenv("TOPOLOGY_EDITOR_SECRET", raising=False)
+    with respx.mock:
+        async with CheckmkClient(CONN) as client:
+            await _provision_topology_editor(client, CONN)
+    # No REST calls at all -- respx.mock with no routes registered raises
+    # on any request, so reaching this line already proves zero calls.
+    out = " ".join(capsys.readouterr().out.split())
+    assert "TOPOLOGY_EDITOR_SECRET not set" in out
+    assert "skipping topology_editor provisioning" in out
+
+
+@pytest.mark.asyncio
+async def test_provision_topology_editor_skips_when_secret_empty(monkeypatch, capsys):
+    monkeypatch.setenv("TOPOLOGY_EDITOR_SECRET", "")
+    with respx.mock:
+        async with CheckmkClient(CONN) as client:
+            await _provision_topology_editor(client, CONN)
+    assert "skipping topology_editor provisioning" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_provision_topology_editor_creates_and_activates(monkeypatch, capsys):
+    monkeypatch.setenv("TOPOLOGY_EDITOR_SECRET", "env-topology-secret")
+    with respx.mock:
+        respx.get(_TOPOLOGY_ROLE_URL).mock(return_value=Response(200, json={}))
+        respx.put(_TOPOLOGY_ROLE_URL).mock(return_value=Response(204))
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(404, json={"title": "Not Found"}))
+        respx.post(f"{BASE}/domain-types/user_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        activate = respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=_pending([])
+        )
+        respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(200, json={"id": "run1", "extensions": {"is_running": False}})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _provision_topology_editor(client, CONN)
+
+    assert activate.called
+    out = " ".join(capsys.readouterr().out.split())
+    assert "created" in out
+    assert "env-topology-secret" not in out
+
+
+@pytest.mark.asyncio
+async def test_provision_topology_editor_prints_updated_when_rotated(monkeypatch, capsys):
+    monkeypatch.setenv("TOPOLOGY_EDITOR_SECRET", "env-topology-secret")
+    with respx.mock:
+        respx.get(_TOPOLOGY_ROLE_URL).mock(return_value=Response(200, json={}))
+        respx.put(_TOPOLOGY_ROLE_URL).mock(return_value=Response(204))
+        respx.get(_TOPOLOGY_USER_URL).mock(return_value=Response(200, json={}, headers={"ETag": '"u-etag"'}))
+        respx.put(_TOPOLOGY_USER_URL).mock(return_value=Response(200, json={}))
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=_pending([])
+        )
+        respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(200, json={"id": "run1", "extensions": {"is_running": False}})
+        )
+        async with CheckmkClient(CONN) as client:
+            await _provision_topology_editor(client, CONN)
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "updated with TOPOLOGY_EDITOR_SECRET from the environment" in out
+    assert "env-topology-secret" not in out
+
+
+@pytest.mark.asyncio
+async def test_provision_topology_editor_warns_and_swallows_api_error(monkeypatch, capsys):
+    monkeypatch.setenv("TOPOLOGY_EDITOR_SECRET", "env-topology-secret")
+    with respx.mock:
+        respx.get(_TOPOLOGY_ROLE_URL).mock(return_value=Response(500, json={"title": "boom"}))
+        async with CheckmkClient(CONN) as client:
+            await _provision_topology_editor(client, CONN)  # must not raise
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "scripts/provision_topology_editor.py" in out
+    assert "env-topology-secret" not in out
 
 
 @pytest.mark.asyncio

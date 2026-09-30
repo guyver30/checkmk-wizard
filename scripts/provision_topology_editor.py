@@ -1,18 +1,29 @@
-"""One-time provisioning: a narrowly-scoped `topology_editor` Checkmk role
-plus automation user for the dashboard's direct-to-Checkmk write path (D-04).
+"""Manual fallback: provision the narrowly-scoped `topology_editor` Checkmk
+role and automation user the dashboard uses for topology writes.
+
+Amended 2026-09-30 (quick 260930-hpy): the wizard now provisions/rotates
+this role and user automatically right after Phase 1 (see
+`src/checkmk_wizard/wizard.py:_provision_topology_editor`), reading the
+same `TOPOLOGY_EDITOR_SECRET` env var this script reads. This script
+remains only as a manual fallback for an operator who wants to
+(re)provision it without running the whole wizard. The credential itself
+no longer lives in the dashboard's browser bundle at all -- it lives in
+`deploy/.env` and is injected server-side by the dashboard's nginx on an
+allow-list of the exact REST calls the dashboard makes
+(`deploy/dashboard-nginx.conf`). This supersedes Phase 13 D-04's
+client-embedded credential.
 
 Why a separate scoped user, not the wizard's admin automation user
 --------------------------------------------------------------------
-D-04 flagged this explicitly: the dashboard's browser bundle embeds this
-credential client-side (T-13-09), so it must never be the wizard's own
-full `admin`-role `automation` user from `bootstrap_automation_user()`
-(`src/checkmk_wizard/api.py:386`) -- a leaked/exfiltrated secret from
-DevTools would otherwise carry full admin power (user management, global
-settings, rulesets), not just "edit hosts and activate my own changes".
-`topology_editor` is scoped to exactly the ids in `REQUIRED_PERMISSIONS`
-below (13-01 VERDICT V-PERMS) and nothing more (RESEARCH.md Anti-Patterns,
-Security Domain V4): `wato.activateforeign` and every `wato.users`/
-`wato.global`/`wato.rulesets` id are deliberately excluded.
+The dashboard's write path must never carry the wizard's own full
+`admin`-role `automation` user from `bootstrap_automation_user()`
+(`src/checkmk_wizard/api.py`) -- a compromised topology_editor credential
+would otherwise carry full admin power (user management, global settings,
+rulesets), not just "edit hosts and activate my own changes".
+`TOPOLOGY_EDITOR_PERMISSIONS` (`src/checkmk_wizard/api.py`) is scoped to
+exactly those ids (13-01 VERDICT V-PERMS) and nothing more (RESEARCH.md
+Anti-Patterns, Security Domain V4): `wato.activateforeign` and every
+`wato.users`/`wato.global`/`wato.rulesets` id are deliberately excluded.
 
 Role clone body shape: source-verified, not live-HTTP-tested
 -----------------------------------------------------------------
@@ -22,15 +33,16 @@ create/edit endpoints EXIST (VERDICT V-ROLE: REST) but its
 request body schemas -- there is no pasted OpenAPI excerpt naming the
 exact field names anywhere in this repo's history, and no live Checkmk
 site was reachable from this execution environment to probe further.
-Rather than guess, this script's request bodies were read directly from
-the actual installed Checkmk 2.4.0p35 REST endpoint source found on this
+Rather than guess, the request bodies implemented in
+`CheckmkClient.ensure_topology_editor_role()` were read directly from the
+actual installed Checkmk 2.4.0p35 REST endpoint source found on this
 machine (2026-09-23):
   `/opt/omd/versions/2.4.0p35.cre/lib/python3/cmk/gui/openapi/endpoints/user_role/__init__.py`
   `/opt/omd/versions/2.4.0p35.cre/lib/python3/cmk/gui/openapi/endpoints/user_role/request_schemas.py`
 -- the literal server code that executes the request, a stronger source
 than a live HTTP round trip would even be, consistent with this
 codebase's "Checkmk's live behaviour, not its docs, is the source of
-truth" rule (`src/checkmk_wizard/api.py:200-206`). Findings:
+truth" rule (`src/checkmk_wizard/api.py`). Findings:
   - `CreateUserRole` (POST body): `role_id` (the EXISTING role to clone
     FROM, required), `new_role_id` (the new role's id, optional), and
     `new_alias` (optional).
@@ -40,95 +52,77 @@ truth" rule (`src/checkmk_wizard/api.py:200-206`). Findings:
   - `edit_userrole`'s `@Endpoint(...)` registration passes no `etag=`
     argument, so `ETagBehaviour` defaults to `None` -- unlike
     `host_config`'s PUT, no `If-Match` header is required or sent here.
-If a future Checkmk version changes this shape, the POST/PUT below 400s
-and this script prints the full rejection body (mirroring
-`scripts/probe_topology_rest.py`'s diagnostic style) rather than
-silently believing it succeeded.
 
-User creation and change-activation body shapes reuse
-`bootstrap_automation_user()`'s already-live-proven shapes
-(`src/checkmk_wizard/api.py:386-535`) verbatim: `auth_option.auth_type`/
-`store_automation_secret` for the user, and the
-`pending_changes` ETag -> `activate-changes/invoke` -> poll `is_running`
-sequence for activation.
-
-Stdlib-only (urllib.request, urllib.error, json, os, secrets, sys) so it
-runs with bare `python3` inside the `automation-worker` container as well
-as under `uv run` on the host, matching `scripts/probe_topology_rest.py`'s
-"standalone, dependency-light" constraint. Does not import `httpx`,
-`requests`, or the wizard's own installable package.
+This script now goes through `CheckmkClient`/`CheckmkConnection`
+(`src/checkmk_wizard/api.py`) instead of a bare standard-library HTTP
+client, so every REST call is normalized into `CheckmkAPIError` the same
+way the wizard's own calls are -- consistent with this codebase's
+single-choke-point rule
+(`api.py:_request`).
 
 Configuration is env-var only, the same names as the worker compose
 service and `scripts/mqtt_poller.py`: `CMK_REST_HOST` (default `checkmk`),
 `CMK_REST_PORT` (default `5000`), `CMK_SITE_ID` (default `dmc`),
 `CMK_REST_USERNAME` (default `automation`, the wizard's own admin
 automation user -- used here server-side only, to provision the new
-scoped credential), `CMK_REST_SECRET` (required).
+scoped credential), `CMK_REST_SECRET` (required), and
+`TOPOLOGY_EDITOR_SECRET` (optional -- when set, create-or-rotate to this
+exact value; when unset, generate one on first create and print it once).
 
-The `Authorization` header and the raw secret are never printed, except
-the freshly-generated `topology_editor` secret itself, printed exactly
-once at creation time (mirrors `wizard.py`'s
-`_print_automation_secret_created()`, OPS-02) -- this is the one value
-the operator needs and cannot recover any other way.
+The `Authorization` header and any automation secret are never printed,
+except a freshly-generated `topology_editor` secret when
+`TOPOLOGY_EDITOR_SECRET` was not pre-chosen -- printed exactly once at
+creation time (mirrors `wizard.py`'s `_print_automation_secret_created()`,
+OPS-02) -- this is the one value the operator needs and cannot recover
+any other way.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import os
 import secrets
 import sys
-import time
-import urllib.error
-import urllib.request
-from typing import Any
+
+from checkmk_wizard.api import (
+    TOPOLOGY_EDITOR_PERMISSIONS as REQUIRED_PERMISSIONS,
+)
+from checkmk_wizard.api import (
+    TOPOLOGY_EDITOR_ROLE_ALIAS,
+    TOPOLOGY_EDITOR_ROLE_ID,
+    TOPOLOGY_EDITOR_USER_ID,
+    CheckmkAPIError,
+    CheckmkClient,
+    CheckmkConnection,
+    build_role_permissions,
+)
+from checkmk_wizard.api import (
+    build_topology_editor_user_body as build_user_body,
+)
+
+# build_role_permissions/build_user_body/REQUIRED_PERMISSIONS are no longer
+# called from this module -- CheckmkClient.provision_topology_editor() and
+# CheckmkClient.ensure_topology_editor_role() own that logic now -- but stay
+# importable here (tests/test_provision_topology_editor.py) as a stable,
+# documented re-export of the api.py names this script used to define itself.
+__all__ = [
+    "REQUIRED_PERMISSIONS",
+    "build_role_permissions",
+    "build_user_body",
+    "generate_secret",
+    "main",
+    "redact_auth_header",
+]
 
 DEFAULT_REST_HOST = "checkmk"
 DEFAULT_REST_PORT = "5000"
 DEFAULT_SITE_ID = "dmc"
 DEFAULT_REST_USERNAME = "automation"
-DEFAULT_TIMEOUT_SECONDS = 10.0
-
-ROLE_ID = "topology_editor"
-ROLE_ALIAS = "Topology editor (dashboard)"
-# The built-in role topology_editor is cloned from -- least-privileged
-# non-admin built-in role (RESEARCH.md Pitfall 4: "clone user, name it
-# e.g. topology_editor, enable only host-edit and activate-changes
-# permissions").
-BASE_ROLE_ID = "user"
-USER_ID = "topology_editor"
-
-# 13-01's VERDICT V-PERMS (2026-09-23) listed six ids derived from which
-# wato.* permissions the ADMIN role happened to have enabled -- it never
-# live-tested the scoped role itself. Live UAT (2026-09-23) found that six
-# was incomplete: a freshly-cloned role with no folder contact-group
-# membership got a blanket 404 on GET /objects/host_config/{name} for
-# every host, because `wato.all_folders` only grants WRITE access to every
-# folder -- it does not make the role able to SEE (discover) a host it
-# isn't a contact for in the first place. `wato.see_all_folders` is the
-# separate "see" counterpart to `wato.all_folders`'s "write", and without
-# it a scoped role can edit nothing because it can't find anything.
-# `wato.activateforeign` is present on the admin role too but is
-# deliberately EXCLUDED -- a scoped write role must only activate its own
-# changes, never someone else's.
-REQUIRED_PERMISSIONS: tuple[str, ...] = (
-    "wato.use",
-    "wato.edit",
-    "wato.all_folders",
-    "wato.see_all_folders",
-    "wato.edit_hosts",
-    "wato.manage_hosts",
-    "wato.activate",
-)
 
 # Mirrors bootstrap_automation_user()'s own bounded poll
-# (`src/checkmk_wizard/api.py:525-528`): 30 attempts * 0.3s.
+# (`src/checkmk_wizard/api.py`): 30 attempts * 0.3s.
 _ACTIVATION_POLL_ATTEMPTS = 30
 _ACTIVATION_POLL_INTERVAL_SECONDS = 0.3
-
-
-class ProvisionError(RuntimeError):
-    """Raised for a connection-level REST failure (not an HTTP status)."""
 
 
 def redact_auth_header(header: str) -> str:
@@ -145,229 +139,78 @@ def redact_auth_header(header: str) -> str:
 
 
 def generate_secret() -> str:
-    """A fresh URL-safe automation secret, mirroring
-    `bootstrap_automation_user()`'s `secrets.token_urlsafe(24)`
-    (`api.py:432`) but sized up to comfortably clear a 32-character floor.
+    """A fresh URL-safe automation secret, sized to comfortably clear a
+    32-character floor -- kept local (api.py has no standalone equivalent;
+    `bootstrap_automation_user()` inlines its own shorter `token_urlsafe(24)`
+    call) so this script's secret length stays independently pinned.
     """
     return secrets.token_urlsafe(32)
 
 
-def build_role_permissions(perm_ids: tuple[str, ...]) -> dict[str, str]:
-    """Map each permission id to `"yes"` (enabled) -- `EditUserRole.new_permissions`' shape."""
-    return {perm_id: "yes" for perm_id in perm_ids}
+async def _activate_own_changes(client: CheckmkClient, site_id: str) -> None:
+    """Best-effort: activate this script's own pending change (the new
+    user/role).
 
-
-def build_user_body(username: str, secret: str) -> dict[str, Any]:
-    """`POST /domain-types/user_config/collections/all` body, `roles: [ROLE_ID]` --
-    never `["admin"]` (T-13-09). Shape otherwise identical to
-    `bootstrap_automation_user()`'s proven-working body
-    (`api.py:446-464`).
+    Mirrors `bootstrap_automation_user()`'s activation sequence: GET the
+    pending-changes ETag, POST `activate-changes/invoke` with
+    `force_foreign_changes: false`, poll `is_running`. A 401 here means
+    Checkmk sees OTHER operators' foreign changes also pending -- this
+    script must not force those through, so it prints a warning and
+    leaves them for the operator to activate via the GUI, rather than
+    escalating to `force_foreign_changes: true`.
     """
-    return {
-        "username": username,
-        "fullname": ROLE_ALIAS,
-        "auth_option": {
-            "auth_type": "automation",
-            "secret": secret,
-            "store_automation_secret": True,
-        },
-        "roles": [ROLE_ID],
-    }
-
-
-def _rest(
-    method: str,
-    path: str,
-    *,
-    base_url: str,
-    auth_header: str,
-    body: dict[str, Any] | None = None,
-    extra_headers: dict[str, str] | None = None,
-    timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> tuple[int, Any, Any]:
-    """Single choke point for every REST call this script makes.
-
-    Returns `(status_code, parsed_json_or_raw_text, response_headers)`
-    instead of raising on non-2xx, mirroring
-    `scripts/probe_topology_rest.py`'s `_rest()` helper -- several steps
-    below deliberately inspect 4xx/404 (idempotent "already exists"
-    checks, rejection diagnostics). Only connection-level failures raise
-    `ProvisionError`.
-    """
-    url = f"{base_url}{path}"
-    headers = {"Accept": "application/json", "Authorization": auth_header}
-    if extra_headers:
-        headers.update(extra_headers)
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode()
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status = resp.getcode()
-            raw = resp.read()
-            resp_headers = resp.headers
-    except urllib.error.HTTPError as exc:
-        status = exc.code
-        raw = exc.read()
-        resp_headers = exc.headers
-    except (urllib.error.URLError, OSError) as exc:
-        raise ProvisionError(f"{method} {url} failed: {exc}") from exc
-    text = raw.decode(errors="replace")
-    try:
-        parsed = json.loads(text) if text else None
-    except (json.JSONDecodeError, ValueError):
-        parsed = text
-    return status, parsed, resp_headers
+        etag, _ = await client.get_pending_changes()
+        run = await client.activate_changes([site_id], etag, force_foreign_changes=False)
+    except CheckmkAPIError as exc:
+        if exc.status_code == 401:
+            print(
+                "[activate] other operators' changes are also pending and were NOT forced through "
+                "-- activate them yourself in the Checkmk GUI (Setup > Activate pending changes)"
+            )
+            return
+        raise
 
-
-def _print_rejection(label: str, status: int, body: Any) -> None:
-    print(f"[{label}] rejected -- status {status}")
-    if isinstance(body, dict):
-        detail = body.get("fields") or body.get("detail") or body.get("title")
-        print(f"[{label}] detail: {detail}")
-    print(f"[{label}] full response body: {body}")
-
-
-def ensure_role(base_url: str, auth_header: str) -> bool:
-    """Idempotently create/clone `ROLE_ID` and (re)assert its permissions.
-
-    Skips the clone step (only) if `GET /objects/user_role/{ROLE_ID}`
-    already returns 200 -- the permission PUT always runs regardless, so
-    a re-run always re-asserts the exact `REQUIRED_PERMISSIONS` set even
-    if it drifted via the GUI.
-    """
-    status, _body, _headers = _rest(
-        "GET", f"/objects/user_role/{ROLE_ID}", base_url=base_url, auth_header=auth_header
-    )
-    if status == 200:
-        print(f"[role] {ROLE_ID} already exists -- skipping clone")
-    else:
-        print(f"[role] cloning {BASE_ROLE_ID} -> {ROLE_ID}")
-        status, body, _headers = _rest(
-            "POST",
-            "/domain-types/user_role/collections/all",
-            base_url=base_url,
-            auth_header=auth_header,
-            body={"role_id": BASE_ROLE_ID, "new_role_id": ROLE_ID, "new_alias": ROLE_ALIAS},
-        )
-        if status not in (200, 201):
-            _print_rejection("role-clone", status, body)
-            return False
-        print(f"[role] {ROLE_ID} created")
-
-    print(f"[role] setting permissions: {sorted(REQUIRED_PERMISSIONS)}")
-    status, body, _headers = _rest(
-        "PUT",
-        f"/objects/user_role/{ROLE_ID}",
-        base_url=base_url,
-        auth_header=auth_header,
-        body={"new_permissions": build_role_permissions(REQUIRED_PERMISSIONS)},
-    )
-    if status not in (200, 204):
-        _print_rejection("role-edit", status, body)
-        return False
-    print("[role] permissions set")
-    return True
-
-
-def activate_own_changes(base_url: str, auth_header: str, site_id: str) -> None:
-    """Best-effort: activate this script's own pending change (the new user/role).
-
-    Mirrors `bootstrap_automation_user()`'s activation sequence
-    (`api.py:508-532`): GET the pending-changes ETag, POST
-    `activate-changes/invoke` with `force_foreign_changes: false`, poll
-    `is_running`. A 401 here means Checkmk sees OTHER operators' foreign
-    changes also pending -- this script must not force those through, so
-    it prints a warning and leaves them for the operator to activate via
-    the GUI (plan 13-04's own instruction), rather than escalating to
-    `force_foreign_changes: true`.
-    """
-    status, _body, headers = _rest(
-        "GET",
-        "/domain-types/activation_run/collections/pending_changes",
-        base_url=base_url,
-        auth_header=auth_header,
-    )
-    etag = headers.get("ETag", "") if status == 200 and headers is not None else ""
-    if not etag:
-        print("[activate] no pending changes ETag -- nothing to activate")
-        return
-
-    status, body, _headers = _rest(
-        "POST",
-        "/domain-types/activation_run/actions/activate-changes/invoke",
-        base_url=base_url,
-        auth_header=auth_header,
-        body={"redirect": False, "sites": [site_id], "force_foreign_changes": False},
-        extra_headers={"If-Match": etag},
-    )
-    if status == 401:
-        print(
-            "[activate] other operators' changes are also pending and were NOT forced through "
-            "-- activate them yourself in the Checkmk GUI (Setup > Activate pending changes)"
-        )
-        return
-    if status not in (200, 303):
-        _print_rejection("activate", status, body)
-        return
-
-    self_url = None
-    is_running = False
-    if isinstance(body, dict):
-        self_url = next(
-            (link["href"] for link in body.get("links", []) if link.get("rel") == "self"), None
-        )
-        is_running = body.get("extensions", {}).get("is_running", False)
+    run_id = run.get("id")
+    is_running = run.get("extensions", {}).get("is_running", False)
     for _ in range(_ACTIVATION_POLL_ATTEMPTS):
-        if not is_running or not self_url:
+        if not is_running or not run_id:
             break
-        time.sleep(_ACTIVATION_POLL_INTERVAL_SECONDS)
-        status, poll_body, _headers = _rest(
-            "GET", self_url.replace(base_url, ""), base_url=base_url, auth_header=auth_header
-        )
-        is_running = (
-            poll_body.get("extensions", {}).get("is_running", False)
-            if isinstance(poll_body, dict)
-            else False
-        )
+        await asyncio.sleep(_ACTIVATION_POLL_INTERVAL_SECONDS)
+        run = await client.get_activation_run(run_id)
+        is_running = run.get("extensions", {}).get("is_running", False)
     print("[activate] activation complete")
 
 
-def ensure_user(base_url: str, auth_header: str, site_id: str) -> int:
-    """Idempotently create `USER_ID`, printing its secret exactly once.
+async def _provision(connection: CheckmkConnection, site_id: str, topology_secret: str) -> int:
+    async with CheckmkClient(connection) as client:
+        if topology_secret:
+            created = await client.provision_topology_editor(topology_secret)
+            verb = "created" if created else "rotated"
+            print(f"{TOPOLOGY_EDITOR_USER_ID} automation user {verb} from TOPOLOGY_EDITOR_SECRET.")
+            await _activate_own_changes(client, site_id)
+            return 0
 
-    Returns a process exit code: 0 on success (created or already
-    existed), 1 on a rejected create.
-    """
-    status, _body, _headers = _rest(
-        "GET", f"/objects/user_config/{USER_ID}", base_url=base_url, auth_header=auth_header
-    )
-    if status == 200:
-        print(f"{USER_ID} already exists — secret not rotated")
+        await client.ensure_topology_editor_role()
+        if await client.user_exists(TOPOLOGY_EDITOR_USER_ID):
+            print(
+                f"{TOPOLOGY_EDITOR_USER_ID} already exists — secret not rotated "
+                "(set TOPOLOGY_EDITOR_SECRET to rotate)"
+            )
+            return 0
+
+        secret = generate_secret()
+        await client.upsert_automation_user(
+            TOPOLOGY_EDITOR_USER_ID, secret, roles=[TOPOLOGY_EDITOR_ROLE_ID], fullname=TOPOLOGY_EDITOR_ROLE_ALIAS
+        )
+        print(f"{TOPOLOGY_EDITOR_USER_ID} automation user created.")
+        print(
+            f"Secret: {secret}\n"
+            "Put this into deploy/.env as TOPOLOGY_EDITOR_SECRET, then recreate the dashboard "
+            "(podman compose down && podman compose up -d)."
+        )
+        await _activate_own_changes(client, site_id)
         return 0
-
-    secret = generate_secret()
-    status, body, _headers = _rest(
-        "POST",
-        "/domain-types/user_config/collections/all",
-        base_url=base_url,
-        auth_header=auth_header,
-        body=build_user_body(USER_ID, secret),
-    )
-    if status not in (200, 201):
-        _print_rejection("user-create", status, body)
-        return 1
-
-    print(f"{USER_ID} automation user created.")
-    print(
-        f"Secret: {secret}\n"
-        "Paste this into TOPOLOGY_EDITOR_SECRET in dashboard-react/src/lib/config.ts "
-        "— it will not be shown again."
-    )
-    activate_own_changes(base_url, auth_header, site_id)
-    return 0
 
 
 def main() -> int:
@@ -376,21 +219,21 @@ def main() -> int:
     site_id = os.environ.get("CMK_SITE_ID", DEFAULT_SITE_ID)
     username = os.environ.get("CMK_REST_USERNAME", DEFAULT_REST_USERNAME)
     secret = os.environ.get("CMK_REST_SECRET", "")
+    topology_secret = os.environ.get("TOPOLOGY_EDITOR_SECRET", "").strip()
 
     if not secret:
         print("[FAIL] CMK_REST_SECRET is not set", file=sys.stderr)
         return 1
 
-    base_url = f"http://{rest_host}:{rest_port}/{site_id}/check_mk/api/1.0"
-    auth_header = f"Bearer {username} {secret}"
-    print(f"REST base URL: {base_url}")
-    print(f"Authorization: {redact_auth_header(auth_header)}")
+    connection = CheckmkConnection(
+        host=rest_host, site=site_id, username=username, secret=secret, port=int(rest_port)
+    )
+    print(f"REST base URL: {connection.base_url}")
+    print(f"Authorization: {redact_auth_header(f'Bearer {username} {secret}')}")
 
     try:
-        if not ensure_role(base_url, auth_header):
-            return 1
-        return ensure_user(base_url, auth_header, site_id)
-    except ProvisionError as exc:
+        return asyncio.run(_provision(connection, site_id, topology_secret))
+    except CheckmkAPIError as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
 

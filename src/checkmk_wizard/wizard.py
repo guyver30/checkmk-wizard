@@ -2921,9 +2921,46 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
 # ── Entry point ──────────────────────────────────────────────────────────
 
 
+async def _provision_topology_editor(client: CheckmkClient, connection: CheckmkConnection) -> None:
+    """Provision or rotate the dashboard's scoped `topology_editor` Checkmk
+    user right after Phase 1, from `TOPOLOGY_EDITOR_SECRET` in deploy/.env.
+
+    Best-effort and never fatal, same contract as the other Phase 1
+    bootstrap helpers: a failure here (e.g. Checkmk rejects the role/user
+    shape on some future version) must not abort the wizard run, since the
+    dashboard's editing feature is optional -- run() continues into phase2
+    either way. The operator can always fall back to
+    scripts/provision_topology_editor.py, which reads the same env var.
+    """
+    secret = os.environ.get("TOPOLOGY_EDITOR_SECRET", "").strip()
+    if not secret:
+        console.print(
+            "[dim]TOPOLOGY_EDITOR_SECRET not set — skipping topology_editor "
+            "provisioning; dashboard map editing stays off.[/dim]"
+        )
+        return
+    try:
+        created = await client.provision_topology_editor(secret)
+        if created:
+            console.print("[green]topology_editor automation user created.[/green]")
+        else:
+            console.print(
+                "[green]topology_editor automation user updated with TOPOLOGY_EDITOR_SECRET "
+                "from the environment.[/green]"
+            )
+        await _activate_pending_changes(client, connection)
+    except CheckmkAPIError as exc:
+        console.print(
+            f"[yellow]Could not provision topology_editor ({exc}) — dashboard map editing "
+            "stays off. Run scripts/provision_topology_editor.py manually to fix this "
+            "without a full wizard re-run.[/yellow]"
+        )
+
+
 async def run() -> None:
     connection = await phase1_site_bringup()
     async with CheckmkClient(connection) as client:
+        await _provision_topology_editor(client, connection)
         folder_subnets, tag_group_available = await phase2_folders(client)
         scan_results = await phase3_discovery(client, folder_subnets)
         onboarded = await phase4_classification(
