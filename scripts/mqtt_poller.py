@@ -2352,6 +2352,76 @@ def run_rollups(
     return written, failures
 
 
+@dataclass
+class RollupScheduler:
+    """Tracks when the next availability-rollup attempt is due (D-49/D-51/D-52).
+
+    In-memory only -- a poller restart simply re-evaluates `due()` as
+    freshly due again, which is safe because every object write below it
+    is never-overwrite (D-44/D-52): a restart mid-backfill just repeats
+    the days that already succeeded as no-ops.
+    """
+
+    last_completed_local_date: datetime.date | None = None
+    next_attempt_monotonic: float = 0.0
+    delay_minutes: int = DEFAULT_ROLLUP_DELAY_MINUTES
+
+    def due(self, now_local: datetime.datetime, now_monotonic: float) -> bool:
+        if now_monotonic < self.next_attempt_monotonic:
+            return False
+        if self.last_completed_local_date is None:
+            return True
+        if now_local.date() == self.last_completed_local_date:
+            return False
+        return now_local.time() >= datetime.time(0, self.delay_minutes)
+
+    def mark_success(self, local_date: datetime.date) -> None:
+        self.last_completed_local_date = local_date
+        self.next_attempt_monotonic = 0.0
+
+    def mark_failure(self, now_monotonic: float) -> None:
+        self.next_attempt_monotonic = now_monotonic + ROLLUP_RETRY_SECONDS
+
+
+def maybe_run_rollups(
+    config: PollerConfig,
+    scheduler: RollupScheduler,
+    s3_holder: dict,
+    tz: zoneinfo.ZoneInfo,
+    now_local: datetime.datetime,
+    now_monotonic: float,
+) -> None:
+    """Run the availability-rollup backfill once it is due, never letting a failure reach the poll loop.
+
+    A no-op (no S3 client built, no ClickHouse query) until both
+    `clickhouse_url` and `s3_endpoint` are configured -- mirrors
+    `write_history()`'s "unset means disabled" posture. The one
+    deliberate broad `except Exception` here matches the REST
+    folder-lookup's never-fatal posture (D-44): the rollup job is
+    enrichment, and no failure in it -- expected
+    (`ClickHouseError`/`RollupError`/`botocore`) or not -- may ever crash
+    the poller.
+    """
+    if not config.clickhouse_url or not config.s3_endpoint:
+        return
+    if not scheduler.due(now_local, now_monotonic):
+        return
+    try:
+        if "client" not in s3_holder:
+            s3_holder["client"] = build_s3_client(config)
+        _written, failures = run_rollups(config, s3_holder["client"], now_local.date())
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring above
+        _logger.warning(
+            "Availability rollup run failed; retrying in %ss: %s", ROLLUP_RETRY_SECONDS, exc
+        )
+        scheduler.mark_failure(now_monotonic)
+        return
+    if failures == 0:
+        scheduler.mark_success(now_local.date())
+    else:
+        scheduler.mark_failure(now_monotonic)
+
+
 def available_host_columns(host: str, port: int, timeout: float) -> set[str]:
     """Return the column names the live site's `hosts` table actually exposes.
 
@@ -3592,6 +3662,37 @@ def run_forever(config: PollerConfig) -> int:
     else:
         _logger.info("History writes disabled: CLICKHOUSE_URL is unset")
 
+    # Phase 14.1 (D-49/D-52): resolved once here, not per cycle -- a
+    # missing tzdata package (research Pitfall 3) or a bad ROLLUP_TZ value
+    # disables rollups for the process's lifetime rather than raising out
+    # of every single cycle below.
+    rollup_tz: zoneinfo.ZoneInfo | None
+    try:
+        rollup_tz = zoneinfo.ZoneInfo(_validate_tz_name(config.rollup_tz))
+    except (zoneinfo.ZoneInfoNotFoundError, RollupError) as exc:
+        _logger.error(
+            "Availability rollups disabled: cannot resolve ROLLUP_TZ=%r (Pitfall 3: is the "
+            "tzdata package installed?): %s",
+            config.rollup_tz,
+            exc,
+        )
+        rollup_tz = None
+
+    scheduler = RollupScheduler(delay_minutes=config.rollup_delay_minutes)
+    s3_holder: dict = {}
+    if rollup_tz is not None:
+        if config.clickhouse_url and config.s3_endpoint:
+            _logger.info(
+                "Availability rollups enabled: bucket=%s tz=%s",
+                config.availability_bucket,
+                config.rollup_tz,
+            )
+        else:
+            _logger.info(
+                "Availability rollups disabled: %s is unset",
+                "CLICKHOUSE_URL" if not config.clickhouse_url else "S3_ENDPOINT",
+            )
+
     stop_event = threading.Event()
 
     def _handle_signal(signum, frame):
@@ -3673,6 +3774,17 @@ def run_forever(config: PollerConfig) -> int:
             write_history(config, build_history_rows(
                 snapshots, services, datetime.datetime.now(datetime.UTC)
             ))
+        # Outside the Livestatus try/else above -- the rollup backfill does
+        # not depend on this cycle's Livestatus result (D-49/D-51/D-52).
+        if rollup_tz is not None:
+            maybe_run_rollups(
+                config,
+                scheduler,
+                s3_holder,
+                rollup_tz,
+                datetime.datetime.now(rollup_tz),
+                time.monotonic(),
+            )
         stop_event.wait(timeout=config.poll_interval_seconds)
 
     # Graceful stop must leave the same retained value the LWT would have

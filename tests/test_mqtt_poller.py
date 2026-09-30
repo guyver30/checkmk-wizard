@@ -4111,3 +4111,131 @@ def test_run_forever_sweep_gate_on_when_livestatus_returns_hosts_even_if_rest_fa
         devices={"return_value": [_snapshot("a")]},
     )
     assert mock_run_cycle.call_args.kwargs["allow_stale_sweep"] is True
+
+
+# --- RollupScheduler / maybe_run_rollups (Phase 14.1, D-49/D-51/D-52) --------
+
+
+def test_rollup_scheduler_fresh_instance_is_due_immediately_regardless_of_time():
+    scheduler = poller.RollupScheduler()
+    now_local = datetime.datetime(2026, 9, 28, 13, 0, tzinfo=datetime.UTC)
+    assert scheduler.due(now_local, now_monotonic=0.0) is True
+    assert scheduler.due(now_local, now_monotonic=99999.0) is True
+
+
+def test_rollup_scheduler_not_due_again_same_day_after_success():
+    scheduler = poller.RollupScheduler()
+    scheduler.mark_success(datetime.date(2026, 9, 28))
+    for hour in (0, 12, 23):
+        now_local = datetime.datetime(2026, 9, 28, hour, 0, tzinfo=datetime.UTC)
+        assert scheduler.due(now_local, now_monotonic=0.0) is False
+
+
+def test_rollup_scheduler_due_after_midnight_delay_on_the_next_day():
+    scheduler = poller.RollupScheduler(delay_minutes=5)
+    scheduler.mark_success(datetime.date(2026, 9, 28))
+    before_delay = datetime.datetime(2026, 9, 29, 0, 3, tzinfo=datetime.UTC)
+    after_delay = datetime.datetime(2026, 9, 29, 0, 5, tzinfo=datetime.UTC)
+    assert scheduler.due(before_delay, now_monotonic=0.0) is False
+    assert scheduler.due(after_delay, now_monotonic=0.0) is True
+
+
+def test_rollup_scheduler_mark_failure_backs_off_then_retries():
+    scheduler = poller.RollupScheduler()
+    scheduler.mark_failure(now_monotonic=1000.0)
+    now_local = datetime.datetime(2026, 9, 28, 13, 0, tzinfo=datetime.UTC)
+    assert scheduler.due(now_local, now_monotonic=1200.0) is False
+    assert scheduler.due(now_local, now_monotonic=1300.0) is True
+
+
+def test_maybe_run_rollups_noop_when_clickhouse_url_unset():
+    config = _make_config(clickhouse_url="", s3_endpoint="http://minio:9000")
+    scheduler = poller.RollupScheduler()
+    s3_holder: dict = {}
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    with (
+        patch.object(poller, "build_s3_client") as mock_build,
+        patch.object(poller, "run_rollups") as mock_run,
+    ):
+        poller.maybe_run_rollups(
+            config, scheduler, s3_holder, tz, datetime.datetime.now(tz), poller.time.monotonic()
+        )
+    mock_build.assert_not_called()
+    mock_run.assert_not_called()
+    assert s3_holder == {}
+
+
+def test_maybe_run_rollups_noop_when_s3_endpoint_unset():
+    config = _make_config(clickhouse_url="http://clickhouse:8123", s3_endpoint="")
+    scheduler = poller.RollupScheduler()
+    s3_holder: dict = {}
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    with (
+        patch.object(poller, "build_s3_client") as mock_build,
+        patch.object(poller, "run_rollups") as mock_run,
+    ):
+        poller.maybe_run_rollups(
+            config, scheduler, s3_holder, tz, datetime.datetime.now(tz), poller.time.monotonic()
+        )
+    mock_build.assert_not_called()
+    mock_run.assert_not_called()
+
+
+def test_maybe_run_rollups_marks_success_when_zero_failures():
+    config = _make_config(clickhouse_url="http://clickhouse:8123", s3_endpoint="http://minio:9000")
+    scheduler = poller.RollupScheduler()
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    now_local = datetime.datetime.now(tz)
+    with (
+        patch.object(poller, "build_s3_client", return_value=MagicMock()),
+        patch.object(poller, "run_rollups", return_value=([], 0)),
+    ):
+        poller.maybe_run_rollups(config, scheduler, {}, tz, now_local, poller.time.monotonic())
+    assert scheduler.last_completed_local_date == now_local.date()
+
+
+def test_maybe_run_rollups_marks_failure_when_run_rollups_reports_failures():
+    config = _make_config(clickhouse_url="http://clickhouse:8123", s3_endpoint="http://minio:9000")
+    scheduler = poller.RollupScheduler()
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    now_local = datetime.datetime.now(tz)
+    with (
+        patch.object(poller, "build_s3_client", return_value=MagicMock()),
+        patch.object(poller, "run_rollups", return_value=([], 2)),
+    ):
+        poller.maybe_run_rollups(config, scheduler, {}, tz, now_local, poller.time.monotonic())
+    assert scheduler.last_completed_local_date is None
+    assert scheduler.next_attempt_monotonic > 0.0
+
+
+def test_maybe_run_rollups_logs_and_marks_failure_instead_of_raising(caplog):
+    config = _make_config(clickhouse_url="http://clickhouse:8123", s3_endpoint="http://minio:9000")
+    scheduler = poller.RollupScheduler()
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    now_local = datetime.datetime.now(tz)
+    with (
+        caplog.at_level("WARNING", logger=poller._logger.name),
+        patch.object(poller, "build_s3_client", return_value=MagicMock()),
+        patch.object(poller, "run_rollups", side_effect=poller.ClickHouseError("boom")),
+    ):
+        poller.maybe_run_rollups(config, scheduler, {}, tz, now_local, poller.time.monotonic())
+    assert scheduler.last_completed_local_date is None
+    assert scheduler.next_attempt_monotonic > 0.0
+    assert any("Availability rollup run failed" in record.getMessage() for record in caplog.records)
+
+
+def test_maybe_run_rollups_reuses_s3_client_across_calls():
+    config = _make_config(clickhouse_url="http://clickhouse:8123", s3_endpoint="http://minio:9000")
+    scheduler = poller.RollupScheduler()
+    tz = poller.zoneinfo.ZoneInfo("Asia/Singapore")
+    now_local = datetime.datetime.now(tz)
+    s3_holder: dict = {}
+    with (
+        patch.object(poller, "build_s3_client", return_value=MagicMock()) as mock_build,
+        patch.object(poller, "run_rollups", return_value=([], 0)),
+    ):
+        poller.maybe_run_rollups(config, scheduler, s3_holder, tz, now_local, poller.time.monotonic())
+        scheduler.next_attempt_monotonic = 0.0
+        scheduler.last_completed_local_date = None
+        poller.maybe_run_rollups(config, scheduler, s3_holder, tz, now_local, poller.time.monotonic())
+    mock_build.assert_called_once()
