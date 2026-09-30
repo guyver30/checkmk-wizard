@@ -359,10 +359,9 @@ services:
     networks:
       - cmk_net
 
-  # 6. Live Dashboard — static nginx, no build step, no server-side process.
-  # Serves dashboard/ read-only; every runtime setting an operator might need
-  # to change per deployment lives in dashboard/js/config.js instead of an
-  # environment: block here (D-01/D-02/D-20).
+  # 6. Live Dashboard — static nginx, no server-side process. Per-deployment
+  # dashboard settings live in dashboard-react/src/lib/config.ts (baked in at
+  # build time), not in an environment: block here (D-01/D-02/D-20).
   dashboard:
     # React dashboard, built into its own nginx image (cutover 2026-09-28; it
     # replaced the vanilla ../dashboard bind mount). Rebuild after every

@@ -3525,7 +3525,7 @@ def test_run_cycle_services_none_publishes_status_but_nothing_on_services_topic(
 
 
 # Regression for D-33 (oldest-events-on-top was reported live, but the shipped
-# code is correct): `renderEvents()` (dashboard/js/render-shell.js) reverses
+# code is correct): `EventHistory` (dashboard-react/src/components/EventHistory.tsx) reverses
 # the published array exactly once, trusting that the poller publishes it
 # oldest-first. No prior test pinned array *order* across multiple cycles --
 # every existing events test above checks membership or `entries[-1]`, which a

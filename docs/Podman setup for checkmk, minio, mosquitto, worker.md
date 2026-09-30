@@ -194,8 +194,8 @@ After editing `config.ts`, or after every `git pull`, rebuild the image and rest
 cd deploy && podman compose build dashboard && podman compose down && podman compose up -d
 ```
 
-The old vanilla dashboard in `dashboard/` is no longer served. It stays in the repo until a
-later cleanup removes it. For development with hot reload, see `dashboard-react/README.md` §3.
+The old vanilla dashboard (`dashboard/`) was deleted from the repo on 2026-09-30. For
+development with hot reload, see `dashboard-react/README.md` §3.
 
 **Note on the topology editor credential (Phase 13):** the dashboard's map edit mode (§7's
 "Topology map check") writes directly to Checkmk's REST API from the browser, using a

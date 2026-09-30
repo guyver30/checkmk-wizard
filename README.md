@@ -187,16 +187,14 @@ or actual SSH connections — that requires a real lab environment.
 
 ## Live dashboard
 
-A static, backend-less web dashboard visualizes the resulting Checkmk-monitored network topology
-and device status in real time over MQTT, served on port 8090 alongside the rest of the stack —
-see [`dashboard/README.md`](dashboard/README.md) for the directory layout, the one file an
-operator edits per deployment (`dashboard/js/config.js`), and the vendored-asset inventory, and
+A backend-less React + TypeScript web dashboard (`dashboard-react/`) visualizes the resulting
+Checkmk-monitored network topology and device status in real time over MQTT, with a live editable
+topology map, served on port 8090 alongside the rest of the stack. See
+[`dashboard-react/README.md`](dashboard-react/README.md) for building it and the one file an
+operator edits per deployment (`src/lib/config.ts`), and
 [`docs/Podman setup for checkmk, minio, mosquitto, worker.md`](<docs/Podman setup for checkmk, minio, mosquitto, worker.md>)
 for how it fits into the wider deployment. To deploy the whole stack on a new machine, follow the
-checklist in [`docs/DEPLOY-NEW-MACHINE.md`](docs/DEPLOY-NEW-MACHINE.md). A React + TypeScript rewrite at `dashboard-react/`
-(not yet cut over into the deployed stack) adds a live editable topology map on top of this —
-see [`dashboard-react/README.md`](dashboard-react/README.md)'s "Topology map and editing"
-section.
+checklist in [`docs/DEPLOY-NEW-MACHINE.md`](docs/DEPLOY-NEW-MACHINE.md).
 
 Device-type icons are drop-in SVG files (file name = device type) — see
 [`docs/DEVICE-TYPE-ICONS.md`](docs/DEVICE-TYPE-ICONS.md).

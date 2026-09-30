@@ -8,7 +8,7 @@ D-40/D-42 — same live, at-a-glance topology/status picture, built against the 
 
 Since 2026-09-28 this app **is** the deployed dashboard. The compose `dashboard` service builds
 it into an nginx image (`deploy/dashboard.Containerfile`) and serves it on host port 8090. The
-cutover checklist in §8 is done, except for deleting the old `dashboard/`.
+cutover checklist in §8 is done, and the old `dashboard/` has been deleted (2026-09-30).
 
 ## 2. Build precondition — build `design-system` first
 
@@ -82,7 +82,7 @@ The remaining constants in `src/lib/config.ts`:
 
 - `WS_PORT` — the Mosquitto WebSockets listener port.
 - `WS_USERNAME` / `WS_PASSWORD` — deliberately-committed disposable read-only broker
-  credentials (same convention as `dashboard/js/config.js`, `cmkadmin`/`cmkadmin`, and
+  credentials (same convention as `cmkadmin`/`cmkadmin` and
   `deploy/mosquitto.passwd`). Rotate them before exposing the dashboard beyond a trusted LAN.
 - `POLL_INTERVAL_SECONDS` (15) / `STALENESS_FACTOR` (3) — must be kept in step with
   `scripts/mqtt_poller.py`'s own defaults; a mismatch would make staleness flip at the wrong
@@ -327,4 +327,5 @@ changes.
 4. Deploying an update: `git pull`, then
    `cd deploy && podman compose build dashboard && podman compose down && podman compose up -d`.
    `src/lib/config.ts` is baked in at build time, so rebuild after editing it too.
-5. Still to do: delete `dashboard/`.
+5. The old vanilla `dashboard/` (and its `docs/mockup/` preview harness) was deleted on
+   2026-09-30.
