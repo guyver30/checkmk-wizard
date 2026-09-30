@@ -13,11 +13,12 @@
 // resolve.
 //
 // DEFAULT_WS_USERNAME/DEFAULT_WS_PASSWORD are the disposable read-only credentials used
-// whenever `/config.json` is unreachable or omits them (vite dev/preview, vitest) -- the
-// same convention already used by deploy/mosquitto.passwd itself, cmkadmin/cmkadmin, and
-// minioadmin/minioadmin. The grant behind them is read-only (`topic read lan/#` in
-// deploy/mosquitto.acl), which bounds the exposure to reading the device list, never
-// writing anything back to the broker.
+// whenever `/config.json` is unreachable or omits them (vite dev/preview, vitest) -- for
+// dev/vitest only; production values come from WS_PASSWORD in deploy/.env via /config.json
+// (quick 260930-jj4 -- the mosquitto container now builds its own password file from
+// deploy/.env at every start, rather than reading one from a tracked file). The grant
+// behind them is read-only (`topic read lan/#` in deploy/mosquitto.acl), which bounds the
+// exposure to reading the device list, never writing anything back to the broker.
 //
 // POLL_INTERVAL_SECONDS and HISTORY_MAX_ENTRIES mirror DEFAULT_POLL_INTERVAL_SECONDS and
 // DEFAULT_HISTORY_MAX_ENTRIES in scripts/mqtt_poller.py and must be kept in step with it

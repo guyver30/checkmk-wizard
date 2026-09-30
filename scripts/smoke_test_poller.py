@@ -13,6 +13,10 @@ The sibling `scripts/mqtt_poller.py` module is loaded via
 Livestatus column probe or topic constants, so this script can never drift
 from the poller's own contract.
 
+`--password` defaults from the MQTT_POLLER_PASSWORD environment variable (falling
+back to the disposable `poller` dev value if unset), so the usual invocation sources
+deploy/.env first: `set -a; . deploy/.env; set +a; uv run python scripts/smoke_test_poller.py`.
+
 Each check proves one requirement:
 - `check_livestatus_columns` — resolves RESEARCH.md Open Question 1 and
   Assumptions A1-A3 (the live `hosts` table's actual column set).
@@ -47,6 +51,7 @@ import argparse
 import datetime
 import importlib.util
 import json
+import os
 import pathlib
 import shlex
 import subprocess
@@ -599,7 +604,7 @@ def main() -> int:
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--tcp-port", type=int, default=1883)
     parser.add_argument("--user", default="poller")
-    parser.add_argument("--password", default="poller")
+    parser.add_argument("--password", default=os.environ.get("MQTT_POLLER_PASSWORD", "poller"))
     parser.add_argument("--livestatus-host", default="localhost")
     parser.add_argument("--livestatus-port", type=int, default=6557)
     parser.add_argument("--poll-interval", type=float, default=60.0)

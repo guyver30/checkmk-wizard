@@ -7,6 +7,11 @@ deliberately standalone, run via `uv run python scripts/smoke_test_broker.py`
 against a real deployment host — not collected by pytest (no `test_*`
 function names, not under `tests/`).
 
+`--poller-password`/`--ws-password` default from the MQTT_POLLER_PASSWORD/WS_PASSWORD
+environment variables (falling back to the disposable `poller`/`wsreader` dev values if
+unset), so the usual invocation sources deploy/.env first:
+`set -a; . deploy/.env; set +a; uv run python scripts/smoke_test_broker.py`.
+
 Each check proves one requirement:
 - `check_poller_publish` — the poller's authenticated write path on plain
   MQTT 1883 works (D-05: 1883 is no longer anonymous).
@@ -32,6 +37,7 @@ Each check proves one requirement:
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
@@ -319,9 +325,9 @@ def main() -> int:
     parser.add_argument("--tcp-port", type=int, default=1883)
     parser.add_argument("--ws-port", type=int, default=9002)
     parser.add_argument("--poller-user", default="poller")
-    parser.add_argument("--poller-password", default="poller")
+    parser.add_argument("--poller-password", default=os.environ.get("MQTT_POLLER_PASSWORD", "poller"))
     parser.add_argument("--ws-user", default="wsreader")
-    parser.add_argument("--ws-password", default="wsreader")
+    parser.add_argument("--ws-password", default=os.environ.get("WS_PASSWORD", "wsreader"))
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--skip-restart", action="store_true")
     parser.add_argument("--restart-cmd", default="podman compose restart mosquitto")
