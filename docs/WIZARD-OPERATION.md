@@ -56,6 +56,64 @@ state file. If the process is killed mid-run, the next run starts at Phase 1
 with no memory of what happened before (site/hosts already created in
 Checkmk are simply re-detected or re-created).
 
+## Starting over with a blank site (delete the site and the retained MQTT data)
+
+**Container mode:** the worker has no `omd`, so the wizard cannot delete the
+site. The Phase 1 "Delete a site" menu below exists only in host-native mode.
+The site lives in the `checkmk` container's `checkmk_data` volume, and the
+entrypoint creates a new, empty site on the next start if that volume is
+missing. So to start over, remove that volume together with the broker's
+`mosquitto_data` volume.
+
+`mosquitto_data` holds the retained MQTT messages, and the dashboard reads
+nothing else. On startup the poller already clears retained per-device topics
+for hosts that are no longer on the site. It does **not** clear the global
+`lan/events/recent` feed, though, so without a broker wipe the dashboard's
+history keeps the old site's events, shown as "unknown → unknown".
+
+Run from `deploy/`. Compose prefixes volume names with the project name
+(`deploy_`), so confirm the names with `podman volume ls` first:
+
+```bash
+cd ~/checkmk-stack/app/checkmk-wizard/deploy
+podman compose down
+podman volume rm deploy_checkmk_data deploy_mosquitto_data
+podman compose up -d
+```
+
+- Always do a full `down`/`up`. Never remove the volume under a running stack
+  and never use `podman compose restart poller`: the poller's clean-up runs
+  only at startup, and restarting a single container once cut Checkmk off
+  from the LAN.
+- Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's
+  users and ACL are bind-mounted files (`mosquitto.passwd`, `mosquitto.acl`),
+  so they survive the wipe.
+- Agents on target hosts are still registered to the deleted site. Run
+  `cmk-agent-ctl delete-all` on each of them before re-onboarding (the same
+  warning Phase 1's delete path prints).
+- Once the history stack (Phase 14.1) is deployed, the old site's metrics and
+  state history stay in `deploy_clickhouse_data`. Remove that volume in the
+  same step if the history should go too.
+
+To clear **only** the events feed and keep everything else in the broker,
+publish an empty retained message. The poller rebuilds the feed from empty:
+
+```bash
+podman exec mosquitto mosquitto_pub -h localhost -u poller -P '<poller password>' -t lan/events/recent -r -n
+```
+
+Then, on the fresh site: make sure `deploy/.env` has `CMK_REST_SECRET` set,
+run the wizard (Phase 1 creates the `automation` user with that secret), re-run
+`scripts/provision_topology_editor.py` if you use the map's edit mode (its user
+was in the deleted site), and hard-refresh the dashboard (Ctrl+Shift+R). There
+is no undo: the old site's hosts, rules and monitoring history (RRDs) are gone.
+The full rationale is in
+[Podman setup §8.5](<Podman setup for checkmk, minio, mosquitto, worker.md#85-starting-over-with-a-blank-site>).
+
+**Host-native mode:** use Phase 1's "Delete a site, then create a new one"
+menu for the site itself. If a broker feeds a dashboard, clear its retained
+data the same way: stop it, remove its data volume, then start it again.
+
 ## Phase 1 — Site Bring-up (`wizard.py:264-471`)
 
 1. **Container-mode detection:** `container_mode = not site.omd_installed()`
