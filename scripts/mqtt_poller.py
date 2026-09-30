@@ -48,6 +48,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -75,6 +76,19 @@ DEFAULT_REST_PORT = 5000
 # above: this is the per-request timeout for the poller's own REST folder
 # lookup, kept as a named constant rather than inlined.
 DEFAULT_REST_TIMEOUT_SECONDS = 10.0
+# Phase 14.1 (D-44): default per-request timeout for the poller's ClickHouse
+# HTTP writes/queries, env-configurable via CLICKHOUSE_TIMEOUT_SECONDS
+# (unlike the Livestatus/REST timeouts above) since ClickHouse's own load
+# is outside this project's control.
+DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS = 5.0
+# Phase 14.1 (D-44/T-14.1-08): the table name is interpolated directly into
+# the INSERT statement's SQL text (ClickHouse's HTTP interface has no
+# parameterized-identifier syntax), so `_clickhouse_insert` only ever
+# writes to one of these four known-safe names -- never an arbitrary
+# caller-supplied string.
+CLICKHOUSE_INSERT_TABLES = frozenset(
+    {"history.metrics", "history.host_state", "history.service_state", "history.availability_daily"}
+)
 
 TOPIC_TOPOLOGY = "lan/devices/topology"
 TOPIC_EVENTS = "lan/events/recent"
@@ -294,6 +308,15 @@ class RestError(RuntimeError):
     """
 
 
+class ClickHouseError(RuntimeError):
+    """Single normalized failure type for the poller's ClickHouse HTTP calls (D-44).
+
+    Callers log it and carry on -- it never interrupts the mandatory
+    Livestatus/MQTT cycle, mirroring `RestError`'s non-fatal role for the
+    REST folder lookup.
+    """
+
+
 def _env_int(name: str, default: int) -> int:
     """Read an int env var, falling back to `default` (with a warning) on a bad value.
 
@@ -348,12 +371,21 @@ class PollerConfig:
     # those fields were: no existing positional PollerConfig(...) call site
     # breaks.
     service_history_max_entries: int = DEFAULT_SERVICE_HISTORY_MAX_ENTRIES
+    # Phase 14.1 (D-44). Appended after service_history_max_entries so no
+    # positional PollerConfig(...) call site breaks. An empty
+    # clickhouse_url (the default) means history writes are disabled
+    # entirely (write_history() below is a no-op) -- the poller behaves
+    # exactly as before Phase 14.1 with CLICKHOUSE_URL unset.
+    clickhouse_url: str = ""
+    clickhouse_writer_user: str = "poller_writer"
+    clickhouse_writer_password: str = ""
+    clickhouse_timeout_seconds: float = DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS
 
     def __repr__(self) -> str:
         # T-09-02: this object must be safe to log — never render the raw
-        # MQTT password or the REST secret (cmk_rest_secret). Defined
-        # explicitly so @dataclass does not generate a repr that would
-        # include either.
+        # MQTT password, the REST secret (cmk_rest_secret), or (Phase 14.1)
+        # the ClickHouse writer password. Defined explicitly so @dataclass
+        # does not generate a repr that would include any of them.
         return (
             "PollerConfig("
             f"livestatus_host={self.livestatus_host!r}, "
@@ -372,7 +404,11 @@ class PollerConfig:
             f"cmk_rest_port={self.cmk_rest_port!r}, "
             f"cmk_site_id={self.cmk_site_id!r}, "
             f"cmk_rest_username={self.cmk_rest_username!r}, "
-            "cmk_rest_secret='***')"
+            "cmk_rest_secret='***', "
+            f"clickhouse_url={self.clickhouse_url!r}, "
+            f"clickhouse_writer_user={self.clickhouse_writer_user!r}, "
+            "clickhouse_writer_password='***', "
+            f"clickhouse_timeout_seconds={self.clickhouse_timeout_seconds!r})"
         )
 
     @classmethod
@@ -402,6 +438,15 @@ class PollerConfig:
             cmk_site_id=os.environ.get("CMK_SITE_ID", "dmc"),
             cmk_rest_username=os.environ.get("CMK_REST_USERNAME", ""),
             cmk_rest_secret=os.environ.get("CMK_REST_SECRET", ""),
+            # Phase 14.1 (D-44): trailing slash stripped so URL-building
+            # call sites can always do f"{clickhouse_url}/?query=..." without
+            # worrying about a double slash.
+            clickhouse_url=os.environ.get("CLICKHOUSE_URL", "").rstrip("/"),
+            clickhouse_writer_user=os.environ.get("CLICKHOUSE_WRITER_USER", "poller_writer"),
+            clickhouse_writer_password=os.environ.get("CLICKHOUSE_WRITER_PASSWORD", ""),
+            clickhouse_timeout_seconds=_env_float(
+                "CLICKHOUSE_TIMEOUT_SECONDS", DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS
+            ),
         )
 
 
@@ -1323,6 +1368,132 @@ def fetch_host_folders(base_url: str, username: str, secret: str, timeout: float
         host_id: info.folder
         for host_id, info in fetch_host_config(base_url, username, secret, timeout).items()
     }
+
+
+def _clickhouse_request(
+    url: str,
+    *,
+    user: str,
+    password: str,
+    timeout: float,
+    data: bytes | None = None,
+    method: str = "GET",
+) -> bytes:
+    """Send one HTTP request to ClickHouse and return the raw response body.
+
+    Every ClickHouse network failure funnels through this one choke point
+    and is normalized into `ClickHouseError` exactly once, mirroring
+    `_livestatus_request`'s/`fetch_host_config`'s single-choke-point
+    pattern above. Auth is via the `X-ClickHouse-User`/`X-ClickHouse-Key`
+    headers (docs.checkmk.com is not the source here -- verified via
+    context7, clickhouse.com/docs/concepts/features/interfaces/http,
+    2026-09-28: the HTTP interface accepts credentials as headers so they
+    never appear in the URL or in request logs, T-14.1-10). The password
+    is never included in any exception message this function raises.
+    """
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "X-ClickHouse-User": user,
+            "X-ClickHouse-Key": password,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        # ClickHouse's HTTP interface returns the SQL error as the response
+        # body on a non-2xx status (e.g. "Table history.metrics doesn't
+        # exist") -- surface up to 300 chars of it so a logged warning is
+        # actionable, without risking an unbounded body in the log line.
+        # A synthetic HTTPError with no underlying fp (as in some tests)
+        # cannot be read; degrade to an empty body rather than raising a
+        # second, unrelated exception out of this except clause.
+        try:
+            body = exc.read()[:300].decode(errors="replace")
+        except Exception:  # noqa: BLE001 - deliberately broad, see comment above
+            body = ""
+        raise ClickHouseError(
+            f"ClickHouse {method} to {url} failed: HTTP {exc.code}: {body}"
+        ) from exc
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise ClickHouseError(f"ClickHouse {method} to {url} failed: {exc}") from exc
+
+
+def _clickhouse_insert(
+    base_url: str,
+    user: str,
+    password: str,
+    table: str,
+    rows: list[dict],
+    timeout: float,
+) -> None:
+    """POST `rows` to ClickHouse as one `INSERT INTO {table} FORMAT JSONEachRow` batch.
+
+    D-44: one INSERT per table per cycle, no buffering, no file, no retry
+    -- a rejected or unreachable batch is simply dropped by the caller
+    (`write_history()` below) and the gap reads as "no data" (D-47).
+    `table` must be one of `CLICKHOUSE_INSERT_TABLES` (T-14.1-08): the name
+    is interpolated into the SQL text since ClickHouse's HTTP interface has
+    no parameterized-identifier syntax, so an unlisted table never reaches
+    a request at all. An empty `rows` list is a no-op (no request made) --
+    a quiet cycle (e.g. `services=None`) must not spam ClickHouse with
+    empty inserts.
+    """
+    if not rows:
+        return
+    if table not in CLICKHOUSE_INSERT_TABLES:
+        raise ClickHouseError(f"Refusing to insert into unlisted table {table!r}")
+    try:
+        body = "\n".join(json.dumps(row, allow_nan=False) for row in rows).encode("utf-8")
+    except ValueError as exc:
+        # allow_nan=False raises ValueError on NaN/inf -- a second guard
+        # behind build_history_rows()'s own finite-value filtering
+        # (T-14.1-12), never silently sending a value ClickHouse would
+        # reject anyway.
+        raise ClickHouseError(f"Refusing to insert non-finite value into {table}: {exc}") from exc
+    url = f"{base_url}/?query=" + urllib.parse.quote(f"INSERT INTO {table} FORMAT JSONEachRow")
+    _clickhouse_request(url, user=user, password=password, timeout=timeout, data=body, method="POST")
+
+
+def _clickhouse_query(base_url: str, user: str, password: str, sql: str, timeout: float) -> list[dict]:
+    """Run a read-only `sql` query and return its rows as a list of dicts.
+
+    GET is used deliberately, not just by convention: ClickHouse's HTTP
+    interface forces `readonly=1` on GET requests server-side (verified
+    via context7, clickhouse.com/docs/concepts/features/configuration/
+    settings/permissions-for-queries, 2026-09-28), so a query built from
+    this function can never accidentally mutate data even if `sql` were
+    malformed -- a free safety net on top of the read-only ClickHouse user
+    D-54 provisions. `" FORMAT JSONEachRow"` is appended to `sql` so the
+    response body is one JSON object per line. Note for callers: ClickHouse
+    renders 64-bit integers (UInt64/Int64) as JSON strings by default, so a
+    count column needs `int(...)` at the call site, not a bare comparison.
+    """
+    url = f"{base_url}/?query=" + urllib.parse.quote(f"{sql} FORMAT JSONEachRow")
+    body = _clickhouse_request(url, user=user, password=password, timeout=timeout, method="GET")
+    text = body.decode(errors="replace")
+    try:
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+    except json.JSONDecodeError as exc:
+        raise ClickHouseError(f"Malformed JSONEachRow response for query {sql!r}: {exc}") from exc
+
+
+def _clickhouse_command(base_url: str, user: str, password: str, sql: str, timeout: float) -> str:
+    """POST `sql` as the request body and return ClickHouse's decoded text response.
+
+    For statements that must not be sent as a GET (e.g. `INSERT INTO
+    FUNCTION s3(...)`, used by plan 14.1-05's Parquet rollup export) --
+    GET forces readonly=1 (see `_clickhouse_query()` above), which such
+    statements would fail under. No caller exists in this plan.
+    """
+    url = f"{base_url}/"
+    body = _clickhouse_request(
+        url, user=user, password=password, timeout=timeout, data=sql.encode("utf-8"), method="POST"
+    )
+    return body.decode(errors="replace")
 
 
 def available_host_columns(host: str, port: int, timeout: float) -> set[str]:

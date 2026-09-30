@@ -3,6 +3,7 @@ import importlib.util
 import json
 import sys
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -581,6 +582,10 @@ _ENV_VARS = (
     "CMK_SITE_ID",
     "CMK_REST_USERNAME",
     "CMK_REST_SECRET",
+    "CLICKHOUSE_URL",
+    "CLICKHOUSE_WRITER_USER",
+    "CLICKHOUSE_WRITER_PASSWORD",
+    "CLICKHOUSE_TIMEOUT_SECONDS",
 )
 
 
@@ -901,6 +906,223 @@ def test_fetch_host_folders_derives_from_fetch_host_config():
         result = poller.fetch_host_folders("http://checkmk:5000/dmc/check_mk/api/1.0", "user", "secret", 10)
     assert result == {"sw1": "vlan10"}
     assert mock_urlopen.call_count == 1
+
+
+# --- ClickHouse config fields ------------------------------------------------
+
+
+def test_poller_config_from_env_clickhouse_defaults_with_empty_environment(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    config = poller.PollerConfig.from_env()
+    assert config.clickhouse_url == ""
+    assert config.clickhouse_writer_user == "poller_writer"
+    assert config.clickhouse_writer_password == ""
+    assert config.clickhouse_timeout_seconds == 5.0
+
+
+def test_poller_config_from_env_clickhouse_url_trailing_slash_stripped(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("CLICKHOUSE_URL", "http://clickhouse:8123/")
+    config = poller.PollerConfig.from_env()
+    assert config.clickhouse_url == "http://clickhouse:8123"
+
+
+def test_poller_config_from_env_clickhouse_timeout_falls_back_on_bad_value(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("CLICKHOUSE_TIMEOUT_SECONDS", "abc")
+    config = poller.PollerConfig.from_env()
+    assert config.clickhouse_timeout_seconds == 5.0
+
+
+def test_poller_config_repr_never_contains_the_clickhouse_password_value(monkeypatch):
+    _clear_poller_env(monkeypatch)
+    monkeypatch.setenv("CLICKHOUSE_URL", "http://clickhouse:8123")
+    monkeypatch.setenv("CLICKHOUSE_WRITER_PASSWORD", "ch-s3cr3t")
+    config = poller.PollerConfig.from_env()
+    rendered = repr(config)
+    assert "ch-s3cr3t" not in rendered
+    assert "clickhouse_writer_password='***'" in rendered
+    assert "clickhouse_url='http://clickhouse:8123'" in rendered
+
+
+# --- ClickHouse HTTP choke point ---------------------------------------------
+
+
+def test_clickhouse_insert_posts_jsoneachrow_body():
+    rows = [{"ts": "2026-09-28 01:02:03", "host": "web1", "service": "CPU", "metric": "util", "value": 1.0, "warn": None, "crit": None}]
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"")) as mock_urlopen:
+        poller._clickhouse_insert(
+            "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", rows, 5.0
+        )
+    assert mock_urlopen.call_count == 1
+    request = mock_urlopen.call_args[0][0]
+    decoded_query = urllib.parse.unquote(request.full_url.split("?query=", 1)[1])
+    assert decoded_query == "INSERT INTO history.metrics FORMAT JSONEachRow"
+    assert request.get_method() == "POST"
+    assert request.data == json.dumps(rows[0], allow_nan=False).encode("utf-8")
+    assert request.get_header("X-clickhouse-user") == "poller_writer"
+    assert request.get_header("X-clickhouse-key") == "s3cr3t"
+    assert "s3cr3t" not in request.full_url
+
+
+def test_clickhouse_insert_joins_multiple_rows_with_newlines():
+    rows = [
+        {"ts": "2026-09-28 01:02:03", "host": "web1", "folder": "vlan10", "state": 0, "in_downtime": 0},
+        {"ts": "2026-09-28 01:02:03", "host": "web2", "folder": "vlan10", "state": 1, "in_downtime": 0},
+    ]
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"")) as mock_urlopen:
+        poller._clickhouse_insert(
+            "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.host_state", rows, 5.0
+        )
+    request = mock_urlopen.call_args[0][0]
+    expected = "\n".join(json.dumps(row, allow_nan=False) for row in rows).encode("utf-8")
+    assert request.data == expected
+
+
+def test_clickhouse_insert_empty_rows_makes_no_request():
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        poller._clickhouse_insert(
+            "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [], 5.0
+        )
+    mock_urlopen.assert_not_called()
+
+
+def test_clickhouse_insert_unlisted_table_raises_without_a_request():
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123",
+                "poller_writer",
+                "s3cr3t",
+                "system.query_log",
+                [{"a": 1}],
+                5.0,
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+    mock_urlopen.assert_not_called()
+
+
+def test_clickhouse_insert_nan_value_raises_without_a_request():
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123",
+                "poller_writer",
+                "s3cr3t",
+                "history.metrics",
+                [{"value": float("nan")}],
+                5.0,
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+    mock_urlopen.assert_not_called()
+
+
+def test_clickhouse_insert_connection_failure_becomes_clickhouse_error():
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError as exc:
+            assert isinstance(exc.__cause__, OSError)
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_insert_url_error_becomes_clickhouse_error():
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("no route")):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_insert_timeout_becomes_clickhouse_error():
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_insert_http_error_message_includes_response_body():
+    http_error = urllib.error.HTTPError(
+        url="http://clickhouse:8123/?query=x",
+        code=500,
+        msg="Internal Server Error",
+        hdrs=None,
+        fp=MagicMock(read=MagicMock(return_value=b"Table history.metrics doesn't exist")),
+    )
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError as exc:
+            assert "Table history.metrics doesn't exist" in str(exc)
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_insert_http_error_with_no_body_does_not_raise_a_different_exception():
+    http_error = urllib.error.HTTPError(
+        url="http://clickhouse:8123/?query=x", code=403, msg="Forbidden", hdrs=None, fp=None
+    )
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        try:
+            poller._clickhouse_insert(
+                "http://clickhouse:8123", "poller_writer", "s3cr3t", "history.metrics", [{"a": 1}], 5.0
+            )
+        except poller.ClickHouseError:
+            pass
+        else:
+            raise AssertionError("expected ClickHouseError")
+
+
+def test_clickhouse_query_parses_jsoneachrow_response_and_uses_get():
+    body = b'{"host":"web1","state":0}\n{"host":"web2","state":1}\n'
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(body)) as mock_urlopen:
+        result = poller._clickhouse_query(
+            "http://clickhouse:8123", "reader", "s3cr3t", "SELECT host, state FROM history.host_state", 5.0
+        )
+    assert result == [{"host": "web1", "state": 0}, {"host": "web2", "state": 1}]
+    request = mock_urlopen.call_args[0][0]
+    assert request.get_method() == "GET"
+    decoded_query = urllib.parse.unquote(request.full_url.split("?query=", 1)[1])
+    assert decoded_query == "SELECT host, state FROM history.host_state FORMAT JSONEachRow"
+
+
+def test_clickhouse_query_empty_body_returns_empty_list():
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"")):
+        result = poller._clickhouse_query(
+            "http://clickhouse:8123", "reader", "s3cr3t", "SELECT 1", 5.0
+        )
+    assert result == []
+
+
+def test_clickhouse_command_posts_sql_as_body_and_returns_decoded_text():
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(b"Ok.\n")) as mock_urlopen:
+        result = poller._clickhouse_command(
+            "http://clickhouse:8123", "poller_writer", "s3cr3t", "INSERT INTO FUNCTION s3(...) SELECT 1", 5.0
+        )
+    assert result == "Ok.\n"
+    request = mock_urlopen.call_args[0][0]
+    assert request.get_method() == "POST"
+    assert request.data == b"INSERT INTO FUNCTION s3(...) SELECT 1"
 
 
 # --- build_hosts_query / select_host_columns --------------------------------
