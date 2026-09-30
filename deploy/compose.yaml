@@ -174,12 +174,21 @@ services:
       # The image runs as non-root UID 65532; `mc alias set` writes its config
       # under $HOME, which is otherwise unset for that UID.
       - HOME=/tmp
-    entrypoint: ["/usr/bin/sh", "-c"]
-    command: >
-      until mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY"; do sleep 2; done &&
-      mc mb --ignore-existing local/clickhouse-s3-disk &&
-      mc mb --ignore-existing local/fleet-availability &&
-      mc anonymous set download local/fleet-availability
+    # The script is the third element of a list-form entrypoint, the same form
+    # the grafana service uses. Bug fixed 2026-09-30 (first live start): it
+    # used to be a plain-string `command:` after `entrypoint: [sh, -c]`, but
+    # compose splits a string command on whitespace, so `sh -c` received only
+    # "until" as its script (and "mc" as $0). The container exited with "mc:
+    # line 0: syntax error: unexpected end of file (expecting "do")", no bucket
+    # was created, and clickhouse crash-looped on its missing S3 disk bucket.
+    entrypoint:
+      - "/usr/bin/sh"
+      - "-c"
+      - >-
+        until mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY"; do sleep 2; done &&
+        mc mb --ignore-existing local/clickhouse-s3-disk &&
+        mc mb --ignore-existing local/fleet-availability &&
+        mc anonymous set download local/fleet-availability
     networks:
       - cmk_net
 
