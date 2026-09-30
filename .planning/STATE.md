@@ -119,6 +119,7 @@ None.
 | 260928-l4h | Host details as a collapsible right-hand pane beside the map (`?host=`), replacing the /details page; event history filters to the selected host, empty-space click deselects | 2026-09-28 | 6183a2e | [260928-l4h-host-details-right-hand-pane](./quick/260928-l4h-host-details-right-hand-pane/) |
 | 260928-m6f | Show host IP next to renamed hosts (poller publishes `address`; tree tooltip, `name (ip)` on cards/map/events/details) | 2026-09-28 | ae02bb4 | [260928-m6f-show-host-ip-next-to-renamed-hosts](./quick/260928-m6f-show-host-ip-next-to-renamed-hosts/) |
 | 260928-m6g | Topology map: faint always-visible 50px grid, snap-to-grid on edit-mode drag, parent-to-child edge hint | 2026-09-28 | 940285d | [260928-m6g-topology-map-grid-snap-and-edge-hint](./quick/260928-m6g-topology-map-grid-snap-and-edge-hint/) |
+| fast | Switch MinIO image to cgr.dev/chainguard/minio pinned by digest (Docker Hub and quay.io both unpullable) | 2026-09-30 | c77c3fd | - |
 
 ## Deferred Items
 
