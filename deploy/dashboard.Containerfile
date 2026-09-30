@@ -21,5 +21,12 @@ RUN npm --prefix dashboard-react ci \
  && npm --prefix dashboard-react run build
 
 FROM docker.io/library/nginx:alpine
-COPY deploy/dashboard-nginx.conf /etc/nginx/conf.d/default.conf
+# Installed as a template, not a static conf.d file: deploy/dashboard-nginx.conf
+# references ${CH_READER_PASSWORD} and ${NGINX_LOCAL_RESOLVERS}, which the official
+# nginx image's own entrypoint renders via envsubst at container start (verified
+# 2026-09-30 against github.com/nginxinc/docker-nginx
+# entrypoint/20-envsubst-on-templates.sh). This only substitutes variables actually
+# present in the container's environment, so nginx's own $uri/$arg_*/$is_args/$args
+# variables pass through untouched — they are never environment variables.
+COPY deploy/dashboard-nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /src/dashboard-react/dist /usr/share/nginx/html
