@@ -170,26 +170,27 @@ builds `dashboard-react/` into its own nginx image (`deploy/dashboard.Containerf
 = the repo root). The image build compiles `design-system/` and the SPA inside a Node container, so
 the host needs no Node install. nginx serves the static files, with an SPA fallback for
 `/?host=...` (and old `/details?id=...`) bookmarks and a same-origin `/checkmk-api/` route to `checkmk:5000`
-(`deploy/dashboard-nginx.conf`). There's no server-side process and no `environment:` block:
-every per-deployment setting lives in `dashboard-react/src/lib/config.ts`, which is **baked into
-the image at build time**. Edit it once, before the first build:
+(`deploy/dashboard-nginx.conf`). There's no server-side process, and the image carries no
+per-machine settings (amended 2026-09-30, quick 260930-ixs): the dashboard service's
+`environment:` block passes `CMK_SITE_ID`, `WS_USERNAME`, `WS_PASSWORD` (plus the existing
+`CH_READER_PASSWORD`/`TOPOLOGY_EDITOR_SECRET`) from `deploy/.env`, and nginx serves the first
+three as `/config.json`, which the SPA loads once before first render
+(`dashboard-react/src/lib/runtimeConfig.ts`):
 
-- `CHECKMK_BASE_URL` — must be changed from its checked-in `http://<HOST_IP>:8080` placeholder to
-  a URL a LAN browser can actually resolve. The poller reaches Checkmk over the container-internal
-  name `checkmk:5000`, which no browser outside `cmk_net` can resolve. This constant is what the
-  "View in Checkmk" link is built from (D-20), and the link stays disabled while it's the placeholder.
-- `CHECKMK_SITE` — the same site name used everywhere else in this doc (`dmc` by default).
+- `CMK_SITE_ID` — the same site name used everywhere else in this doc (`dmc` by default). Also
+  what the "View in Checkmk" link and every `/checkmk-api/<site>/...` call use.
 - `WS_USERNAME`/`WS_PASSWORD` (`wsreader`/`wsreader` by default) — disposable read-only Mosquitto
   WebSockets credentials, checked in deliberately, same convention as `cmkadmin`/`cmkadmin` and
-  `minioadmin`/`minioadmin` above: rotate them (see §6's Mosquitto credential row, and
+  `minioadmin`/`minioadmin` above: rotate them by setting `WS_PASSWORD` in `deploy/.env` and
+  regenerating `deploy/mosquitto.passwd` (see §6's Mosquitto credential row, and
   `deploy/gen-mosquitto-passwd.sh`) before exposing this stack beyond a trusted LAN. The grant
   behind them is read-only (`topic read lan/#` in `deploy/mosquitto.acl`), so the exposure is
   bounded to reading the device list, never writing to the broker.
-- `TOPOLOGY_EDITOR_SECRET` — no longer configured here (amended 2026-09-30, quick 260930-hpy);
-  see the next note.
+- `TOPOLOGY_EDITOR_SECRET` — see the next note.
 
-After editing `config.ts`, or after every `git pull`, rebuild the image and restart the stack
-(a full down/up, not a single-service restart; see §5.1 "A third signature"):
+Rebuild the image only after a `git pull` (code changes only — per-machine settings come from
+`deploy/.env` at container start, no rebuild needed), then restart the stack (a full down/up,
+not a single-service restart; see §5.1 "A third signature"):
 
 ```bash
 cd deploy && podman compose build dashboard && podman compose down && podman compose up -d
@@ -275,7 +276,7 @@ echo 'CMK_SITE_ID=mysite' >> deploy/.env      # or: CMK_SITE_ID=mysite podman co
 podman compose up -d
 ```
 
-The wizard's site-name prompt is then pre-filled with `mysite`. Site names must start with a letter and be 1–16 letters/digits/underscores. Two things are not driven by this variable: the dashboard's `CHECKMK_SITE` constant (see §3 dashboard config) and the `podman compose exec checkmk omd ... dmc ...` commands in this doc — substitute your name.
+The wizard's site-name prompt is then pre-filled with `mysite`. Site names must start with a letter and be 1–16 letters/digits/underscores. The dashboard now follows `CMK_SITE_ID` automatically too (quick 260930-ixs); the one thing not driven by this variable is the `podman compose exec checkmk omd ... dmc ...` commands in this doc — substitute your name.
 
 **Option 2 — rename an existing site.** If the stack already runs under the wrong name, rename from the host (not the wizard). Note that `omd mv` needs the site stopped:
 
@@ -284,7 +285,7 @@ podman compose exec checkmk omd stop dmc
 podman compose exec checkmk omd mv dmc mysite
 ```
 
-Then set `CMK_SITE_ID=mysite` in `deploy/.env`, update the dashboard's `CHECKMK_SITE`, and recreate the containers (`podman compose up -d --force-recreate checkmk worker poller`). Otherwise the checkmk entrypoint's `omd start "$CMK_SITE_ID"` targets the old name and the `tmpfs` mount stays on the old path. Because it is easy to miss one of these places, on a disposable stack it is usually simpler to remove the `checkmk_data` volume (§8.5) and start again with Option 1. Existing agents registered against the old site keep their old URL/certs and must be re-registered after a rename.
+Then set `CMK_SITE_ID=mysite` in `deploy/.env` and recreate the containers, including the dashboard (`podman compose up -d --force-recreate checkmk worker poller dashboard`) — or a full `podman compose down && podman compose up -d`. Otherwise the checkmk entrypoint's `omd start "$CMK_SITE_ID"` targets the old name and the `tmpfs` mount stays on the old path. Because it is easy to miss one of these places, on a disposable stack it is usually simpler to remove the `checkmk_data` volume (§8.5) and start again with Option 1. Existing agents registered against the old site keep their old URL/certs and must be re-registered after a rename.
 
 ---
 
@@ -298,8 +299,8 @@ Then set `CMK_SITE_ID=mysite` in `deploy/.env`, update the dashboard's `CHECKMK_
 # resolve correctly without setting POLLER_SCRIPTS_DIR
 cd app/checkmk-wizard/deploy
 
-# Build the dashboard image (first time, and after every git pull or
-# dashboard-react/src/lib/config.ts edit; see the dashboard note in §3)
+# Build the dashboard image (first time, and after every git pull;
+# see the dashboard note in §3)
 podman compose build dashboard
 
 # Start all containers in the background
@@ -611,9 +612,10 @@ LAN browser. Confirm:
   `retain: true` specifically so a freshly-opened browser tab gets the current fleet state
   immediately, not just future updates.
 
-If the indicator never leaves "Connecting…", check that `dashboard-react/src/lib/config.ts`'s `WS_PORT`/credentials match
-this doc's §6 defaults (or your rotated ones) and that port 9002 is reachable from the browser's
-own network, not just from the deployment host.
+If the indicator never leaves "Connecting…", check that `WS_USERNAME`/`WS_PASSWORD` in
+`deploy/.env` (visible via `curl http://HOST:8090/config.json`) match this doc's §6 defaults (or
+your rotated ones) in `deploy/mosquitto.passwd`, and that port 9002 is reachable from the
+browser's own network, not just from the deployment host.
 
 ### Topology map check (Phase 13)
 

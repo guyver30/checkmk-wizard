@@ -36,10 +36,11 @@
 // browser bundle at all -- see checkmkWrite.ts's module header and deploy/dashboard-nginx.conf
 // (amended 2026-09-30, quick 260930-hpy).
 //
-// Amended 2026-09-30 (quick 260930-ixs): CHECKMK_BASE_URL, CHECKMK_BASE_URL_PLACEHOLDER,
-// isCheckmkLinkConfigured(), WS_USERNAME, WS_PASSWORD and CHECKMK_SITE are removed -- the
-// site name and WS credentials are runtime values now (see runtimeConfig.ts), not build-time
-// ones, so this file no longer carries a placeholder that an operator could forget to edit.
+// Amended 2026-09-30 (quick 260930-ixs): the human-facing Checkmk base URL constant, its
+// unedited-placeholder sentinel, the link-configured predicate, and the build-time WS/site
+// constants they lived alongside are all removed -- the site name and WS credentials are
+// runtime values now (see runtimeConfig.ts), not build-time ones, so this file no longer
+// carries a placeholder that an operator could forget to edit.
 
 export const WS_PORT = 9002;
 export const DEFAULT_CHECKMK_SITE = "dmc";
