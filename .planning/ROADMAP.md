@@ -392,16 +392,16 @@ Plans:
   - D-22: Grafana sits alongside the dashboard, for analysts; optional, never replaces it
   - D-23: TSDB container in the compose stack with MinIO as long-term tier; product choice is for research (resolved 2026-09-28: ClickHouse, see 14.1-CONTEXT.md D-40)
   - D-24: the dashboard queries the TSDB over HTTP, read-only. This amends the "no new backend" constraint, so PROJECT.md and CLAUDE.md must be updated during planning. The access mechanism is for research
-**Plans:** 8 plans
+**Plans:** 4/8 plans executed
 
 Plans:
 
 **Wave 1**
 
-- [ ] 14.1-01-PLAN.md — Requirements reworded for ClickHouse (+HIST-07a); ClickHouse S3-tiered storage policy, TTL schema, read-only users (HIST-04, HIST-05, HIST-07a, HIST-08)
-- [ ] 14.1-02-PLAN.md — Poller history write path: ClickHouse HTTP choke point, per-cycle metric/host/service state rows (HIST-01..03)
-- [ ] 14.1-03-PLAN.md — Grafana provisioning: ClickHouse datasource (read-only user) and three starter dashboards (HIST-10)
-- [ ] 14.1-04-PLAN.md — Dashboard nginx GET-only allowlist to ClickHouse and rollup objects, plus live smoke test (HIST-08, HIST-09, HIST-10)
+- [x] 14.1-01-PLAN.md — Requirements reworded for ClickHouse (+HIST-07a); ClickHouse S3-tiered storage policy, TTL schema, read-only users (HIST-04, HIST-05, HIST-07a, HIST-08)
+- [x] 14.1-02-PLAN.md — Poller history write path: ClickHouse HTTP choke point, per-cycle metric/host/service state rows (HIST-01..03)
+- [x] 14.1-03-PLAN.md — Grafana provisioning: ClickHouse datasource (read-only user) and three starter dashboards (HIST-10)
+- [x] 14.1-04-PLAN.md — Dashboard nginx GET-only allowlist to ClickHouse and rollup objects, plus live smoke test (HIST-08, HIST-09, HIST-10)
 
 **Wave 2** *(blocked on Wave 1)*
 
