@@ -392,7 +392,7 @@ Plans:
   - D-22: Grafana sits alongside the dashboard, for analysts; optional, never replaces it
   - D-23: TSDB container in the compose stack with MinIO as long-term tier; product choice is for research (resolved 2026-09-28: ClickHouse, see 14.1-CONTEXT.md D-40)
   - D-24: the dashboard queries the TSDB over HTTP, read-only. This amends the "no new backend" constraint, so PROJECT.md and CLAUDE.md must be updated during planning. The access mechanism is for research
-**Plans:** 4/8 plans executed
+**Plans:** 7/8 plans executed
 
 Plans:
 
@@ -405,9 +405,9 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 14.1-05-PLAN.md — Daily availability rollups: JSON + Parquet, auto-backfill, never-overwrite (HIST-05, HIST-06, HIST-07, HIST-07a; blocked on 14.1-02)
-- [ ] 14.1-06-PLAN.md — Compose: ClickHouse, minio-init, Grafana, pinned quay.io MinIO, poller/dashboard settings (HIST-04, HIST-05, HIST-10; blocked on 14.1-01, -03, -04)
-- [ ] 14.1-07-PLAN.md — Constraint amendment and deployment docs (HIST-11; blocked on 14.1-01)
+- [x] 14.1-05-PLAN.md — Daily availability rollups: JSON + Parquet, auto-backfill, never-overwrite (HIST-05, HIST-06, HIST-07, HIST-07a; blocked on 14.1-02)
+- [x] 14.1-06-PLAN.md — Compose: ClickHouse, minio-init, Grafana, pinned quay.io MinIO, poller/dashboard settings (HIST-04, HIST-05, HIST-10; blocked on 14.1-01, -03, -04)
+- [x] 14.1-07-PLAN.md — Constraint amendment and deployment docs (HIST-11; blocked on 14.1-01)
 
 **Wave 3** *(blocked on all of the above)*
 
