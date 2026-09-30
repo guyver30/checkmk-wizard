@@ -89,6 +89,8 @@ services:
     # runs as non-root UID 65532; the image's /data is mode 777, so a fresh
     # minio_data volume works. A volume written by the old root-run image needs
     # `podman unshare chown -R 65532:65532 <volume mountpoint>` once.
+    # Long-term exit: moving to AWS S3 removes this dependency on MinIO's own
+    # release cadence entirely (D-41).
     image: cgr.dev/chainguard/minio:latest@sha256:71674988a1c7ddd5724928633199152b11e4ddefd6c6ce2d60772ff4a8f22ca9
     container_name: minio
     restart: unless-stopped
@@ -101,6 +103,113 @@ services:
       - "9001:9001"     # Web Console
     volumes:
       - minio_data:/data:z
+    networks:
+      - cmk_net
+
+  # 3a. MinIO bucket bootstrap — creates the buckets ClickHouse's S3 disk and
+  # the poller's rollup writer need, and makes fleet-availability anonymous
+  # download-only so nginx's read-only proxy (deploy/dashboard-nginx.conf)
+  # never needs a MinIO credential (D-54/D-56). Idempotent: reruns on every
+  # `podman compose up` (`mc mb --ignore-existing`/`mc anonymous set` are safe
+  # to repeat). On AWS S3 the equivalent is a bucket policy set once as a
+  # deployment step, not code (D-41).
+  minio-init:
+    # latest-dev is used deliberately, not latest: the latest-dev variant
+    # ships busybox `sh`/`sleep`, while plain `latest` has `mc`/`bash` but no
+    # `sleep` (checked from the image layers 2026-09-30). Chainguard's free
+    # tier only publishes `latest`/`latest-dev`, so this is pinned by digest,
+    # same reasoning as the `minio` service above.
+    image: cgr.dev/chainguard/minio-client:latest-dev@sha256:19c80ef13b3bec25196b00c24345195f0d0e1305a339cebf6dc7d44b85782817
+    container_name: minio-init
+    depends_on:
+      - minio
+    restart: "no"
+    environment:
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      # The image runs as non-root UID 65532; `mc alias set` writes its config
+      # under $HOME, which is otherwise unset for that UID.
+      - HOME=/tmp
+    entrypoint: ["/usr/bin/sh", "-c"]
+    command: >
+      until mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY"; do sleep 2; done &&
+      mc mb --ignore-existing local/clickhouse-s3-disk &&
+      mc mb --ignore-existing local/fleet-availability &&
+      mc anonymous set download local/fleet-availability
+    networks:
+      - cmk_net
+
+  # 3b. ClickHouse — S3-tiered metric/state history store (D-23/D-40/D-41).
+  # Init scripts under ./clickhouse-config/initdb run only on the first start
+  # of an empty clickhouse_data volume, so every CH_* secret below must be set
+  # in deploy/.env BEFORE that first start (see deploy/.env.example).
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.9.4.3
+    container_name: clickhouse
+    restart: unless-stopped
+    depends_on:
+      - minio
+      - minio-init
+    environment:
+      - CLICKHOUSE_USER=ch_admin
+      - CLICKHOUSE_PASSWORD=${CH_ADMIN_PASSWORD:-}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CH_WRITER_PASSWORD=${CH_WRITER_PASSWORD:-}
+      - CH_READER_PASSWORD=${CH_READER_PASSWORD:-}
+      - CH_GRAFANA_PASSWORD=${CH_GRAFANA_PASSWORD:-}
+      # Trailing double slash required by ClickHouse's MinIO S3-disk guide
+      # (deploy/clickhouse-config/config.d/s3-storage.xml cites the same doc).
+      # For AWS S3, repoint this at the regional bucket URL instead (D-41).
+      - CH_S3_DISK_ENDPOINT=http://minio:9000/clickhouse-s3-disk//
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+    # No `ports:` — HTTP 8123 stays on cmk_net only, like checkmk's own REST
+    # port 5000. The native protocol port 9000 would collide with MinIO's
+    # published 9000 and nothing in this stack uses it (RESEARCH.md Open
+    # Question 1).
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse:z
+      - ./clickhouse-config/config.d/s3-storage.xml:/etc/clickhouse-server/config.d/s3-storage.xml:ro,z
+      - ./clickhouse-config/initdb:/docker-entrypoint-initdb.d:ro,z
+    networks:
+      - cmk_net
+
+  # 3c. Grafana — analyst-facing dashboards over ClickHouse, alongside the
+  # dashboard, never replacing it (D-22/D-55).
+  grafana:
+    image: grafana/grafana:13.2.2
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+      - clickhouse
+    ports:
+      - "3000:3000"     # Grafana UI — clear of 8080/8000/6556/1883/9000/9001/9002/8090
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-}
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_PLUGINS_PREINSTALL=grafana-clickhouse-datasource
+      - CH_GRAFANA_PASSWORD=${CH_GRAFANA_PASSWORD:-}
+      - TZ=Asia/Singapore
+    # HIST-10: refuse to start with an empty or default "admin" password. A
+    # guard here (rather than a `${GRAFANA_ADMIN_PASSWORD:?}` interpolation)
+    # is required because compose interpolates the whole file before
+    # selecting services — a required-value guard there would also block
+    # checkmk/mosquitto from starting on a first-time deploy (10-REVIEW CR-01
+    # reasoning, same as every other secret in this file).
+    entrypoint:
+      - "/bin/sh"
+      - "-c"
+      - >-
+        if [ -z "$$GF_SECURITY_ADMIN_PASSWORD" ] || [ "$$GF_SECURITY_ADMIN_PASSWORD" = "admin" ]; then
+          echo "ERROR: GRAFANA_ADMIN_PASSWORD is empty or the default 'admin'. Set a real password in deploy/.env, then recreate this container." >&2;
+          exit 1;
+        fi;
+        exec /run.sh
+    volumes:
+      - ./grafana-provisioning:/etc/grafana/provisioning:ro,z
+      - grafana_data:/var/lib/grafana:z
     networks:
       - cmk_net
 
@@ -181,8 +290,11 @@ services:
       # (see the worker service's own volume above) so a fresh checkout
       # deploys without a manual copy step.
       - ${POLLER_SCRIPTS_DIR:-../scripts}:/scripts:ro,z
+    # tzdata is required (not optional): python:3.12-slim ships no IANA
+    # timezone database, and the availability rollup's day boundary math
+    # needs a real "Asia/Singapore" zoneinfo entry (RESEARCH.md Pitfall 3).
     command: >
-      bash -c "pip install --no-cache-dir paho-mqtt==2.1.0 &&
+      bash -c "pip install --no-cache-dir paho-mqtt==2.1.0 boto3==1.43.105 tzdata==2026.4 &&
                exec python -u /scripts/mqtt_poller.py"
     environment:
       - LIVESTATUS_HOST=checkmk
@@ -227,6 +339,23 @@ services:
       - CMK_SITE_ID=${CMK_SITE_ID:-dmc}
       - CMK_REST_USERNAME=automation
       - CMK_REST_SECRET=${CMK_REST_SECRET:-}
+      # Phase 14.1 (HIST-04/05/10): fleet history store. clickhouse is
+      # deliberately NOT added to depends_on above — history is enrichment,
+      # so the poller must start and keep publishing status even if
+      # ClickHouse is down (D-44); an unreachable ClickHouse just drops that
+      # cycle's rows, which reads as "no data" (D-47).
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_WRITER_USER=poller_writer
+      - CLICKHOUSE_WRITER_PASSWORD=${CH_WRITER_PASSWORD:-}
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - S3_REGION=us-east-1
+      - S3_ADDRESSING_STYLE=path
+      - AVAILABILITY_BUCKET=fleet-availability
+      - ROLLUP_TZ=Asia/Singapore
+      - ROLLUP_BACKFILL_DAYS=28
+      - ROLLUP_DELAY_MINUTES=5
     networks:
       - cmk_net
 
@@ -247,6 +376,15 @@ services:
     # nginx resolves `checkmk` for the /checkmk-api/ proxy when it starts.
     depends_on:
       - checkmk
+    # Phase 14.1 (D-54): the /ch-api/ and /availability/ locations in
+    # deploy/dashboard-nginx.conf resolve their upstreams (clickhouse, minio)
+    # per request via a resolver, not at nginx startup — so the dashboard
+    # deliberately does NOT depend_on clickhouse or minio; a stopped history
+    # container only 502s its own path, never blocks the dashboard container
+    # from starting.
+    environment:
+      - CH_READER_PASSWORD=${CH_READER_PASSWORD:-}
+      - NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
     ports:
       - "8090:80"       # dashboard UI — host 8090 is clear of 8080/8000/6556
                           # checkmk, 1883 mqtt, 9000/9001 minio and 9002
@@ -259,6 +397,8 @@ volumes:
   mosquitto_data:
   mosquitto_log:
   minio_data:
+  clickhouse_data:
+  grafana_data:
 
 networks:
   cmk_net:
