@@ -194,6 +194,79 @@ See [`WIZARD-OPERATION.md`](WIZARD-OPERATION.md) for the full phase-by-phase wal
    podman compose build dashboard && podman compose down && podman compose up -d
    ```
 
+## 9. Start the stack automatically at boot
+
+A systemd **user** service runs `podman compose up -d` at boot and `podman compose down` at
+shutdown. Because lingering is enabled (step 1), it starts at boot without anyone logging in.
+
+Create `~/.config/systemd/user/checkmk-stack.service`:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/checkmk-stack.service <<'EOF'
+[Unit]
+Description=Checkmk monitoring stack (Podman Compose)
+Wants=podman.socket
+After=podman.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Must be the deploy/ directory you ran `podman compose` from by hand: compose.yaml and
+# .env live there, and the directory name sets the compose project name, which prefixes
+# the volume names (deploy_checkmk_data, ...). Any other directory either finds no
+# compose.yaml or starts a new project with empty volumes.
+WorkingDirectory=%h/checkmk-stack/app/checkmk-wizard/deploy
+Environment="DOCKER_HOST=unix:///run/user/%U/podman/podman.sock"
+# `podman compose` hands off to docker-compose or podman-compose, which it looks up on PATH;
+# a user service's default PATH can miss them
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/bin/podman compose up -d
+ExecStop=/usr/bin/podman compose down
+TimeoutStopSec=180
+
+[Install]
+WantedBy=default.target
+EOF
+```
+
+`%h` is your home directory and `%U` your numeric user ID. A oneshot unit has no start timeout,
+so a slow first image pull at boot is not cut off. The unit leaves out
+`network-online.target`: it only exists in the system manager, so a user unit that waits on it
+waits on nothing.
+
+Take over the running stack and enable the service:
+
+```bash
+cd ~/checkmk-stack/app/checkmk-wizard/deploy
+podman compose down                    # the service starts it fresh; volumes are kept
+systemctl --user daemon-reload
+systemctl --user enable --now checkmk-stack.service
+```
+
+Check it:
+
+```bash
+systemctl --user status checkmk-stack.service   # expect: Active: active (exited)
+loginctl show-user $USER --property=Linger      # expect: Linger=yes
+podman compose ps                               # all six containers Up
+```
+
+Then reboot once and confirm the stack comes back without logging in, for example by opening
+the dashboard on port 8090 from another machine.
+
+If the service fails, read the full error with `journalctl --user -u checkmk-stack.service -e`:
+
+- **`no configuration file provided`**: `WorkingDirectory` doesn't point at `deploy/`.
+- **`the container name "…" is already in use`**: containers from a different compose project
+  (typically an older layout run from another directory) still exist. Remove them with
+  `podman rm -f checkmk mosquitto minio automation-worker mqtt-poller dashboard`, then
+  `systemctl --user restart checkmk-stack.service`. Volumes are not removed.
+
+After editing the unit file, run `systemctl --user daemon-reload`. Stopping and starting the
+service (`systemctl --user stop` / `start checkmk-stack.service`) does the same full down/up as
+running compose by hand.
+
 ## Updating later
 
 After every `git pull`, or any `config.ts` edit:
@@ -203,5 +276,3 @@ cd ~/checkmk-stack/app/checkmk-wizard/deploy
 podman compose build dashboard && podman compose down && podman compose up -d
 podman compose exec worker bash -c "cd /app/checkmk-wizard && uv sync"
 ```
-
-To start the stack at boot, see the systemd user service at the end of the Podman setup doc.
