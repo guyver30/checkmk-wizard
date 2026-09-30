@@ -98,7 +98,7 @@ export DOCKER_HOST="unix:///run/user/1000/podman/podman.sock"
 
 ## 2. Directory Structure
 
-The canonical `compose.yaml`, `mosquitto.conf`, `mosquitto.acl`, `mosquitto.passwd` and `gen-mosquitto-passwd.sh` live under this repo's own `deploy/` directory (see §3). Since Phase 9, `deploy/compose.yaml` also bind-mounts `../scripts` for the `poller` service (§6's MQTT topic contract), and that path resolves relative to wherever `compose.yaml` itself sits — so the repo checkout (§8.1's clone command) must exist **before** `podman compose up`, and `podman compose` must be run from the checkout's own `deploy/` directory, not from a copy of `deploy/` placed loose in `checkmk-stack/`:
+The canonical `compose.yaml`, `mosquitto.conf` and `mosquitto.acl` live under this repo's own `deploy/` directory (see §3). Since quick 260930-jj4, the broker's password file is no longer a tracked file — it is generated at container start from `deploy/.env` (see §3's "First-time credential setup"). Since Phase 9, `deploy/compose.yaml` also bind-mounts `../scripts` for the `poller` service (§6's MQTT topic contract), and that path resolves relative to wherever `compose.yaml` itself sits — so the repo checkout (§8.1's clone command) must exist **before** `podman compose up`, and `podman compose` must be run from the checkout's own `deploy/` directory, not from a copy of `deploy/` placed loose in `checkmk-stack/`:
 
 ```text
 checkmk-stack/
@@ -107,9 +107,8 @@ checkmk-stack/
         ├── deploy/         # this repo's own deploy/ directory; `podman
         │   ├── compose.yaml           # compose` is run from here (§4),
         │   ├── mosquitto.conf         # not from a separate copy
-        │   ├── mosquitto.acl
-        │   ├── mosquitto.passwd
-        │   └── gen-mosquitto-passwd.sh
+        │   └── mosquitto.acl          # (mosquitto.passwd is generated in the
+        │                              #  container from deploy/.env, not tracked)
         └── dashboard/      # Phase 11 — static live dashboard, bind-mounted
             ├── index.html          # read-only into the `dashboard` service
             ├── devices.html        # (§4/§6); see dashboard/README.md for
@@ -147,7 +146,9 @@ A few things worth knowing that aren't obvious just from reading those files:
 
 ### First-time credential setup
 
-`deploy/mosquitto.passwd` is checked in with disposable default credentials (see §6). To rotate them, re-run [`deploy/gen-mosquitto-passwd.sh`](../deploy/gen-mosquitto-passwd.sh) — optionally with `WS_PASSWORD=` / `POLLER_PASSWORD=` environment overrides — and commit (or otherwise redeploy) the resulting file. This script is the supported way to regenerate the password file; it invokes the broker's own `mosquitto_passwd` via `podman run`/`docker run`, so no local Mosquitto install is required.
+The two Mosquitto broker passwords, `MQTT_POLLER_PASSWORD` (user `poller`) and `WS_PASSWORD` (user `wsreader`), are generated into `deploy/.env` by `deploy/init-env.sh` (quick 260930-jj4 — no tracked credential file any more). `compose up` refuses to start without both set (`${VAR:?run deploy/init-env.sh}` on the `mosquitto`, `poller` and `dashboard` services). The `mosquitto` service's own entrypoint (see `deploy/compose.yaml`) builds `/mosquitto/config/mosquitto.passwd` from these two values, owned by `mosquitto` (uid 1883) and mode `0700`, in the container's writable layer, on every start — never on the host. To rotate either password: edit it in `deploy/.env`, then `podman compose down && podman compose up -d` (a full down/up, never a single-service restart).
+
+**Troubleshooting the generated password file:** if `podman logs mosquitto` shows "owner is not mosquitto" or "world readable permissions", the start-up command's `chown`/`chmod` did not run — check `deploy/compose.yaml`'s `mosquitto` service `entrypoint:`.
 
 **Note on `CMK_PASSWORD`:** this sets the initial `cmkadmin` login password, and only when Checkmk first creates the site. checkmk-wizard's container mode asks for it at Phase 1 (it is not pre-filled — the prompt tells you the default is `cmkadmin` on a fresh site) so it can bootstrap the site's `automation`/`agent_registration` REST users itself (see §8.3), then offers to change it via the REST API. Keep `cmkadmin` here as the shipped default; there is no need to edit this file after changing the password in the wizard.
 
@@ -179,13 +180,12 @@ three as `/config.json`, which the SPA loads once before first render
 
 - `CMK_SITE_ID` — the same site name used everywhere else in this doc (`dmc` by default). Also
   what the "View in Checkmk" link and every `/checkmk-api/<site>/...` call use.
-- `WS_USERNAME`/`WS_PASSWORD` (`wsreader`/`wsreader` by default) — disposable read-only Mosquitto
-  WebSockets credentials, checked in deliberately, same convention as `cmkadmin`/`cmkadmin` and
-  `minioadmin`/`minioadmin` above: rotate them by setting `WS_PASSWORD` in `deploy/.env` and
-  regenerating `deploy/mosquitto.passwd` (see §6's Mosquitto credential row, and
-  `deploy/gen-mosquitto-passwd.sh`) before exposing this stack beyond a trusted LAN. The grant
-  behind them is read-only (`topic read lan/#` in `deploy/mosquitto.acl`), so the exposure is
-  bounded to reading the device list, never writing to the broker.
+- `WS_USERNAME`/`WS_PASSWORD` (user `wsreader` by default) — read-only Mosquitto WebSockets
+  credentials. `WS_PASSWORD` is generated into `deploy/.env` by `deploy/init-env.sh` and
+  required (quick 260930-jj4 — see §3's "First-time credential setup"); rotate it by editing
+  `deploy/.env`, then a full `podman compose down && podman compose up -d`. The grant behind it
+  is read-only (`topic read lan/#` in `deploy/mosquitto.acl`), so the exposure is bounded to
+  reading the device list, never writing to the broker.
 - `TOPOLOGY_EDITOR_SECRET` — see the next note.
 
 Rebuild the image only after a `git pull` (code changes only — per-machine settings come from
@@ -432,10 +432,10 @@ Default credentials:
 
 * **Checkmk:** `cmkadmin` / `cmkadmin`
 * **MinIO:** `minioadmin` / `minioadmin`
-* **Mosquitto (poller, MQTT 1883):** `poller` / `poller`
-* **Mosquitto (wsreader, WebSockets 9002, read-only):** `wsreader` / `wsreader`
+* **Mosquitto (poller, MQTT 1883):** user `poller`, password generated by `deploy/init-env.sh` into `MQTT_POLLER_PASSWORD` in `deploy/.env`
+* **Mosquitto (wsreader, WebSockets 9002, read-only):** user `wsreader`, password generated by `deploy/init-env.sh` into `WS_PASSWORD` in `deploy/.env`
 
-These Mosquitto credentials are disposable dev/local defaults, same as `cmkadmin`/`minioadmin` above — rotate them (see §3's "First-time credential setup") before exposing this stack beyond a trusted LAN.
+`cmkadmin`/`minioadmin` above are disposable dev/local defaults — rotate them before exposing this stack beyond a trusted LAN. The two Mosquitto passwords have no default at all (quick 260930-jj4): `compose up` refuses to start until `deploy/init-env.sh` has generated them (see §3's "First-time credential setup").
 
 ### MQTT topic contract (poller)
 
@@ -519,16 +519,18 @@ print(f\"MinIO Buckets: {s3.list_buckets()}\")
 
 ### Broker smoke test
 
-[`scripts/smoke_test_broker.py`](../scripts/smoke_test_broker.py) proves the Mosquitto hardening actually holds against a live broker — configuration alone doesn't demonstrate it. From the repo checkout on the deployment host:
+[`scripts/smoke_test_broker.py`](../scripts/smoke_test_broker.py) proves the Mosquitto hardening actually holds against a live broker — configuration alone doesn't demonstrate it. Its `--poller-password`/`--ws-password` default from the `MQTT_POLLER_PASSWORD`/`WS_PASSWORD` environment variables, so source `deploy/.env` first. From the repo checkout on the deployment host:
 
 ```bash
+set -a; . deploy/.env; set +a
 uv run python scripts/smoke_test_broker.py
 ```
 
-From inside the `worker` container (which cannot restart its sibling `mosquitto` service, hence `--skip-restart`):
+From inside the `worker` container (which cannot restart its sibling `mosquitto` service, hence `--skip-restart`): the worker container does not carry `MQTT_POLLER_PASSWORD`/`WS_PASSWORD` in its own environment, so pass them explicitly:
 
 ```bash
-uv run python scripts/smoke_test_broker.py --host mosquitto --ws-port 9001 --skip-restart
+uv run python scripts/smoke_test_broker.py --host mosquitto --ws-port 9001 --skip-restart \
+  --poller-password "$MQTT_POLLER_PASSWORD" --ws-password "$WS_PASSWORD"
 ```
 
 What each check proves:
@@ -585,7 +587,8 @@ bare `uv run` elsewhere in this section is likewise a command for inside `automa
 **Manual tombstone test:** the fifth Phase 9 success criterion (a real Checkmk host deletion) needs a live Checkmk site to delete a host from, so it isn't automated. Delete a host in the Checkmk UI, activate changes, wait one poll interval, then confirm with:
 
 ```bash
-mosquitto_sub -h <host> -p 1883 -u poller -P poller -t 'lan/devices/<host>/status' -v -C 1 -W 5
+set -a; . deploy/.env; set +a
+mosquitto_sub -h <host> -p 1883 -u poller -P "$MQTT_POLLER_PASSWORD" -t 'lan/devices/<host>/status' -v -C 1 -W 5
 ```
 
 Live-verified 2026-09-08 (deleting `192.168.0.215`): a zero-length retained publish is a *clear*, not a delivered empty message, so `mosquitto_sub` without `-C`/`-W` would simply hang with no output. `-C 1 -W 5` makes that observable: the subscribe times out ("Timed out", RC 27) with no message received, which is what confirms the retained status was cleared. Also confirm the host is gone from `lan/devices/topology` and that a `removed` event appears in `lan/events/recent`.
@@ -613,9 +616,10 @@ LAN browser. Confirm:
   immediately, not just future updates.
 
 If the indicator never leaves "Connecting…", check that `WS_USERNAME`/`WS_PASSWORD` in
-`deploy/.env` (visible via `curl http://HOST:8090/config.json`) match this doc's §6 defaults (or
-your rotated ones) in `deploy/mosquitto.passwd`, and that port 9002 is reachable from the
-browser's own network, not just from the deployment host.
+`deploy/.env` (visible via `curl http://HOST:8090/config.json`) are the values the `mosquitto`
+container's own entrypoint used to build its password file (`podman logs mosquitto` shows no
+password-file errors — see §3's "First-time credential setup" troubleshooting note), and that
+port 9002 is reachable from the browser's own network, not just from the deployment host.
 
 ### Topology map check (Phase 13)
 
@@ -725,12 +729,13 @@ podman compose up -d
 If you only want to clear the events feed and keep everything else in the broker, publish an empty retained message instead (the poller rebuilds the feed from empty):
 
 ```bash
-podman exec mosquitto mosquitto_pub -h localhost -u poller -P '<poller password>' -t lan/events/recent -r -n
+set -a; . deploy/.env; set +a
+podman exec mosquitto mosquitto_pub -h localhost -u poller -P "$MQTT_POLLER_PASSWORD" -t lan/events/recent -r -n
 ```
 
 If you rebuilt Checkmk **without** a full `podman compose down`, the poller kept running. The sweep runs only at poller startup, so restart the stack afterwards with `podman compose down && podman compose up -d`. Don't use `podman compose restart poller`: restarting a single container can cut Checkmk off from the LAN (see §5.1, "A third signature").
 
-Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's credentials and ACL are bind-mounted files (`mosquitto.passwd`, `mosquitto.acl`), so they survive the wipe.
+Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's ACL is a bind-mounted file (`mosquitto.acl`); its users are regenerated from `deploy/.env` at every start (quick 260930-jj4) — both survive the volume wipe.
 
 Then, on the fresh site:
 
