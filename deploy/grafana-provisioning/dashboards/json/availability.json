@@ -1,0 +1,73 @@
+{
+  "uid": "fleet-availability",
+  "title": "Availability",
+  "tags": ["fleet-history"],
+  "schemaVersion": 39,
+  "editable": false,
+  "timezone": "browser",
+  "refresh": "1m",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Fleet availability % per day",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT toDateTime(day) AS time, availability_pct FROM history.availability_daily FINAL WHERE group_type = 'fleet' AND day >= toDate($__fromTime) AND day <= toDate($__toTime) ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Per device over range",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+          "editorType": "sql",
+          "format": 2,
+          "rawSql": "SELECT entity_key AS host, folder, sum(up_minutes) AS up_minutes, sum(down_minutes) AS down_minutes, sum(unobserved_minutes) AS unobserved_minutes, sum(downtime_minutes) AS downtime_minutes, sum(no_data_minutes) AS no_data_minutes, round(sum(up_minutes) / nullIf(sum(up_minutes) + sum(down_minutes), 0) * 100, 3) AS availability_pct FROM history.availability_daily FINAL WHERE entity_type = 'device' AND day >= toDate($__fromTime) AND day <= toDate($__toTime) GROUP BY host, folder ORDER BY host"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Per folder over range",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+          "editorType": "sql",
+          "format": 2,
+          "rawSql": "SELECT entity_key AS folder, sum(up_minutes) AS up_minutes, sum(down_minutes) AS down_minutes, sum(unobserved_minutes) AS unobserved_minutes, sum(downtime_minutes) AS downtime_minutes, sum(no_data_minutes) AS no_data_minutes, round(sum(up_minutes) / nullIf(sum(up_minutes) + sum(down_minutes), 0) * 100, 3) AS availability_pct FROM history.availability_daily FINAL WHERE entity_type = 'group' AND group_type = 'folder' AND day >= toDate($__fromTime) AND day <= toDate($__toTime) GROUP BY folder ORDER BY folder"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "text",
+      "title": "Definitions",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 24 },
+      "options": {
+        "mode": "markdown",
+        "content": "Availability = UP / (UP + DOWN). UNREACHABLE time is shown as unobserved and excluded from the denominator. Scheduled downtime is excluded and reported separately. Periods with no data are counted as neither up nor down. Days are Asia/Singapore local. Figures come from the daily rollup (history.availability_daily), the same source as the JSON/Parquet objects written to object storage."
+      }
+    }
+  ]
+}

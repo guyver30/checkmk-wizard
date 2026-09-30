@@ -1,0 +1,122 @@
+{
+  "uid": "fleet-host-metrics",
+  "title": "Host metrics explorer",
+  "tags": ["fleet-history"],
+  "schemaVersion": 39,
+  "editable": false,
+  "timezone": "browser",
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "type": "query",
+        "label": "Host",
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+        "query": {
+          "editorType": "sql",
+          "format": 2,
+          "rawSql": "SELECT DISTINCT host FROM history.metrics ORDER BY host"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false
+      },
+      {
+        "name": "service",
+        "type": "query",
+        "label": "Service",
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+        "query": {
+          "editorType": "sql",
+          "format": 2,
+          "rawSql": "SELECT DISTINCT service FROM history.metrics WHERE host = '${host}' ORDER BY service"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false
+      },
+      {
+        "name": "metric",
+        "type": "query",
+        "label": "Metric",
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+        "query": {
+          "editorType": "sql",
+          "format": 2,
+          "rawSql": "SELECT DISTINCT metric FROM history.metrics WHERE host = '${host}' AND service = '${service}' ORDER BY metric"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Value (mean per interval)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT $__timeInterval(ts) AS time, metric, avg(value) AS value FROM history.metrics WHERE $__timeFilter(ts) AND host = '${host}' AND service = '${service}' AND metric IN (${metric:singlequote}) GROUP BY time, metric ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Min / max envelope",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT $__timeInterval(ts) AS time, min(value_min) AS value_min, max(value_max) AS value_max FROM history.metrics WHERE $__timeFilter(ts) AND host = '${host}' AND service = '${service}' AND metric IN (${metric:singlequote}) GROUP BY time ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Thresholds",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT $__timeInterval(ts) AS time, max(warn) AS warn, max(crit) AS crit FROM history.metrics WHERE $__timeFilter(ts) AND host = '${host}' AND service = '${service}' AND metric IN (${metric:singlequote}) GROUP BY time ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "text",
+      "title": "Resolution note",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 24 },
+      "options": {
+        "mode": "markdown",
+        "content": "Data older than 30 days is aggregated to 5-minute buckets (value = bucket mean, value_min/value_max = extremes); data older than 1 year is aggregated to 1-hour buckets."
+      }
+    }
+  ]
+}
