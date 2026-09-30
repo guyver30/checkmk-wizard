@@ -1,0 +1,40 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-30T11:54:31.749Z",
+  "phase": "14.1",
+  "phase_name": "Fleet History Store, Availability Rollups and Grafana",
+  "phase_dir": ".planning/phases/14.1-fleet-history-store-availability-rollups-and-grafana",
+  "plan": 8,
+  "task": 2,
+  "total_tasks": 2,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": "14.1-01..07", "name": "Waves 1-2 executed, merged, tracked", "status": "done", "commit": "2981b38"},
+    {"id": "14.1-08 T1", "name": "Offline pre-flight (pytest, ruff, yaml/json parse, bash -n, smoke --help)", "status": "done", "commit": "n/a (checks only)"},
+    {"id": "14.1-08 T2", "name": "Operator live verification", "status": "in_progress", "progress": "Steps 1-5 PASS on host kone-dmc-test (site mysite): stack up, minio-init buckets, clickhouse stable, initdb 01/02 ran, 4 users, SHOW CREATE TABLE shows s3_tiered + both GROUP BY TTL + TO VOLUME s3 + 1095d delete, rows growing, outage test degrades and recovers. Step 8 (Grafana): logs in, 3 dashboards provisioned but show NO data. Steps 6 (rollup) and 7 (smoke test) need a completed Asia/Singapore day."}
+  ],
+  "remaining_tasks": [
+    {"id": "14.1-08 step 8", "name": "Diagnose empty Grafana dashboards", "status": "in_progress"},
+    {"id": "14.1-08 step 6", "name": "Rollup JSON+Parquet exist for a past day; full down/up does not rewrite", "status": "not_started"},
+    {"id": "14.1-08 step 7", "name": "scripts/smoke_test_history_proxy.py all PASS against live host", "status": "not_started"},
+    {"id": "14.1-08 summary", "name": "Write 14.1-08-SUMMARY.md, then verify phase (bm-verifier), mark ROADMAP complete", "status": "not_started"}
+  ],
+  "blockers": [
+    {"description": "Grafana dashboards show no history although ClickHouse has rows", "type": "technical", "workaround": "Awaiting operator diagnostics: grafana_reader SELECT test, grafana logs, datasource Test, template-variable dropdowns, panel Query inspector"}
+  ],
+  "human_actions_pending": [
+    {"action": "Run the 4 Grafana diagnostics and paste results", "context": "14.1-08 step 8", "blocking": true},
+    {"action": "Tomorrow: steps 6 and 7 (rollup + smoke test with --date of the rolled-up day)", "context": "14.1-08", "blocking": true},
+    {"action": "Fix systemd user unit: add [Install] WantedBy=default.target, daemon-reload, enable --now, loginctl enable-linger", "context": "unit shows 'static'", "blocking": false},
+    {"action": "Confirm 'Edit topology' switch enabled after run-wizard.sh Phase 1 on mysite", "context": "quick 260930-hpy live check", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "topology_editor credential injected by nginx from deploy/.env; wizard provisions the user; dashboard probes at runtime (supersedes D-04 client-embedded secret)", "rationale": "no config.ts edit/rebuild, secret out of the browser bundle", "phase": "quick-260930-hpy"},
+    {"decision": "Dashboard per-machine settings via nginx /config.json (CMK_SITE_ID, WS_USERNAME, WS_PASSWORD); dead CHECKMK_BASE_URL removed", "rationale": "deploy/.env is the only per-machine file", "phase": "quick-260930-ixs"},
+    {"decision": "Mosquitto builds its password file at start from MQTT_POLLER_PASSWORD/WS_PASSWORD; ${VAR:?} makes the whole compose refuse when missing (user's explicit choice, departs from CR-01)", "rationale": "no MQTT credentials in git; loud failure", "phase": "quick-260930-jj4"},
+    {"decision": "ClickHouse S3 disk endpoint is bucket + data/ prefix, not the double slash from the MinIO guide", "rationale": "26.9.4.3 rejects '//' with Code 36 Invalid S3 key", "phase": "14.1"}
+  ],
+  "uncommitted_files": ["PROMPT_LOG.md", "docs/host_service_menu.png", "docs/hosts_down.png", "docs/hosts_down2.png", "docs/hosts_up.png"],
+  "next_action": "Get the Grafana diagnostics from the operator and fix the empty dashboards (likely template-variable query format of grafana-clickhouse-datasource, or datasource/plugin/auth).",
+  "context_notes": "All work is pushed (origin/main == main at 7f3e399). History was rewritten earlier by the user with git filter-repo (web_assets/, dashboard/, docs/mockup/ removed); host clone was reset to origin/main. Two live-found bugs fixed today: minio-init string command split by compose (e991bfd), ClickHouse S3 endpoint double slash (7f3e399)."
+}
