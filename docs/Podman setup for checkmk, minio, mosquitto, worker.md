@@ -714,10 +714,13 @@ podman build -t my-custom-worker:1.0.0 ./app
 
 3. Update `compose.yaml` to reference `image: my-custom-worker:1.0.0` under the `worker` service.
 
+---
+
+## 10. Starting the Stack at Boot (systemd User Service)
 
 While `restart: unless-stopped` is configured in `compose.yaml`, **rootless Podman does not run a background daemon**. When the host reboots, systemd starts your user session (thanks to `loginctl enable-linger`), but it does not execute `podman compose up` on its own.
 
-To make the stack start on system boot, create a systemd user service.
+To make the stack start on system boot, create a systemd user service. The same steps, in short form, are in [`DEPLOY-NEW-MACHINE.md`](DEPLOY-NEW-MACHINE.md) step 9.
 
 ---
 
@@ -727,187 +730,98 @@ Create the systemd user directory if it doesn't exist:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-
 ```
 
 Create `~/.config/systemd/user/checkmk-stack.service`:
 
 ```ini
 [Unit]
-Description=Checkmk, Mosquitto, MinIO, and Worker Podman Compose Stack
-Wants=network-online.target
-After=network-online.target podman.socket
+Description=Checkmk monitoring stack (Podman Compose)
+Wants=podman.socket
+After=podman.socket
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Set working directory to your checkmk-stack folder
-WorkingDirectory=%h/checkmk-stack
+# Must be the deploy/ directory you ran `podman compose` from by hand: compose.yaml and
+# .env live there, and the directory name sets the compose project name, which prefixes
+# the volume names (deploy_checkmk_data, ...). Any other directory either finds no
+# compose.yaml or starts a new project with empty volumes.
+WorkingDirectory=%h/checkmk-stack/app/checkmk-wizard/deploy
 Environment="DOCKER_HOST=unix:///run/user/%U/podman/podman.sock"
-
-# Start the stack on boot
+# `podman compose` hands off to docker-compose or podman-compose, which it looks up on PATH;
+# a user service's default PATH can miss them
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 ExecStart=/usr/bin/podman compose up -d
-
-# Stop the stack cleanly on shutdown/reboot
 ExecStop=/usr/bin/podman compose down
+TimeoutStopSec=180
 
 [Install]
 WantedBy=default.target
-
 ```
 
-*(Note: `%h` automatically resolves to your home directory, e.g., `/home/kone`, and `%U` to your UID `1000`).*
+*(Note: `%h` resolves to your home directory, e.g. `/home/kone`, and `%U` to your numeric UID, e.g. `1000`.)*
+
+Why it looks like this (corrected 2026-09-30; the earlier version of this unit had three problems):
+
+- **`WorkingDirectory`** used to be `%h/checkmk-stack`, from the layout before Phase 9 moved `compose.yaml` into the repo's `deploy/` directory (§2). From there, `podman compose` finds no `compose.yaml`. And a directory that *does* hold one but has a different name starts a separate compose project with its own, empty volumes.
+- **`network-online.target` is gone.** It exists only in the system manager, so a user unit that waits on it waits on nothing.
+- **`Wants=podman.socket` is added.** `After=` alone only orders the unit after the socket; it doesn't start the socket.
+
+`TimeoutStopSec=180` gives `compose down` more than the default 90 seconds at shutdown. No start timeout is needed: systemd disables it for `Type=oneshot` (`man systemd.service`, `TimeoutStartSec=`), so a slow first image pull at boot is not cut off. The unit file was checked with `systemd-analyze --user verify` (systemd 257).
 
 ---
 
-### Step 2: Enable and Start the Service
+### Step 2: Take Over the Running Stack and Enable the Service
 
-Reload the systemd user daemon and enable the service:
+If you started the stack by hand before, take it down first so the service starts it fresh. Volumes are kept.
 
 ```bash
-# Reload user unit files
+cd ~/checkmk-stack/app/checkmk-wizard/deploy
+podman compose down
+
 systemctl --user daemon-reload
-
-# Enable to launch on boot
-systemctl --user enable checkmk-stack.service
-
-# Start it immediately (or verify it attaches to the running stack)
-systemctl --user start checkmk-stack.service
-
+systemctl --user enable --now checkmk-stack.service
 ```
 
 ---
 
 ### Step 3: Verify Status
 
-Check that systemd recognizes the active stack:
-
 ```bash
-systemctl --user status checkmk-stack.service
-
+systemctl --user status checkmk-stack.service   # expect: Active: active (exited)
+loginctl show-user $USER --property=Linger      # expect: Linger=yes
+podman compose ps                               # all six containers Up
 ```
 
-*Expected output: `Active: active (exited)` with `RemainAfterExit=yes`.*
+The system will now run `podman compose up -d` under your user during boot, before anyone logs in, and a clean `podman compose down` at shutdown or reboot. Reboot once and confirm the stack comes back without logging in, e.g. by opening the dashboard on port 8090 from another machine.
+
+After editing the unit file, run `systemctl --user daemon-reload`. `systemctl --user stop` / `start checkmk-stack.service` does the same full down/up as running compose by hand (see §5.1 on why a full down/up rather than a single-service restart).
 
 ---
 
-### Step 4: Verification Check
+### Troubleshooting
 
-Ensure user lingering remains active:
+Read the full error with `journalctl --user -u checkmk-stack.service -e`; `systemctl status` truncates long lines.
 
-```bash
-loginctl show-user $USER | grep Linger
-# Output: Linger=yes
+**`no configuration file provided: not found`**: `WorkingDirectory` doesn't point at the repo's `deploy/` directory.
 
-```
+**`the container name "…" is already in use`**: an example seen on 2026-09-02 with the old unit:
 
-The system will now invoke `podman compose up -d` under your user context during host boot before any user logs in, and issue a clean `podman compose down` during shutdown or reboot.
-
-If you see error like
-systemctl --user status checkmk-stack.service
+```text
 × checkmk-stack.service - Checkmk, Mosquitto, MinIO, and Worker Podman Compose Stack
-     Loaded: loaded (/home/kone/.config/systemd/user/checkmk-stack.service; enabled; preset: enabled)
      Active: failed (Result: exit-code) since Wed 2026-09-02 05:22:00 UTC; 21s ago
-    Process: 228833 ExecStart=/usr/bin/podman compose up -d (code=exited, status=1/FAILURE)
-   Main PID: 228833 (code=exited, status=1/FAILURE)
-        CPU: 148ms
-
-Sep 02 05:22:00 kone-dmc-test podman[228845]:  Volume checkmk-stack_checkmk_data Created
 Sep 02 05:22:00 kone-dmc-test podman[228845]:  Volume checkmk-stack_checkmk_data Created
 Sep 02 05:22:00 kone-dmc-test podman[228845]:  Container checkmk Creating
-Sep 02 05:22:00 kone-dmc-test podman[228845]:  service:worker:1 Error response from daemon: container create: creating container storage: the container nam>
-Sep 02 05:22:00 kone-dmc-test podman[228845]:  Volume checkmk-stack_mosquitto_data Error error during connect: Post "http://%2Frun%2Fuser%2F1000%2Fpodman%2>
 Sep 02 05:22:00 kone-dmc-test podman[228845]: Error response from daemon: container create: creating container storage: the container name "automation-work>
 Sep 02 05:22:00 kone-dmc-test podman[228833]: Error: executing /usr/libexec/docker/cli-plugins/docker-compose up -d: exit status 1
-Sep 02 05:22:00 kone-dmc-test systemd[221094]: checkmk-stack.service: Main process exited, code=exited, status=1/FAILURE
-Sep 02 05:22:00 kone-dmc-test systemd[221094]: checkmk-stack.service: Failed with result 'exit-code'.
-Sep 02 05:22:00 kone-dmc-test systemd[221094]: Failed to start checkmk-stack.service - Checkmk, Mosquitto, MinIO, and Worker Podman Compose Stack.
-
-Look at the line truncated in the log:
-
-```text
-Error response from daemon: container create: creating container storage: the container name "automation-work[er]...
-
 ```
 
-The error is **`the container name "automation-worker" is already in use by...`** (or `checkmk` / `mosquitto`).
-
-Because we manually ran `podman compose up -d` earlier, existing containers with those static `container_name` values already exist. When systemd executed `podman compose up -d`, it tried to recreate them and crashed due to the name collision.
-
----
-
-### Step 1: Clean Up Orphaned / Existing Containers
-
-Stop and remove any existing containers that were created manually so systemd can take full ownership:
+`Volume checkmk-stack_checkmk_data Created` is the tell: the service ran compose from a different directory than the manual `podman compose up -d`, so compose saw a new project (`checkmk-stack`), created new empty volumes, and then collided with the existing containers' fixed `container_name`s. Fix `WorkingDirectory` first. Then remove the old containers (volumes are not touched) and restart the service:
 
 ```bash
-# Move to stack directory
-cd ~/checkmk-stack
-
-# Take down any running compose units
-podman compose down
-
-# If any stray containers still linger with those names, remove them:
-podman rm -f checkmk mosquitto minio automation-worker 2>/dev/null || true
-
+podman rm -f checkmk mosquitto minio automation-worker mqtt-poller dashboard 2>/dev/null || true
+systemctl --user restart checkmk-stack.service
 ```
 
----
-
-### Step 2: Add `PATH` to the systemd Service
-
-When `podman compose` delegates to `/usr/libexec/docker/cli-plugins/docker-compose`, systemd user services run with a minimal `PATH` that often lacks standard binary locations like `/usr/local/bin` and `/usr/bin`.
-
-Update `~/.config/systemd/user/checkmk-stack.service`:
-
-```ini
-[Unit]
-Description=Checkmk, Mosquitto, MinIO, and Worker Podman Compose Stack
-Wants=network-online.target
-After=network-online.target podman.socket
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-WorkingDirectory=%h/checkmk-stack
-Environment="DOCKER_HOST=unix:///run/user/%U/podman/podman.sock"
-Environment="PATH=/usr/local/bin:/usr/bin:/bin"
-
-# Commands
-ExecStart=/usr/bin/podman compose up -d
-ExecStop=/usr/bin/podman compose down
-
-[Install]
-WantedBy=default.target
-
-```
-
----
-
-### Step 3: Reload and Start the Service
-
-```bash
-# 1. Reload the systemd daemon
-systemctl --user daemon-reload
-
-# 2. Start the service
-systemctl --user start checkmk-stack.service
-
-# 3. Check status
-systemctl --user status checkmk-stack.service
-
-```
-
-You should see:
-
-```text
-Active: active (exited) since ...
-
-```
-
-And verify the containers are up:
-
-```bash
-podman ps
-
-```
+If a stray project's empty volumes were created (like `checkmk-stack_checkmk_data` above), list them with `podman volume ls` and remove only those with `podman volume rm`. Keep the `deploy_*` ones: they hold your site.
