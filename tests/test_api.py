@@ -348,14 +348,26 @@ async def test_activate_changes_handles_204():
 
 
 @pytest.mark.asyncio
-async def test_get_pending_changes_etag():
+async def test_get_pending_changes():
     with respx.mock:
         respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
-            return_value=Response(200, json={}, headers={"ETag": '"the-etag"'})
+            return_value=Response(200, json={"value": [{"id": "c1"}]}, headers={"ETag": '"the-etag"'})
         )
         async with CheckmkClient(CONN) as client:
-            etag = await client.get_pending_changes_etag()
+            etag, changes = await client.get_pending_changes()
     assert etag == '"the-etag"'
+    assert changes == [{"id": "c1"}]
+
+
+@pytest.mark.asyncio
+async def test_get_activation_run():
+    with respx.mock:
+        respx.get(f"{BASE}/objects/activation_run/run1").mock(
+            return_value=Response(200, json={"id": "run1", "extensions": {"is_running": False}})
+        )
+        async with CheckmkClient(CONN) as client:
+            run = await client.get_activation_run("run1")
+    assert run["extensions"]["is_running"] is False
 
 
 @pytest.mark.asyncio

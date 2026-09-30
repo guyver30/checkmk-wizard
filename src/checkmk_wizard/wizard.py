@@ -2640,6 +2640,26 @@ def _print_linux_manual(host: OnboardedHost, connection: CheckmkConnection, regi
 # for a host that's actually still missing something.
 _DISCOVERY_RETRY_DELAYS_SECONDS = (10, 20, 30)
 
+_ACTIVATION_POLL_SECONDS = 1.0
+_ACTIVATION_TIMEOUT_SECONDS = 180
+_ACTIVATION_MAX_ROUNDS = 3
+
+
+async def _wait_for_activation(client: CheckmkClient, run: dict) -> bool:
+    """Poll an activation run until it finishes; False if it is still running
+    after _ACTIVATION_TIMEOUT_SECONDS. Polls `is_running` on the run object, the
+    same approach `bootstrap_automation_user()` uses (its comment explains why
+    the redirect-based wait-for-completion endpoint is not followed)."""
+    run_id = run.get("id")
+    waited = 0.0
+    while run_id and run.get("extensions", {}).get("is_running", False):
+        if waited >= _ACTIVATION_TIMEOUT_SECONDS:
+            return False
+        await asyncio.sleep(_ACTIVATION_POLL_SECONDS)
+        waited += _ACTIVATION_POLL_SECONDS
+        run = await client.get_activation_run(run_id)
+    return True
+
 
 async def _activate_pending_changes(client: CheckmkClient, connection: CheckmkConnection) -> bool:
     """Push every pending WATO change (host/folder/rule creation, and
@@ -2649,9 +2669,18 @@ async def _activate_pending_changes(client: CheckmkClient, connection: CheckmkCo
     host/rule config from the *activated* core, not from WATO's on-disk
     but not-yet-activated pending state — knows whether to trust what it
     finds next.
+
+    Bug fixed 2026-09-30: this used to print "Changes activated" as soon as
+    Checkmk accepted the request, but activate-changes only starts a
+    background job (Checkmk 2.4.0 source, endpoints/activate_changes). Phase 6
+    then ran discovery against a core that might still be reloading, and a
+    live run finished with two of Phase 6's discovery changes still pending
+    although Phase 7 had reported success. Now each run is awaited, and the
+    pending list is re-read afterwards: anything the finished run did not
+    cover is activated in another round, up to _ACTIVATION_MAX_ROUNDS.
     """
     try:
-        etag = await client.get_pending_changes_etag()
+        etag, _ = await client.get_pending_changes()
         # force_foreign_changes=True: Phase 1's container-mode branch
         # bootstraps the `automation` and `agent_registration` users while
         # authenticated as cmkadmin via the GUI session-cookie flow, so
@@ -2665,9 +2694,23 @@ async def _activate_pending_changes(client: CheckmkClient, connection: CheckmkCo
         # one wizard run — there's no other real operator to protect
         # against, so forcing the activation through is correct here, not a
         # workaround.
-        await client.activate_changes([connection.site], etag, force_foreign_changes=True)
-        console.print("[green]Changes activated.[/green]")
-        return True
+        for _ in range(_ACTIVATION_MAX_ROUNDS):
+            run = await client.activate_changes([connection.site], etag, force_foreign_changes=True)
+            if not await _wait_for_activation(client, run):
+                console.print(
+                    f"[yellow]Activation still running after {_ACTIVATION_TIMEOUT_SECONDS}s — "
+                    "check Setup > Activate changes in the Checkmk GUI.[/yellow]"
+                )
+                return False
+            etag, pending = await client.get_pending_changes()
+            if not pending:
+                console.print("[green]Changes activated.[/green]")
+                return True
+        console.print(
+            f"[yellow]{len(pending)} change(s) still pending after {_ACTIVATION_MAX_ROUNDS} activations — "
+            "activate them in the Checkmk GUI (Setup > Activate changes).[/yellow]"
+        )
+        return False
     except CheckmkAPIError as exc:
         console.print(f"[red]Activation failed: {exc}[/red]")
         return False

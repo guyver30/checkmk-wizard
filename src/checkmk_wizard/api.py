@@ -260,12 +260,19 @@ class CheckmkClient:
 
     # -- Phase 7: activation --------------------------------------------------
 
-    async def get_pending_changes_etag(self) -> str:
+    async def get_pending_changes(self) -> tuple[str, list[dict[str, Any]]]:
+        """Return (ETag, pending changes). The changes are the collection's
+        `value` list (Checkmk 2.4.0 source, endpoints/activate_changes,
+        `list_pending_changes`)."""
         resp = await self._request("GET", "/domain-types/activation_run/collections/pending_changes")
         etag = resp.headers.get("ETag")
         if not etag:
             raise CheckmkAPIError("GET", str(resp.url), resp.status_code, "missing ETag header")
-        return etag
+        return etag, resp.json().get("value", [])
+
+    async def get_activation_run(self, activation_id: str) -> dict[str, Any]:
+        resp = await self._request("GET", f"/objects/activation_run/{activation_id}")
+        return resp.json()
 
     async def activate_changes(
         self, sites: list[str], etag: str, force_foreign_changes: bool = False

@@ -3870,6 +3870,76 @@ async def test_phase7_livestatus_retries_after_transient_reset(monkeypatch, tmp_
     assert "LIVESTATUS_TCP_TLS" not in out
 
 
+def _pending(changes):
+    return Response(200, json={"value": changes}, headers={"ETag": '"etag1"'})
+
+
+@pytest.mark.asyncio
+async def test_activate_pending_changes_waits_for_running_activation(monkeypatch, capsys):
+    # activate-changes only STARTS a background job (Checkmk 2.4.0 source,
+    # cmk/gui/openapi/endpoints/activate_changes: "will start an asynchronous
+    # background job"), so "Changes activated" must wait until the run reports
+    # is_running false.
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=_pending([])
+        )
+        respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(200, json={"id": "run1", "extensions": {"is_running": True}})
+        )
+        status = respx.get(f"{BASE}/objects/activation_run/run1").mock(
+            side_effect=[
+                Response(200, json={"id": "run1", "extensions": {"is_running": True}}),
+                Response(200, json={"id": "run1", "extensions": {"is_running": False}}),
+            ]
+        )
+        async with CheckmkClient(CONN) as client:
+            assert await _activate_pending_changes(client, CONN) is True
+    assert status.call_count == 2
+    assert "Changes activated" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_activate_pending_changes_reactivates_leftover_changes(capsys):
+    # Regression for a live report (2026-09-30): after a full run, two
+    # discovery changes by `automation` ("Saved check configuration of host
+    # 'internet-router' with 0 services", "Updated discovered host labels")
+    # were still pending although Phase 7 printed "Changes activated". A change
+    # the finished run did not cover must be activated in another round.
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            side_effect=[_pending([{"id": "c1"}]), _pending([{"id": "c1"}]), _pending([])]
+        )
+        activate = respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(200, json={"id": "run1", "extensions": {"is_running": False}})
+        )
+        async with CheckmkClient(CONN) as client:
+            assert await _activate_pending_changes(client, CONN) is True
+    assert activate.call_count == 2
+    assert "Changes activated" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_activate_pending_changes_reports_changes_that_never_clear(capsys):
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=_pending([{"id": "c1"}])
+        )
+        activate = respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            return_value=Response(200, json={"id": "run1", "extensions": {"is_running": False}})
+        )
+        async with CheckmkClient(CONN) as client:
+            assert await _activate_pending_changes(client, CONN) is False
+    out = capsys.readouterr().out
+    assert activate.call_count == 3
+    assert "still pending" in out
+    assert "Changes activated" not in out
+
+
 @pytest.mark.asyncio
 async def test_activate_pending_changes_success(capsys):
     with respx.mock:

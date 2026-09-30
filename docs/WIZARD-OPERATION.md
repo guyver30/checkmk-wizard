@@ -1554,10 +1554,22 @@ a different mechanism than the plan's wording, but the same outcome
    shared with Phase 6's pre-discovery activation above — the exact same
    helper, not a duplicate): `GET /domain-types/activation_run/
    collections/pending_changes` to read the `ETag` header
-   (`api.py:238-243`), then `POST /domain-types/activation_run/actions/
+   (`client.get_pending_changes()`), then `POST /domain-types/activation_run/actions/
    activate-changes/invoke` with `{redirect: false, sites: [site],
-   force_foreign_changes: false}` and `If-Match: <etag>`
-   (`api.py:245-261`). This activation covers what Phase 6's `fix_all`
+   force_foreign_changes: true}` and `If-Match: <etag>`.
+   **Waits for the activation to finish (fixed 2026-09-30).** That POST only
+   *starts* a background job (Checkmk 2.4.0 source,
+   `endpoints/activate_changes`), so the helper polls `GET
+   /objects/activation_run/{id}` every second until `is_running` is false,
+   for up to 180 s. It then re-reads the pending list: any change the finished
+   run didn't cover is activated in another round, up to 3 rounds, and only
+   then does it print "Changes activated". Before this fix it printed that as
+   soon as the job started. A live run then ended with two of Phase 6's
+   discovery changes ("Saved check configuration of host … with 0
+   services", "Updated discovered host labels") still pending. If changes are
+   still pending after 3 rounds, or the run times out, it prints a yellow
+   warning pointing at Setup > Activate changes in the GUI and counts as a
+   failure. This activation covers what Phase 6's `fix_all`
    discovery just produced — accepting a discovered service is itself a
    pending change, separate from whatever Phase 5's host/rule creation
    already needed (that part was activated once already, before Phase 6
