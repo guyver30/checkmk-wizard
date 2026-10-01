@@ -18,6 +18,7 @@ from checkmk_wizard.api import (
     bootstrap_agent_registration_secret,
     bootstrap_automation_user,
     change_cmkadmin_password,
+    revert_pending_changes,
 )
 
 CONN = CheckmkConnection(host="cmk.example", site="mysite", username="automation", secret="s3cret")
@@ -975,3 +976,105 @@ async def test_provision_topology_editor_returns_false_when_rotated():
             created = await client.provision_topology_editor("s3cret")
 
     assert created is False
+
+
+# -- revert_pending_changes ---------------------------------------------------
+
+WATO_URL = "http://cmk.example/mysite/check_mk/wato.py"
+PENDING_URL = f"{BASE}/domain-types/activation_run/collections/pending_changes"
+_REVERT_PAGE = (
+    '<a href="wato.py?mode=revert_changes&amp;_action=discard'
+    '&amp;_transid=1727780000%2FAbC-d_9xYz&amp;_csrf_token=tok">Revert</a>'
+)
+
+
+def _mock_gui_login_ok():
+    respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+    respx.post(LOGIN_URL).mock(
+        return_value=Response(200, headers={"set-cookie": "auth_mysite=cmkadmin:xyz; Path=/"})
+    )
+
+
+def _discard_calls(route):
+    return [c for c in route.calls if c.request.url.params.get("_action") == "discard"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "page",
+    [
+        _REVERT_PAGE,
+        # JS-escaped slash inside a string literal
+        "var u = 'wato.py?mode=revert_changes&_action=discard&_transid=1727780000\\/AbC-d_9xYz&_csrf_token=tok';",
+    ],
+)
+async def test_revert_pending_changes_success(page):
+    with respx.mock:
+        _mock_gui_login_ok()
+        wato = respx.get(WATO_URL).mock(return_value=Response(200, text=page))
+        respx.get(PENDING_URL).mock(return_value=Response(200, json={"value": []}))
+        result = await revert_pending_changes("cmk.example", "mysite", "adminpw")
+
+    assert result.reverted is True
+    discards = _discard_calls(wato)
+    assert len(discards) == 1
+    params = discards[0].request.url.params
+    assert params["mode"] == "revert_changes"
+    assert params["_transid"] == "1727780000/AbC-d_9xYz"
+    assert params["_csrf_token"] == "tok"
+
+
+@pytest.mark.asyncio
+async def test_revert_pending_changes_nothing_pending():
+    with respx.mock:
+        _mock_gui_login_ok()
+        wato = respx.get(WATO_URL).mock(return_value=Response(200, text="<p>No pending changes.</p>"))
+        result = await revert_pending_changes("cmk.example", "mysite", "adminpw")
+
+    assert result.reverted is True
+    assert "no pending changes" in result.detail
+    assert _discard_calls(wato) == []
+
+
+@pytest.mark.asyncio
+async def test_revert_pending_changes_no_transid_means_no_revert_offered():
+    with respx.mock:
+        _mock_gui_login_ok()
+        wato = respx.get(WATO_URL).mock(return_value=Response(200, text="<p>Revert not possible</p>"))
+        result = await revert_pending_changes("cmk.example", "mysite", "adminpw")
+
+    assert result.reverted is False
+    assert "snapshot" in result.detail
+    assert _discard_calls(wato) == []
+
+
+@pytest.mark.asyncio
+async def test_revert_pending_changes_still_pending_after_discard():
+    with respx.mock:
+        _mock_gui_login_ok()
+        respx.get(WATO_URL).mock(return_value=Response(200, text=_REVERT_PAGE))
+        respx.get(PENDING_URL).mock(return_value=Response(200, json={"value": [{}, {}]}))
+        result = await revert_pending_changes("cmk.example", "mysite", "adminpw")
+
+    assert result.reverted is False
+    assert "2 change(s) still pending" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_revert_pending_changes_login_failure_does_not_raise():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(return_value=Response(200, text=LOGIN_PAGE_HTML))
+        respx.post(LOGIN_URL).mock(return_value=Response(200))
+        result = await revert_pending_changes("cmk.example", "mysite", "wrong")
+
+    assert result.reverted is False
+    assert "login" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_revert_pending_changes_connect_error_does_not_raise():
+    with respx.mock:
+        respx.get(LOGIN_URL).mock(side_effect=httpx.ConnectError("boom"))
+        result = await revert_pending_changes("cmk.example", "mysite", "adminpw")
+
+    assert result.reverted is False

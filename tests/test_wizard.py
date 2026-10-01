@@ -1,5 +1,7 @@
 import ast
+import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 import questionary
@@ -9,7 +11,7 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection
+from checkmk_wizard.api import CheckmkAPIError, CheckmkClient, CheckmkConnection, RevertChangesResult
 from checkmk_wizard.remote import (
     ActionResult,
     AgentStatusCheck,
@@ -20,6 +22,7 @@ from checkmk_wizard.remote import (
     SSHCredentials,
 )
 from checkmk_wizard.scanner import HostScanResult
+import checkmk_wizard.wizard as wizard_module
 from checkmk_wizard.wizard import (
     _DEFAULT_CPU_LOAD_LEVELS,
     _DEFAULT_CPU_UTILIZATION_LEVELS,
@@ -36,6 +39,9 @@ from checkmk_wizard.wizard import (
     _SMARTMONTOOLS_DIR,
     DEVICE_TYPE_TAG_GROUP_ID,
     OnboardedHost,
+    WizardAborted,
+    _AbortState,
+    _abortable_ask_async,
     RetagCandidate,
     RetagSelection,
     ScannedHost,
@@ -4443,3 +4449,282 @@ async def test_phase7_demo_livestatus_failure_warns_with_manual_commands(monkeyp
     out = capsys.readouterr().out
     assert "lq" in out and "PROCESS_HOST_CHECK_RESULT;dh1;0;faked up" in out
     assert list(tmp_path.glob("config_snapshot_*.json"))
+
+
+# -- Esc / Ctrl+C abort -------------------------------------------------------
+
+
+def _abort_state(monkeypatch, *, esc_enabled=True):
+    state = _AbortState(esc_enabled=esc_enabled)
+    monkeypatch.setattr(wizard_module, "_ABORT_STATE", state)
+    return state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["text", "select"])
+async def test_esc_at_prompt_raises_wizard_aborted(monkeypatch, kind):
+    _abort_state(monkeypatch)
+    with create_pipe_input() as inp:
+        out = DummyOutput()
+        if kind == "text":
+            question = questionary.text("name?", input=inp, output=out)
+        else:
+            question = questionary.select("pick", choices=["a", "b"], input=inp, output=out)
+        inp.send_text("\x1b")
+        with pytest.raises(WizardAborted):
+            await asyncio.wait_for(_abortable_ask_async(question), 5)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_at_prompt_raises_wizard_aborted(monkeypatch):
+    _abort_state(monkeypatch)
+    with create_pipe_input() as inp:
+        question = questionary.text("name?", input=inp, output=DummyOutput())
+        inp.send_text("\x03")
+        with pytest.raises(WizardAborted):
+            await asyncio.wait_for(_abortable_ask_async(question), 5)
+
+
+@pytest.mark.asyncio
+async def test_esc_is_swallowed_once_disabled(monkeypatch):
+    _abort_state(monkeypatch, esc_enabled=False)
+    with create_pipe_input() as inp:
+        question = questionary.text("name?", input=inp, output=DummyOutput())
+        inp.send_text("\x1b")
+        task = asyncio.ensure_future(_abortable_ask_async(question))
+        # Past prompt_toolkit's escape flush timeout, so the Esc is not
+        # merged with the following keys into an Alt-sequence.
+        await asyncio.sleep(0.6)
+        inp.send_text("ok\r")
+        assert await asyncio.wait_for(task, 5) == "ok"
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_propagates_once_esc_disabled(monkeypatch):
+    _abort_state(monkeypatch, esc_enabled=False)
+    with create_pipe_input() as inp:
+        question = questionary.text("name?", input=inp, output=DummyOutput())
+        inp.send_text("\x03")
+
+        # Caught inside the task: a KeyboardInterrupt escaping an asyncio
+        # task would tear down the test runner's event loop.
+        async def ask():
+            try:
+                await _abortable_ask_async(question)
+            except KeyboardInterrupt:
+                return "interrupted"
+
+        assert await asyncio.wait_for(ask(), 5) == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_phase5_disables_esc_and_says_so(monkeypatch, capsys):
+    state = _abort_state(monkeypatch)
+    monkeypatch.setattr(wizard_module, "_create_expected_open_port_rules", AsyncMock())
+    monkeypatch.setattr(wizard_module, "_create_ping_check_rule", AsyncMock())
+
+    async with CheckmkClient(CONN) as client:
+        await phase5_onboarding(client, CONN, [], [])
+
+    assert state.esc_enabled is False
+    assert "Esc is disabled" in capsys.readouterr().out
+
+
+def test_main_installs_abortable_ask(monkeypatch):
+    monkeypatch.setattr(questionary, "Question", type("Q", (questionary.Question,), {}))
+    monkeypatch.setattr(wizard_module, "run", AsyncMock())
+
+    wizard_module.main([])
+
+    assert questionary.Question.ask_async is _abortable_ask_async
+
+
+def test_main_turns_keyboard_interrupt_into_exit_130(monkeypatch, capsys):
+    monkeypatch.setattr(questionary, "Question", type("Q", (questionary.Question,), {}))
+    monkeypatch.setattr(wizard_module, "run", AsyncMock(side_effect=KeyboardInterrupt))
+
+    with pytest.raises(SystemExit) as excinfo:
+        wizard_module.main([])
+
+    assert excinfo.value.code == 130
+    assert "Interrupted" in capsys.readouterr().out
+
+
+# -- Abort handler: pending-change summary, apply / revert / leave ------------
+
+def _flat(text):
+    # rich wraps long lines at the terminal width; collapse that for substring asserts.
+    return " ".join(text.split())
+
+
+_PENDING = [
+    {"id": "1", "action_name": "create-host", "text": "Created host &#x27;sw1&#x27;",
+     "user_id": "automation", "time": 1727780000.0},
+    {"id": "2", "action_name": "edit-folder", "text": "Edited folder", "user_id": "alice", "time": 1727780100.0},
+]
+
+
+def _abort_run_setup(monkeypatch, pending, answers, *, esc_state=None):
+    """Wire run() so phase2 raises WizardAborted; returns the spies."""
+    monkeypatch.setattr(wizard_module, "_ABORT_STATE", esc_state or _AbortState())
+    monkeypatch.setattr(wizard_module, "phase1_site_bringup", AsyncMock(return_value=CONN))
+    monkeypatch.setattr(wizard_module, "_provision_topology_editor", AsyncMock())
+    monkeypatch.setattr(wizard_module, "phase2_folders", AsyncMock(side_effect=WizardAborted))
+    phase3 = AsyncMock()
+    monkeypatch.setattr(wizard_module, "phase3_discovery", phase3)
+    monkeypatch.setattr(CheckmkClient, "get_pending_changes", AsyncMock(return_value=("etag", pending)))
+    activate = AsyncMock(return_value=True)
+    revert = AsyncMock(return_value=RevertChangesResult(True, "all pending changes reverted"))
+    monkeypatch.setattr(wizard_module, "_activate_pending_changes", activate)
+    monkeypatch.setattr(wizard_module, "revert_pending_changes", revert)
+
+    queue = list(answers)
+    asked = []
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        asked.append(self)
+        answer = queue.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    return {"activate": activate, "revert": revert, "phase3": phase3, "asked": asked}
+
+
+@pytest.mark.asyncio
+async def test_abort_in_phase1_prints_no_pending_changes(monkeypatch, capsys):
+    monkeypatch.setattr(wizard_module, "_ABORT_STATE", _AbortState())
+    monkeypatch.setattr(wizard_module, "phase1_site_bringup", AsyncMock(side_effect=WizardAborted))
+    get_pending = AsyncMock()
+    monkeypatch.setattr(CheckmkClient, "get_pending_changes", get_pending)
+
+    await wizard_module.run()
+
+    assert "Aborted — no pending changes" in _flat(capsys.readouterr().out)
+    get_pending.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_abort_with_no_pending_changes_asks_nothing(monkeypatch, capsys):
+    spies = _abort_run_setup(monkeypatch, [], [])
+
+    await wizard_module.run()
+
+    assert "Aborted — no pending changes" in _flat(capsys.readouterr().out)
+    assert spies["asked"] == []
+    spies["phase3"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_abort_apply_activates_and_does_not_revert(monkeypatch, capsys):
+    spies = _abort_run_setup(monkeypatch, _PENDING, ["apply"])
+
+    await wizard_module.run()
+
+    spies["activate"].assert_awaited_once()
+    spies["revert"].assert_not_called()
+    out = _flat(capsys.readouterr().out)
+    # html-unescaped text, and the non-wizard user is marked.
+    assert "Created host 'sw1'" in out
+    assert "alice (other user)" in out
+    assert "automation (other user)" not in out
+
+
+@pytest.mark.asyncio
+async def test_abort_revert_uses_stored_password(monkeypatch):
+    state = _AbortState(cmkadmin_password="adminpw")
+    spies = _abort_run_setup(monkeypatch, _PENDING, ["revert"], esc_state=state)
+    # run() resets the stored password at the start; Phase 1 (mocked here)
+    # is what would re-record it.
+
+    async def phase1():
+        state.cmkadmin_password = "adminpw"
+        return CONN
+
+    monkeypatch.setattr(wizard_module, "phase1_site_bringup", phase1)
+
+    await wizard_module.run()
+
+    spies["revert"].assert_awaited_once_with("cmk.example", "mysite", "adminpw", proto="http", port=None)
+    spies["activate"].assert_not_called()
+    assert len(spies["asked"]) == 1  # no password prompt
+
+
+@pytest.mark.asyncio
+async def test_abort_revert_prompts_for_password_when_unknown(monkeypatch):
+    spies = _abort_run_setup(monkeypatch, _PENDING, ["revert", "typedpw"])
+
+    await wizard_module.run()
+
+    assert len(spies["asked"]) == 2
+    assert spies["revert"].await_args.args[2] == "typedpw"
+
+
+@pytest.mark.asyncio
+async def test_abort_revert_blank_password_means_leave(monkeypatch, capsys):
+    spies = _abort_run_setup(monkeypatch, _PENDING, ["revert", ""])
+
+    await wizard_module.run()
+
+    spies["revert"].assert_not_called()
+    assert "Setup > Activate changes" in _flat(capsys.readouterr().out)
+
+
+@pytest.mark.asyncio
+async def test_abort_revert_failure_prints_reason_and_manual_path(monkeypatch, capsys):
+    spies = _abort_run_setup(monkeypatch, _PENDING, ["revert", "pw"])
+    spies["revert"].return_value = RevertChangesResult(False, "no snapshot yet")
+
+    await wizard_module.run()
+
+    out = _flat(capsys.readouterr().out)
+    assert "no snapshot yet" in out
+    assert "Setup > Activate changes > Revert changes" in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", ["leave", WizardAborted()])
+async def test_abort_leave_or_esc_touches_nothing(monkeypatch, capsys, answer):
+    spies = _abort_run_setup(monkeypatch, _PENDING, [answer])
+
+    await wizard_module.run()
+
+    spies["activate"].assert_not_called()
+    spies["revert"].assert_not_called()
+    assert "Setup > Activate changes" in _flat(capsys.readouterr().out)
+
+
+@pytest.mark.asyncio
+async def test_abort_default_choice_is_leave_with_foreign_changes(monkeypatch):
+    seen = {}
+    real_select = questionary.select
+
+    def spy_select(*args, **kwargs):
+        seen["default"] = kwargs.get("default")
+        return real_select(*args, **kwargs)
+
+    monkeypatch.setattr(questionary, "select", spy_select)
+    _abort_run_setup(monkeypatch, _PENDING, ["leave"])
+    await wizard_module.run()
+    assert seen["default"] == "leave"
+
+    seen.clear()
+    _abort_run_setup(monkeypatch, _PENDING[:1], ["leave"])
+    await wizard_module.run()
+    assert seen["default"] == "revert"
+
+
+@pytest.mark.asyncio
+async def test_phase1_records_cmkadmin_password_for_revert(monkeypatch):
+    state = _AbortState()
+    monkeypatch.setattr(wizard_module, "_ABORT_STATE", state)
+    monkeypatch.setattr(wizard_module.site, "create_site", lambda *a, **k: "")
+    monkeypatch.setattr(wizard_module.site, "enable_livestatus_tcp", lambda *a, **k: None)
+    monkeypatch.setattr(wizard_module.site, "start_site", lambda *a, **k: "")
+    monkeypatch.setattr(wizard_module, "_prompt_change_cmkadmin_password", AsyncMock(return_value="newpw"))
+    monkeypatch.setattr(wizard_module, "bootstrap_automation_user", AsyncMock(return_value="sec"))
+
+    await wizard_module._create_fresh_site("mysite", "cmk.example")
+
+    assert state.cmkadmin_password == "newpw"

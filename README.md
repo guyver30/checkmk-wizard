@@ -195,6 +195,16 @@ service). To undo, send `ENABLE_HOST_CHECK;<host>` and
 `ENABLE_SVC_CHECK;<host>;PING`. If Livestatus is unreachable the wizard prints
 the manual `lq` commands instead of failing.
 
+### Leaving early (Esc)
+
+Press Esc (or Ctrl+C) at any prompt in Phases 1-4 to abort. The wizard lists the
+site's pending (not yet activated) changes, marks other users' changes, and
+asks whether to apply them, revert them (discards ALL pending changes on the
+site, via the Checkmk GUI's "Revert changes"), or leave them pending. From
+Phase 5 on Esc is disabled because SSH changes to remote hosts cannot be
+reverted; Ctrl+C then exits with status 130. Details in
+[docs/WIZARD-OPERATION.md](docs/WIZARD-OPERATION.md#leaving-the-wizard-early-esc).
+
 ## Test
 
 ```bash

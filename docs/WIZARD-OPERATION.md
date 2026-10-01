@@ -62,6 +62,47 @@ state file. If the process is killed mid-run, the next run starts at Phase 1
 with no memory of what happened before (site/hosts already created in
 Checkmk are simply re-detected or re-created).
 
+### Leaving the wizard early (Esc)
+
+Pressing Esc (or Ctrl+C) at any prompt in Phases 1-4 ends the run through a
+single `WizardAborted` exception. `main()` installs `_abortable_ask_async` in
+place of `questionary.Question.ask_async`, so no prompt call site checks for a
+`None` answer. prompt_toolkit waits a short escape-sequence timeout before it
+recognises a lone Esc, so the abort is not instant. The custom full-screen
+retag screen in Phase 4 honours Esc as well.
+
+What happens next:
+
+- Abort before Phase 1 produced a connection: the wizard prints
+  `Aborted — no pending changes` and exits.
+- Abort in Phases 1-4 once connected: `_handle_abort()` reads the site's pending
+  (not yet activated) changes. If there are none it prints the same message.
+  Otherwise it shows a table of time, user, action and text (Checkmk's HTML
+  escapes are decoded). Changes by anyone other than the wizard's own accounts
+  (`automation`, `cmkadmin`) are marked `(other user)`.
+- A prompt then offers three choices:
+  - **Apply** activates the pending changes through the normal activation
+    path.
+  - **Revert** discards ALL pending changes on the site, including other
+    users'; Checkmk cannot revert single changes. It is the default only when
+    every pending change is the wizard's own; otherwise the default is Leave.
+  - **Leave pending** exits and keeps the changes. Esc at this prompt means
+    Leave. The wizard prints the manual path: Setup > Activate changes.
+
+Revert semantics: Checkmk 2.4.0's REST API has no revert endpoint, so
+`api.revert_pending_changes()` drives the GUI's "Revert changes" action
+(`ModeRevertChanges`). That restores the last automatic WATO snapshot taken at
+the previous activation, so it needs an earlier activation to have happened.
+It logs in as `cmkadmin`, reusing the password from Phase 1 when this run
+collected it and prompting for it otherwise (blank means Leave). On any
+failure the wizard prints the reason and the manual path Setup > Activate
+changes > Revert changes. This path is not yet live-verified on 2.4.0p35.
+
+From the start of Phase 5 Esc is disabled, and the wizard prints a note saying
+so. Phase 5 changes remote hosts over SSH, which no Checkmk revert can undo.
+Ctrl+C from there on exits with status 130 and a message; it does not revert
+or activate anything.
+
 ## Starting over with a blank site (delete the site and the retained MQTT data)
 
 **Container mode:** the worker has no `omd`, so the wizard cannot delete the
@@ -978,6 +1019,10 @@ listing hosts warns and returns. Nothing here aborts the wizard run.
 
 ## Phase 5 — Host Onboarding (`wizard.py:1021-1034`, delegating the
 per-host loop to `_onboard_hosts()`, `wizard.py:829-1018`)
+
+Esc is disabled from the start of this phase (see "Leaving the wizard early
+(Esc)" above), because SSH changes to remote hosts cannot be undone by a Checkmk
+revert.
 
 **Restructured 2026-08-26** — the per-host firewall/agent/SNMP/ping
 onboarding loop (below) now only covers hosts the user actually promoted
