@@ -403,6 +403,7 @@ async def _create_fresh_site(
     admin_password = await _prompt_change_cmkadmin_password(
         checkmk_host, site_name, admin_password, checkmk_port
     )
+    _ABORT_STATE.cmkadmin_password = admin_password
     try:
         env_secret = os.environ.get("CMK_REST_SECRET") or None
         secret = await bootstrap_automation_user(
@@ -635,6 +636,7 @@ async def phase1_site_bringup() -> CheckmkConnection:
                 checkmk_port,
                 reason="'cmkadmin' is a well-known default",
             )
+            _ABORT_STATE.cmkadmin_password = cmkadmin_password
             try:
                 # With env_secret set, an existing 'automation' user is
                 # updated to that secret rather than rejected, so the
@@ -3187,15 +3189,131 @@ async def _provision_topology_editor(client: CheckmkClient, connection: CheckmkC
         )
 
 
-async def run(*, demo: bool = False) -> None:
-    connection = await phase1_site_bringup()
-    async with CheckmkClient(connection) as client:
-        await _provision_topology_editor(client, connection)
-        folder_subnets, tag_group_available = await phase2_folders(client)
-        scan_results = await phase3_discovery(client, folder_subnets, demo=demo)
-        onboarded = await phase4_classification(
-            scan_results, client, connection, tag_group_available=tag_group_available, demo=demo
+_MANUAL_ACTIVATE_PATH = "Setup > Activate changes"
+
+
+async def _handle_abort(client: CheckmkClient, connection: CheckmkConnection) -> None:
+    """After Esc/Ctrl+C in Phases 1-4: show the site's pending (not yet
+    activated) changes and let the operator apply, revert or leave them.
+
+    Exists because a half-finished run used to leave pending changes behind
+    that the next run force-activated silently. Esc stops working at Phase 5,
+    which changes remote hosts over SSH, something no Checkmk revert can undo.
+
+    Revert discards ALL pending changes on the site, other users' included
+    (Checkmk has no per-change revert), so the default is "leave" whenever a
+    change by someone other than this wizard's accounts is pending. Esc at
+    the final prompt means leave.
+    """
+    try:
+        _, pending = await client.get_pending_changes()
+    except CheckmkAPIError as exc:
+        console.print(
+            f"[yellow]Aborted. Could not read the pending changes ({exc}). "
+            f"Review them in the Checkmk GUI: {_MANUAL_ACTIVATE_PATH}.[/yellow]"
         )
+        return
+    if not pending:
+        console.print("Aborted — no pending changes")
+        return
+
+    own_users = {connection.username, "cmkadmin"}
+    table = Table(title=f"{len(pending)} pending change(s) on site {connection.site}")
+    for column in ("Time", "User", "Action", "Text"):
+        table.add_column(column)
+    foreign = 0
+    for change in pending:
+        stamp = change.get("time")
+        when = datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M:%S") if stamp else "?"  # noqa: DTZ006 -- local wall-clock display only
+        user = str(change.get("user_id") or "?")
+        user_cell = escape(user)
+        if user not in own_users:
+            foreign += 1
+            user_cell += " [yellow](other user)[/yellow]"
+        table.add_row(
+            when,
+            user_cell,
+            escape(str(change.get("action_name") or "")),
+            escape(html.unescape(str(change.get("text") or ""))),
+        )
+    console.print(table)
+    if foreign:
+        console.print(f"[yellow]{foreign} of these were made by other users.[/yellow]")
+
+    try:
+        choice = await questionary.select(
+            "What should happen to these pending changes?",
+            choices=[
+                questionary.Choice("Apply — activate them now", value="apply"),
+                questionary.Choice(
+                    "Revert — discard ALL pending changes on the site, including other users' "
+                    "(Checkmk cannot revert single changes)",
+                    value="revert",
+                ),
+                questionary.Choice(
+                    "Leave pending — exit and decide later in the Checkmk GUI", value="leave"
+                ),
+            ],
+            default="leave" if foreign else "revert",
+        ).ask_async()
+    except WizardAborted:
+        choice = "leave"
+
+    if choice == "apply":
+        await _activate_pending_changes(client, connection)
+        return
+    if choice == "revert":
+        password = _ABORT_STATE.cmkadmin_password
+        if not password:
+            try:
+                password = await questionary.password(
+                    "cmkadmin password (needed to revert via the Checkmk GUI; blank = leave pending):"
+                ).ask_async()
+            except WizardAborted:
+                password = None
+        if password:
+            result = await revert_pending_changes(
+                connection.host,
+                connection.site,
+                password,
+                proto=connection.proto,
+                port=connection.port,
+            )
+            if result.reverted:
+                console.print(f"[green]Reverted: {escape(result.detail)}[/green]")
+            else:
+                console.print(
+                    f"[yellow]Revert failed: {escape(result.detail)}. "
+                    f"Revert manually: {_MANUAL_ACTIVATE_PATH} > Revert changes.[/yellow]"
+                )
+            return
+    console.print(
+        f"Pending changes left in place. Review them in the Checkmk GUI: {_MANUAL_ACTIVATE_PATH} "
+        "(activate, or Revert changes)."
+    )
+
+
+async def run(*, demo: bool = False) -> None:
+    _ABORT_STATE.esc_enabled = True
+    _ABORT_STATE.cmkadmin_password = None
+    try:
+        connection = await phase1_site_bringup()
+    except WizardAborted:
+        # No REST client exists yet, so there is nothing to summarise.
+        console.print("Aborted — no pending changes")
+        return
+    async with CheckmkClient(connection) as client:
+        try:
+            await _provision_topology_editor(client, connection)
+            folder_subnets, tag_group_available = await phase2_folders(client)
+            scan_results = await phase3_discovery(client, folder_subnets, demo=demo)
+            onboarded = await phase4_classification(
+                scan_results, client, connection, tag_group_available=tag_group_available, demo=demo
+            )
+        except WizardAborted:
+            await _handle_abort(client, connection)
+            console.rule("[bold yellow]Aborted")
+            return
         await phase5_onboarding(
             client, connection, onboarded, scan_results, tag_group_available=tag_group_available
         )
