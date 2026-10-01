@@ -4267,3 +4267,90 @@ async def test_phase6_discovery_gives_up_after_all_retries_exhausted(monkeypatch
     assert sleep_calls == [10, 20, 30]
     out = capsys.readouterr().out
     assert "NOT picked up" in out
+
+
+# ── demo mode ───────────────────────────────────────────────────────────
+
+
+def test_main_demo_flag_passes_demo_to_run(monkeypatch):
+    from checkmk_wizard import wizard as wiz
+
+    seen = []
+
+    async def fake_run(*, demo=False):
+        seen.append(demo)
+
+    monkeypatch.setattr(wiz, "run", fake_run)
+    wiz.main(["--demo"])
+    wiz.main([])
+    assert seen == [True, False]
+
+
+def test_demo_host_ips_skips_excluded_and_validates_capacity():
+    from checkmk_wizard import wizard as wiz
+
+    assert wiz._demo_host_ips("10.0.0.0/24", 3, {"10.0.0.2"}) == ["10.0.0.1", "10.0.0.3", "10.0.0.4"]
+    assert wiz._demo_host_ips("10.0.0.0/30", 0, set()) == []
+    with pytest.raises(ValueError):
+        wiz._demo_host_ips("10.0.0.0/30", 3, set())
+
+
+def _no_scan(monkeypatch):
+    async def boom(*args, **kwargs):
+        raise AssertionError("scan_network must not run in demo mode")
+
+    monkeypatch.setattr("checkmk_wizard.wizard.scan_network", boom)
+
+
+def _answer_with(monkeypatch, values):
+    answers = iter(values)
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+
+@pytest.mark.asyncio
+async def test_phase3_demo_stages_generated_ips_without_scanning(monkeypatch):
+    _no_scan(monkeypatch)
+    _answer_with(monkeypatch, ["2", "10.0.0.0/24"])
+    with respx.mock:
+        _mock_list_hosts([_host("sw1", "10.0.0.1", tag_agent="cmk-agent")])
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        async with CheckmkClient(CONN) as client:
+            results = await phase3_discovery(client, {"/vlan10": "10.0.0.0/24"}, demo=True)
+
+    assert [(r.ip, r.open_ports, r.folder) for r in results] == [
+        ("10.0.0.2", [], "/vlan10"),
+        ("10.0.0.3", [], "/vlan10"),
+    ]
+    bodies = [json.loads(c.request.content) for c in create_route.calls]
+    assert [b["host_name"] for b in bodies] == ["10.0.0.2", "10.0.0.3"]
+    assert bodies[0]["attributes"] == {"ipaddress": "10.0.0.2", "tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"}
+
+
+@pytest.mark.asyncio
+async def test_phase3_demo_without_folders_uses_root_and_test_net_default(monkeypatch):
+    from checkmk_wizard import wizard as wiz
+
+    _no_scan(monkeypatch)
+    _answer_with(monkeypatch, ["1", "198.51.100.0/24"])
+    defaults = []
+    real_text = questionary.text
+
+    def spy_text(message, **kwargs):
+        defaults.append((message, kwargs.get("default")))
+        return real_text(message, **kwargs)
+
+    monkeypatch.setattr(wiz.questionary, "text", spy_text)
+    with respx.mock:
+        _mock_list_hosts([])
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            results = await phase3_discovery(client, {}, demo=True)
+
+    assert [(r.ip, r.folder) for r in results] == [("198.51.100.1", "/")]
+    assert ("Subnet for them:", "198.51.100.0/24") in defaults
