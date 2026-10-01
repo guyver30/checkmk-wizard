@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import html
 import ipaddress
 import json
 import os
@@ -20,7 +21,7 @@ from typing import Any
 import questionary
 from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Point
-from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.layout import HSplit, Layout, ScrollOffsets, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
@@ -37,10 +38,63 @@ from checkmk_wizard.api import (
     bootstrap_agent_registration_secret,
     bootstrap_automation_user,
     change_cmkadmin_password,
+    revert_pending_changes,
 )
 from checkmk_wizard.scanner import DEFAULT_PORTS, scan_network
 
 console = Console()
+
+
+class WizardAborted(Exception):
+    """Raised by Esc or Ctrl+C at a prompt in Phases 1-4, so one exception
+    (not a None answer every call site would have to check) ends the run and
+    lets run() offer to apply or revert the pending changes."""
+
+
+@dataclass
+class _AbortState:
+    esc_enabled: bool = True
+    cmkadmin_password: str | None = None
+
+
+# Module-level because _abortable_ask_async replaces questionary's own method
+# and so cannot receive arguments from the ~48 prompt call sites. It is the
+# one piece of mutable module state; run() resets it at the start of every run.
+_ABORT_STATE = _AbortState()
+
+
+async def _abortable_ask_async(
+    self: questionary.Question, patch_stdout: bool = False, kbi_msg: str = ""
+) -> Any:
+    """Replacement for `questionary.Question.ask_async` that turns Esc and
+    Ctrl+C into `WizardAborted` while `_ABORT_STATE.esc_enabled` is set.
+
+    questionary's own `ask_async` swallows Ctrl+C and returns None, which most
+    of the ~48 call sites do not handle; one wrapper installed in main()
+    replaces editing every call site. `kbi_msg` is accepted for signature
+    compatibility and ignored. The Esc binding is eager so it fires without
+    waiting to see whether an Alt-sequence follows; prompt_toolkit's escape
+    timeout still adds a short delay before a lone Esc is recognised. With Esc
+    disabled (Phase 5 onward, where SSH changes to remote hosts cannot be
+    undone by a Checkmk revert) the binding swallows the key and Ctrl+C
+    propagates as KeyboardInterrupt. Verified with questionary 2.1.1 /
+    prompt_toolkit 3.0.53 using a pipe input for text, select, confirm,
+    password and checkbox questions.
+    """
+    kb = KeyBindings()
+
+    @kb.add("escape", eager=True)
+    def _(event):
+        if _ABORT_STATE.esc_enabled:
+            event.app.exit(exception=WizardAborted(), style="class:aborting")
+
+    self.application.key_bindings = merge_key_bindings([self.application.key_bindings, kb])
+    try:
+        return await self.unsafe_ask_async(patch_stdout)
+    except KeyboardInterrupt:
+        if _ABORT_STATE.esc_enabled:
+            raise WizardAborted from None
+        raise
 
 # Bundled smartmontools .deb packages (see remote.smartmontools_deb_filename)
 # ship inside the repo, not the installed package, since this wizard is run
@@ -1104,6 +1158,11 @@ async def _run_retag_screen(
         nonlocal outcome
         outcome = "discard"
         event.app.exit()
+
+    @bindings.add("escape", eager=True)
+    def _(event):
+        if _ABORT_STATE.esc_enabled:
+            event.app.exit(exception=WizardAborted())
 
     rows = Window(
         content=FormattedTextControl(
@@ -2709,6 +2768,11 @@ async def phase5_onboarding(
     tag_group_available: bool = True,
 ) -> None:
     console.rule("[bold]Phase 5 — Host Onboarding")
+    _ABORT_STATE.esc_enabled = False
+    console.print(
+        "[dim]Esc is disabled from here on — Phase 5 changes remote hosts over SSH, "
+        "which a Checkmk revert cannot undo.[/dim]"
+    )
     if hosts:
         await _onboard_hosts(client, connection, hosts, tag_group_available=tag_group_available)
 
@@ -3148,4 +3212,13 @@ def main(argv: list[str] | None = None) -> None:
         help="create N fake hosts in a subnet without scanning, and fake them UP after activation",
     )
     args = parser.parse_args(argv)
-    asyncio.run(run(demo=args.demo))
+    # Installed at the entry point only; tests monkeypatch Question.ask_async themselves.
+    questionary.Question.ask_async = _abortable_ask_async
+    try:
+        asyncio.run(run(demo=args.demo))
+    except KeyboardInterrupt:
+        console.print(
+            "[yellow]Interrupted — from Phase 5 on, changes already made on remote hosts are "
+            "not undone; any pending Checkmk changes stay pending (Setup > Activate changes).[/yellow]"
+        )
+        raise SystemExit(130) from None

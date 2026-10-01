@@ -1,5 +1,7 @@
 import ast
+import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 import questionary
@@ -20,6 +22,7 @@ from checkmk_wizard.remote import (
     SSHCredentials,
 )
 from checkmk_wizard.scanner import HostScanResult
+import checkmk_wizard.wizard as wizard_module
 from checkmk_wizard.wizard import (
     _DEFAULT_CPU_LOAD_LEVELS,
     _DEFAULT_CPU_UTILIZATION_LEVELS,
@@ -36,6 +39,9 @@ from checkmk_wizard.wizard import (
     _SMARTMONTOOLS_DIR,
     DEVICE_TYPE_TAG_GROUP_ID,
     OnboardedHost,
+    WizardAborted,
+    _AbortState,
+    _abortable_ask_async,
     RetagCandidate,
     RetagSelection,
     ScannedHost,
@@ -4443,3 +4449,102 @@ async def test_phase7_demo_livestatus_failure_warns_with_manual_commands(monkeyp
     out = capsys.readouterr().out
     assert "lq" in out and "PROCESS_HOST_CHECK_RESULT;dh1;0;faked up" in out
     assert list(tmp_path.glob("config_snapshot_*.json"))
+
+
+# -- Esc / Ctrl+C abort -------------------------------------------------------
+
+
+def _abort_state(monkeypatch, *, esc_enabled=True):
+    state = _AbortState(esc_enabled=esc_enabled)
+    monkeypatch.setattr(wizard_module, "_ABORT_STATE", state)
+    return state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["text", "select"])
+async def test_esc_at_prompt_raises_wizard_aborted(monkeypatch, kind):
+    _abort_state(monkeypatch)
+    with create_pipe_input() as inp:
+        out = DummyOutput()
+        if kind == "text":
+            question = questionary.text("name?", input=inp, output=out)
+        else:
+            question = questionary.select("pick", choices=["a", "b"], input=inp, output=out)
+        inp.send_text("\x1b")
+        with pytest.raises(WizardAborted):
+            await asyncio.wait_for(_abortable_ask_async(question), 5)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_at_prompt_raises_wizard_aborted(monkeypatch):
+    _abort_state(monkeypatch)
+    with create_pipe_input() as inp:
+        question = questionary.text("name?", input=inp, output=DummyOutput())
+        inp.send_text("\x03")
+        with pytest.raises(WizardAborted):
+            await asyncio.wait_for(_abortable_ask_async(question), 5)
+
+
+@pytest.mark.asyncio
+async def test_esc_is_swallowed_once_disabled(monkeypatch):
+    _abort_state(monkeypatch, esc_enabled=False)
+    with create_pipe_input() as inp:
+        question = questionary.text("name?", input=inp, output=DummyOutput())
+        inp.send_text("\x1b")
+        task = asyncio.ensure_future(_abortable_ask_async(question))
+        # Past prompt_toolkit's escape flush timeout, so the Esc is not
+        # merged with the following keys into an Alt-sequence.
+        await asyncio.sleep(0.6)
+        inp.send_text("ok\r")
+        assert await asyncio.wait_for(task, 5) == "ok"
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_propagates_once_esc_disabled(monkeypatch):
+    _abort_state(monkeypatch, esc_enabled=False)
+    with create_pipe_input() as inp:
+        question = questionary.text("name?", input=inp, output=DummyOutput())
+        inp.send_text("\x03")
+
+        # Caught inside the task: a KeyboardInterrupt escaping an asyncio
+        # task would tear down the test runner's event loop.
+        async def ask():
+            try:
+                await _abortable_ask_async(question)
+            except KeyboardInterrupt:
+                return "interrupted"
+
+        assert await asyncio.wait_for(ask(), 5) == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_phase5_disables_esc_and_says_so(monkeypatch, capsys):
+    state = _abort_state(monkeypatch)
+    monkeypatch.setattr(wizard_module, "_create_expected_open_port_rules", AsyncMock())
+    monkeypatch.setattr(wizard_module, "_create_ping_check_rule", AsyncMock())
+
+    async with CheckmkClient(CONN) as client:
+        await phase5_onboarding(client, CONN, [], [])
+
+    assert state.esc_enabled is False
+    assert "Esc is disabled" in capsys.readouterr().out
+
+
+def test_main_installs_abortable_ask(monkeypatch):
+    monkeypatch.setattr(questionary, "Question", type("Q", (questionary.Question,), {}))
+    monkeypatch.setattr(wizard_module, "run", AsyncMock())
+
+    wizard_module.main([])
+
+    assert questionary.Question.ask_async is _abortable_ask_async
+
+
+def test_main_turns_keyboard_interrupt_into_exit_130(monkeypatch, capsys):
+    monkeypatch.setattr(questionary, "Question", type("Q", (questionary.Question,), {}))
+    monkeypatch.setattr(wizard_module, "run", AsyncMock(side_effect=KeyboardInterrupt))
+
+    with pytest.raises(SystemExit) as excinfo:
+        wizard_module.main([])
+
+    assert excinfo.value.code == 130
+    assert "Interrupted" in capsys.readouterr().out
