@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 Phase: 14.1 (Fleet History Store, Availability Rollups and Grafana) — EXECUTING
 Plan: 1 of 8
 Status: Executing Phase 14.1
-Last activity: 2026-10-01 - Completed quick task 261001-s0c: wizard --demo mode
+Last activity: 2026-10-01 - Completed quick task 261001-tpy: reset-site.sh rename + Esc abort
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -123,6 +123,7 @@ None.
 | 260930-ixs | Dashboard runtime config from deploy/.env via nginx /config.json (no per-machine config.ts edits) | 2026-09-30 | 299482d | [260930-ixs-dashboard-runtime-config-from-env-instea](./quick/260930-ixs-dashboard-runtime-config-from-env-instea/) |
 | 260930-jj4 | Mosquitto passwords from deploy/.env (broker builds its password file at start; mosquitto.passwd + gen script removed) | 2026-09-30 | c3c0798 | [260930-jj4-mosquitto-passwords-from-env-generated-a](./quick/260930-jj4-mosquitto-passwords-from-env-generated-a/) |
 | 261001-s0c | wizard --demo mode: generate N hosts in a subnet without scanning; fake them UP (host + PING) via Livestatus commands after Phase 7 | 2026-10-01 | 298da08 | [261001-s0c-wizard-demo-mode-fake-hosts-in-a-subnet-](./quick/261001-s0c-wizard-demo-mode-fake-hosts-in-a-subnet-/) |
+| 261001-tpy | reset-site.sh: confirm the existing site (read from the volume), ask a new name (default old), Esc/Ctrl+C abort before any change; --site NAME | 2026-10-01 | e10004f | [261001-tpy-reset-site-sh-confirm-existing-site-ask-](./quick/261001-tpy-reset-site-sh-confirm-existing-site-ask-/) |
 | fast | Switch MinIO image to cgr.dev/chainguard/minio pinned by digest (Docker Hub and quay.io both unpullable) | 2026-09-30 | c77c3fd | - |
 | fast | Add docs/DEPLOY-NEW-MACHINE.md new-machine deploy checklist, linked from README | 2026-09-30 | 62d64e0 | - |
 
