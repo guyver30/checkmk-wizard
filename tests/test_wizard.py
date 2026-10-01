@@ -4354,3 +4354,92 @@ async def test_phase3_demo_without_folders_uses_root_and_test_net_default(monkey
 
     assert [(r.ip, r.folder) for r in results] == [("198.51.100.1", "/")]
     assert ("Subnet for them:", "198.51.100.0/24") in defaults
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("demo", [True, False])
+async def test_phase4_monitoring_method_defaults_to_ping_only_in_demo(monkeypatch, demo):
+    from checkmk_wizard import wizard as wiz
+
+    scanned = ScannedHost(ip="10.0.0.5", open_ports=[], folder="/")
+    # promote the host, hostname, monitoring method; later prompts get ""
+    _answer_with(monkeypatch, [[scanned], "10.0.0.5", "ping", *[""] * 20])
+    select_kwargs = []
+    real_select = questionary.select
+
+    def spy_select(message, **kwargs):
+        select_kwargs.append(kwargs)
+        return real_select(message, **kwargs)
+
+    monkeypatch.setattr(wiz.questionary, "select", spy_select)
+    await phase4_classification([scanned], demo=demo)
+
+    method_kwargs = select_kwargs[0]
+    assert ("default" in method_kwargs) is demo
+    if demo:
+        assert method_kwargs["default"] == "ping"
+
+
+async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True):
+    monkeypatch.chdir(tmp_path)
+    events = []
+
+    def fake_send(host, commands):
+        events.append(("send", host, list(commands)))
+        send(host, commands)
+
+    def fake_query(host, names):
+        events.append(("query",))
+        return {"dh1": 0}
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr("checkmk_wizard.wizard.livestatus.send_commands", fake_send)
+    monkeypatch.setattr("checkmk_wizard.wizard.livestatus.query_host_states", fake_query)
+    monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
+    host = OnboardedHost(ip="10.0.0.5", hostname="dh1", folder="/", os_family="ping")
+    with respx.mock:
+        _mock_activation_routes()
+        _mock_list_hosts([_host("dh1", "10.0.0.5")])
+        respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"value": []})
+        )
+        async with CheckmkClient(CONN) as client:
+            await phase7_activation(client, CONN, [host], demo=demo)
+    return events
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_fakes_hosts_up_before_state_query(monkeypatch, tmp_path):
+    events = await _run_phase7_demo(monkeypatch, tmp_path, lambda host, commands: None)
+
+    assert events[0] == (
+        "send",
+        CONN.host,
+        [
+            "DISABLE_HOST_CHECK;dh1",
+            "PROCESS_HOST_CHECK_RESULT;dh1;0;faked up",
+            "DISABLE_SVC_CHECK;dh1;PING",
+            "PROCESS_SERVICE_CHECK_RESULT;dh1;PING;0;faked up",
+        ],
+    )
+    assert events[1] == ("query",)
+
+
+@pytest.mark.asyncio
+async def test_phase7_without_demo_never_sends_commands(monkeypatch, tmp_path):
+    events = await _run_phase7_demo(monkeypatch, tmp_path, lambda host, commands: None, demo=False)
+    assert all(e[0] != "send" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_livestatus_failure_warns_with_manual_commands(monkeypatch, tmp_path, capsys):
+    def reset(host, commands):
+        raise ConnectionResetError(104, "Connection reset by peer")
+
+    await _run_phase7_demo(monkeypatch, tmp_path, reset)
+
+    out = capsys.readouterr().out
+    assert "lq" in out and "PROCESS_HOST_CHECK_RESULT;dh1;0;faked up" in out
+    assert list(tmp_path.glob("config_snapshot_*.json"))

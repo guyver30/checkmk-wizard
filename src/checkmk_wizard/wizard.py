@@ -25,6 +25,7 @@ from prompt_toolkit.layout import HSplit, Layout, ScrollOffsets, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import Progress
 from rich.table import Table
 
@@ -1796,8 +1797,11 @@ async def phase4_classification(
                 )
             else:
                 hostname = raw_hostname
+        # Demo hosts do not exist, so default to ping: no SSH/agent waits.
+        method_default: dict[str, str] = {"default": "ping"} if demo else {}
         os_family = await questionary.select(
             f"Monitoring method for {hostname}:",
+            **method_default,
             choices=[
                 questionary.Choice("linux (Checkmk agent)", value="linux"),
                 questionary.Choice("windows (Checkmk agent)", value="windows"),
@@ -2961,6 +2965,49 @@ async def _query_host_states_best_effort(host: str, host_names: list[str]) -> di
     return {}
 
 
+async def _fake_demo_hosts_up(livestatus_host: str, host_names: list[str]) -> None:
+    """Demo mode: make hosts that do not exist report UP, via Livestatus.
+
+    Per host: disable the active host check and inject an UP result, and do the
+    same for the auto-created PING service (OK). Best-effort and never raising:
+    activation reloads the core, so the first attempt can hit a connection
+    reset (retried like `_query_host_states_best_effort`); after the retries it
+    prints the manual commands. To undo, send ENABLE_HOST_CHECK;<host> and
+    ENABLE_SVC_CHECK;<host>;PING.
+    """
+    commands = [
+        cmd
+        for name in host_names
+        for cmd in (
+            f"DISABLE_HOST_CHECK;{name}",
+            f"PROCESS_HOST_CHECK_RESULT;{name};0;faked up",
+            f"DISABLE_SVC_CHECK;{name};PING",
+            f"PROCESS_SERVICE_CHECK_RESULT;{name};PING;0;faked up",
+        )
+    ]
+    last_error: Exception | None = None
+    for delay in (*_LIVESTATUS_RETRY_DELAYS_SECONDS, None):
+        try:
+            livestatus.send_commands(livestatus_host, commands)
+        except OSError as exc:
+            last_error = exc
+        else:
+            console.print(f"[green]Faked {len(host_names)} demo host(s) UP (checks disabled).[/green]")
+            # Let the core apply the injected results before the state table query.
+            await asyncio.sleep(2)
+            return
+        if delay is not None:
+            await asyncio.sleep(delay)
+    manual = "\n".join(f'  lq "COMMAND [$(date +%s)] {cmd}"' for cmd in commands)
+    console.print(
+        f"[yellow]Could not fake the demo hosts UP via Livestatus on {livestatus_host}:"
+        f"{livestatus.DEFAULT_PORT} ({last_error}). Run these as the site user to do it manually "
+        "(also check that LIVESTATUS_TCP_TLS is off):\n"
+        f"{escape(manual)}[/yellow]",
+        highlight=False,
+    )
+
+
 async def phase7_activation(
     client: CheckmkClient,
     connection: CheckmkConnection,
@@ -2976,6 +3023,10 @@ async def phase7_activation(
     # itself a pending WATO change, same as any host/rule edit.
     if not await _activate_pending_changes(client, connection):
         return
+
+    if demo and hosts:
+        # Livestatus is a different port than REST — bare host only.
+        await _fake_demo_hosts_up(connection.host, [h.hostname for h in hosts])
 
     # Pull the site's actual current host/folder configuration, not just a
     # log of what this run touched — used for the state table below and for
