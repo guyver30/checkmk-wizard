@@ -8,10 +8,12 @@ for the source citations.
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 import secrets
 from dataclasses import dataclass
 from typing import Any, Self
+from urllib.parse import unquote
 
 import httpx
 
@@ -964,3 +966,108 @@ async def change_cmkadmin_password(
                 raise CheckmkAPIError("PUT", str(put_resp.url), put_resp.status_code, body)
         except httpx.HTTPError as exc:
             raise CheckmkAPIError("GET/PUT", login_url, 0, str(exc)) from exc
+
+
+# -- Abort: revert pending changes via the GUI --------------------------------
+
+# The confirm link on Checkmk's "Revert changes" page is built by
+# makeactionuri() (cmk/gui/utils/urls.py), which appends `_transid` and
+# `_csrf_token` to the current URL. The transid is
+# "<epoch>/<token_urlsafe>"; inside the page its slash can appear as "/",
+# "\/" (JS string) or "%2F".
+_REVERT_TRANSID_RE = re.compile(r"_transid=(\d+(?:/|\\/|%2[Ff])[A-Za-z0-9_-]+)")
+_REVERT_CSRF_RE = re.compile(r"_csrf_token=([^&\"'\s]+)")
+
+
+@dataclass
+class RevertChangesResult:
+    reverted: bool
+    detail: str
+
+
+async def revert_pending_changes(
+    host: str,
+    site: str,
+    cmkadmin_password: str,
+    proto: str = "http",
+    port: int | None = None,
+    cmkadmin_user: str = "cmkadmin",
+) -> RevertChangesResult:
+    """Discard ALL pending (not yet activated) changes on the site through the
+    Checkmk GUI's "Revert changes" action.
+
+    Checkmk's 2.4.0 REST API has no revert/discard endpoint (verified
+    2026-10-01 against cmk/gui/openapi/endpoints/activate_changes/__init__.py
+    on the 2.4.0, 2.5.0 and master branches: only activate-changes,
+    wait-for-completion, show, running and pending_changes). So this drives
+    `ModeRevertChanges` in cmk/gui/wato/pages/activate_changes.py (2.4.0): it
+    logs in as cmkadmin, loads `wato.py?mode=revert_changes` to obtain the
+    `_transid` / `_csrf_token` the page's confirm link carries (built by
+    `makeactionuri` in cmk/gui/utils/urls.py), then repeats the request with
+    `_action=discard`. Checkmk restores the last automatic WATO snapshot (taken
+    at the last activation) and activates it, so every pending change on the
+    site is reverted, including other users' changes; there is no per-change
+    revert. Needs the permissions wato.activate + wato.discard (+
+    wato.discardforeign when foreign changes exist); cmkadmin has all of them.
+    The action silently does nothing when no snapshot exists yet or a pending
+    change forbids discarding, so success is confirmed by re-reading the
+    pending-changes list.
+
+    Not yet live-verified on 2.4.0p35.
+
+    Best-effort: this never raises. Any failure comes back as
+    `RevertChangesResult(False, reason)` and the caller should print the reason
+    plus the manual path "Setup > Activate changes > Revert changes".
+    """
+    base = _site_base(proto, host, port, site)
+    try:
+        async with httpx.AsyncClient() as client:
+            await _gui_login(client, f"{base}/login.py", site, cmkadmin_user, cmkadmin_password)
+
+            page = await client.get(f"{base}/wato.py", params={"mode": "revert_changes"})
+            text = html.unescape(page.text)
+            if "No pending changes" in text:
+                return RevertChangesResult(True, "no pending changes to revert")
+
+            transid_match = _REVERT_TRANSID_RE.search(text)
+            if not transid_match:
+                return RevertChangesResult(
+                    False,
+                    "Checkmk offered no revert action; no WATO snapshot from a previous activation "
+                    "exists yet, a pending change blocks discarding, or the user lacks wato.discard",
+                )
+            transid = unquote(transid_match.group(1)).replace("\\/", "/")
+            csrf_match = _REVERT_CSRF_RE.search(text) or _CSRF_TOKEN_RE.search(text)
+            csrf = unquote(csrf_match.group(1)) if csrf_match else ""
+
+            discard = await client.get(
+                f"{base}/wato.py",
+                params={
+                    "mode": "revert_changes",
+                    "_action": "discard",
+                    "_transid": transid,
+                    "_csrf_token": csrf,
+                },
+            )
+            # httpx does not follow redirects by default; a 302 to
+            # activate_changes is the expected success response.
+            if discard.status_code >= 400:
+                return RevertChangesResult(False, f"revert request returned {discard.status_code}")
+
+            check = await client.get(
+                f"{base}/api/v1/domain-types/activation_run/collections/pending_changes",
+                headers={"Accept": "application/json"},
+            )
+            if check.status_code != 200:
+                return RevertChangesResult(
+                    False, f"could not confirm the revert (pending_changes returned {check.status_code})"
+                )
+            remaining = check.json().get("value", [])
+            if remaining:
+                return RevertChangesResult(False, f"{len(remaining)} change(s) still pending after revert")
+            return RevertChangesResult(True, "all pending changes reverted")
+    except CheckmkAPIError as exc:
+        # Only _gui_login raises CheckmkAPIError in this flow.
+        return RevertChangesResult(False, f"cmkadmin login failed: {exc.body}")
+    except (httpx.HTTPError, ValueError) as exc:
+        return RevertChangesResult(False, f"revert request failed: {exc}")
