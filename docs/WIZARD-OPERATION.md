@@ -15,6 +15,12 @@ original design, see [PLAN-CONFORMANCE-AUDIT.md](PLAN-CONFORMANCE-AUDIT.md).
 
 ## Entry point and control flow
 
+`checkmk-wizard --demo` (added 2026-10-01) runs demo mode: Phase 3 generates
+host IPs instead of scanning, Phase 4 defaults the monitoring method to
+`ping`, and Phase 7 fakes the hosts UP after activation (see those sections).
+`deploy/run-wizard.sh` forwards its arguments, so `deploy/run-wizard.sh --demo`
+works in container mode.
+
 Host-native:
 
 ```bash
@@ -722,6 +728,13 @@ root folder, same as the wizard's original behavior.
 
 ## Phase 3 — Network Discovery (`wizard.py:391-467`)
 
+**Demo mode (added 2026-10-01, `--demo`):** no scan runs. Per Phase 2 folder
+with a subnet (or once, into `/` with default `198.51.100.0/24`, when there is
+none) the wizard prompts for a host count and subnet, and stages the first N
+usable IPs not already in Checkmk (`_demo_host_ips`) with the same inert
+attributes as scanned hosts. They are returned as `ScannedHost` with no open
+ports.
+
 **Changed 2026-08-25: scans each Phase 2 folder's subnet directly into
 that folder**, instead of a single subnet always staged at root
 regardless of Phase 2. Falls back to exactly the original single-CIDR
@@ -795,6 +808,9 @@ retag flow and then reports there is nothing to promote.
    `list[ScannedHost(ip, open_ports, folder)]`.
 
 ## Phase 4 — Host Classification (`wizard.py:564-651`)
+
+In demo mode (`--demo`) the "Monitoring method" select defaults to `ping`; all
+prompts stay.
 
 Purely interactive — **no fingerprinting, and (changed 2026-08-25) no
 folder prompt** — each host's folder is already known from which Phase 2
@@ -1606,6 +1622,14 @@ a different mechanism than the plan's wording, but the same outcome
 (SNMP-only hosts get their community string configured).
 
 ## Phase 7 — Activation & Validation (`wizard.py:939-988`)
+
+In demo mode (`--demo`), right after the activation below succeeds,
+`_fake_demo_hosts_up` sends over Livestatus TCP (`livestatus.send_commands`,
+one connection per command) `DISABLE_HOST_CHECK`, `PROCESS_HOST_CHECK_RESULT;<host>;0`,
+`DISABLE_SVC_CHECK;<host>;PING` and `PROCESS_SERVICE_CHECK_RESULT;<host>;PING;0`
+for every host onboarded this run, so they show UP. It retries on connection
+reset and, on final failure, prints the manual `lq` commands without aborting.
+Undo with `ENABLE_HOST_CHECK` / `ENABLE_SVC_CHECK`.
 
 1. `_activate_pending_changes(client, connection)` (added 2026-08-27,
    shared with Phase 6's pre-discovery activation above — the exact same
