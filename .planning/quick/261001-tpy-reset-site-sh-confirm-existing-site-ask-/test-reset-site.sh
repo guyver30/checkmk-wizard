@@ -33,7 +33,7 @@ OTHER=keep
 #!/usr/bin/env bash
 echo "podman $* | $(grep '^CMK_SITE_ID' .env 2>/dev/null | tr '\n' ' ')" >> "$LOG"
 case "$*" in
-    "compose config -q") [ -z "${STUB_CONFIG_FAIL:-}" ] || exit 1 ;;
+    "compose config --services") [ -z "${STUB_CONFIG_FAIL:-}" ] || exit 1 ;;
     "volume exists "*) [ -z "${STUB_NO_VOLUME:-}" ] || exit 1 ;;
     "container inspect"*) echo "${STUB_RUNNING:-true}" ;;
     "exec checkmk ls"*|"run "*) printf 'lost+found\n%s\n' "${STUB_SITES:-dmc}" ;;

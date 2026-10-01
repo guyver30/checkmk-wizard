@@ -102,8 +102,13 @@ read_line() {
 }
 
 # 1. Pre-flight: nothing is asked or changed unless compose can parse .env.
-if ! podman compose config -q >/dev/null 2>&1; then
-    echo "deploy/.env is missing or incomplete; run deploy/init-env.sh first." >&2
+# `config --services`, not `config -q`: podman-compose 1.0.6 (Debian/Ubuntu
+# package) has no -q and failed this check on a complete .env (2026-10-01).
+# The compose error is shown, so a real cause is never hidden behind the hint.
+if ! config_err="$(podman compose config --services 2>&1 >/dev/null)"; then
+    echo "$config_err" >&2
+    echo "Compose could not read deploy/compose.yaml with deploy/.env (error above)." >&2
+    echo "If it names a missing variable, run deploy/init-env.sh first." >&2
     exit 1
 fi
 
