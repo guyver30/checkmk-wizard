@@ -4,6 +4,7 @@ Configurator (see docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md).
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import ipaddress
 import json
@@ -24,6 +25,7 @@ from prompt_toolkit.layout import HSplit, Layout, ScrollOffsets, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import Progress
 from rich.table import Table
 
@@ -1527,7 +1529,94 @@ def _pending_hosts(hosts: list[dict[str, Any]]) -> list[ScannedHost]:
     return pending
 
 
-async def phase3_discovery(client: CheckmkClient, folder_subnets: dict[str, str | None]) -> list[ScannedHost]:
+# TEST-NET-2 (RFC 5737): documentation range, never routed, so demo hosts can
+# never collide with a real network.
+_DEMO_DEFAULT_SUBNET = "198.51.100.0/24"
+
+
+def _demo_host_ips(cidr: str, count: int, exclude: set[str]) -> list[str]:
+    """First `count` usable addresses of `cidr` that are not in `exclude`."""
+    ips: list[str] = []
+    if count <= 0:
+        return ips
+    for addr in ipaddress.ip_network(cidr, strict=False).hosts():
+        ip = str(addr)
+        if ip in exclude:
+            continue
+        ips.append(ip)
+        if len(ips) == count:
+            return ips
+    raise ValueError(f"subnet {cidr} has only {len(ips)} free usable addresses (wanted {count})")
+
+
+async def _demo_discovery(
+    client: CheckmkClient,
+    folder_subnets: dict[str, str | None],
+    pending: list[ScannedHost],
+    excluded_ips: set[str],
+) -> list[ScannedHost]:
+    """Demo-mode Phase 3: stage generated host IPs instead of scanning.
+
+    The hosts do not exist on any network; Phase 7 fakes them UP after
+    activation. `excluded_ips` are addresses already in Checkmk.
+    """
+    console.print(
+        "[bold magenta]DEMO MODE — no network scan; generating hosts that do not exist "
+        "and will be faked UP after activation.[/bold magenta]"
+    )
+    targets = [(folder, cidr) for folder, cidr in folder_subnets.items() if cidr] or [
+        ("/", _DEMO_DEFAULT_SUBNET)
+    ]
+    used = set(excluded_ips)
+    all_results: list[ScannedHost] = []
+    for folder, default_cidr in targets:
+        count: int | None = None
+        while count is None:
+            raw = await questionary.text(f"Number of demo hosts for folder '{folder}':", default="5").ask_async()
+            try:
+                count = int(raw)
+                if count < 0:
+                    raise ValueError
+            except ValueError:
+                count = None
+                console.print("[red]Enter a whole number >= 0 — try again.[/red]")
+        ips: list[str] | None = None
+        while ips is None and count:
+            cidr = await questionary.text("Subnet for them:", default=default_cidr).ask_async()
+            try:
+                ips = _demo_host_ips(cidr, count, used)
+            except ValueError as exc:
+                console.print(f"[red]{exc} — try again.[/red]")
+        for ip in ips or []:
+            used.add(ip)
+            all_results.append(ScannedHost(ip=ip, open_ports=[], folder=folder))
+            try:
+                await client.create_host(
+                    host_name=ip,
+                    folder=folder,
+                    attributes={"ipaddress": ip, "tag_agent": "no-agent", "tag_snmp_ds": "no-snmp"},
+                )
+            except CheckmkAPIError as exc:
+                console.print(f"[yellow]Could not stage {ip}: {exc}[/yellow]")
+
+    seen_ips = {sh.ip for sh in all_results}
+    all_results.extend(p for p in pending if p.ip not in seen_ips)
+
+    table = Table(title="Demo hosts (not scanned)")
+    table.add_column("IP")
+    table.add_column("Folder")
+    for sh in all_results:
+        table.add_row(sh.ip, sh.folder)
+    console.print(table)
+    return all_results
+
+
+async def phase3_discovery(
+    client: CheckmkClient,
+    folder_subnets: dict[str, str | None],
+    *,
+    demo: bool = False,
+) -> list[ScannedHost]:
     """Scan each Phase 2 folder's subnet directly into that folder. Falls
     back to a single flat scan into the root folder when Phase 2 defined
     no folders (skipped, or every folder's subnet was left blank) —
@@ -1563,6 +1652,9 @@ async def phase3_discovery(client: CheckmkClient, folder_subnets: dict[str, str 
             f"[bold]{len(pending)} unpromoted host(s) already in Checkmk[/bold] (left by an earlier "
             "run or found by a folder's daily network scan) — they will be offered for promotion in Phase 4."
         )
+
+    if demo:
+        return await _demo_discovery(client, folder_subnets, pending, known_ips | pending_ips)
 
     if existing_hosts is not None and not existing_hosts:
         console.print("New site — no hosts yet, so the network scan is required.")
@@ -1663,6 +1755,7 @@ async def phase4_classification(
     connection: CheckmkConnection | None = None,
     *,
     tag_group_available: bool = True,
+    demo: bool = False,
 ) -> list[OnboardedHost]:
     """Purely interactive — no fingerprinting, no folder prompt: each host's
     folder is already known from which Phase 2 folder-subnet scan found it.
@@ -1704,8 +1797,11 @@ async def phase4_classification(
                 )
             else:
                 hostname = raw_hostname
+        # Demo hosts do not exist, so default to ping: no SSH/agent waits.
+        method_default: dict[str, str] = {"default": "ping"} if demo else {}
         os_family = await questionary.select(
             f"Monitoring method for {hostname}:",
+            **method_default,
             choices=[
                 questionary.Choice("linux (Checkmk agent)", value="linux"),
                 questionary.Choice("windows (Checkmk agent)", value="windows"),
@@ -2869,7 +2965,56 @@ async def _query_host_states_best_effort(host: str, host_names: list[str]) -> di
     return {}
 
 
-async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]) -> None:
+async def _fake_demo_hosts_up(livestatus_host: str, host_names: list[str]) -> None:
+    """Demo mode: make hosts that do not exist report UP, via Livestatus.
+
+    Per host: disable the active host check and inject an UP result, and do the
+    same for the auto-created PING service (OK). Best-effort and never raising:
+    activation reloads the core, so the first attempt can hit a connection
+    reset (retried like `_query_host_states_best_effort`); after the retries it
+    prints the manual commands. To undo, send ENABLE_HOST_CHECK;<host> and
+    ENABLE_SVC_CHECK;<host>;PING.
+    """
+    commands = [
+        cmd
+        for name in host_names
+        for cmd in (
+            f"DISABLE_HOST_CHECK;{name}",
+            f"PROCESS_HOST_CHECK_RESULT;{name};0;faked up",
+            f"DISABLE_SVC_CHECK;{name};PING",
+            f"PROCESS_SERVICE_CHECK_RESULT;{name};PING;0;faked up",
+        )
+    ]
+    last_error: Exception | None = None
+    for delay in (*_LIVESTATUS_RETRY_DELAYS_SECONDS, None):
+        try:
+            livestatus.send_commands(livestatus_host, commands)
+        except OSError as exc:
+            last_error = exc
+        else:
+            console.print(f"[green]Faked {len(host_names)} demo host(s) UP (checks disabled).[/green]")
+            # Let the core apply the injected results before the state table query.
+            await asyncio.sleep(2)
+            return
+        if delay is not None:
+            await asyncio.sleep(delay)
+    manual = "\n".join(f'  lq "COMMAND [$(date +%s)] {cmd}"' for cmd in commands)
+    console.print(
+        f"[yellow]Could not fake the demo hosts UP via Livestatus on {livestatus_host}:"
+        f"{livestatus.DEFAULT_PORT} ({last_error}). Run these as the site user to do it manually "
+        "(also check that LIVESTATUS_TCP_TLS is off):\n"
+        f"{escape(manual)}[/yellow]",
+        highlight=False,
+    )
+
+
+async def phase7_activation(
+    client: CheckmkClient,
+    connection: CheckmkConnection,
+    hosts: list[OnboardedHost],
+    *,
+    demo: bool = False,
+) -> None:
     console.rule("[bold]Phase 7 — Activation & Validation")
     # Phase 6 already activated once before running discovery (so
     # discovery reflects Phase 5's host/rule changes) — this activation
@@ -2878,6 +3023,10 @@ async def phase7_activation(client: CheckmkClient, connection: CheckmkConnection
     # itself a pending WATO change, same as any host/rule edit.
     if not await _activate_pending_changes(client, connection):
         return
+
+    if demo and hosts:
+        # Livestatus is a different port than REST — bare host only.
+        await _fake_demo_hosts_up(connection.host, [h.hostname for h in hosts])
 
     # Pull the site's actual current host/folder configuration, not just a
     # log of what this run touched — used for the state table below and for
@@ -2974,22 +3123,29 @@ async def _provision_topology_editor(client: CheckmkClient, connection: CheckmkC
         )
 
 
-async def run() -> None:
+async def run(*, demo: bool = False) -> None:
     connection = await phase1_site_bringup()
     async with CheckmkClient(connection) as client:
         await _provision_topology_editor(client, connection)
         folder_subnets, tag_group_available = await phase2_folders(client)
-        scan_results = await phase3_discovery(client, folder_subnets)
+        scan_results = await phase3_discovery(client, folder_subnets, demo=demo)
         onboarded = await phase4_classification(
-            scan_results, client, connection, tag_group_available=tag_group_available
+            scan_results, client, connection, tag_group_available=tag_group_available, demo=demo
         )
         await phase5_onboarding(
             client, connection, onboarded, scan_results, tag_group_available=tag_group_available
         )
         await phase6_discovery(client, connection, onboarded)
-        await phase7_activation(client, connection, onboarded)
+        await phase7_activation(client, connection, onboarded, demo=demo)
     console.rule("[bold green]Done")
 
 
-def main() -> None:
-    asyncio.run(run())
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="checkmk-wizard")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="create N fake hosts in a subnet without scanning, and fake them UP after activation",
+    )
+    args = parser.parse_args(argv)
+    asyncio.run(run(demo=args.demo))

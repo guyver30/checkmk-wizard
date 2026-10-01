@@ -174,6 +174,27 @@ The `uv sync` is deliberate — the checkout is bind-mounted into the
 container, so a `git pull` on the host changes the code the container runs
 but not its virtualenv.
 
+### Demo mode
+
+`--demo` fills a site with fake hosts so you can demo a populated, all-green
+Checkmk site and dashboard without real devices:
+
+```bash
+uv run checkmk-wizard --demo
+deploy/run-wizard.sh --demo   # container mode; arguments are forwarded
+```
+
+Phase 3 does not scan. For each Phase 2 folder with a subnet it asks how many
+hosts to create and in which subnet (default: the folder's subnet; with no
+folders, the root folder and `198.51.100.0/24`, the non-routable TEST-NET-2
+range) and stages the first N usable addresses not already in Checkmk. Phase 4
+keeps its prompts but the monitoring method defaults to `ping`. After Phase 7's
+activation, every host onboarded in that run is faked UP over Livestatus
+(host check disabled with an UP result injected, same for its `PING`
+service). To undo, send `ENABLE_HOST_CHECK;<host>` and
+`ENABLE_SVC_CHECK;<host>;PING`. If Livestatus is unreachable the wizard prints
+the manual `lq` commands instead of failing.
+
 ## Test
 
 ```bash

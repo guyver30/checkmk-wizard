@@ -11,7 +11,7 @@
 # `uv sync` runs every time because the checkout is bind-mounted: a git pull on
 # the host updates the code the container runs, but not its virtualenv.
 #
-# Usage: deploy/run-wizard.sh
+# Usage: deploy/run-wizard.sh [wizard options]   (e.g. --demo)
 
 set -euo pipefail
 
@@ -76,4 +76,4 @@ echo "Leaving it blank skips creating the 'automation' user from CMK_REST_SECRET
 echo
 
 exec podman exec --interactive --tty "$container" \
-    bash -c "cd /app/checkmk-wizard && uv sync && uv run checkmk-wizard"
+    bash -c 'cd /app/checkmk-wizard && uv sync && uv run checkmk-wizard "$@"' _ "$@"
