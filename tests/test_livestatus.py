@@ -1,6 +1,8 @@
 import socket
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from checkmk_wizard import livestatus
 
 
@@ -68,3 +70,47 @@ def test_query_host_states_sends_expected_lql_query():
         "\n"
     )
     sock.shutdown.assert_called_once_with(socket.SHUT_WR)
+
+
+def test_send_commands_empty_opens_no_connection():
+    with patch("socket.create_connection") as mock_connect:
+        livestatus.send_commands("h", [])
+    mock_connect.assert_not_called()
+
+
+def test_send_commands_wire_format_one_connection_per_command():
+    sock = _fake_connection(b"")
+    with (
+        patch("socket.create_connection", return_value=sock) as mock_connect,
+        patch("checkmk_wizard.livestatus.time.time", return_value=1700000000.9),
+    ):
+        livestatus.send_commands("checkmk", ["DISABLE_HOST_CHECK;a", "DISABLE_HOST_CHECK;b"])
+    assert mock_connect.call_count == 2
+    mock_connect.assert_called_with(("checkmk", livestatus.DEFAULT_PORT), timeout=10)
+    sent = [c[0][0] for c in sock.sendall.call_args_list]
+    assert sent == [
+        b"COMMAND [1700000000] DISABLE_HOST_CHECK;a\n\n",
+        b"COMMAND [1700000000] DISABLE_HOST_CHECK;b\n\n",
+    ]
+
+
+def test_send_commands_uses_custom_port():
+    sock = _fake_connection(b"")
+    with patch("socket.create_connection", return_value=sock) as mock_connect:
+        livestatus.send_commands("checkmk", ["X;y"], port=7000)
+    mock_connect.assert_called_once_with(("checkmk", 7000), timeout=10)
+
+
+@pytest.mark.parametrize("bad", ["A;b\nGET hosts", "A;b\rC"])
+def test_send_commands_rejects_newlines_before_connecting(bad):
+    with patch("socket.create_connection") as mock_connect, pytest.raises(ValueError):
+        livestatus.send_commands("h", ["OK;x", bad])
+    mock_connect.assert_not_called()
+
+
+def test_send_commands_propagates_oserror():
+    with (
+        patch("socket.create_connection", side_effect=ConnectionResetError),
+        pytest.raises(OSError),
+    ):
+        livestatus.send_commands("h", ["X;y"])
