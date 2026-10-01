@@ -285,7 +285,7 @@ podman compose exec checkmk omd stop dmc
 podman compose exec checkmk omd mv dmc mysite
 ```
 
-Then set `CMK_SITE_ID=mysite` in `deploy/.env` and recreate the containers, including the dashboard (`podman compose up -d --force-recreate checkmk worker poller dashboard`) — or a full `podman compose down && podman compose up -d`. Otherwise the checkmk entrypoint's `omd start "$CMK_SITE_ID"` targets the old name and the `tmpfs` mount stays on the old path. Because it is easy to miss one of these places, on a disposable stack it is usually simpler to remove the `checkmk_data` volume (§8.5) and start again with Option 1. Existing agents registered against the old site keep their old URL/certs and must be re-registered after a rename.
+Then set `CMK_SITE_ID=mysite` in `deploy/.env` and recreate the containers, including the dashboard (`podman compose up -d --force-recreate checkmk worker poller dashboard`) — or a full `podman compose down && podman compose up -d`. Otherwise the checkmk entrypoint's `omd start "$CMK_SITE_ID"` targets the old name and the `tmpfs` mount stays on the old path. Because it is easy to miss one of these places, on a disposable stack it is usually simpler to run `deploy/reset-site.sh` (§8.5). It wipes the site and recreates it under a new name in one step: it asks for the new name and writes `CMK_SITE_ID` to `deploy/.env` for you. Existing agents registered against the old site keep their old URL/certs and must be re-registered after a rename.
 
 ---
 
@@ -712,6 +712,8 @@ What to expect, that's different from running it directly on a Checkmk host:
 Nothing here needs repeating on every run except §8.3 itself — dependencies (§8.2) and Livestatus TCP (§5) only need doing once (or again after `uv.lock` changes or a site recreation, respectively). checkmk-wizard also detects an already-provisioned `automation`/`agent_registration` user on re-runs and falls back to asking for its existing secret instead of failing (see the main [README.md](../README.md#prerequisites)).
 
 ### 8.5. Starting over with a blank site
+
+`deploy/reset-site.sh` automates this whole section: it detects the site in the `checkmk_data` volume, asks you to confirm its name, asks for a new site name (Enter keeps it; Esc or Ctrl+C aborts with nothing changed), writes it to `CMK_SITE_ID` in `deploy/.env` and does the full down/up. `--yes --site NAME` does it non-interactively. The by-hand steps follow.
 
 To run the wizard against a genuinely fresh Checkmk site, remove the Checkmk volume **and** the Mosquitto volume (the second is recommended, see below):
 

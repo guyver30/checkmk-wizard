@@ -77,11 +77,19 @@ for hosts that are no longer on the site. It does **not** clear the global
 `lan/events/recent` feed, though, so without a broker wipe the dashboard's
 history keeps the old site's events, shown as "unknown → unknown".
 
-`deploy/reset-site.sh` does all of this. It asks you to type the site name to
-confirm, then runs down, the volume removal and up. It waits for Checkmk to
-answer, reports `LIVESTATUS_TCP_TLS`, and lists the next steps. `--with-history`
-also removes `clickhouse_data`, and `--yes` skips the prompt. Afterwards,
-`deploy/run-wizard.sh` starts the wizard:
+`deploy/reset-site.sh` does all of this. It first checks that `deploy/.env` is
+usable (otherwise it stops and points you to `deploy/init-env.sh`). It then
+detects the site that actually lives in the `checkmk_data` volume and shows it
+next to `CMK_SITE_ID` from `deploy/.env`, with a warning when they differ. You
+confirm by typing the existing site name, then it asks for a new site name
+(`New site name [<existing>]:`, Enter keeps the current one; invalid names are
+re-asked). Esc or Ctrl+C at either prompt aborts with nothing changed. After
+that it runs down and the volume removal, writes the new name to `CMK_SITE_ID`
+in `deploy/.env`, and runs up, so the new site is created under that name. It
+waits for Checkmk to answer, reports `LIVESTATUS_TCP_TLS`, and lists the next
+steps. `--with-history` also removes `clickhouse_data`. `--yes` skips both
+prompts and keeps the name, and `--yes --site NAME` renames non-interactively.
+Afterwards, `deploy/run-wizard.sh` starts the wizard:
 
 ```bash
 ~/checkmk-stack/app/checkmk-wizard/deploy/reset-site.sh
