@@ -38,7 +38,7 @@
           "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
           "editorType": "sql",
           "format": 2,
-          "rawSql": "SELECT entity_key AS host, folder, sum(up_minutes) AS up_minutes, sum(down_minutes) AS down_minutes, sum(unobserved_minutes) AS unobserved_minutes, sum(downtime_minutes) AS downtime_minutes, sum(no_data_minutes) AS no_data_minutes, round(sum(up_minutes) / nullIf(sum(up_minutes) + sum(down_minutes), 0) * 100, 3) AS availability_pct FROM history.availability_daily FINAL WHERE entity_type = 'device' AND day >= toDate($__fromTime) AND day <= toDate($__toTime) GROUP BY host, folder ORDER BY host"
+          "rawSql": "SELECT entity_key AS host, folder, sum(up_minutes) AS up_minutes, sum(down_minutes) AS down_minutes, sum(unobserved_minutes) AS unobserved_minutes, sum(downtime_minutes) AS downtime_minutes, sum(no_data_minutes) AS no_data_minutes, round(up_minutes / nullIf(up_minutes + down_minutes, 0) * 100, 3) AS availability_pct FROM history.availability_daily FINAL WHERE entity_type = 'device' AND day >= toDate($__fromTime) AND day <= toDate($__toTime) GROUP BY host, folder ORDER BY host"
         }
       ]
     },
@@ -55,7 +55,7 @@
           "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-fleet" },
           "editorType": "sql",
           "format": 2,
-          "rawSql": "SELECT entity_key AS folder, sum(up_minutes) AS up_minutes, sum(down_minutes) AS down_minutes, sum(unobserved_minutes) AS unobserved_minutes, sum(downtime_minutes) AS downtime_minutes, sum(no_data_minutes) AS no_data_minutes, round(sum(up_minutes) / nullIf(sum(up_minutes) + sum(down_minutes), 0) * 100, 3) AS availability_pct FROM history.availability_daily FINAL WHERE entity_type = 'group' AND group_type = 'folder' AND day >= toDate($__fromTime) AND day <= toDate($__toTime) GROUP BY folder ORDER BY folder"
+          "rawSql": "SELECT entity_key AS folder, sum(up_minutes) AS up_minutes, sum(down_minutes) AS down_minutes, sum(unobserved_minutes) AS unobserved_minutes, sum(downtime_minutes) AS downtime_minutes, sum(no_data_minutes) AS no_data_minutes, round(up_minutes / nullIf(up_minutes + down_minutes, 0) * 100, 3) AS availability_pct FROM history.availability_daily FINAL WHERE entity_type = 'group' AND group_type = 'folder' AND day >= toDate($__fromTime) AND day <= toDate($__toTime) GROUP BY folder ORDER BY folder"
         }
       ]
     },

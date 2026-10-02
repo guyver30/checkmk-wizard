@@ -377,3 +377,4 @@
 - **2026-10-02 17:18** — keep WR-06 documented for now
 - **2026-10-02 17:38** — I set up a real linux host (192.168.97.130) (for Phase 14.1 plan 08 live verification; was asked fake vs real hosts)
 - **2026-10-02 18:00** — (Grafana dashboards all error: SETTING_CONSTRAINT_VIOLATION max_execution_time shouldn't be greater than 60)
+- **2026-10-02 18:04** — (Grafana Availability dashboard: 'Per device over range' and 'Per folder over range' error 184 illegal_aggregation; 'Fleet availability' panel empty)
