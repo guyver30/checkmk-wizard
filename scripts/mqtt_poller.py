@@ -37,11 +37,13 @@ than generic docs.
 from __future__ import annotations
 
 import argparse
+import collections
 import datetime
 import json
 import logging
 import math
 import os
+import queue
 import random
 import re
 import signal
@@ -1299,6 +1301,331 @@ def send_livestatus_commands(
                 sock.shutdown(socket.SHUT_WR)
         except (TimeoutError, OSError) as exc:
             raise LivestatusError(f"Livestatus command send failed: {exc}") from exc
+
+
+# --- Admin command channel: faked-set derivation and command worker --------------------
+
+ADMIN_FAKED_COLUMN = "active_checks_enabled"
+ADMIN_PING_SERVICE = "PING"
+ADMIN_FAKED_HOSTS_QUERY = (
+    "GET hosts\nColumns: name state active_checks_enabled\n"
+    "Filter: active_checks_enabled = 0\nOutputFormat: json\n\n"
+)
+ADMIN_PING_SERVICES_QUERY = (
+    "GET services\nColumns: host_name active_checks_enabled\n"
+    "Filter: description = PING\nOutputFormat: json\n\n"
+)
+ADMIN_QUEUE_MAX = 8
+ADMIN_SEEN_IDS_MAX = 64
+# Like wizard `_fake_demo_hosts_up`'s 2 s pause: lets the core apply the external
+# commands before the faked-set query runs.
+ADMIN_REFRESH_DELAY_SECONDS = 2.0
+ADMIN_ACK_DETAIL_MAX = 200
+_ADMIN_OP_STATE = {"up": "UP", "down": "DOWN", "unreach": "UNREACH", "restore": "RESTORED"}
+_ADMIN_FAKED_STATES = ("UP", "DOWN", "UNREACH")
+
+
+def _livestatus_json_rows(body: str, what: str) -> list:
+    if not body.strip():
+        return []
+    try:
+        rows = json.loads(body)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise LivestatusError(f"Malformed {what} response: {exc}") from exc
+    if not isinstance(rows, list):
+        raise LivestatusError(f"Malformed {what} response: expected a list")
+    return rows
+
+
+def query_faked_hosts(host: str, port: int, timeout: float) -> dict[str, str]:
+    """Hosts that currently look faked, derived from Livestatus (D-10).
+
+    Faked means the HOST's active checks are disabled AND (the host's PING service has
+    active checks disabled OR the host has no PING service). Wizard `--demo` hosts
+    disable only the PING check (the host check stays enabled under the "Always assume
+    host to be up" rule), so they are not counted; unmanaged switches have no PING
+    service, so a faked switch is still counted. Hosts whose checks an operator disabled
+    for other reasons are counted too (documented limitation). Assumption A1: the
+    `active_checks_enabled` column exists on the live site (probed by `--check-columns`).
+    """
+    try:
+        host_rows = _livestatus_json_rows(
+            _livestatus_request(host, port, ADMIN_FAKED_HOSTS_QUERY, timeout), "faked hosts"
+        )
+        ping_rows = _livestatus_json_rows(
+            _livestatus_request(host, port, ADMIN_PING_SERVICES_QUERY, timeout), "PING services"
+        )
+        ping_active = {row[0]: int(row[1]) for row in ping_rows}
+        faked: dict[str, str] = {}
+        for row in host_rows:
+            name = row[0]
+            if not isinstance(name, str) or not is_publishable_device_id(name):
+                continue
+            if ping_active.get(name, 0) != 0:
+                continue
+            faked[name] = host_state_label(int(row[1]))
+    except (IndexError, TypeError, ValueError) as exc:
+        raise LivestatusError(f"Malformed faked-hosts response: {exc}") from exc
+    return faked
+
+
+class AdminContext:
+    """State shared between the poll loop thread and the admin worker thread (lock-guarded)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._snapshots: dict[str, DeviceSnapshot] = {}
+        self._faked: dict[str, str] = {}
+        self._last_published: dict[str, str] | None = None
+        self.use_ledger = False
+
+    def update_snapshots(self, snapshots: list[DeviceSnapshot]) -> None:
+        with self._lock:
+            self._snapshots = {s.id: s for s in snapshots}
+
+    def snapshot_map(self) -> dict[str, DeviceSnapshot]:
+        with self._lock:
+            return dict(self._snapshots)
+
+    def faked(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._faked)
+
+    def set_faked(self, faked: dict[str, str]) -> None:
+        with self._lock:
+            self._faked = dict(faked)
+
+    def seed_ledger(self, faked: dict[str, str]) -> None:
+        self.set_faked(faked)
+
+    def apply_ledger(self, actions: list[AdminAction]) -> None:
+        """Record applied actions in the ledger (only meaningful when `use_ledger`)."""
+        with self._lock:
+            for action in actions:
+                if action.op == "restore":
+                    self._faked.pop(action.host, None)
+                elif action.op in _ADMIN_OP_STATE:
+                    self._faked[action.host] = _ADMIN_OP_STATE[action.op]
+
+    def should_publish(self, faked: dict[str, str]) -> bool:
+        with self._lock:
+            if self._last_published is not None and self._last_published == faked:
+                return False
+            self._last_published = dict(faked)
+            return True
+
+
+def publish_admin_faked(client, hosts: dict[str, str], source: str, timestamp: str) -> None:
+    _publish_json(
+        client,
+        TOPIC_ADMIN_FAKED,
+        {"hosts": hosts, "source": source, "timestamp": timestamp},
+        qos=1,
+        retain=True,
+    )
+
+
+def publish_admin_ack(client, ack: dict) -> None:
+    # Not retained: a late admin tab must never show a stale result.
+    _publish_json(client, TOPIC_ADMIN_ACK, ack, qos=1, retain=False)
+
+
+def refresh_admin_faked(client, context: AdminContext, config: PollerConfig) -> None:
+    """Recompute the faked map and publish `admin/faked` only when it changed (D-10)."""
+    if context.use_ledger:
+        faked = context.faked()
+        known = context.snapshot_map()
+        if known:
+            pruned = {h: s for h, s in faked.items() if h in known}
+            if pruned != faked:
+                context.set_faked(pruned)
+                faked = pruned
+        source = "ledger"
+    else:
+        try:
+            faked = query_faked_hosts(
+                config.livestatus_host, config.livestatus_port, DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
+            )
+        except LivestatusError as exc:
+            _logger.warning("Faked-host query failed; keeping last map: %s", exc)
+            return
+        context.set_faked(faked)
+        source = "livestatus"
+    if context.should_publish(faked):
+        publish_admin_faked(client, faked, source, utc_now_iso())
+
+
+def parse_admin_faked_payload(payload: bytes) -> dict[str, str]:
+    """Parse a retained `admin/faked` payload; {} on anything malformed."""
+    try:
+        data = json.loads(payload.decode("utf-8"))
+        hosts = data["hosts"]
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError):
+        return {}
+    if not isinstance(hosts, dict):
+        return {}
+    return {
+        k: v
+        for k, v in hosts.items()
+        if isinstance(k, str) and _HOST_ID_RE.match(k) and v in _ADMIN_FAKED_STATES
+    }
+
+
+class AdminCommandWorker:
+    """Executes admin commands off paho's network thread.
+
+    Livestatus retries during a core reload can take ~20 s, which must never block paho's
+    network loop or the poll loop. One daemon thread serializes commands so two actions
+    never interleave.
+    """
+
+    def __init__(
+        self,
+        config: PollerConfig,
+        context: AdminContext,
+        *,
+        send_fn=send_livestatus_commands,
+        sleep_fn=time.sleep,
+        refresh_fn=refresh_admin_faked,
+    ) -> None:
+        self._config = config
+        self._context = context
+        self._send_fn = send_fn
+        self._sleep_fn = sleep_fn
+        self._refresh_fn = refresh_fn
+        self._queue: queue.Queue[AdminCommand] = queue.Queue(maxsize=ADMIN_QUEUE_MAX)
+        self._seen_ids: collections.deque[str] = collections.deque(maxlen=ADMIN_SEEN_IDS_MAX)
+        self._stop = threading.Event()
+        self._client = None
+        self._thread: threading.Thread | None = None
+
+    def attach_client(self, client) -> None:
+        self._client = client
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="admin-worker", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def _ack(self, ack: dict) -> None:
+        if self._client is not None:
+            publish_admin_ack(self._client, ack)
+
+    @staticmethod
+    def _fail_ack(command_id: str, action: str, detail: str) -> dict:
+        return {
+            "id": command_id,
+            "ok": False,
+            "action": action,
+            "detail": detail[:ADMIN_ACK_DETAIL_MAX],
+            "applied": [],
+            "skipped": [],
+        }
+
+    def submit(self, payload: bytes, retained: bool) -> None:
+        """Runs on paho's thread; must stay cheap."""
+        if retained:
+            # Stale-command replay guard (T-16-05): a retained admin/cmd must never execute.
+            _logger.warning("Ignoring retained admin/cmd delivery")
+            return
+        try:
+            command = parse_admin_command(payload)
+        except AdminCommandError as exc:
+            if exc.command_id is not None:
+                self._ack(self._fail_ack(exc.command_id, "", exc.reason))
+            return
+        if command.id in self._seen_ids:
+            return
+        self._seen_ids.append(command.id)
+        try:
+            self._queue.put_nowait(command)
+        except queue.Full:
+            self._ack(self._fail_ack(command.id, command.action, "poller busy, try again"))
+
+    def process_one(self, command: AdminCommand) -> dict:
+        known = self._context.snapshot_map()
+        if not known:
+            return self._fail_ack(command.id, command.action, "poller has no host list yet")
+        known_hosts = [h for h in command.hosts if h in known]
+        skipped = [h for h in command.hosts if h not in known]
+        if command.action != "restore_all" and not known_hosts:
+            return self._fail_ack(command.id, command.action, "no known hosts in command")
+        actions = plan_admin_actions(
+            command.action, known_hosts, list(known.values()), self._context.faked()
+        )
+        ack = {
+            "id": command.id,
+            "ok": True,
+            "action": command.action,
+            "detail": "nothing to do",
+            "applied": [],
+            "skipped": skipped,
+        }
+        if not actions:
+            return ack
+        commands: list[str] = []
+        for a in actions:
+            commands.extend(build_admin_commands(a, known[a.host].address))
+        failure: LivestatusError | None = None
+        for delay in (*ADMIN_LIVESTATUS_RETRY_DELAYS_SECONDS, None):
+            try:
+                self._send_fn(
+                    self._config.livestatus_host,
+                    self._config.livestatus_port,
+                    commands,
+                    DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+                )
+                failure = None
+                break
+            except LivestatusError as exc:
+                failure = exc
+                if delay is not None:
+                    self._sleep_fn(delay)
+        if failure is not None:
+            ack = self._fail_ack(
+                command.id, command.action, f"Livestatus unreachable: {failure}"
+            )
+            ack["skipped"] = skipped
+            return ack
+        if self._context.use_ledger:
+            self._context.apply_ledger(actions)
+        self._sleep_fn(ADMIN_REFRESH_DELAY_SECONDS)
+        self._refresh_fn(self._client, self._context, self._config)
+        ack["detail"] = f"sent {len(commands)} Livestatus commands"
+        ack["applied"] = [
+            {"host": a.host, "state": _ADMIN_OP_STATE[a.op], "cascaded": a.cascaded}
+            for a in actions
+        ]
+        _logger.info(
+            "admin command id=%s action=%s applied=%d skipped=%d",
+            command.id,
+            command.action,
+            len(actions),
+            len(skipped),
+        )
+        return ack
+
+    def _handle(self, command: AdminCommand) -> None:
+        try:
+            ack = self.process_one(command)
+        except Exception:
+            # The only broad catch in the worker: one bad command must never kill the
+            # thread that serves every later command.
+            _logger.exception("admin command %s failed", command.id)
+            ack = self._fail_ack(command.id, command.action, "internal error")
+        self._ack(ack)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                command = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            self._handle(command)
 
 
 def extract_device_type(tags: dict) -> str:
@@ -2999,7 +3326,9 @@ def utc_now_iso() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat()
 
 
-def build_mqtt_client(config: PollerConfig) -> mqtt.Client:
+def build_mqtt_client(
+    config: PollerConfig, admin_worker: AdminCommandWorker | None = None
+) -> mqtt.Client:
     """Construct, authenticate and connect the poller's long-lived MQTT client.
 
     Configuring the LWT happens before connecting because paho-mqtt's
@@ -3022,8 +3351,19 @@ def build_mqtt_client(config: PollerConfig) -> mqtt.Client:
     def on_connect(client, userdata, flags, reason_code, properties=None):
         # Birth message: last_poll is None until the first cycle completes.
         publish_poller_status(client, since=utc_now_iso(), last_poll=None, device_count=0)
+        if admin_worker is not None:
+            # Subscribe on every connect: a clean-session reconnect loses subscriptions.
+            client.subscribe(TOPIC_ADMIN_CMD, qos=1)
 
     client.on_connect = on_connect
+    if admin_worker is not None:
+        admin_worker.attach_client(client)
+
+        def on_message(client, userdata, msg):
+            if msg.topic == TOPIC_ADMIN_CMD:
+                admin_worker.submit(msg.payload, msg.retain)
+
+        client.on_message = on_message
     client.reconnect_delay_set(min_delay=1, max_delay=120)
     client.connect(config.mqtt_host, config.mqtt_port, keepalive=30)
     client.loop_start()
@@ -3240,6 +3580,9 @@ class PollerState:
     # mosquitto volume wiped too (docs section 8.5, commit 96e7182).
     # `run_cycle` sweeps it once, behind `allow_stale_sweep`, then empties it.
     retained_ids: set[str] = field(default_factory=set)
+    # 2026-10-02 (Phase 16 D-10 fallback seed): faked hosts restored from the retained
+    # `admin/faked` topic; only used when the site lacks `active_checks_enabled`.
+    admin_faked: dict[str, str] = field(default_factory=dict)
     # Phase 14 (PLR-14): incident id -> last-published `incident_signature()`
     # (or `None` for an id seeded by `reconcile_state` from a retained topic
     # whose payload was never parsed -- a seeded `None` always differs from
@@ -3484,10 +3827,14 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     service_history_payloads: dict[str, bytes] = {}
     retained_ids: set[str] = set()
     retained_incident_ids: set[str] = set()
+    admin_faked_result: list[bytes] = []
     topology_received = threading.Event()
 
     def on_message(client, userdata, msg):
         parts = msg.topic.split("/")
+        if msg.topic == TOPIC_ADMIN_FAKED:
+            admin_faked_result.append(msg.payload)
+            return
         # A zero-length payload is an already-cleared topic, not a ghost.
         # Only exact 4-segment per-device topics count (the 3-segment
         # `lan/devices/topology` never matches), and only ids that
@@ -3546,6 +3893,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         client.subscribe("lan/devices/+/services", qos=1)
         client.subscribe("lan/devices/+/service_history", qos=1)
         client.subscribe("lan/incidents/+/status", qos=1)
+        client.subscribe(TOPIC_ADMIN_FAKED, qos=1)
         client.subscribe(TOPIC_TOPOLOGY, qos=1)
         client.loop_start()
         topology_received.wait(timeout=config.reconcile_timeout_seconds)
@@ -3570,6 +3918,9 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         service_history=service_history,
         retained_ids=retained_ids,
         previous_incidents={incident_id: None for incident_id in retained_incident_ids},
+        admin_faked=parse_admin_faked_payload(
+            admin_faked_result[0] if admin_faked_result else b""
+        ),
     )
 
 
@@ -3788,7 +4139,11 @@ def run_forever(config: PollerConfig) -> int:
     """
     configure_logging(config.log_level)
     state = reconcile_state(config)
-    client = build_mqtt_client(config)
+    admin_context = AdminContext()
+    admin_context.seed_ledger(state.admin_faked)
+    admin_worker = AdminCommandWorker(config, admin_context)
+    client = build_mqtt_client(config, admin_worker=admin_worker)
+    admin_worker.start()
     rest_base_url = cmk_rest_base_url(config)
     # Reused (never cleared) on a RestError below rather than falling back
     # to an empty dict: `folder` participates in `topology_signature`, so
@@ -3858,6 +4213,7 @@ def run_forever(config: PollerConfig) -> int:
     # the whole poller as unable to start.
     service_columns: list[str] | None
     service_columns = None
+    available_services: set[str] = set()
     last_service_exc: LivestatusError | None = None
     for attempt in range(1, max_attempts + 1):
         try:
@@ -3885,6 +4241,17 @@ def run_forever(config: PollerConfig) -> int:
             "are disabled until the poller restarts",
             max_attempts,
             last_service_exc,
+        )
+
+    # Phase 16 D-10: derive the faked set from Livestatus when both tables expose
+    # `active_checks_enabled`; otherwise fall back to the poller-owned ledger.
+    admin_context.use_ledger = (
+        ADMIN_FAKED_COLUMN not in available or ADMIN_FAKED_COLUMN not in available_services
+    )
+    if admin_context.use_ledger:
+        _logger.warning(
+            "Livestatus lacks %s on hosts or services; admin faked set uses the poller ledger",
+            ADMIN_FAKED_COLUMN,
         )
 
     # OPS-04: a greppable line in `podman logs` distinguishing a healthy
@@ -4013,6 +4380,8 @@ def run_forever(config: PollerConfig) -> int:
                 services=services,
                 allow_stale_sweep=bool(snapshots) or (rest_ok and not last_host_config),
             )
+            admin_context.update_snapshots(snapshots)
+            refresh_admin_faked(client, admin_context, config)
             # Runs after MQTT publishing (run_cycle above) so a slow or dead
             # ClickHouse can never delay status (D-44). A skipped cycle
             # (the LivestatusError branch above) writes nothing at all,
@@ -4036,6 +4405,7 @@ def run_forever(config: PollerConfig) -> int:
     # Graceful stop must leave the same retained value the LWT would have
     # left, so a `podman compose stop poller` and a `kill -9` look
     # identical to the dashboard.
+    admin_worker.stop()
     shutdown_mqtt_client(client)
     return 0
 
@@ -4084,6 +4454,10 @@ def main() -> int:
             print(f"{'present' if present else 'MISSING'}: {name} (required)")
         for name in OPTIONAL_HOST_COLUMNS:
             print(f"{'present' if name in available else 'missing'}: {name} (optional)")
+        print(
+            f"{'present' if ADMIN_FAKED_COLUMN in available else 'missing'}: "
+            f"{ADMIN_FAKED_COLUMN} (admin, optional)"
+        )
 
         try:
             available_services = available_service_columns(
@@ -4098,6 +4472,10 @@ def main() -> int:
             print(f"{'present' if present else 'MISSING'}: {name} (required, services)")
         for name in OPTIONAL_SERVICE_COLUMNS:
             print(f"{'present' if name in available_services else 'missing'}: {name} (optional, services)")
+        print(
+            f"{'present' if ADMIN_FAKED_COLUMN in available_services else 'missing'}: "
+            f"{ADMIN_FAKED_COLUMN} (admin, optional, services)"
+        )
         return 0 if ok else 1
 
     if args.dump_service_names:
