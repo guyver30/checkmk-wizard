@@ -167,7 +167,8 @@ DEPENDS_ON_LABEL = "depends_on"
 # Mirrors `_HOST_NAME_RE` in `src/checkmk_wizard/wizard.py` and `HOST_NAME_RE`
 # in `dashboard-react/src/lib/checkmkWrite.ts` -- the one character class
 # Checkmk host ids are constrained to across this whole codebase.
-_HOST_ID_RE = re.compile(r"^[-0-9a-zA-Z_.]+$")
+# `\Z`, not `$`: `$` also matches before a trailing newline (review WR-03).
+_HOST_ID_RE = re.compile(r"^[-0-9a-zA-Z_.]+\Z")
 _MAX_SERVICE_CRITICALITY_ENTRIES = 200
 _MAX_DEPENDS_ON_ENTRIES = 50
 
@@ -1074,11 +1075,11 @@ def incident_signature(incident: dict) -> tuple:
 
 ADMIN_ACTIONS = ("up", "down", "unreach", "restore", "restore_all")
 ADMIN_MAX_HOSTS_PER_COMMAND = 200
-_ADMIN_COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_ADMIN_COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}\Z")
 # Mirrors wizard.py `_LIVESTATUS_RETRY_DELAYS_SECONDS`: the core reloads on activation and
 # resets connections, so a send can fail transiently.
 ADMIN_LIVESTATUS_RETRY_DELAYS_SECONDS = (3, 5, 10)
-_ADMIN_SAFE_ADDRESS_RE = re.compile(r"^[0-9A-Za-z.:_-]{1,253}$")
+_ADMIN_SAFE_ADDRESS_RE = re.compile(r"^[0-9A-Za-z.:_-]{1,253}\Z")
 
 
 class AdminCommandError(ValueError):
@@ -1432,6 +1433,9 @@ class AdminContext:
         self._snapshots: dict[str, DeviceSnapshot] = {}
         self._faked: dict[str, str] = {}
         self._last_published: dict[str, str] | None = None
+        # Serializes the should_publish + publish pair so two threads cannot publish
+        # out of order and leave a stale retained admin/faked (review WR-02).
+        self.publish_lock = threading.Lock()
         self.use_ledger = False
 
     def update_snapshots(self, snapshots: list[DeviceSnapshot]) -> None:
@@ -1449,6 +1453,12 @@ class AdminContext:
     def set_faked(self, faked: dict[str, str]) -> None:
         with self._lock:
             self._faked = dict(faked)
+
+    def prune_ledger(self, known: dict) -> dict[str, str]:
+        """Drop ledger hosts missing from `known`, atomically; returns the ledger."""
+        with self._lock:
+            self._faked = {h: s for h, s in self._faked.items() if h in known}
+            return dict(self._faked)
 
     def seed_ledger(self, faked: dict[str, str]) -> None:
         self.set_faked(faked)
@@ -1488,13 +1498,8 @@ def publish_admin_ack(client, ack: dict) -> None:
 def refresh_admin_faked(client, context: AdminContext, config: PollerConfig) -> None:
     """Recompute the faked map and publish `admin/faked` only when it changed (D-10)."""
     if context.use_ledger:
-        faked = context.faked()
         known = context.snapshot_map()
-        if known:
-            pruned = {h: s for h, s in faked.items() if h in known}
-            if pruned != faked:
-                context.set_faked(pruned)
-                faked = pruned
+        faked = context.prune_ledger(known) if known else context.faked()
         source = "ledger"
     else:
         try:
@@ -1506,8 +1511,9 @@ def refresh_admin_faked(client, context: AdminContext, config: PollerConfig) -> 
             return
         context.set_faked(faked)
         source = "livestatus"
-    if context.should_publish(faked):
-        publish_admin_faked(client, faked, source, utc_now_iso())
+    with context.publish_lock:
+        if context.should_publish(faked):
+            publish_admin_faked(client, faked, source, utc_now_iso())
 
 
 def parse_admin_faked_payload(payload: bytes) -> dict[str, str]:
@@ -1629,8 +1635,21 @@ class AdminCommandWorker:
         if not actions:
             return ack
         commands: list[str] = []
+        built: list[AdminAction] = []
         for a in actions:
-            commands.extend(build_admin_commands(a, known[a.host].address))
+            try:
+                commands.extend(build_admin_commands(a, known[a.host].address))
+            except ValueError as exc:
+                # One unsafe host must not drop the whole batch (review WR-04).
+                _logger.warning("admin command %s: skipping %s: %s", command.id, a.host, exc)
+                skipped.append(a.host)
+                continue
+            built.append(a)
+        actions = built
+        if not actions:
+            ack["skipped"] = skipped
+            ack["detail"] = "no host could be commanded"
+            return ack
         failure: LivestatusError | None = None
         for delay in (*ADMIN_LIVESTATUS_RETRY_DELAYS_SECONDS, None):
             try:
