@@ -1694,10 +1694,10 @@ warning prints and the run continues with the fallback below.
 
 Right after the activation succeeds, `_fake_demo_hosts_up` sends over Livestatus
 TCP (`livestatus.send_commands`, one connection per command) for every host
-onboarded this run `PROCESS_HOST_CHECK_RESULT;<host>;0;OK - <ip> rta 0.412ms
+onboarded this run `PROCESS_HOST_CHECK_RESULT;<host>;0;OK - <ip> rta <random>ms
 lost 0%` (so the host is UP immediately rather than PENDING until the first
 scheduled check), `DISABLE_SVC_CHECK;<host>;PING` and
-`PROCESS_SERVICE_CHECK_RESULT;<host>;PING;0;OK - <ip> rta 0.412ms lost 0%`. The
+`PROCESS_SERVICE_CHECK_RESULT;<host>;PING;0;OK - <ip> rta <random>ms lost 0%`. The
 plugin output is check_icmp-style text built from the host's IP (no `;`, the
 Livestatus separator). With `fake_host_checks=True` (rule creation failed) it
 also sends `DISABLE_HOST_CHECK;<host>` first. It retries on connection reset

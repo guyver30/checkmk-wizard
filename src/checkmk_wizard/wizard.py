@@ -10,6 +10,7 @@ import html
 import ipaddress
 import json
 import os
+import random
 import re
 import secrets
 import socket
@@ -3084,8 +3085,8 @@ async def _fake_demo_hosts_up(
     Per host: inject an UP result for the host (so it shows UP immediately
     rather than PENDING until the first scheduled check), and disable the
     auto-created PING service's check and inject an OK result for it. Plugin
-    output is realistic check_icmp-style text built from the host's IP (the
-    dashboard shows it); it must not contain `;`, the Livestatus command
+    output is realistic check_icmp-style text built from the host's IP with a
+    random rta per host (the dashboard shows it); it must not contain `;`, the Livestatus command
     separator. The "Always assume host to be up" rule
     (`_create_demo_host_check_rule`) keeps the host fresh afterwards; only when
     that rule could not be created (`fake_host_checks=True`) is the host check
@@ -3100,7 +3101,8 @@ async def _fake_demo_hosts_up(
     host_names = [h.hostname for h in hosts]
     commands = []
     for h in hosts:
-        output = f"OK - {h.ip} rta 0.412ms lost 0%"
+        # Random round-trip time per host so demo hosts do not all look identical.
+        output = f"OK - {h.ip} rta {random.uniform(0.2, 3.0):.3f}ms lost 0%"
         if fake_host_checks:
             commands.append(f"DISABLE_HOST_CHECK;{h.hostname}")
         commands += [

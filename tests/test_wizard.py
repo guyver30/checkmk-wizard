@@ -4412,6 +4412,7 @@ async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True, rule_statu
     monkeypatch.setattr("checkmk_wizard.wizard.livestatus.send_commands", fake_send)
     monkeypatch.setattr("checkmk_wizard.wizard.livestatus.query_host_states", fake_query)
     monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("checkmk_wizard.wizard.random.uniform", lambda a, b: 0.412)
     host = OnboardedHost(ip="10.0.0.5", hostname="dh1", folder="/", os_family="ping")
     with respx.mock:
         respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(

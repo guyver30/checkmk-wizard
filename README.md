@@ -198,7 +198,7 @@ keeps running a host check that returns UP and the hosts stay UP and fresh
 (not STALE) on the dashboard. After activation each host also gets an UP
 result injected, and its `PING` service has its check disabled with an OK
 result injected. The injected plugin output is check_icmp-style text such as
-`OK - <ip> rta 0.412ms lost 0%`. If the rule cannot be created the wizard warns
+`OK - <ip> rta <random>ms lost 0%` (rta random per host, 0.2–3.0 ms). If the rule cannot be created the wizard warns
 and falls back to also disabling the host check (`DISABLE_HOST_CHECK`). To
 undo, delete that rule (Setup > Hosts > Host monitoring rules > Host check
 command) and send `ENABLE_SVC_CHECK;<host>;PING` (plus
