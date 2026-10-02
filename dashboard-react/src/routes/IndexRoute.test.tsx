@@ -142,6 +142,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     await flush();
 
     expect(screen.queryByText("No open incidents")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /collapse incidents/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("log", { name: /recent events/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /collapse host details/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /collapse device tree/i })).toBeInTheDocument();
@@ -331,14 +332,15 @@ describe("IndexRoute incidents (DASH-14/DASH-15)", () => {
     });
   }
 
-  it("renders the incident card above the topology map, and h2's tree row shows 'See incident'", () => {
+  it("renders the incident card in the right column (after the map), even with no host selected, and h2's tree row shows 'See incident'", () => {
     renderIndex();
     seedDevicesAndIncident();
 
     const incidentRegion = screen.getByRole("region", { name: /open incidents/i });
     const map = screen.getByTestId("topology-map");
     const position = incidentRegion.compareDocumentPosition(map);
-    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(position & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Collapse incidents" })).toBeInTheDocument();
 
     const tree = screen.getByRole("tree", { name: "Device tree" });
     within(tree)
@@ -346,6 +348,15 @@ describe("IndexRoute incidents (DASH-14/DASH-15)", () => {
       .forEach((button) => fireEvent.click(button));
 
     expect(screen.getByText("See incident")).toBeInTheDocument();
+  });
+
+  it("with a host selected, the incident region precedes the Host details pane", () => {
+    renderIndexAt("/?host=h1");
+    seedDevicesAndIncident();
+
+    const incidentRegion = screen.getByRole("region", { name: /open incidents/i });
+    const collapseDetails = screen.getByRole("button", { name: /collapse host details/i });
+    expect(incidentRegion.compareDocumentPosition(collapseDetails) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("with no incidents open, 'No open incidents' renders and the map still renders", () => {

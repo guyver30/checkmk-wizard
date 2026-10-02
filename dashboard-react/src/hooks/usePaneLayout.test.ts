@@ -16,8 +16,8 @@ describe("usePaneLayout", () => {
 
   it("returns the default sizes, both uncollapsed, on first mount with empty storage", () => {
     const { result } = renderHook(() => usePaneLayout());
-    expect(result.current.sizes).toEqual({ tree: 320, events: 260, details: 420 });
-    expect(result.current.collapsed).toEqual({ tree: false, events: false, details: false });
+    expect(result.current.sizes).toEqual({ tree: 320, events: 260, details: 420, incidents: 280 });
+    expect(result.current.collapsed).toEqual({ tree: false, events: false, details: false, incidents: false });
   });
 
   it("returns the persisted sizes on mount with a valid persisted record", () => {
@@ -26,7 +26,7 @@ describe("usePaneLayout", () => {
       JSON.stringify({ treeWidth: 400, eventsHeight: 300, treeCollapsed: false, eventsCollapsed: false }),
     );
     const { result } = renderHook(() => usePaneLayout());
-    expect(result.current.sizes).toEqual({ tree: 400, events: 300, details: 420 });
+    expect(result.current.sizes).toEqual({ tree: 400, events: 300, details: 420, incidents: 280 });
   });
 
   it("returns defaults without throwing on mount with a corrupt persisted value", () => {
@@ -35,7 +35,7 @@ describe("usePaneLayout", () => {
     expect(() => {
       hook = renderHook(() => usePaneLayout());
     }).not.toThrow();
-    expect(hook?.result.current.sizes).toEqual({ tree: 320, events: 260, details: 420 });
+    expect(hook?.result.current.sizes).toEqual({ tree: 320, events: 260, details: 420, incidents: 280 });
   });
 
   it("clamps a persisted detailsWidth outside [min, max] and defaults detailsCollapsed to false", () => {
@@ -51,8 +51,26 @@ describe("usePaneLayout", () => {
       JSON.stringify({ treeWidth: 500, eventsHeight: 280, treeCollapsed: true, eventsCollapsed: false }),
     );
     const { result } = renderHook(() => usePaneLayout());
-    expect(result.current.sizes).toEqual({ tree: 500, events: 280, details: 420 });
-    expect(result.current.collapsed).toEqual({ tree: true, events: false, details: false });
+    expect(result.current.sizes).toEqual({ tree: 500, events: 280, details: 420, incidents: 280 });
+    expect(result.current.collapsed).toEqual({ tree: true, events: false, details: false, incidents: false });
+  });
+
+  it("clamps a persisted incidentsHeight, falls back a non-boolean incidentsCollapsed, keeps older fields", () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ treeWidth: 500, incidentsHeight: 99999, incidentsCollapsed: "x" }),
+    );
+    const { result } = renderHook(() => usePaneLayout());
+    expect(result.current.sizes.incidents).toBe(600);
+    expect(result.current.collapsed.incidents).toBe(false);
+    expect(result.current.sizes.tree).toBe(500);
+  });
+
+  it("toggleCollapse('incidents') flips the flag and persists incidentsCollapsed in the same record", () => {
+    const { result } = renderHook(() => usePaneLayout());
+    act(() => result.current.toggleCollapse("incidents"));
+    expect(result.current.collapsed.incidents).toBe(true);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").incidentsCollapsed).toBe(true);
   });
 
   it("clamps a persisted size outside [min, max] into range rather than honouring it", () => {
@@ -104,7 +122,7 @@ describe("usePaneLayout", () => {
     expect(result.current.sizes.events).toBe(350);
   });
 
-  it("toggleCollapse persists all six fields, including the details pane's current state", () => {
+  it("toggleCollapse persists all eight fields, including the details pane's current state", () => {
     const { result } = renderHook(() => usePaneLayout());
     act(() => {
       result.current.setSize("details", 500);
@@ -120,10 +138,12 @@ describe("usePaneLayout", () => {
       eventsCollapsed: false,
       detailsWidth: 500,
       detailsCollapsed: false,
+      incidentsHeight: 280,
+      incidentsCollapsed: false,
     });
   });
 
-  it("commit persists all six fields", () => {
+  it("commit persists all eight fields", () => {
     const { result } = renderHook(() => usePaneLayout());
     act(() => {
       result.current.setSize("details", 500);
@@ -139,6 +159,8 @@ describe("usePaneLayout", () => {
       eventsCollapsed: false,
       detailsWidth: 500,
       detailsCollapsed: false,
+      incidentsHeight: 280,
+      incidentsCollapsed: false,
     });
   });
 

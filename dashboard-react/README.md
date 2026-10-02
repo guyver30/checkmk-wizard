@@ -139,7 +139,7 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
     optional `navExtra` slot for this; after changing `design-system/`, rebuild and pack it, then
     run `npm install ../design-system/kone-design-system-0.1.0.tgz` in `dashboard-react/` so its
     lockfile records the new tarball's integrity hash, or the image build's `npm ci` fails.
-  - In topology edit mode the map fills the centre area: the incident list, event history and
+  - In topology edit mode the map fills the centre area: the Incidents pane, event history and
     host details pane are hidden until edit mode is turned off. The device tree stays.
 - A saved position (`map_position`, a Checkmk host label written by edit mode) is applied only
   the first time a node appears on the map; positions are never re-applied to a node a viewer
@@ -182,13 +182,14 @@ switches itself off and shows a one-time notice, so a browser tab left open over
 sit in a writable state indefinitely.
 
 **Host details pane:** clicking a host — on the map (edit mode off), in the device tree, or in
-an incident card's device list — opens a right-hand pane beside the map (`ThreePaneLayout`'s
-fourth slot) showing that host's `HostDetails` content (the gauges and services
+an incident card's device list — opens a pane in the right-hand column, BELOW the Incidents
+pane (see section 5c), showing that host's `HostDetails` content (the gauges and services
 described above). The pane is absent until a host is opened. Its header has icon buttons, like
-the device tree and event history panes: a chevron collapses it to a 40px rail (the chevron
-flips to expand it again) and an × closes it. Each icon has an accessible name and a tooltip
-("Collapse host details", "Close host details" and so on). Its divider is
-drag-resizable, and both its width and collapsed state persist across a reload (`usePaneLayout`,
+the device tree and event history panes: a chevron collapses it (to a header bar when the
+Incidents pane above it is still open, or to a 40px rail when the whole column is collapsed; the
+chevron flips to expand it again) and an × closes it. Each icon has an accessible name and a tooltip
+("Collapse host details", "Close host details" and so on). The column's left
+divider is drag-resizable and resizes both stacked panes, and both the width and the collapsed state persist across a reload (`usePaneLayout`,
 the same storage record the device tree and event history panes use). Opening a different host
 while the pane is collapsed re-expands it. The open host lives in the URL as `/?host=<id>` and
 coexists with `?incident=` — opening one never drops the other, so a shared link can carry both.
@@ -236,8 +237,15 @@ The file name **is** the device type — the `tag_device_type` value from `devic
 
 ## 5c. Incidents
 
-Above the topology map, `IncidentList` (DASH-14) shows one card per open root-cause incident,
-sourced from the poller's `lan/incidents/{incident_id}/status` topics (see the deployment doc's
+In the Incidents pane at the top of the right-hand column (above the host details pane),
+`IncidentList` (DASH-14) shows one card per open root-cause incident. The pane header always
+reads "Incidents" plus a count badge coloured by the worst open incident (danger when any card
+is danger, otherwise warning), or a quiet "No open incidents" when none are open. The pane is
+collapsible: collapsing it keeps the header (count and severity badge) visible, and when every
+pane in the right column is collapsed the column becomes a 40px rail that still shows the badge
+and the expand chevrons. The pane's height and collapsed state persist across a reload
+(`usePaneLayout`). The map and event history take the whole centre column; topology edit mode
+hides the pane. Cards are sourced from the poller's `lan/incidents/{incident_id}/status` topics (see the deployment doc's
 MQTT topic contract). It never re-sorts its input — ordering is `selectOpenIncidents`'s job
 (D-12): worst criticality tier first, then longest-open within a tier (a null `since` sorts
 last within its tier), ties broken by incident id.

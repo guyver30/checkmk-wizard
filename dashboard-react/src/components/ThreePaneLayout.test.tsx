@@ -127,7 +127,7 @@ describe("ThreePaneLayout", () => {
         />,
       );
       expect(screen.getByText("web1 details")).toBeInTheDocument();
-      expect(screen.getByRole("separator", { name: /resize host details/i })).toBeInTheDocument();
+      expect(screen.getByRole("separator", { name: /resize right column/i })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /close host details/i })).toBeInTheDocument();
     });
@@ -206,6 +206,117 @@ describe("ThreePaneLayout", () => {
       );
       expect(screen.queryByText("web1 details")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: /expand host details/i })).toBeInTheDocument();
+    });
+  });
+
+  describe("incidents pane", () => {
+    const base = { tree: <p>tree</p>, centreTop: <p>top</p>, centreBottom: <p>bottom</p> };
+    const summary = <span>SUMMARY</span>;
+
+    function rootGrid() {
+      return screen.getByText("top").closest("div.grid")?.parentElement as HTMLElement;
+    }
+
+    it("with only incidents, renders the pane, its summary, a collapse button and the column separator", () => {
+      render(<ThreePaneLayout {...base} incidents={<p>inc body</p>} incidentsSummary={summary} />);
+      expect(screen.getByText("Incidents")).toBeInTheDocument();
+      expect(screen.getByText("SUMMARY")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Collapse incidents" })).toBeInTheDocument();
+      expect(screen.getByRole("separator", { name: /resize right column/i })).toBeInTheDocument();
+      expect(rootGrid().style.gridTemplateColumns.split(" ")).toHaveLength(5);
+    });
+
+    it("collapsing the only right-column pane makes a 40px rail that keeps the summary and expand button", () => {
+      render(<ThreePaneLayout {...base} incidents={<p>inc body</p>} incidentsSummary={summary} />);
+      fireEvent.click(screen.getByRole("button", { name: "Collapse incidents" }));
+      expect(rootGrid().style.gridTemplateColumns.split(" ")[4]).toBe("40px");
+      expect(screen.queryByText("inc body")).not.toBeInTheDocument();
+      expect(screen.getByText("SUMMARY")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Expand incidents" })).toBeInTheDocument();
+    });
+
+    it("stacks incidents above details with a Resize incidents separator", () => {
+      render(
+        <ThreePaneLayout {...base} incidents={<p>inc body</p>} details={<p>det body</p>} detailsKey="h1" />,
+      );
+      const inc = screen.getByText("inc body");
+      const det = screen.getByText("det body");
+      expect(inc.compareDocumentPosition(det) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      const separator = screen.getByRole("separator", { name: /resize incidents/i });
+      expect(separator).toHaveAttribute("aria-orientation", "horizontal");
+      const grid = separator.parentElement as HTMLElement;
+      const rowPx = () => Number(grid.style.gridTemplateRows.split(" ")[0].replace("px", ""));
+      const before = rowPx();
+      fireEvent.pointerDown(separator, { clientY: 300, pointerId: 1 });
+      fireEvent.pointerMove(separator, { clientY: 350, pointerId: 1 });
+      fireEvent.pointerUp(separator, { clientY: 350, pointerId: 1 });
+      expect(rowPx()).toBeGreaterThan(before);
+    });
+
+    it("incidents collapsed above expanded details: header bar stays, column keeps its width", () => {
+      render(
+        <ThreePaneLayout
+          {...base}
+          incidents={<p>inc body</p>}
+          incidentsSummary={summary}
+          details={<p>det body</p>}
+          detailsKey="h1"
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Collapse incidents" }));
+      expect(screen.queryByText("inc body")).not.toBeInTheDocument();
+      expect(screen.getByText("Incidents")).toBeInTheDocument();
+      expect(screen.getByText("SUMMARY")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Expand incidents" })).toBeInTheDocument();
+      expect(screen.getByText("det body")).toBeInTheDocument();
+      expect(rootGrid().style.gridTemplateColumns.split(" ")[4]).toBe("420px");
+      expect(screen.queryByRole("separator", { name: /resize incidents/i })).not.toBeInTheDocument();
+    });
+
+    it("details collapsed below expanded incidents: details shrinks to a header bar", () => {
+      render(
+        <ThreePaneLayout
+          {...base}
+          incidents={<p>inc body</p>}
+          details={<p>det body</p>}
+          detailsKey="h1"
+          onCloseDetails={() => {}}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Collapse host details" }));
+      expect(screen.queryByText("det body")).not.toBeInTheDocument();
+      expect(screen.getByText("Host details")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Expand host details" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Close host details" })).toBeInTheDocument();
+      expect(screen.getByText("inc body")).toBeInTheDocument();
+      expect(rootGrid().style.gridTemplateColumns.split(" ")[4]).toBe("420px");
+    });
+
+    it("both collapsed: the column becomes a 40px rail with both expand buttons and the summary", () => {
+      render(
+        <ThreePaneLayout
+          {...base}
+          incidents={<p>inc body</p>}
+          incidentsSummary={summary}
+          details={<p>det body</p>}
+          detailsKey="h1"
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Collapse incidents" }));
+      fireEvent.click(screen.getByRole("button", { name: "Collapse host details" }));
+      expect(rootGrid().style.gridTemplateColumns.split(" ")[4]).toBe("40px");
+      expect(screen.getByRole("button", { name: "Expand incidents" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Expand host details" })).toBeInTheDocument();
+      expect(screen.getByText("SUMMARY")).toBeInTheDocument();
+    });
+
+    it("the incidents collapsed state survives an unmount/remount", () => {
+      const { unmount } = render(<ThreePaneLayout {...base} incidents={<p>inc body</p>} />);
+      fireEvent.click(screen.getByRole("button", { name: "Collapse incidents" }));
+      unmount();
+      render(<ThreePaneLayout {...base} incidents={<p>inc body</p>} />);
+      expect(screen.queryByText("inc body")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Expand incidents" })).toBeInTheDocument();
     });
   });
 });

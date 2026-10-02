@@ -5,19 +5,24 @@ import { readJson, writeJson } from "../lib/guardedStorage";
 // valid one -- bump the suffix, not the key body, if the shape changes. The details pane
 // fields added below (260928-l4h) do NOT bump this to v2: the addition is purely additive and
 // readInitialState's per-field fallback already handles a v1 record that predates them, so
-// bumping would needlessly discard an operator's saved tree/events sizes.
+// bumping would needlessly discard an operator's saved tree/events sizes. The incidents pane
+// fields are additive in the same way. `sizes.details` is the width of the whole right column
+// (the incidents and details panes share it); it keeps the `details` key so a width saved
+// before the incidents pane existed still applies.
 const STORAGE_KEY = "dashboard-react.paneLayout.v1";
 
 const DEFAULTS = {
   treeWidth: 320,
   eventsHeight: 260,
   detailsWidth: 420,
+  incidentsHeight: 280,
 } as const;
 
 export const PANE_BOUNDS = {
   tree: { min: 200, max: 640 },
   events: { min: 120, max: 600 },
   details: { min: 280, max: 800 },
+  incidents: { min: 120, max: 600 },
 } as const;
 
 interface PersistedLayout {
@@ -27,18 +32,22 @@ interface PersistedLayout {
   eventsCollapsed: boolean;
   detailsWidth: number;
   detailsCollapsed: boolean;
+  incidentsHeight: number;
+  incidentsCollapsed: boolean;
 }
 
 interface PaneSizes {
   tree: number;
   events: number;
   details: number;
+  incidents: number;
 }
 
 interface PaneCollapsed {
   tree: boolean;
   events: boolean;
   details: boolean;
+  incidents: boolean;
 }
 
 type PaneKey = keyof PaneSizes;
@@ -72,10 +81,21 @@ function readInitialState(): { sizes: PaneSizes; collapsed: PaneCollapsed } {
       : DEFAULTS.detailsWidth;
   const detailsCollapsed =
     typeof persisted.detailsCollapsed === "boolean" ? persisted.detailsCollapsed : false;
+  const incidentsHeight =
+    typeof persisted.incidentsHeight === "number"
+      ? clamp(persisted.incidentsHeight, PANE_BOUNDS.incidents.min, PANE_BOUNDS.incidents.max)
+      : DEFAULTS.incidentsHeight;
+  const incidentsCollapsed =
+    typeof persisted.incidentsCollapsed === "boolean" ? persisted.incidentsCollapsed : false;
 
   return {
-    sizes: { tree: treeWidth, events: eventsHeight, details: detailsWidth },
-    collapsed: { tree: treeCollapsed, events: eventsCollapsed, details: detailsCollapsed },
+    sizes: { tree: treeWidth, events: eventsHeight, details: detailsWidth, incidents: incidentsHeight },
+    collapsed: {
+      tree: treeCollapsed,
+      events: eventsCollapsed,
+      details: detailsCollapsed,
+      incidents: incidentsCollapsed,
+    },
   };
 }
 
@@ -92,6 +112,8 @@ function toRecord(state: LayoutState): PersistedLayout {
     eventsCollapsed: state.collapsed.events,
     detailsWidth: state.sizes.details,
     detailsCollapsed: state.collapsed.details,
+    incidentsHeight: state.sizes.incidents,
+    incidentsCollapsed: state.collapsed.incidents,
   };
 }
 

@@ -3,8 +3,9 @@
 // re-sorts them.
 
 import { useEffect, useRef } from "react";
+import { Badge } from "kone-design-system";
 import { displayNameWithAddress } from "../lib/display";
-import type { Incident } from "../lib/incidents";
+import { worstIncidentStatus, type Incident } from "../lib/incidents";
 import type { DevicePayload } from "../lib/types";
 import { IncidentCard } from "./IncidentCard";
 
@@ -13,6 +14,26 @@ export interface IncidentListProps {
   devices: Record<string, DevicePayload>;
   nowMs: number;
   highlightedId?: string | null;
+}
+
+// The Incidents pane header's at-a-glance summary: a count badge coloured by the worst open
+// incident (the same danger/warning vocabulary the cards use), or a quiet line when none are open.
+export function IncidentsSummary({ incidents }: { incidents: Incident[] }) {
+  const worst = worstIncidentStatus(incidents);
+  if (worst === null) {
+    return <span className="truncate text-xs text-fg-tertiary">No open incidents</span>;
+  }
+  return (
+    <span
+      data-testid="incidents-severity"
+      data-severity={worst}
+      aria-label={`${incidents.length} open ${incidents.length === 1 ? "incident" : "incidents"}`}
+    >
+      <Badge color={worst} variant="solid">
+        {incidents.length}
+      </Badge>
+    </span>
+  );
 }
 
 export function IncidentList({ incidents, devices, nowMs, highlightedId }: IncidentListProps) {
@@ -44,8 +65,7 @@ export function IncidentList({ incidents, devices, nowMs, highlightedId }: Incid
 
   if (incidents.length === 0) {
     return (
-      <div className="text-xs text-fg-tertiary">
-        <p className="font-semibold">No open incidents</p>
+      <div className="p-3 text-xs text-fg-tertiary">
         <p>Every device the poller can reach is reporting normally.</p>
       </div>
     );
@@ -55,7 +75,7 @@ export function IncidentList({ incidents, devices, nowMs, highlightedId }: Incid
     <section
       ref={sectionRef}
       aria-label="Open incidents"
-      className="flex max-h-[35vh] shrink-0 flex-col gap-2 overflow-y-auto"
+      className="flex flex-col gap-2 p-3"
     >
       {incidents.map((incident) => (
         <IncidentCard

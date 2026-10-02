@@ -660,8 +660,8 @@ With the stack up, verify the root-cause incident engine end to end:
    `ENABLE_HOST_CHECK` to reverse) — see `docs/Incident demo with fake check results.md` for the
    exact commands, scenario scripts (single host, managed switch, unmanaged/inferred switch,
    poller restart), and cleanup/verification steps.
-4. Expected dashboard result: within about two poll cycles, one incident card appears above the
-   topology map (`"{host} — {duration}"`, worst-criticality colour), the affected hosts dim in
+4. Expected dashboard result: within about two poll cycles, one incident card appears in the Incidents
+   pane at the top of the right-hand column (`"{host} — {duration}"`, worst-criticality colour), the affected hosts dim in
    the fleet tree and on the topology map with a "See incident" link, and restoring the faked
    state clears the card and the dimming within about two more poll cycles.
 

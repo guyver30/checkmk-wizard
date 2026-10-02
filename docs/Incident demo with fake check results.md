@@ -70,7 +70,7 @@ cmk "PROCESS_HOST_CHECK_RESULT;<plain_host>;1;CRITICAL - <ip>: rta nan, lost 100
 ```
 
 What the audience sees (within ~2 poll cycles): exactly one incident card,
-`"{plain_host label} — {duration}"`, appears above the stats strip with a criticality badge. It
+`"{plain_host label} — {duration}"`, appears in the Incidents pane at the top of the right-hand column with a criticality badge. It
 has no consequence line, because the root isn't counted as a consequence and there are none. No
 other host changes — a plain host with no managed children never produces a second card or dims
 anything else.
