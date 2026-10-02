@@ -6,8 +6,12 @@ import {
   BASE_DELAY_MS,
   MAX_DELAY_MS,
   SUBSCRIBE_TOPICS,
+  ADMIN_SUBSCRIBE_TOPICS,
+  publishAdminCommand,
   __resetForTests,
 } from "./mqttClient";
+import { useAdminStore, __resetAdminStoreForTests } from "./adminStore";
+import { __setAdminModeForTests } from "../lib/adminMode";
 import { useAppStore } from "./useAppStore";
 import { __setRuntimeConfigForTests } from "../lib/runtimeConfig";
 
@@ -21,6 +25,8 @@ function createFakeClient() {
       return fake;
     }),
     subscribe: vi.fn(),
+    publish: vi.fn(),
+    connected: true,
     reconnect: vi.fn(),
     end: vi.fn(),
     emit(event: string, ...args: unknown[]) {
@@ -46,9 +52,11 @@ const INITIAL_STATE = useAppStore.getState();
 beforeEach(() => {
   useAppStore.setState(INITIAL_STATE, true);
   __resetForTests();
+  __resetAdminStoreForTests();
 });
 
 afterEach(() => {
+  __setAdminModeForTests(false);
   disconnect();
   __resetForTests();
   // Reset the runtime config so a non-default wsUsername/wsPassword set by one test can
@@ -201,5 +209,80 @@ describe("connect", () => {
     expect(handleMessageSpy).toHaveBeenCalledWith("lan/devices/h1/status", payload);
 
     handleMessageSpy.mockRestore();
+  });
+});
+
+describe("admin mode", () => {
+  it("subscribes only the normal topics outside admin mode", () => {
+    const fake = createFakeClient();
+    connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
+    fake.emit("connect");
+    expect(fake.subscribe).toHaveBeenCalledWith(SUBSCRIBE_TOPICS);
+  });
+
+  it("adds admin topics in admin mode", () => {
+    __setAdminModeForTests(true);
+    const fake = createFakeClient();
+    connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
+    fake.emit("connect");
+    expect(fake.subscribe).toHaveBeenCalledWith([...SUBSCRIBE_TOPICS, ...ADMIN_SUBSCRIBE_TOPICS]);
+  });
+
+  it("skips admin topics when the admin config failed to load", () => {
+    __setAdminModeForTests(true);
+    useAdminStore.getState().setConfigError(true);
+    const fake = createFakeClient();
+    connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
+    fake.emit("connect");
+    expect(fake.subscribe).toHaveBeenCalledWith(SUBSCRIBE_TOPICS);
+  });
+
+  it("routes admin/ messages to the admin store only", () => {
+    __setAdminModeForTests(true);
+    const fake = createFakeClient();
+    connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
+    const handleSpy = vi.spyOn(useAppStore.getState(), "handleMessage");
+    const body = new TextEncoder().encode(JSON.stringify({ hosts: { a: "DOWN" } }));
+    fake.emit("message", "admin/faked", body);
+    expect(useAdminStore.getState().faked).toEqual({ a: "DOWN" });
+    expect(handleSpy).not.toHaveBeenCalled();
+    handleSpy.mockRestore();
+  });
+
+  it("still routes lan/ messages to the app store", () => {
+    const fake = createFakeClient();
+    connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
+    const handleSpy = vi.spyOn(useAppStore.getState(), "handleMessage");
+    const body = new TextEncoder().encode(JSON.stringify({ status: "online" }));
+    fake.emit("message", "lan/poller/status", body);
+    expect(handleSpy).toHaveBeenCalledWith("lan/poller/status", body);
+    handleSpy.mockRestore();
+  });
+
+  it("publishAdminCommand publishes QoS 1 non-retained and records pending", () => {
+    __setAdminModeForTests(true);
+    const fake = createFakeClient();
+    connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
+    const id = publishAdminCommand("down", ["a"]);
+    expect(id).not.toBeNull();
+    expect(fake.publish).toHaveBeenCalledWith(
+      "admin/cmd",
+      JSON.stringify({ id, action: "down", hosts: ["a"] }),
+      { qos: 1, retain: false },
+    );
+    expect(useAdminStore.getState().pending?.id).toBe(id);
+  });
+
+  it("publishAdminCommand returns null without a connected client or outside admin mode", () => {
+    __setAdminModeForTests(true);
+    expect(publishAdminCommand("down", ["a"])).toBeNull();
+    const fake = createFakeClient();
+    fake.connected = false;
+    connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
+    expect(publishAdminCommand("down", ["a"])).toBeNull();
+    fake.connected = true;
+    __setAdminModeForTests(false);
+    expect(publishAdminCommand("down", ["a"])).toBeNull();
+    expect(fake.publish).not.toHaveBeenCalled();
   });
 });
