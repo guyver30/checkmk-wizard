@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 Phase: 14.1 (Fleet History Store, Availability Rollups and Grafana) — EXECUTING
 Plan: 1 of 8
 Status: Executing Phase 14.1
-Last activity: 2026-10-01 - Completed quick task 261001-ts1: wizard Esc abort with apply/revert
+Last activity: 2026-10-02 - Completed quick task 261002-bkk: demo mode promote all and fresh faked-up hosts
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -125,6 +125,7 @@ None.
 | 261001-s0c | wizard --demo mode: generate N hosts in a subnet without scanning; fake them UP (host + PING) via Livestatus commands after Phase 7 | 2026-10-01 | 298da08 | [261001-s0c-wizard-demo-mode-fake-hosts-in-a-subnet-](./quick/261001-s0c-wizard-demo-mode-fake-hosts-in-a-subnet-/) |
 | 261001-tpy | reset-site.sh: confirm the existing site (read from the volume), ask a new name (default old), Esc/Ctrl+C abort before any change; --site NAME | 2026-10-01 | e10004f | [261001-tpy-reset-site-sh-confirm-existing-site-ask-](./quick/261001-tpy-reset-site-sh-confirm-existing-site-ask-/) |
 | 261001-ts1 | wizard Esc/Ctrl+C abort in Phases 1-4: pending-changes table, then Apply / Revert (GUI revert action as cmkadmin) / Leave; Esc disabled from Phase 5 | 2026-10-01 | e131393 | [261001-ts1-wizard-esc-abort-summarize-pending-chang](./quick/261001-ts1-wizard-esc-abort-summarize-pending-chang/) |
+| 261002-bkk | demo mode: pre-select all generated hosts in Phase 4; always-up host_check_commands rule so faked hosts never go stale; realistic injected plugin output; PENDING for never-checked hosts | 2026-10-02 | f9005d7 | [261002-bkk-demo-mode-promote-all-and-fresh-faked-up](./quick/261002-bkk-demo-mode-promote-all-and-fresh-faked-up/) |
 | fast | Switch MinIO image to cgr.dev/chainguard/minio pinned by digest (Docker Hub and quay.io both unpullable) | 2026-09-30 | c77c3fd | - |
 | fast | Add docs/DEPLOY-NEW-MACHINE.md new-machine deploy checklist, linked from README | 2026-09-30 | 62d64e0 | - |
 
