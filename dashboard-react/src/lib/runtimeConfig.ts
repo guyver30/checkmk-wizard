@@ -69,6 +69,12 @@ export async function loadRuntimeConfig(fetchFn: typeof fetch = fetch): Promise<
   return current;
 }
 
+// Called once by main.tsx before mount in admin mode (?admin=1): swaps in the write-capable
+// MQTT login while leaving the site name untouched.
+export function applyAdminCredentials(wsUsername: string, wsPassword: string): void {
+  current = { ...current, wsUsername, wsPassword };
+}
+
 export function getRuntimeConfig(): RuntimeConfig {
   return current;
 }
