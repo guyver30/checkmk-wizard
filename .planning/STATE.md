@@ -127,6 +127,7 @@ None.
 | 261001-ts1 | wizard Esc/Ctrl+C abort in Phases 1-4: pending-changes table, then Apply / Revert (GUI revert action as cmkadmin) / Leave; Esc disabled from Phase 5 | 2026-10-01 | e131393 | [261001-ts1-wizard-esc-abort-summarize-pending-chang](./quick/261001-ts1-wizard-esc-abort-summarize-pending-chang/) |
 | 261002-bkk | demo mode: pre-select all generated hosts in Phase 4; always-up host_check_commands rule so faked hosts never go stale; realistic injected plugin output; PENDING for never-checked hosts | 2026-10-02 | f9005d7 | [261002-bkk-demo-mode-promote-all-and-fresh-faked-up](./quick/261002-bkk-demo-mode-promote-all-and-fresh-faked-up/) |
 | 261002-c2m | poller: republish service list when a service's first plugin output arrives (signature tracks empty vs non-empty output) | 2026-10-02 | 31a472e | fast (no plan) |
+| 261002-rta | demo: random rta (0.2-3.0 ms) in injected OK ping output per host | 2026-10-02 | dbdc040 | fast (no plan) |
 | fast | Switch MinIO image to cgr.dev/chainguard/minio pinned by digest (Docker Hub and quay.io both unpullable) | 2026-09-30 | c77c3fd | - |
 | fast | Add docs/DEPLOY-NEW-MACHINE.md new-machine deploy checklist, linked from README | 2026-09-30 | 62d64e0 | - |
 
