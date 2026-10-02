@@ -66,6 +66,7 @@ Progress: [░░░░░░░░░░] 0%
 - Phase 15 added 2026-09-23: Location Hierarchy for Hosts and Dashboard Tower Tabs — a new Checkmk tag group (mirroring `tag_device_type`/Phase 10.1's retag UI) captures physical location (tower + sub-location, e.g. motor room, lobby, control room), propagated to the MQTT payload and surfaced as per-tower dashboard tabs with sublocation filtering. Deliberately rejects reusing folders (folders already encode VLAN, which is horizontal across towers). Parked as a not-urgent placeholder to revisit later, not planned/executed now.
 - Phase 14.1 inserted after Phase 14: Fleet history store (TSDB on MinIO, poller-written), daily availability rollups on MinIO, Grafana for analysts; split out of Phase 14 per 14-CONTEXT.md D-01/D-20..D-24
 - Phase 14.2 inserted after Phase 14: Failure prediction (regression, dates with confidence tag) and template/local-model incident narration in a separate analytics container; split out of Phase 14 per 14-CONTEXT.md D-01/D-30..D-32
+- Phase 16 added: Dashboard admin mode (?admin=1) to fake host UP/DOWN for live management demos via an MQTT command topic consumed by the poller (Livestatus commands); includes keeping the inferred unmanaged-switch card with faked-DOWN children. Gate is the query flag only (user choice 2026-10-02: closed demo network).
 
 ### Decisions
 

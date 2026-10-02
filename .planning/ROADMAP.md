@@ -446,3 +446,13 @@ Plans:
   - Whether the per-tower map should reuse Phase 13's `parents`-derived topology map (vis-network) for positioning within a tower, or is a simpler non-topological sublocation list/grid — sequencing after Phase 13 may be preferable so real topology data exists first, but that dependency is not locked.
 
 **Plans**: TBD
+
+### Phase 16: Dashboard admin mode for live demos
+
+**Goal:** An admin mode (`?admin=1`) lets an operator ctrl+click multi-select hosts in the map, device tree or a whole folder and send realistic UP/DOWN ping results (host + PING service, check_icmp-style output with random rta, as the wizard's `--demo` does) so non-admin dashboards show them live for management demos. Commands travel as MQTT messages on a new admin command topic that the poller turns into Livestatus commands (PROCESS_*_CHECK_RESULT, DISABLE/ENABLE_HOST_CHECK, plus a restore-real-checks action); no new server-side app; broker ACL grants publish on that topic only to the admin login. An unmanaged switch whose children are faked DOWN must still render the combined inferred switch card with its children listed below, as on a real site.
+**Requirements**: TBD
+**Depends on:** Phase 14.1
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 16 to break down)
