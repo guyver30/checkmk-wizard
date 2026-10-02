@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IndexRoute } from "./IndexRoute";
 import * as checkmkWrite from "../lib/checkmkWrite";
 import type { IncidentLookup } from "../lib/incidents";
+import { __setAdminModeForTests } from "../lib/adminMode";
 import { useAppStore } from "../store/useAppStore";
 
 // Every write in edit mode goes through checkmkWrite.ts -- mocked here so these route-level
@@ -88,6 +89,30 @@ describe("IndexRoute", () => {
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
   });
 
+});
+
+describe("IndexRoute admin mode", () => {
+  afterEach(() => {
+    __setAdminModeForTests(false);
+  });
+
+  it("renders no admin chrome without admin mode", () => {
+    renderIndex();
+    expect(screen.queryByText(/ADMIN MODE/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set DOWN" })).not.toBeInTheDocument();
+  });
+
+  it("renders the banner and action bar and disables the edit switch in admin mode", async () => {
+    __setAdminModeForTests(true);
+    renderIndex();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText("ADMIN MODE - no hosts faked")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set DOWN" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Edit topology" })).toBeDisabled();
+    expect(screen.getByText("Unavailable in admin mode")).toBeInTheDocument();
+  });
 });
 
 describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit", () => {

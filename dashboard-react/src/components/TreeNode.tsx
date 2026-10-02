@@ -7,11 +7,15 @@
 // stateMapping.badgeForState, never a second colour table.
 
 import { Link, useLocation } from "react-router";
-import { Badge } from "kone-design-system";
+import { Badge, Checkbox } from "kone-design-system";
+import { hostsInFolder, isAdminMode } from "../lib/adminMode";
 import { deviceTypeMaskUrl } from "../lib/mapIcons";
 import { hostHref, incidentHref } from "../lib/searchLinks";
 import { badgeForState } from "../lib/stateMapping";
 import type { TreeGroupNode } from "../lib/treeModel";
+import type { GroupingMode } from "../lib/types";
+import { useAdminStore } from "../store/adminStore";
+import { useAppStore } from "../store/useAppStore";
 import { StateBadgeForState } from "./StateBadge";
 
 const INDENT_PX = 16;
@@ -30,52 +34,102 @@ export interface TreeNodeProps {
   depth: number;
   isOpen: boolean;
   onToggle: (key: string) => void;
+  groupingMode?: GroupingMode;
 }
 
-export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
+export function TreeNode({
+  node,
+  depth,
+  isOpen,
+  onToggle,
+  groupingMode,
+}: TreeNodeProps) {
   const { search } = useLocation();
+  // Admin selection (D-12): the admin store and device map are read unconditionally (hooks),
+  // but every admin branch below is gated on isAdminMode() so the non-admin DOM is unchanged.
+  const admin = isAdminMode();
+  const selected = useAdminStore((s) => s.selected);
+  const faked = useAdminStore((s) => s.faked);
+  const toggleSelected = useAdminStore((s) => s.toggleSelected);
+  const setSelected = useAdminStore((s) => s.setSelected);
+  const allDevices = useAppStore((s) => s.devices);
+  const folderAdmin = admin && groupingMode === "folder";
+  const folderIds = folderAdmin ? hostsInFolder(node.key, allDevices) : [];
+  const folderSelected = folderIds.filter((id) => selected.has(id)).length;
+  const folderChecked =
+    folderIds.length > 0 && folderSelected === folderIds.length;
   const spec = badgeForState(node.worst);
   const accentClass = ACCENT_BORDER_CLASS[spec.color] ?? "border-neutral-300";
 
+  const header = (
+    <button
+      type="button"
+      onClick={() => onToggle(node.key)}
+      aria-expanded={isOpen}
+      style={{ paddingLeft: depth * INDENT_PX + ROW_START_PX }}
+      className={[
+        "flex w-full items-center gap-2 border-l-4 py-2 pr-3 text-left hover:bg-bg-subtle-hover",
+        accentClass,
+      ].join(" ")}
+    >
+      <span
+        className={[
+          "flex h-5 w-5 shrink-0 items-center justify-center text-fg-secondary transition-transform",
+          isOpen ? "rotate-180" : "",
+        ].join(" ")}
+        aria-hidden
+      >
+        &#9660;
+      </span>
+      <span className="flex-1 truncate text-sm font-semibold text-fg-primary">
+        {node.label}
+      </span>
+      {node.hatched && (
+        <>
+          {/* Visible partial-data marker -- decorative, the accessible name comes from the
+                sr-only text below so a screen reader doesn't get a redundant/undescribed glyph. */}
+          <span
+            aria-hidden
+            title="Partial data — some devices in this group are stale"
+            className="h-2 w-2 shrink-0 rounded-full border border-dashed border-fg-tertiary"
+          />
+          <span className="sr-only">, some devices have stale data</span>
+        </>
+      )}
+      <span className="shrink-0 text-xs text-fg-tertiary">
+        {node.nonOkCount} / {node.total}
+      </span>
+      {folderAdmin && folderSelected > 0 && (
+        <span className="shrink-0 text-xs text-fg-tertiary">
+          {folderSelected}/{folderIds.length} selected
+        </span>
+      )}
+      <StateBadgeForState state={node.worst} />
+    </button>
+  );
+
   return (
     <div role="treeitem" aria-expanded={isOpen}>
-      <button
-        type="button"
-        onClick={() => onToggle(node.key)}
-        aria-expanded={isOpen}
-        style={{ paddingLeft: depth * INDENT_PX + ROW_START_PX }}
-        className={[
-          "flex w-full items-center gap-2 border-l-4 py-2 pr-3 text-left hover:bg-bg-subtle-hover",
-          accentClass,
-        ].join(" ")}
-      >
-        <span
-          className={[
-            "flex h-5 w-5 shrink-0 items-center justify-center text-fg-secondary transition-transform",
-            isOpen ? "rotate-180" : "",
-          ].join(" ")}
-          aria-hidden
-        >
-          &#9660;
-        </span>
-        <span className="flex-1 truncate text-sm font-semibold text-fg-primary">{node.label}</span>
-        {node.hatched && (
-          <>
-            {/* Visible partial-data marker -- decorative, the accessible name comes from the
-                sr-only text below so a screen reader doesn't get a redundant/undescribed glyph. */}
-            <span
-              aria-hidden
-              title="Partial data — some devices in this group are stale"
-              className="h-2 w-2 shrink-0 rounded-full border border-dashed border-fg-tertiary"
+      {folderAdmin ? (
+        <div className="flex items-center">
+          <span
+            className="shrink-0"
+            style={{ paddingLeft: depth * INDENT_PX + 4 }}
+          >
+            <Checkbox
+              size="sm"
+              aria-label="Select all hosts in this folder"
+              title="Select all hosts in this folder"
+              checked={folderChecked}
+              indeterminate={folderSelected > 0 && !folderChecked}
+              onChange={() => setSelected(folderIds, !folderChecked)}
             />
-            <span className="sr-only">, some devices have stale data</span>
-          </>
-        )}
-        <span className="shrink-0 text-xs text-fg-tertiary">
-          {node.nonOkCount} / {node.total}
-        </span>
-        <StateBadgeForState state={node.worst} />
-      </button>
+          </span>
+          <div className="flex-1">{header}</div>
+        </div>
+      ) : (
+        header
+      )}
       {isOpen && (
         <div role="group">
           {node.children.map((device) => {
@@ -83,16 +137,36 @@ export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
             const ariaLabel = device.dimmed
               ? `${device.label} — part of an open incident`
               : `${device.label} — ${displayState}`;
+            const isSelected = admin && selected.has(device.id);
             return (
               <div
                 key={device.id}
                 role="treeitem"
                 style={{ paddingLeft: (depth + 1) * INDENT_PX + ROW_START_PX }}
                 aria-label={ariaLabel}
-                className="flex items-center pr-3"
+                className={[
+                  "flex items-center pr-3",
+                  isSelected ? "border-l-4 border-brand bg-brand-light" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
               >
+                {admin && (
+                  <Checkbox
+                    size="sm"
+                    aria-label={device.label}
+                    checked={selected.has(device.id)}
+                    onChange={() => toggleSelected(device.id)}
+                  />
+                )}
                 <Link
                   to={hostHref(search, device.id)}
+                  onClick={(event) => {
+                    if (admin && (event.ctrlKey || event.metaKey)) {
+                      event.preventDefault();
+                      toggleSelected(device.id);
+                    }
+                  }}
                   className={[
                     "flex flex-1 items-center gap-2 py-1.5 text-sm hover:bg-bg-subtle-hover",
                     device.dimmed ? "opacity-50" : "",
@@ -138,6 +212,13 @@ export function TreeNode({ node, depth, isOpen, onToggle }: TreeNodeProps) {
                   </Badge>
                 ) : (
                   <StateBadgeForState state={displayState} />
+                )}
+                {admin && faked[device.id] && (
+                  <span className="ml-1">
+                    <Badge color="neutral" variant="outline">
+                      FAKED
+                    </Badge>
+                  </span>
                 )}
               </div>
             );

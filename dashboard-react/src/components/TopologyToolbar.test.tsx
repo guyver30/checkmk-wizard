@@ -76,4 +76,10 @@ describe("TopologyToolbar", () => {
       screen.getByText("Editing is off: set TOPOLOGY_EDITOR_SECRET in deploy/.env and run the wizard."),
     ).toBeInTheDocument();
   });
+
+  it("disabledReason disables the switch and shows the reason even when editing is configured", () => {
+    renderToolbar({ editingConfigured: true, disabledReason: "Unavailable in admin mode" });
+    expect(screen.getByRole("switch", { name: "Edit topology" })).toBeDisabled();
+    expect(screen.getByText("Unavailable in admin mode")).toBeInTheDocument();
+  });
 });
