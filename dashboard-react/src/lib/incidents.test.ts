@@ -10,6 +10,7 @@ import {
   normalizeIncident,
   selectOpenIncidents,
   sortIncidents,
+  worstIncidentStatus,
   type Incident,
 } from "./incidents";
 import type { IncidentPayload } from "./types";
@@ -296,5 +297,22 @@ describe("incidentStatus", () => {
   it("is 'warning' when the root is only UNREACH with no confirmed-down consequence", () => {
     const incident = makeIncident({ confirmedDown: [], rootState: "UNREACH", inferred: false });
     expect(incidentStatus(incident)).toBe("warning");
+  });
+});
+
+describe("worstIncidentStatus", () => {
+  it("is null for no incidents", () => {
+    expect(worstIncidentStatus([])).toBeNull();
+  });
+
+  it("is 'danger' when any incident is danger", () => {
+    const warning = makeIncident({ confirmedDown: [], rootState: "UNREACH", inferred: false });
+    const danger = makeIncident({ confirmedDown: ["a"] });
+    expect(worstIncidentStatus([warning, danger])).toBe("danger");
+  });
+
+  it("is 'warning' when every incident is only a warning", () => {
+    const warning = makeIncident({ confirmedDown: [], rootState: "UNREACH", inferred: false });
+    expect(worstIncidentStatus([warning, warning])).toBe("warning");
   });
 });

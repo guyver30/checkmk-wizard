@@ -222,3 +222,12 @@ export function incidentStatus(incident: Incident): "danger" | "warning" {
   }
   return "warning";
 }
+
+// Worst severity across a set of open incidents, for the Incidents pane header badge. Built on
+// incidentStatus so the header colour can never disagree with the worst card. Null when empty.
+export function worstIncidentStatus(incidents: Incident[]): "danger" | "warning" | null {
+  if (incidents.length === 0) {
+    return null;
+  }
+  return incidents.some((incident) => incidentStatus(incident) === "danger") ? "danger" : "warning";
+}
