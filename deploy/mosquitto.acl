@@ -11,3 +11,14 @@ topic readwrite #
 
 user wsreader
 topic read lan/#
+
+# Admin dashboard login (`?admin=1`). Its only write grant is the admin command
+# topic. Admin topics live outside `lan/`, so wsreader never sees them. `read
+# lan/#` is granted so the admin page can show the normal dashboard on one
+# connection (user-confirmed 2026-10-02, amending the original grant design);
+# wsadmin still cannot write anywhere under `lan/`.
+user wsadmin
+topic read lan/#
+topic read admin/ack
+topic read admin/faked
+topic write admin/cmd
