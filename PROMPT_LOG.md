@@ -366,3 +366,6 @@
 - **2026-10-02 09:23** — yes (add fakeping <host> up|down helper to the incident demo doc)
 - **2026-10-02 09:28** — all good, let's proceed with phase 16
 - **2026-10-02 09:41** — /bm:plan-phase 16
+- **2026-10-02 13:38** — /bm:execute-phase 16
+- **2026-10-02 15:29** — let's do option 1 and option 2 (workaround for podman 'not found in input list' on fresh up -d; plus quick task to fix compose depends_on for minio-init/clickhouse/grafana)
+- **2026-10-02 16:24** — skip 13 and 14, finish the plan and fix the gaps (Phase 16 UAT gaps: plain-click select, select all, restore = demo baseline, periodic re-inject of faked state)
