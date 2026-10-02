@@ -7,6 +7,11 @@ export interface ThreePaneLayoutProps {
   centreTop: ReactNode;
   // Omitted (e.g. in topology edit mode) to give centreTop the whole column height.
   centreBottom?: ReactNode;
+  // The right column stacks `incidents` (top) above `details` (bottom). Both are optional and
+  // both are omitted in topology edit mode. `incidentsSummary` (count + severity badge) stays
+  // visible in the incidents pane header even while that pane is collapsed.
+  incidents?: ReactNode;
+  incidentsSummary?: ReactNode;
   details?: ReactNode;
   detailsKey?: string | null;
   onCloseDetails?: () => void;
@@ -17,7 +22,7 @@ const COLLAPSED_RAIL_PX = 40;
 
 // Which edge of the layout a pane sits on. It decides which way the collapse/expand chevron
 // points: towards the edge the pane collapses into, and back out again.
-type PaneSide = "left" | "right" | "bottom";
+type PaneSide = "left" | "right" | "bottom" | "top";
 
 interface CollapsiblePaneProps {
   title: string;
@@ -25,11 +30,16 @@ interface CollapsiblePaneProps {
   collapsed: boolean;
   onToggleCollapse: () => void;
   onClose?: () => void;
+  // Always-visible header content right after the title (e.g. the incidents count badge).
+  headerExtra?: ReactNode;
+  // How a collapsed pane looks: a "rail" is just the restore chevron (plus headerExtra) in a
+  // narrow strip; a "bar" keeps the whole header and only drops the body.
+  collapsedAs?: "rail" | "bar";
   children: ReactNode;
 }
 
 // Chevron rotation per side, for the "collapse" direction; "expand" is the opposite (180deg).
-const COLLAPSE_ROTATION: Record<PaneSide, number> = { left: 180, right: 0, bottom: 90 };
+const COLLAPSE_ROTATION: Record<PaneSide, number> = { left: 180, right: 0, bottom: 90, top: 270 };
 
 // Inline SVG icons (stroke = currentColor), so no icon library is added for three glyphs.
 function ChevronIcon({ rotation }: { rotation: number }) {
@@ -71,7 +81,17 @@ function CloseIcon() {
 const ICON_BUTTON_CLASS =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-fg-secondary hover:bg-bg-subtle-hover hover:text-fg-primary";
 
-function CollapsiblePane({ title, side, collapsed, onToggleCollapse, onClose, children }: CollapsiblePaneProps) {
+function CollapsiblePane({
+  title,
+  side,
+  collapsed,
+  onToggleCollapse,
+  onClose,
+  headerExtra,
+  collapsedAs = "rail",
+  children,
+}: CollapsiblePaneProps) {
+  const asRail = collapsed && collapsedAs === "rail";
   const toggleLabel = collapsed ? `Expand ${title.toLowerCase()}` : `Collapse ${title.toLowerCase()}`;
   const closeLabel = `Close ${title.toLowerCase()}`;
   const collapseRotation = COLLAPSE_ROTATION[side];
@@ -80,11 +100,16 @@ function CollapsiblePane({ title, side, collapsed, onToggleCollapse, onClose, ch
       <div
         className={[
           "flex shrink-0 items-center gap-1 border-b border-neutral-150 py-1.5",
-          collapsed ? "justify-center px-1" : "justify-between px-3",
+          asRail ? "flex-col justify-center px-1" : "justify-between px-3",
         ].join(" ")}
       >
-        {!collapsed && <span className="truncate text-sm font-semibold text-fg-primary">{title}</span>}
-        <div className="flex shrink-0 items-center gap-1">
+        {!asRail && (
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-semibold text-fg-primary">{title}</span>
+            {headerExtra}
+          </div>
+        )}
+        <div className={["flex shrink-0 items-center gap-1", asRail ? "flex-col" : ""].join(" ")}>
           <button
             type="button"
             aria-expanded={!collapsed}
@@ -95,14 +120,15 @@ function CollapsiblePane({ title, side, collapsed, onToggleCollapse, onClose, ch
           >
             <ChevronIcon rotation={collapsed ? collapseRotation + 180 : collapseRotation} />
           </button>
-          {!collapsed && onClose && (
+          {asRail && headerExtra}
+          {!asRail && onClose && (
             <button type="button" aria-label={closeLabel} title={closeLabel} onClick={onClose} className={ICON_BUTTON_CLASS}>
               <CloseIcon />
             </button>
           )}
         </div>
       </div>
-      {/* A collapsed pane unmounts its content -- only the rail with the restore button remains. */}
+      {/* A collapsed pane unmounts its content -- only the rail/bar with the restore button remains. */}
       {!collapsed && <div className="min-h-0 flex-1 overflow-auto">{children}</div>}
     </div>
   );
@@ -110,7 +136,8 @@ function CollapsiblePane({ title, side, collapsed, onToggleCollapse, onClose, ch
 
 /**
  * The three-pane shell: a full-height tree pane on the left, and a centre column split into
- * centreTop (flexible) and centreBottom (the event history, sized by eventsHeight). Per D-31,
+ * centreTop (flexible) and centreBottom (the event history, sized by eventsHeight), and an
+ * optional right column stacking the Incidents pane above the Host details pane. Per D-31,
  * this wraps its pane contents as props rather than nesting layout structure inside them, so
  * later plans fill slots without ever restructuring this grid.
  */
@@ -118,6 +145,8 @@ export function ThreePaneLayout({
   tree,
   centreTop,
   centreBottom,
+  incidents,
+  incidentsSummary,
   details,
   detailsKey,
   onCloseDetails,
@@ -126,7 +155,24 @@ export function ThreePaneLayout({
 
   const treeColumnWidth = collapsed.tree ? COLLAPSED_RAIL_PX : sizes.tree;
   const eventsRowHeight = collapsed.events ? COLLAPSED_RAIL_PX : sizes.events;
-  const detailsColumnWidth = collapsed.details ? COLLAPSED_RAIL_PX : sizes.details;
+
+  // Right column: incidents (top) above host details (bottom). The column shrinks to a rail only
+  // when every pane in it is collapsed; otherwise a collapsed pane becomes a header bar so the
+  // incidents count badge and the restore chevrons stay visible without wasting column width.
+  const rightColumn = Boolean(incidents || details);
+  const incidentsOpen = Boolean(incidents) && !collapsed.incidents;
+  const detailsOpen = Boolean(details) && !collapsed.details;
+  const columnRailed = !incidentsOpen && !detailsOpen;
+  const detailsColumnWidth = columnRailed ? COLLAPSED_RAIL_PX : sizes.details;
+  const stacked = Boolean(incidents && details);
+  let rightRows = "1fr";
+  if (stacked && !columnRailed) {
+    if (incidentsOpen && detailsOpen) {
+      rightRows = `${sizes.incidents}px 4px 1fr`;
+    } else {
+      rightRows = incidentsOpen ? "1fr auto" : "auto 1fr";
+    }
+  }
 
   // Re-expand rule (operator decision 3): a NEW host opening (detailsKey changes to a truthy,
   // different value) re-expands a collapsed pane -- the operator just asked to see a host, so a
@@ -146,7 +192,7 @@ export function ThreePaneLayout({
     // a dependency elsewhere in this codebase); only detailsKey should re-run this.
   }, [detailsKey]);
 
-  const gridTemplateColumns = details
+  const gridTemplateColumns = rightColumn
     ? `${treeColumnWidth}px 4px 1fr 4px ${detailsColumnWidth}px`
     : `${treeColumnWidth}px 4px 1fr`;
 
@@ -206,10 +252,10 @@ export function ThreePaneLayout({
         )}
       </div>
 
-      {details && (
+      {rightColumn && (
         <>
           {/* Mirrored-value pattern, same reasoning as the event-history splitter above: sizes.details
-              is the pane's own width, but this divider sits on the pane's LEFT edge, where dragging
+              is the column's own width, but this divider sits on the column's LEFT edge, where dragging
               LEFT (into the centre column) should widen it -- the opposite of Splitter's own
               "dragging right always increases value" contract. */}
           <Splitter
@@ -217,20 +263,83 @@ export function ThreePaneLayout({
             value={bounds.details.min + bounds.details.max - sizes.details}
             min={bounds.details.min}
             max={bounds.details.max}
-            label="Resize host details"
+            label="Resize right column"
             onResize={(next) => setSize("details", bounds.details.min + bounds.details.max - next)}
             onResizeCommit={commit}
           />
 
-          <CollapsiblePane
-            title="Host details"
-            side="right"
-            collapsed={collapsed.details}
-            onToggleCollapse={() => toggleCollapse("details")}
-            onClose={onCloseDetails}
-          >
-            {details}
-          </CollapsiblePane>
+          {columnRailed ? (
+            <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg-surface">
+              {incidents && (
+                <div className="shrink-0">
+                  <CollapsiblePane
+                    title="Incidents"
+                    side="right"
+                    collapsed
+                    collapsedAs="rail"
+                    headerExtra={incidentsSummary}
+                    onToggleCollapse={() => toggleCollapse("incidents")}
+                  >
+                    {incidents}
+                  </CollapsiblePane>
+                </div>
+              )}
+              {details && (
+                <div className="shrink-0">
+                  <CollapsiblePane
+                    title="Host details"
+                    side="right"
+                    collapsed
+                    collapsedAs="rail"
+                    onToggleCollapse={() => toggleCollapse("details")}
+                    onClose={onCloseDetails}
+                  >
+                    {details}
+                  </CollapsiblePane>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="grid h-full min-h-0 min-w-0" style={{ gridTemplateRows: rightRows }}>
+              {incidents && (
+                <CollapsiblePane
+                  title="Incidents"
+                  side={stacked ? "top" : "right"}
+                  collapsed={collapsed.incidents}
+                  collapsedAs="bar"
+                  headerExtra={incidentsSummary}
+                  onToggleCollapse={() => toggleCollapse("incidents")}
+                >
+                  {incidents}
+                </CollapsiblePane>
+              )}
+
+              {incidentsOpen && detailsOpen && (
+                <Splitter
+                  orientation="horizontal"
+                  value={sizes.incidents}
+                  min={bounds.incidents.min}
+                  max={bounds.incidents.max}
+                  label="Resize incidents"
+                  onResize={(next) => setSize("incidents", next)}
+                  onResizeCommit={commit}
+                />
+              )}
+
+              {details && (
+                <CollapsiblePane
+                  title="Host details"
+                  side={stacked ? "bottom" : "right"}
+                  collapsed={collapsed.details}
+                  collapsedAs="bar"
+                  onToggleCollapse={() => toggleCollapse("details")}
+                  onClose={onCloseDetails}
+                >
+                  {details}
+                </CollapsiblePane>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
