@@ -1205,7 +1205,8 @@ def plan_admin_actions(
     Hosts named explicitly always get the command's own state. DOWN on a managed host
     cascades UNREACH to its descendants; the walk includes an unmanaged switch (UNREACH)
     but stops there, because Checkmk cannot see past it (clarified 2026-10-02). UP/restore
-    on a managed host reverses the cascade for descendants faked UNREACH, unless another
+    on a managed host reverses the cascade for descendants faked UNREACH (the cascade's
+    restore uses the demo baseline, see build_admin_commands), unless another
     faked-DOWN managed ancestor still covers them. Unknown host ids are ignored; the
     caller reports them as skipped.
     """
@@ -1241,13 +1242,42 @@ def _admin_output_address(address: str, host_id: str) -> str:
     return address if _ADMIN_SAFE_ADDRESS_RE.match(address or "") else host_id
 
 
+def _admin_up_output(ip: str) -> str:
+    """The OK plugin text shared by the up op, restore and the UP keepalive."""
+    return f"OK - {ip} rta {random.uniform(0.2, 3.0):.3f}ms lost 0%"
+
+
+def _admin_fake_result(state: str, ip: str) -> tuple[int, int, str]:
+    """(host code, PING code, plugin text) for a faked UP/DOWN/UNREACH state."""
+    if state == "UP":
+        return 0, 0, _admin_up_output(ip)
+    output = f"CRITICAL - {ip}: rta nan, lost 100%"
+    if state == "DOWN":
+        return 1, 2, output
+    if state == "UNREACH":
+        return 2, 2, output
+    raise ValueError(f"unknown faked state: {state!r}")
+
+
+def _admin_guard(commands: list[str]) -> list[str]:
+    for command in commands:
+        if "\n" in command or "\r" in command or "'" in command:
+            raise ValueError(f"unsafe Livestatus command: {command!r}")
+    return commands
+
+
 def build_admin_commands(action: AdminAction, address: str) -> list[str]:
     """Livestatus external command bodies for one AdminAction (D-04/D-05).
 
     Mirrors wizard.py `_fake_demo_hosts_up` and the runbook's live-verified fakeping
-    sequence. The host check and the PING service check are DISABLED first so neither
-    the scheduled check nor the demo "Always assume host to be up" rule overwrites the
-    injected result (D-05). Livestatus returns nothing for COMMAND, so success means
+    sequence. For up/down/unreach the host check and the PING service check are
+    DISABLED first so neither the scheduled check nor the demo "Always assume host to
+    be up" rule overwrites the injected result (D-05). Restore re-enables the host check
+    (so the rule keeps demo hosts UP and the host leaves the faked set), injects host UP
+    and PING OK, and deliberately leaves PING disabled: the wizard --demo baseline.
+    Fixed after the 2026-10-02 live UAT (16-UAT-GAPS.md gap 3): the old restore sent
+    ENABLE_SVC_CHECK, so Checkmk really pinged the demo host's non-existent IP and the
+    host went CRITICAL. Livestatus returns nothing for COMMAND, so success means
     "sent", not "applied". Fails closed (ValueError) on any character that could break
     out of the command.
     """
@@ -1255,15 +1285,16 @@ def build_admin_commands(action: AdminAction, address: str) -> list[str]:
     if not _HOST_ID_RE.match(host):
         raise ValueError(f"invalid host id: {host!r}")
     if action.op == "restore":
-        commands = [f"ENABLE_HOST_CHECK;{host}", f"ENABLE_SVC_CHECK;{host};PING"]
+        ip = _admin_output_address(address, host)
+        output = _admin_up_output(ip)
+        commands = [
+            f"ENABLE_HOST_CHECK;{host}",
+            f"PROCESS_HOST_CHECK_RESULT;{host};0;{output}",
+            f"PROCESS_SERVICE_CHECK_RESULT;{host};PING;0;{output}",
+        ]
     elif action.op in ("up", "down", "unreach"):
         ip = _admin_output_address(address, host)
-        if action.op == "up":
-            host_code, svc_code = 0, 0
-            output = f"OK - {ip} rta {random.uniform(0.2, 3.0):.3f}ms lost 0%"
-        else:
-            host_code, svc_code = (1, 2) if action.op == "down" else (2, 2)
-            output = f"CRITICAL - {ip}: rta nan, lost 100%"
+        host_code, svc_code, output = _admin_fake_result(action.op.upper(), ip)
         commands = [
             f"DISABLE_HOST_CHECK;{host}",
             f"DISABLE_SVC_CHECK;{host};PING",
@@ -1272,10 +1303,25 @@ def build_admin_commands(action: AdminAction, address: str) -> list[str]:
         ]
     else:
         raise ValueError(f"unknown op: {action.op!r}")
-    for command in commands:
-        if "\n" in command or "\r" in command or "'" in command:
-            raise ValueError(f"unsafe Livestatus command: {command!r}")
-    return commands
+    return _admin_guard(commands)
+
+
+def build_admin_keepalive_commands(host: str, state: str, address: str) -> list[str]:
+    """Re-inject a faked host's current result (UAT gap 4, staleness).
+
+    Only the two PROCESS_* lines: the checks are already disabled while faked, and
+    re-sending DISABLE_* from a stale faked set could re-disable a just-restored host.
+    """
+    if not _HOST_ID_RE.match(host):
+        raise ValueError(f"invalid host id: {host!r}")
+    ip = _admin_output_address(address, host)
+    host_code, svc_code, output = _admin_fake_result(state, ip)
+    return _admin_guard(
+        [
+            f"PROCESS_HOST_CHECK_RESULT;{host};{host_code};{output}",
+            f"PROCESS_SERVICE_CHECK_RESULT;{host};PING;{svc_code};{output}",
+        ]
+    )
 
 
 def send_livestatus_commands(
@@ -1321,6 +1367,11 @@ ADMIN_SEEN_IDS_MAX = 64
 # commands before the faked-set query runs.
 ADMIN_REFRESH_DELAY_SECONDS = 2.0
 ADMIN_ACK_DETAIL_MAX = 200
+# Checkmk staleness = result age / check_interval (60 s on the demo site) and the
+# dashboard flags STALE at STALENESS_FACTOR 3. Re-injecting every 30 s keeps staleness
+# near 0.5, still under 1.0 if one tick fails; the requirement is at least every 60 s
+# (16-UAT-GAPS.md gap 4: live staleness 2.9-11.2 on faked hosts).
+ADMIN_FAKE_KEEPALIVE_INTERVAL_SECONDS = 30
 _ADMIN_OP_STATE = {"up": "UP", "down": "DOWN", "unreach": "UNREACH", "restore": "RESTORED"}
 _ADMIN_FAKED_STATES = ("UP", "DOWN", "UNREACH")
 
@@ -1345,7 +1396,9 @@ def query_faked_hosts(host: str, port: int, timeout: float) -> dict[str, str]:
     disable only the PING check (the host check stays enabled under the "Always assume
     host to be up" rule), so they are not counted; unmanaged switches have no PING
     service, so a faked switch is still counted. Hosts whose checks an operator disabled
-    for other reasons are counted too (documented limitation). Assumption A1: the
+    for other reasons are counted too (documented limitation). A restored host has its
+    host check enabled and PING disabled, the same shape as a wizard --demo host, so it
+    is not counted. Assumption A1: the
     `active_checks_enabled` column exists on the live site (probed by `--check-columns`).
     """
     try:
@@ -1361,6 +1414,8 @@ def query_faked_hosts(host: str, port: int, timeout: float) -> dict[str, str]:
             name = row[0]
             if not isinstance(name, str) or not is_publishable_device_id(name):
                 continue
+            if int(row[2]) != 0:
+                continue  # host check enabled: a restored/demo host, never faked
             if ping_active.get(name, 0) != 0:
                 continue
             faked[name] = host_state_label(int(row[1]))
@@ -1476,7 +1531,8 @@ class AdminCommandWorker:
 
     Livestatus retries during a core reload can take ~20 s, which must never block paho's
     network loop or the poll loop. One daemon thread serializes commands so two actions
-    never interleave.
+    never interleave. The same thread also runs the faked-host keepalive
+    (`maybe_keepalive`) so it is serialized with admin commands.
     """
 
     def __init__(
@@ -1487,12 +1543,17 @@ class AdminCommandWorker:
         send_fn=send_livestatus_commands,
         sleep_fn=time.sleep,
         refresh_fn=refresh_admin_faked,
+        clock_fn=time.monotonic,
+        query_fn=query_faked_hosts,
     ) -> None:
         self._config = config
         self._context = context
         self._send_fn = send_fn
         self._sleep_fn = sleep_fn
         self._refresh_fn = refresh_fn
+        self._clock_fn = clock_fn
+        self._query_fn = query_fn
+        self._next_keepalive_at = 0.0
         self._queue: queue.Queue[AdminCommand] = queue.Queue(maxsize=ADMIN_QUEUE_MAX)
         self._seen_ids: collections.deque[str] = collections.deque(maxlen=ADMIN_SEEN_IDS_MAX)
         self._stop = threading.Event()
@@ -1619,13 +1680,77 @@ class AdminCommandWorker:
             ack = self._fail_ack(command.id, command.action, "internal error")
         self._ack(ack)
 
+    def maybe_keepalive(self, now: float) -> None:
+        """Re-inject every faked host's current result at most once per interval.
+
+        Single send per tick, no retries or sleeps (the next tick retries); no Livestatus
+        I/O at all when nothing is faked. Publishes nothing and leaves the context alone.
+        """
+        if now < self._next_keepalive_at:
+            return
+        self._next_keepalive_at = now + ADMIN_FAKE_KEEPALIVE_INTERVAL_SECONDS
+        if not self._context.faked():
+            return
+        known = self._context.snapshot_map()
+        if not known:
+            return
+        if self._context.use_ledger:
+            faked = self._context.faked()
+        else:
+            # Re-read right before sending so a restore that landed between poll cycles
+            # is not overwritten by a stale faked set.
+            try:
+                faked = self._query_fn(
+                    self._config.livestatus_host,
+                    self._config.livestatus_port,
+                    DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+                )
+            except LivestatusError as exc:
+                _logger.warning("admin keepalive: faked-set query failed: %s", exc)
+                return
+        commands: list[str] = []
+        refreshed = 0
+        for host, state in sorted(faked.items()):
+            if host not in known or state not in _ADMIN_FAKED_STATES:
+                continue
+            try:
+                commands.extend(
+                    build_admin_keepalive_commands(host, state, known[host].address)
+                )
+            except ValueError as exc:
+                _logger.warning("admin keepalive: skipping %s: %s", host, exc)
+                continue
+            refreshed += 1
+        if not commands:
+            return
+        try:
+            self._send_fn(
+                self._config.livestatus_host,
+                self._config.livestatus_port,
+                commands,
+                DEFAULT_LIVESTATUS_TIMEOUT_SECONDS,
+            )
+        except LivestatusError as exc:
+            _logger.warning("admin keepalive: send failed: %s", exc)
+            return
+        _logger.debug("admin keepalive refreshed %d faked hosts", refreshed)
+
+    def _keepalive_safely(self) -> None:
+        try:
+            self.maybe_keepalive(self._clock_fn())
+        except Exception:
+            # Same rationale as _handle: the worker thread serves every later command.
+            _logger.exception("admin keepalive failed")
+
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
                 command = self._queue.get(timeout=1.0)
             except queue.Empty:
+                self._keepalive_safely()
                 continue
             self._handle(command)
+            self._keepalive_safely()
 
 
 def extract_device_type(tags: dict) -> str:

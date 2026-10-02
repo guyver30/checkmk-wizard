@@ -4490,9 +4490,51 @@ def test_build_admin_commands_up_text_and_rta_range():
         assert 0.2 <= float(text.split("rta ")[1].split("ms")[0]) <= 3.0
 
 
-def test_build_admin_commands_restore():
-    cmds = poller.build_admin_commands(poller.AdminAction("h1", "restore", False), "10.0.0.5")
-    assert cmds == ["ENABLE_HOST_CHECK;h1", "ENABLE_SVC_CHECK;h1;PING"]
+def test_build_admin_commands_restore_is_demo_baseline():
+    # UAT gap 3: ENABLE_SVC_CHECK made Checkmk really ping a demo host's fake IP (CRITICAL).
+    import re
+
+    for _ in range(20):
+        cmds = poller.build_admin_commands(poller.AdminAction("h1", "restore", False), "10.0.0.5")
+        assert len(cmds) == 3
+        assert cmds[0] == "ENABLE_HOST_CHECK;h1"
+        host_prefix = "PROCESS_HOST_CHECK_RESULT;h1;0;"
+        svc_prefix = "PROCESS_SERVICE_CHECK_RESULT;h1;PING;0;"
+        assert cmds[1].startswith(host_prefix) and cmds[2].startswith(svc_prefix)
+        text = cmds[1][len(host_prefix):]
+        assert text == cmds[2][len(svc_prefix):]
+        assert re.match(r"^OK - 10\.0\.0\.5 rta \d+\.\d{3}ms lost 0%$", text)
+        assert 0.2 <= float(text.split("rta ")[1].split("ms")[0]) <= 3.0
+        for cmd in cmds:
+            for forbidden in ("ENABLE_SVC_CHECK", "DISABLE_", "SCHEDULE_", "FORCED"):
+                assert forbidden not in cmd
+
+
+def test_build_admin_commands_restore_unsafe_address_falls_back_to_host_id():
+    cmds = poller.build_admin_commands(poller.AdminAction("h1", "restore", False), "a;b")
+    assert cmds[1].startswith("PROCESS_HOST_CHECK_RESULT;h1;0;OK - h1 rta ")
+
+
+def test_build_admin_keepalive_commands_states():
+    up = poller.build_admin_keepalive_commands("h1", "UP", "10.0.0.5")
+    assert up[0].startswith("PROCESS_HOST_CHECK_RESULT;h1;0;OK - 10.0.0.5 rta ")
+    assert up[1].startswith("PROCESS_SERVICE_CHECK_RESULT;h1;PING;0;OK - 10.0.0.5 rta ")
+    down = poller.build_admin_keepalive_commands("h1", "DOWN", "10.0.0.5")
+    assert down == [
+        "PROCESS_HOST_CHECK_RESULT;h1;1;CRITICAL - 10.0.0.5: rta nan, lost 100%",
+        "PROCESS_SERVICE_CHECK_RESULT;h1;PING;2;CRITICAL - 10.0.0.5: rta nan, lost 100%",
+    ]
+    unreach = poller.build_admin_keepalive_commands("h1", "UNREACH", "10.0.0.5")
+    assert unreach[0].startswith("PROCESS_HOST_CHECK_RESULT;h1;2;")
+    for cmd in up + down + unreach:
+        assert not cmd.startswith(("DISABLE_", "ENABLE_"))
+
+
+def test_build_admin_keepalive_commands_rejects_bad_input():
+    with pytest.raises(ValueError):
+        poller.build_admin_keepalive_commands("h1", "RESTORED", "10.0.0.5")
+    with pytest.raises(ValueError):
+        poller.build_admin_keepalive_commands("h;1", "UP", "10.0.0.5")
 
 
 @pytest.mark.parametrize("bad", ["a;b", "x'y", "1.2.3.4 5", "a\nb", "a\rb", ""])
@@ -4848,3 +4890,151 @@ def test_build_mqtt_client_without_worker_does_not_subscribe_admin():
         mock_client.on_connect(mock_client, None, {}, 0, None)
 
     mock_client.subscribe.assert_not_called()
+
+
+# --- restore baseline through the worker, faked derivation, keepalive ------------------
+
+
+def _sent_commands(send_fn):
+    return [c for call in send_fn.call_args_list for c in call.args[2]]
+
+
+def test_worker_reverse_cascade_restore_never_enables_ping_check():
+    # UAT gap 3b: Set UP on a managed parent restores the faked-UNREACH child.
+    snaps = [_snapshot("p"), _snapshot("c", parents=["p"])]
+    worker, _, context = _admin_worker(snaps)
+    context.set_faked({"p": "DOWN", "c": "UNREACH"})
+    worker.process_one(poller.parse_admin_command(_cmd(action="up", hosts=("p",))))
+    cmds = _sent_commands(worker._send_fn)
+    assert "ENABLE_HOST_CHECK;c" in cmds
+    assert any(c.startswith("PROCESS_SERVICE_CHECK_RESULT;c;PING;0;") for c in cmds)
+    assert not any("ENABLE_SVC_CHECK" in c for c in cmds)
+
+
+def test_worker_restore_all_never_enables_ping_check():
+    worker, _, context = _admin_worker([_snapshot("h1")])
+    context.set_faked({"h1": "DOWN"})
+    worker.process_one(poller.parse_admin_command(_cmd(action="restore_all", hosts=())))
+    cmds = _sent_commands(worker._send_fn)
+    assert "ENABLE_HOST_CHECK;h1" in cmds
+    assert not any("ENABLE_SVC_CHECK" in c for c in cmds)
+
+
+def test_query_faked_hosts_ignores_host_with_enabled_host_check():
+    with patch.object(
+        poller,
+        "_livestatus_request",
+        side_effect=[json.dumps([["h1", 1, 1]]), json.dumps([["h1", 0]])],
+    ):
+        assert poller.query_faked_hosts("lh", 6557, 5.0) == {}
+
+
+def test_query_faked_hosts_restored_baseline_shape_is_not_faked():
+    with patch.object(
+        poller,
+        "_livestatus_request",
+        side_effect=[json.dumps([]), json.dumps([["h1", 0]])],
+    ):
+        assert poller.query_faked_hosts("lh", 6557, 5.0) == {}
+
+
+def test_ledger_restore_pops_host():
+    context = poller.AdminContext()
+    context.use_ledger = True
+    context.set_faked({"a": "DOWN"})
+    context.apply_ledger([poller.AdminAction("a", "restore", False)])
+    assert context.faked() == {}
+
+
+def test_keepalive_interval_constant():
+    assert poller.ADMIN_FAKE_KEEPALIVE_INTERVAL_SECONDS == 30
+    assert poller.ADMIN_FAKE_KEEPALIVE_INTERVAL_SECONDS <= 60
+
+
+def test_keepalive_fake_clock_cadence():
+    query = MagicMock(return_value={"h1": "DOWN"})
+    worker, _, context = _admin_worker([_snapshot("h1")], query_fn=query)
+    context.set_faked({"h1": "DOWN"})
+    worker.maybe_keepalive(0.0)
+    assert worker._send_fn.call_count == 1
+    cmds = worker._send_fn.call_args.args[2]
+    assert [c.split(";")[0] for c in cmds] == [
+        "PROCESS_HOST_CHECK_RESULT",
+        "PROCESS_SERVICE_CHECK_RESULT",
+    ]
+    worker.maybe_keepalive(29.0)
+    assert worker._send_fn.call_count == 1
+    worker.maybe_keepalive(30.0)
+    assert worker._send_fn.call_count == 2
+    worker._sleep_fn.assert_not_called()
+
+
+def test_keepalive_no_io_when_nothing_faked():
+    query = MagicMock()
+    worker, _, _ = _admin_worker([_snapshot("h1")], query_fn=query)
+    worker.maybe_keepalive(0.0)
+    query.assert_not_called()
+    worker._send_fn.assert_not_called()
+
+
+def test_keepalive_only_refreshes_faked_known_hosts():
+    query = MagicMock(return_value={"h1": "UP", "ghost": "DOWN"})
+    worker, _, context = _admin_worker([_snapshot("h1"), _snapshot("h2")], query_fn=query)
+    context.set_faked({"h1": "UP", "ghost": "DOWN"})
+    worker.maybe_keepalive(0.0)
+    cmds = _sent_commands(worker._send_fn)
+    assert cmds and all(";h1;" in c for c in cmds)
+
+
+def test_keepalive_requeries_and_skips_host_restored_meanwhile():
+    query = MagicMock(return_value={})
+    worker, _, context = _admin_worker([_snapshot("h1")], query_fn=query)
+    context.set_faked({"h1": "DOWN"})
+    worker.maybe_keepalive(0.0)
+    query.assert_called_once()
+    worker._send_fn.assert_not_called()
+
+
+def test_keepalive_ledger_mode_uses_context_and_never_queries():
+    query = MagicMock()
+    worker, _, context = _admin_worker([_snapshot("h1")], query_fn=query)
+    context.use_ledger = True
+    context.set_faked({"h1": "UNREACH"})
+    worker.maybe_keepalive(0.0)
+    query.assert_not_called()
+    assert worker._send_fn.call_count == 1
+
+
+def test_keepalive_query_failure_sends_nothing_and_does_not_raise():
+    query = MagicMock(side_effect=poller.LivestatusError("boom"))
+    worker, _, context = _admin_worker([_snapshot("h1")], query_fn=query)
+    context.set_faked({"h1": "DOWN"})
+    worker.maybe_keepalive(0.0)
+    worker._send_fn.assert_not_called()
+
+
+def test_keepalive_send_failure_does_not_raise_or_retry():
+    send = MagicMock(side_effect=poller.LivestatusError("boom"))
+    query = MagicMock(return_value={"h1": "DOWN"})
+    worker, _, context = _admin_worker([_snapshot("h1")], send_fn=send, query_fn=query)
+    context.set_faked({"h1": "DOWN"})
+    worker.maybe_keepalive(0.0)
+    assert send.call_count == 1
+    worker._sleep_fn.assert_not_called()
+
+
+def test_run_calls_keepalive_every_iteration_and_survives_errors():
+    worker, _, _ = _admin_worker([_snapshot("h1")])
+    worker._clock_fn = lambda: 123.0
+    calls = []
+
+    def fake_keepalive(now):
+        calls.append(now)
+        if len(calls) == 1:
+            raise RuntimeError("unexpected")
+        worker._stop.set()
+
+    worker.maybe_keepalive = fake_keepalive
+    worker._queue.put(poller.parse_admin_command(_cmd(action="down", hosts=("h1",))))
+    worker._run()
+    assert calls == [123.0, 123.0]
