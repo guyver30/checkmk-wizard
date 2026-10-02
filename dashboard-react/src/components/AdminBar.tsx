@@ -244,7 +244,20 @@ export function AdminActionBar({
     if (!dialog || waiting) {
       return;
     }
-    const id = publishAdminCommand(dialog.action, dialog.hosts);
+    let id: string | null;
+    try {
+      id = publishAdminCommand(dialog.action, dialog.hosts);
+    } catch (error) {
+      // buildAdminCommand throws above ADMIN_MAX_HOSTS (e.g. Select all on a big site); without
+      // this the dialog stayed open with no feedback (review WR-05, 2026-10-02).
+      setDialog(null);
+      setFeedback({
+        status: "danger",
+        message: `Could not send: ${error instanceof Error ? error.message : "invalid command"}. Select fewer hosts and try again. Nothing changed.`,
+        autoHide: false,
+      });
+      return;
+    }
     if (id === null) {
       setDialog(null);
       setFeedback({

@@ -219,6 +219,19 @@ describe("AdminActionBar", () => {
     expect(screen.getByText(/not connected to the broker/)).toBeInTheDocument();
   });
 
+  it("shows a failure and closes the dialog when the command is rejected (too many hosts)", () => {
+    // Review WR-05: buildAdminCommand throws above 200 hosts; the dialog used to hang open.
+    vi.mocked(publishAdminCommand).mockImplementation(() => {
+      throw new Error("Too many hosts: 201 (max 200)");
+    });
+    useAdminStore.setState({ selected: new Set(["h1"]) });
+    renderBar();
+    fireEvent.click(screen.getByRole("button", { name: "Set UP" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set 1 hosts UP" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText(/Too many hosts: 201 \(max 200\)/)).toBeInTheDocument();
+  });
+
   it("Restore all publishes restore_all with no hosts", () => {
     useAdminStore.setState({ faked: { h1: "DOWN", h2: "UP" } });
     renderBar();
