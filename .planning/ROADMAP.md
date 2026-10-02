@@ -460,7 +460,7 @@ Plans:
 **Goal:** An admin mode (`?admin=1`) lets an operator ctrl+click multi-select hosts in the map, device tree or a whole folder and send realistic UP/DOWN ping results (host + PING service, check_icmp-style output with random rta, as the wizard's `--demo` does) so non-admin dashboards show them live for management demos. Commands travel as MQTT messages on a new admin command topic that the poller turns into Livestatus commands (PROCESS_*_CHECK_RESULT, DISABLE/ENABLE_HOST_CHECK, plus a restore-real-checks action); no new server-side app; broker ACL grants publish on that topic only to the admin login. An unmanaged switch whose children are faked DOWN must still render the combined inferred switch card with its children listed below, as on a real site.
 **Requirements**: TBD
 **Depends on:** Phase 14.1
-**Plans:** 8/8 plans complete
+**Plans:** 8/11 plans complete (3 gap-closure plans added 2026-10-02)
 
 Plans:
 **Wave 1**
@@ -482,3 +482,9 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 16-08-PLAN.md — Live UAT on the deployed stack and confirmation of open assumptions (wave 4, checkpoint)
+
+**Gap closure (live UAT 2026-10-02, 16-UAT-GAPS.md)**
+
+- [ ] 16-09-PLAN.md — Poller: Restore returns hosts to the demo baseline (also the switch reverse cascade); 30 s keepalive re-injects faked state so fakes never go STALE (wave 1)
+- [ ] 16-10-PLAN.md — Dashboard: plain click selects in admin mode (no host details), Select all, demo-baseline restore copy (wave 1)
+- [ ] 16-11-PLAN.md — Docs: runbook, dashboard README, CONTEXT amendments, live re-verify checklist (wave 2)
