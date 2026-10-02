@@ -1,12 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useSearchParams } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TopologyMap } from "./TopologyMap";
 import { instances, resetFakeNetworks } from "../test/fakeVisNetwork";
 import type { DevicePayload } from "../lib/types";
 import * as checkmkWrite from "../lib/checkmkWrite";
 import { nodeVisual } from "../lib/mapIcons";
 import type { IncidentLookup } from "../lib/incidents";
+import { __setAdminModeForTests } from "../lib/adminMode";
+import { __resetAdminStoreForTests, useAdminStore } from "../store/adminStore";
 
 // Every write in edit mode goes through checkmkWrite.ts -- mocked here so these tests exercise
 // TopologyMap's own callback wiring (what it calls, with what args, and how it reacts to
@@ -1197,5 +1199,92 @@ describe("TopologyMap edit mode", () => {
     });
     expect(onEditSaved).not.toHaveBeenCalled();
     promptSpy.mockRestore();
+  });
+});
+
+describe("TopologyMap admin mode", () => {
+  const topologyDevices = [{ id: "h1", parents: [] }];
+  const statuses = { h1: device({ id: "h1" }) };
+  const ctrl = { nodes: ["h1"], event: { srcEvent: { ctrlKey: true } } };
+  const nodeOf = (id: string) =>
+    (instances[0].data.nodes.get(id) as Record<string, unknown> & {
+      color: { border: string };
+      label: string;
+    });
+
+  beforeEach(() => {
+    __setAdminModeForTests(true);
+    __resetAdminStoreForTests();
+  });
+  afterEach(() => {
+    __setAdminModeForTests(false);
+    __resetAdminStoreForTests();
+  });
+
+  it("ctrl+click toggles selection without navigating; metaKey works too", () => {
+    renderMap({ topologyDevices, statuses });
+    act(() => instances[0].emit("click", ctrl));
+    expect(useAdminStore.getState().selected.has("h1")).toBe(true);
+    expect(screen.queryByTestId("host-probe")).toBeNull();
+    act(() => instances[0].emit("click", ctrl));
+    expect(useAdminStore.getState().selected.has("h1")).toBe(false);
+    act(() => instances[0].emit("click", { nodes: ["h1"], event: { srcEvent: { metaKey: true } } }));
+    expect(useAdminStore.getState().selected.has("h1")).toBe(true);
+  });
+
+  it("plain click still navigates and leaves selection unchanged", async () => {
+    renderMap({ topologyDevices, statuses });
+    act(() => instances[0].emit("click", { nodes: ["h1"] }));
+    expect(await screen.findByTestId("host-probe")).toHaveTextContent("h1");
+    expect(useAdminStore.getState().selected.size).toBe(0);
+  });
+
+  it("ctrl+click on empty canvas does nothing", () => {
+    renderMap({ topologyDevices, statuses });
+    act(() => instances[0].emit("click", { nodes: [], edges: [], event: { srcEvent: { ctrlKey: true } } }));
+    expect(useAdminStore.getState().selected.size).toBe(0);
+    expect(screen.queryByTestId("host-probe")).toBeNull();
+  });
+
+  it("decorates selected nodes and reverts on deselect", () => {
+    renderMap({ topologyDevices, statuses });
+    const plain = nodeOf("h1");
+    act(() => instances[0].emit("click", ctrl));
+    const sel = nodeOf("h1");
+    expect(sel.borderWidth).toBe(3);
+    expect(sel.color.border).toBe("#1450f5");
+    expect(sel.label.startsWith("\u2713 ")).toBe(true);
+    act(() => instances[0].emit("click", ctrl));
+    const back = nodeOf("h1");
+    expect(back.label).toBe(plain.label);
+    expect(back.borderWidth).toBe(plain.borderWidth);
+    expect(back.color.border).toBe(plain.color.border);
+  });
+
+  it("shows FAKED caption for faked hosts", () => {
+    renderMap({ topologyDevices, statuses });
+    act(() => useAdminStore.setState({ faked: { h1: "DOWN" } }));
+    expect(nodeOf("h1").label.endsWith("\nFAKED")).toBe(true);
+  });
+
+  it("selection persists across a status update", () => {
+    const { rerender } = renderMap({ topologyDevices, statuses });
+    act(() => instances[0].emit("click", ctrl));
+    rerenderMap(rerender, {
+      topologyDevices,
+      statuses: { h1: device({ id: "h1", state: "CRIT" }) },
+    });
+    expect(nodeOf("h1").borderWidth).toBe(3);
+    expect(nodeOf("h1").label.startsWith("\u2713 ")).toBe(true);
+  });
+
+  it("non-admin: ctrl+click navigates, store untouched, no decoration", async () => {
+    __setAdminModeForTests(false);
+    renderMap({ topologyDevices, statuses });
+    act(() => instances[0].emit("click", ctrl));
+    expect(await screen.findByTestId("host-probe")).toHaveTextContent("h1");
+    expect(useAdminStore.getState().selected.size).toBe(0);
+    act(() => useAdminStore.setState({ faked: { h1: "DOWN" } }));
+    expect(nodeOf("h1").label).not.toMatch(/FAKED|\u2713/);
   });
 });
