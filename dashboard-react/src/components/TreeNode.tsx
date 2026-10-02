@@ -52,6 +52,7 @@ export function TreeNode({
   const faked = useAdminStore((s) => s.faked);
   const toggleSelected = useAdminStore((s) => s.toggleSelected);
   const setSelected = useAdminStore((s) => s.setSelected);
+  const replaceSelection = useAdminStore((s) => s.replaceSelection);
   const allDevices = useAppStore((s) => s.devices);
   const folderAdmin = admin && groupingMode === "folder";
   const folderIds = folderAdmin ? hostsInFolder(node.key, allDevices) : [];
@@ -162,9 +163,14 @@ export function TreeNode({
                 <Link
                   to={hostHref(search, device.id)}
                   onClick={(event) => {
-                    if (admin && (event.ctrlKey || event.metaKey)) {
+                    if (admin) {
+                      // Admin mode: a row click selects, it never navigates or opens details.
                       event.preventDefault();
-                      toggleSelected(device.id);
+                      if (event.ctrlKey || event.metaKey) {
+                        toggleSelected(device.id);
+                      } else {
+                        replaceSelection([device.id]);
+                      }
                     }
                   }}
                   className={[
