@@ -15,6 +15,9 @@ export interface TopologyToolbarProps {
   applying: boolean;
   onApply: () => void;
   editingConfigured: boolean;
+  // When set, the switch is disabled and this text replaces the configuration hint
+  // (admin mode: editing and faking states are mutually exclusive).
+  disabledReason?: string;
 }
 
 export function TopologyToolbar({
@@ -24,13 +27,14 @@ export function TopologyToolbar({
   applying,
   onApply,
   editingConfigured,
+  disabledReason,
 }: TopologyToolbarProps) {
   return (
     <div className="flex items-center gap-2 rounded-md bg-bg-subtle p-3">
       <Switch
         label="Edit topology"
         checked={editMode}
-        disabled={!editingConfigured}
+        disabled={!editingConfigured || disabledReason !== undefined}
         onChange={(event) => onEditModeChange(event.target.checked)}
       />
       {editMode && pendingCount > 0 && (
@@ -49,7 +53,13 @@ export function TopologyToolbar({
           {applying ? "Applying…" : "Apply changes"}
         </Button>
       )}
-      {!editingConfigured && <span className="text-xs text-fg-tertiary">{CONFIGURATION_HINT}</span>}
+      {disabledReason !== undefined ? (
+        <span className="text-xs text-fg-tertiary">{disabledReason}</span>
+      ) : (
+        !editingConfigured && (
+          <span className="text-xs text-fg-tertiary">{CONFIGURATION_HINT}</span>
+        )
+      )}
     </div>
   );
 }

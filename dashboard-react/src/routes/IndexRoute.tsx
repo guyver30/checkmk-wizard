@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useSearchParams } from "react-router";
 import { Snackbar } from "kone-design-system";
+import { AdminActionBar, AdminBanner } from "../components/AdminBar";
 import { CriticalityEditor } from "../components/CriticalityEditor";
 import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
@@ -10,12 +18,17 @@ import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { TopologyMap, type EditFailure } from "../components/TopologyMap";
 import { TopologyToolbar } from "../components/TopologyToolbar";
 import { Tree } from "../components/Tree";
+import { isAdminMode } from "../lib/adminMode";
 import { displayName } from "../lib/display";
 import { useEditIdleTimeout } from "../hooks/useEditIdleTimeout";
 import { useGroupingPrefs } from "../hooks/useGroupingPrefs";
 import { useNowTick } from "../hooks/useNowTick";
 import { displayedServices } from "../lib/agentDetail";
-import { activateChanges, countPendingChanges, probeEditingAvailable } from "../lib/checkmkWrite";
+import {
+  activateChanges,
+  countPendingChanges,
+  probeEditingAvailable,
+} from "../lib/checkmkWrite";
 import { buildIncidentLookup, selectOpenIncidents } from "../lib/incidents";
 import { buildTree } from "../lib/treeModel";
 import type { GroupingMode, TopologyNode } from "../lib/types";
@@ -35,6 +48,9 @@ export function IndexRoute() {
   // on this route so staleness becomes visible even when the poller goes silent. The fleet
   // state counts moved to the header (HeaderStats in StatsStrip.tsx, 2026-09-28).
   const nowMs = useNowTick();
+  // Admin chrome (banner, action bar, tree selection) exists only with ?admin=1; admin wins
+  // over topology edit mode, so the edit toggle is disabled and editMode can never turn on.
+  const adminMode = isAdminMode();
 
   const topology = useAppStore((s) => s.topology);
   const topologyDevices = useMemo(
@@ -47,14 +63,21 @@ export function IndexRoute() {
   // re-rendering this route never resets it -- openKeys is a plain Set the store update has
   // no reason to touch. Sort order itself is always derived from current devices/mode/
   // orderBySeverity on every render (buildTree's own contract), never cached.
-  const { mode, orderBySeverity, setMode, setOrderBySeverity } = useGroupingPrefs();
+  const { mode, orderBySeverity, setMode, setOrderBySeverity } =
+    useGroupingPrefs();
   const devices = useAppStore((s) => s.devices);
 
   // Phase 14 / DASH-14/DASH-15: open incidents, ordered (D-12) and looked up by host id, both
   // pure derivations of the incidents store slice -- never re-sorted or re-derived downstream.
   const incidentRecord = useAppStore((s) => s.incidents);
-  const incidents = useMemo(() => selectOpenIncidents(incidentRecord), [incidentRecord]);
-  const incidentLookup = useMemo(() => buildIncidentLookup(incidents), [incidents]);
+  const incidents = useMemo(
+    () => selectOpenIncidents(incidentRecord),
+    [incidentRecord],
+  );
+  const incidentLookup = useMemo(
+    () => buildIncidentLookup(incidents),
+    [incidents],
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightedIncidentId = searchParams.get("incident");
   // The right-hand host details pane (260928-l4h): present only while ?host= is set, opened
@@ -64,7 +87,11 @@ export function IndexRoute() {
   const onTreeBackgroundClick = useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement;
-      if (target.closest("a, button, input, select, label, [role='treeitem'], [role='button']")) {
+      if (
+        target.closest(
+          "a, button, input, select, label, [role='treeitem'], [role='button']",
+        )
+      ) {
         return;
       }
       if (!searchParams.has("host")) {
@@ -111,8 +138,12 @@ export function IndexRoute() {
       // wholesale -- switching to folder and back should not lose unrelated already-open
       // state. A pure re-sort (the orderBySeverity checkbox) never reaches this code path:
       // openKeys is keyed by group identity, not position, so a re-sort cannot invalidate it.
-      const nextKeys = new Set(buildTree(devices, nextMode).map((group) => group.key));
-      setOpenKeys((prev) => new Set([...prev].filter((key) => nextKeys.has(key))));
+      const nextKeys = new Set(
+        buildTree(devices, nextMode).map((group) => group.key),
+      );
+      setOpenKeys(
+        (prev) => new Set([...prev].filter((key) => nextKeys.has(key))),
+      );
     },
     [devices, setMode],
   );
@@ -155,8 +186,14 @@ export function IndexRoute() {
       Array.from(
         new Set(
           topologyDevices
-            .map((entry) => (entry && typeof entry === "object" ? (entry as TopologyNode).id : undefined))
-            .filter((id): id is string => typeof id === "string" && id.length > 0),
+            .map((entry) =>
+              entry && typeof entry === "object"
+                ? (entry as TopologyNode).id
+                : undefined,
+            )
+            .filter(
+              (id): id is string => typeof id === "string" && id.length > 0,
+            ),
         ),
       ).sort(),
     [topologyDevices],
@@ -165,7 +202,10 @@ export function IndexRoute() {
     () =>
       selectedHost
         ? (topologyDevices.find(
-            (entry) => entry && typeof entry === "object" && (entry as TopologyNode).id === selectedHost,
+            (entry) =>
+              entry &&
+              typeof entry === "object" &&
+              (entry as TopologyNode).id === selectedHost,
           ) as TopologyNode | undefined)
         : undefined,
     [topologyDevices, selectedHost],
@@ -179,9 +219,14 @@ export function IndexRoute() {
     // the editor doesn't offer every row the poller publishes (14-09 live feedback).
     return displayedServices(services[selectedHost] ?? [])
       .map((service) => service.description)
-      .filter((description): description is string => typeof description === "string");
+      .filter(
+        (description): description is string => typeof description === "string",
+      );
   }, [services, selectedHost]);
-  const nameFor = useCallback((id: string) => displayName(devices[id] ?? { id }), [devices]);
+  const nameFor = useCallback(
+    (id: string) => displayName(devices[id] ?? { id }),
+    [devices],
+  );
 
   const onEditModeChange = useCallback((next: boolean) => {
     setEditMode(next);
@@ -199,7 +244,10 @@ export function IndexRoute() {
 
   const { touch } = useEditIdleTimeout(editMode, () => {
     setEditMode(false);
-    setSnackbar({ status: "info", message: "Edit topology turned off after 5 minutes of inactivity" });
+    setSnackbar({
+      status: "info",
+      message: "Edit topology turned off after 5 minutes of inactivity",
+    });
   });
 
   const onEditSaved = useCallback(() => {
@@ -229,14 +277,19 @@ export function IndexRoute() {
     activateChanges()
       .then(() => {
         setPendingCount(0);
-        setSnackbar({ status: "success", message: "Topology updated", autoDismissMs: 3000 });
+        setSnackbar({
+          status: "success",
+          message: "Topology updated",
+          autoDismissMs: 3000,
+        });
       })
       .catch(() => {
         setSnackbar({
           status: "danger",
           message: (
             <>
-              <span className="font-semibold">Saved, but not live yet</span> {APPLY_FAILURE_BODY}
+              <span className="font-semibold">Saved, but not live yet</span>{" "}
+              {APPLY_FAILURE_BODY}
             </>
           ),
         });
@@ -252,89 +305,112 @@ export function IndexRoute() {
     return () => clearTimeout(id);
   }, [snackbar]);
 
+  const layout = (
+    <ThreePaneLayout
+      tree={
+        <div className="flex h-full min-h-0 flex-col">
+          <GroupingControls
+            mode={mode}
+            orderBySeverity={orderBySeverity}
+            onModeChange={onModeChange}
+            onOrderChange={setOrderBySeverity}
+          />
+          {/* A click on empty space in the tree pane (not on a row, link or control) deselects
+                the host, like a click on empty map canvas (260928 follow-up). */}
+          <div
+            className="min-h-0 flex-1 overflow-auto"
+            onClick={onTreeBackgroundClick}
+          >
+            <Tree
+              groups={groups}
+              openKeys={openKeys}
+              onToggle={onToggleGroup}
+              groupingMode={mode}
+            />
+          </div>
+        </div>
+      }
+      centreTop={
+        // The map takes the whole centre height (the D-25 stats strip moved to the header on
+        // 2026-09-28; the incident cards live in the right column's Incidents pane, above host
+        // details). Pointer/wheel/key activity anywhere in the toolbar+map wrapper below
+        // postpones the edit-mode idle timeout. Topology edit mode gives the map the full centre
+        // area: no incidents pane, event history or host details pane; the device tree stays
+        // (260928).
+        <div className="flex h-full flex-col gap-2 p-3">
+          <div
+            className="flex min-h-0 flex-1 flex-col gap-2"
+            onPointerDown={touch}
+            onWheel={touch}
+            onKeyDown={touch}
+          >
+            <TopologyToolbar
+              editMode={editMode}
+              onEditModeChange={onEditModeChange}
+              pendingCount={pendingCount}
+              applying={applying}
+              onApply={onApply}
+              editingConfigured={editingAvailable}
+              disabledReason={
+                adminMode ? "Unavailable in admin mode" : undefined
+              }
+            />
+            {editMode && editingAvailable && (
+              <CriticalityEditor
+                hostIds={hostIds}
+                nameFor={nameFor}
+                selectedHost={selectedHost}
+                onSelectHost={setSelectedHost}
+                node={selectedNode}
+                serviceNames={serviceNames}
+                onSaved={onEditSaved}
+                onFailed={onEditFailed}
+              />
+            )}
+            <div className="min-h-0 flex-1">
+              <TopologyMap
+                topologyDevices={topologyDevices}
+                statuses={devices}
+                nowMs={nowMs}
+                editMode={editMode}
+                onEditSaved={onEditSaved}
+                onEditFailed={onEditFailed}
+                incidentLookup={incidentLookup}
+                onSelectHost={setSelectedHost}
+              />
+            </div>
+          </div>
+        </div>
+      }
+      centreBottom={editMode ? undefined : <EventHistory hostId={hostId} />}
+      incidents={
+        editMode ? undefined : (
+          <IncidentList
+            incidents={incidents}
+            devices={devices}
+            nowMs={nowMs}
+            highlightedId={highlightedIncidentId}
+          />
+        )
+      }
+      incidentsSummary={<IncidentsSummary incidents={incidents} />}
+      details={hostId && !editMode ? <HostDetails id={hostId} /> : undefined}
+      detailsKey={hostId}
+      onCloseDetails={onCloseDetails}
+    />
+  );
+
   return (
     <>
-      <ThreePaneLayout
-        tree={
-          <div className="flex h-full min-h-0 flex-col">
-            <GroupingControls
-              mode={mode}
-              orderBySeverity={orderBySeverity}
-              onModeChange={onModeChange}
-              onOrderChange={setOrderBySeverity}
-            />
-            {/* A click on empty space in the tree pane (not on a row, link or control) deselects
-                the host, like a click on empty map canvas (260928 follow-up). */}
-            <div className="min-h-0 flex-1 overflow-auto" onClick={onTreeBackgroundClick}>
-              <Tree groups={groups} openKeys={openKeys} onToggle={onToggleGroup} />
-            </div>
-          </div>
-        }
-        centreTop={
-          // The map takes the whole centre height (the D-25 stats strip moved to the header on
-          // 2026-09-28; the incident cards live in the right column's Incidents pane, above host
-          // details). Pointer/wheel/key activity anywhere in the toolbar+map wrapper below
-          // postpones the edit-mode idle timeout. Topology edit mode gives the map the full centre
-          // area: no incidents pane, event history or host details pane; the device tree stays
-          // (260928).
-          <div className="flex h-full flex-col gap-2 p-3">
-            <div
-              className="flex min-h-0 flex-1 flex-col gap-2"
-              onPointerDown={touch}
-              onWheel={touch}
-              onKeyDown={touch}
-            >
-              <TopologyToolbar
-                editMode={editMode}
-                onEditModeChange={onEditModeChange}
-                pendingCount={pendingCount}
-                applying={applying}
-                onApply={onApply}
-                editingConfigured={editingAvailable}
-              />
-              {editMode && editingAvailable && (
-                <CriticalityEditor
-                  hostIds={hostIds}
-                  nameFor={nameFor}
-                  selectedHost={selectedHost}
-                  onSelectHost={setSelectedHost}
-                  node={selectedNode}
-                  serviceNames={serviceNames}
-                  onSaved={onEditSaved}
-                  onFailed={onEditFailed}
-                />
-              )}
-              <div className="min-h-0 flex-1">
-                <TopologyMap
-                  topologyDevices={topologyDevices}
-                  statuses={devices}
-                  nowMs={nowMs}
-                  editMode={editMode}
-                  onEditSaved={onEditSaved}
-                  onEditFailed={onEditFailed}
-                  incidentLookup={incidentLookup}
-                  onSelectHost={setSelectedHost}
-                />
-              </div>
-            </div>
-          </div>
-        }
-        centreBottom={editMode ? undefined : <EventHistory hostId={hostId} />}
-        incidents={
-          editMode ? undefined : (
-            <IncidentList
-              incidents={incidents}
-              devices={devices}
-              nowMs={nowMs}
-              highlightedId={highlightedIncidentId}
-            />
-          )
-        }
-        incidentsSummary={<IncidentsSummary incidents={incidents} />}
-        details={hostId && !editMode ? <HostDetails id={hostId} /> : undefined}
-        detailsKey={hostId}
-        onCloseDetails={onCloseDetails}
-      />
+      {adminMode ? (
+        <div className="flex h-full min-h-0 flex-col">
+          <AdminBanner />
+          <div className="min-h-0 flex-1">{layout}</div>
+          <AdminActionBar devices={devices} topologyDevices={topologyDevices} />
+        </div>
+      ) : (
+        layout
+      )}
       {snackbar && (
         <div className="fixed bottom-4 right-4 z-50" data-testid="snackbar">
           <Snackbar
