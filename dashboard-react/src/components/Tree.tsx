@@ -5,15 +5,17 @@
 // reorder would destroy.
 
 import type { TreeGroupNode } from "../lib/treeModel";
+import type { GroupingMode } from "../lib/types";
 import { TreeNode } from "./TreeNode";
 
 export interface TreeProps {
   groups: TreeGroupNode[];
   openKeys: Set<string>;
   onToggle: (key: string) => void;
+  groupingMode?: GroupingMode;
 }
 
-export function Tree({ groups, openKeys, onToggle }: TreeProps) {
+export function Tree({ groups, openKeys, onToggle, groupingMode }: TreeProps) {
   if (groups.length === 0) {
     return <p className="p-3 text-sm text-fg-tertiary">No devices</p>;
   }
@@ -27,6 +29,7 @@ export function Tree({ groups, openKeys, onToggle }: TreeProps) {
           depth={0}
           isOpen={openKeys.has(group.key)}
           onToggle={onToggle}
+          groupingMode={groupingMode}
         />
       ))}
     </div>
