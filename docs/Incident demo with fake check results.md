@@ -45,18 +45,32 @@ What you see in admin mode:
   unavailable" the dashboard container has no admin password configured and every action is
   disabled (see `docs/DEPLOY-NEW-MACHINE.md`).
 - A FAKED badge on every faked host in the tree, and a FAKED caption under it on the map.
-- A bottom action bar with Set UP, Set DOWN, Restore selected and Restore all. Every action opens
-  a confirm dialog listing the exact host names (and, for Set DOWN, the cascade preview).
+- A bottom action bar with Set UP, Set DOWN, Set UNREACHABLE, Restore selected, Restore all, Select
+  all and Clear selection. Every action opens a confirm dialog listing the exact host names (and, for Set DOWN, the cascade preview).
 - "Sent" in the result message means the command was sent to Livestatus. The truth shows up on
   the next 15 s poll.
 
-Selecting hosts: ctrl/cmd+click a node on the map or in the tree, tick a host's checkbox, or
-tick a folder's checkbox (in folder grouping this includes its subfolders). Escape clears the
-selection.
+Selecting hosts: a plain click on a map node or tree row selects that host (replacing the current
+selection), ctrl/cmd+click adds or removes a host, or tick a host's or folder's checkbox (in folder
+grouping this includes its subfolders). "Select all" selects every listed host; Escape or "Clear
+selection" clears the selection. Admin mode shows no host details pane.
 
 Per host the poller sends the same Livestatus sequence as `fakeping`: disable the host check and
-the `PING` service check first, then inject the host and `PING` results. Restore re-enables both
-checks, so the next real check hands back the truth.
+the `PING` service check first, then inject the host and `PING` results.
+
+Restore returns a host to the demo baseline (decision "Always demo baseline", 2026-10-02): it sends
+`ENABLE_HOST_CHECK`, then injects host UP and `PING` OK with the Set UP text, and leaves the `PING`
+check disabled. That is exactly the state the wizard's `--demo` leaves a host in. Restore selected,
+Restore all and the reverse cascade after Set UP on a managed parent all use this rule. A restored
+host leaves the faked set because its host check is enabled again. For a real (non-demo) host, run
+`cmk "ENABLE_SVC_CHECK;<host>;PING"` manually if you want the real `PING` check back; it is not
+re-enabled on purpose, because on demo hosts it pings a non-existent IP and goes CRITICAL.
+
+Keeping fakes fresh: the poller re-injects each faked host's current host and `PING` result every
+`ADMIN_FAKE_KEEPALIVE_INTERVAL_SECONDS` (30 s) from the admin worker thread, without re-sending
+DISABLE commands, and only for hosts in the faked set. Admin-mode fakes therefore no longer turn
+STALE after about 3 minutes (live UAT 2026-10-02 measured staleness 2.9 to 11.2 on faked hosts
+before the fix).
 
 Cascade rules:
 
@@ -71,7 +85,7 @@ Cascade rules:
 
 Scenario A (single host down):
 
-1. Ctrl/cmd+click the plain host, press Set DOWN, confirm.
+1. Click the plain host, press Set DOWN, confirm.
 2. Within about two poll cycles one incident card appears. Press Restore selected, confirm.
 
 Scenario B (managed switch or host down, children UNREACH):
@@ -98,8 +112,9 @@ test hosts or a short downtime.
 
 ### Demo hosts
 
-Hosts created by the wizard's `--demo` keep their "Always assume host to be up" rule, so Restore
-on them returns UP. They are not counted as faked because their host check stays enabled.
+Hosts created by the wizard's `--demo` keep their "Always assume host to be up" rule. Restore puts
+them back to the demo baseline (host UP, `PING` OK, `PING` check disabled); the rule keeps the
+re-enabled host check UP. They are not counted as faked because their host check is enabled.
 
 ### Security
 
@@ -144,13 +159,17 @@ once per shell, after `cmk()` above:
 SITE=${SITE:-dmc}   # your site id, e.g. SITE=dmc_test
 cmk() { podman exec checkmk su - "$SITE" -c "lq 'COMMAND [$(date +%s)] $1'"; }
 
-# fakeping <host> up|down|unreach|restore [ip]   (ip defaults to the host name, used in the output text)
+# fakeping <host> up|down|unreach|restore [ip]   (restore = demo baseline; ip defaults to the host name, used in the output text)
 fakeping() {
   local h=$1 mode=$2 ip=${3:-$1} rta hs ss out
   rta=$(awk -v s="$RANDOM" 'BEGIN { srand(s); printf "%.3f", 0.2 + rand() * 2.8 }')
   case $mode in
     restore)
-      cmk "ENABLE_HOST_CHECK;$h"; cmk "ENABLE_SVC_CHECK;$h;PING"; return ;;
+      out="OK - $ip rta ${rta}ms lost 0%"
+      cmk "ENABLE_HOST_CHECK;$h"
+      cmk "PROCESS_HOST_CHECK_RESULT;$h;0;$out"
+      cmk "PROCESS_SERVICE_CHECK_RESULT;$h;PING;0;$out"
+      return ;;
     up)       hs=0 ss=0 out="OK - $ip rta ${rta}ms lost 0%" ;;
     down)     hs=1 ss=2 out="CRITICAL - $ip: rta nan, lost 100%" ;;
     unreach)  hs=2 ss=2 out="CRITICAL - $ip: rta nan, lost 100%" ;;
@@ -165,7 +184,7 @@ fakeping() {
 fakeping 198.51.100.3 down        # host DOWN, PING CRIT
 fakeping 198.51.100.1 unreach     # a child behind it: UNREACHABLE
 fakeping 198.51.100.3 up          # bring it back (random rta)
-fakeping 198.51.100.3 restore     # hand control back to the real checks
+fakeping 198.51.100.3 restore     # back to the demo baseline (UP, PING OK, PING check stays disabled)
 ```
 
 Notes:
@@ -174,8 +193,9 @@ Notes:
   host checks, so a faked DOWN on a parent does not change its children by itself — send them
   `unreach` too.
 - Hosts from a `--demo` wizard run have an "Always assume host to be up" rule, so a real host
-  check would flip a faked DOWN back to UP. `fakeping` disables the check first, which is why
-  `restore` brings the host back to UP on its own for those hosts.
+  check would flip a faked DOWN back to UP. `fakeping` disables the check first. `restore`
+  re-enables the host check and injects UP and PING OK, but leaves the PING check disabled (demo
+  baseline); for a real host re-enable it with `cmk "ENABLE_SVC_CHECK;<host>;PING"`.
 - Keep the output text free of `;` (the command separator) and single quotes (they break the
   `lq '…'` quoting).
 
@@ -343,3 +363,7 @@ If a host is left with active checks disabled for more than a few minutes, its C
 `host_state_raw` persists independently (the poller groups incidents on `host_state_raw`
 DOWN/UNREACH, not on staleness). This is expected: `ENABLE_HOST_CHECK` and a subsequent real
 check clear the STALE badge on their own, no action needed beyond scenario E's cleanup.
+
+Admin-mode fakes are kept fresh by the poller keepalive (every 30 s) and do not go STALE. Manual
+`fakeping` fakes still go STALE after a few minutes because nothing refreshes them; re-run
+`fakeping` or use admin mode.
