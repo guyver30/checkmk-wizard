@@ -7,6 +7,8 @@ mosquitto, worker.md`'s "Incident check (Phase 14)" section and `dashboard-react
 "5c. Incidents" section — read those first for the underlying contract; this doc is the
 run-of-show script.
 
+Since 2026-10-02 the preferred way to run it is the dashboard's admin mode (see "Admin mode (dashboard, Phase 16)" below); the `fakeping` helper stays as the manual fallback.
+
 Live-verified against a real Checkmk 2.4.0p36.cre site on 2026-09-26 (plan 14-05, D-06 gate).
 
 ## Prerequisites
@@ -29,6 +31,81 @@ Live-verified against a real Checkmk 2.4.0p36.cre site on 2026-09-26 (plan 14-05
    one **unmanaged** switch (Add Node, Phase 13) with at least two children. Faking a real
    production host will trigger Checkmk's own notifications if configured — use test hosts, or
    schedule a short downtime first (T-14-14).
+
+## Admin mode (dashboard, Phase 16)
+
+Since 2026-10-02 the preferred way to run this demo is the dashboard's admin mode; the `fakeping`
+helper below stays as the manual fallback. Open `http://<host>:8090/?admin=1` on the presenter's
+machine and the normal `http://<host>:8090/` on the audience screen. For the technical contract
+(topics, payloads, modules) see `dashboard-react/README.md` section "5e. Admin mode (live demos)".
+
+What you see in admin mode:
+
+- A persistent banner, "ADMIN MODE - N hosts faked" (or "no hosts"). If it says "Admin login
+  unavailable" the dashboard container has no admin password configured and every action is
+  disabled (see `docs/DEPLOY-NEW-MACHINE.md`).
+- A FAKED badge on every faked host in the tree, and a FAKED caption under it on the map.
+- A bottom action bar with Set UP, Set DOWN, Restore selected and Restore all. Every action opens
+  a confirm dialog listing the exact host names (and, for Set DOWN, the cascade preview).
+- "Sent" in the result message means the command was sent to Livestatus. The truth shows up on
+  the next 15 s poll.
+
+Selecting hosts: ctrl/cmd+click a node on the map or in the tree, tick a host's checkbox, or
+tick a folder's checkbox (in folder grouping this includes its subfolders). Escape clears the
+selection.
+
+Per host the poller sends the same Livestatus sequence as `fakeping`: disable the host check and
+the `PING` service check first, then inject the host and `PING` results. Restore re-enables both
+checks, so the next real check hands back the truth.
+
+Cascade rules:
+
+- Set DOWN on a managed parent sets its managed descendants to UNREACHABLE.
+- The walk stops at an unmanaged switch: the switch itself becomes UNREACHABLE, but the hosts
+  behind it only change when you select them.
+- Set UP and Restore reverse the cascade.
+- Fakes last until restored. Use "Restore selected" for some hosts or "Restore all" for every
+  faked host.
+
+### Scenario A, B and C with admin mode
+
+Scenario A (single host down):
+
+1. Ctrl/cmd+click the plain host, press Set DOWN, confirm.
+2. Within about two poll cycles one incident card appears. Press Restore selected, confirm.
+
+Scenario B (managed switch or host down, children UNREACH):
+
+1. Select the managed parent, press Set DOWN, confirm. The dialog lists its managed children,
+   which become UNREACHABLE automatically.
+2. Expect one card rooted at the parent. Restore selected on the parent (the cascade reverses),
+   or Restore all.
+
+Scenario C (unmanaged switch, two children down, then split):
+
+1. Select the two children of the unmanaged switch, press Set DOWN, confirm. You get one
+   combined inferred card rooted at the switch.
+2. Restore one child: the card becomes a plain single-host card for the other child. One child
+   alone stays its own card, by design (D-03).
+3. Restore the second child (or Restore all) and the card clears.
+
+### Side effects
+
+A faked state is a real Checkmk state change. It triggers real Checkmk notifications if any are
+configured, lands in ClickHouse history and the availability rollups (so Grafana shows it), and
+appears in the event feed. Nothing marks it as fake outside the admin view, by design (D-12). Use
+test hosts or a short downtime.
+
+### Demo hosts
+
+Hosts created by the wizard's `--demo` keep their "Always assume host to be up" rule, so Restore
+on them returns UP. They are not counted as faked because their host check stays enabled.
+
+### Security
+
+`/admin-config.json` serves the `wsadmin` login to anyone who can reach the dashboard (D-07). That
+is acceptable only on the closed demo network; a CIDR restriction is deferred. The broker limits
+that login to writing `admin/cmd`; it cannot write anywhere under `lan/`.
 
 ## Why "Fake check results" isn't used, and the cmk helper instead
 

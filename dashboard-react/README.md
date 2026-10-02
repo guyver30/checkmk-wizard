@@ -94,6 +94,12 @@ The constants in `src/lib/config.ts`:
   `server.proxy`/`preview.proxy` forward it to Checkmk; set `CHECKMK_PROXY_TARGET` if Checkmk
   isn't reachable at `http://localhost:8080` from wherever `vite dev`/`vite preview` runs.
 
+Admin mode (Phase 16) adds a second runtime file, `/admin-config.json`, rendered by nginx from
+`ADMIN_WS_USERNAME` (default `wsadmin`) and `ADMIN_WS_PASSWORD` in `deploy/.env`. The SPA fetches it
+only when the page is opened with `?admin=1`. It is open to anyone who can reach the dashboard,
+so use it on the closed demo network only. Under `vite dev` there is no such file, so the admin
+banner shows "Admin login unavailable" and the actions are disabled.
+
 **No `topology_editor` credential is configured in this file anymore** (amended 2026-09-30,
 quick 260930-hpy — supersedes Phase 13 D-04). The dashboard's write path to Checkmk carries
 no client-side secret at all:
@@ -312,6 +318,30 @@ same as every other topology edit in §5.
 
 Criticality badges use a fixed low/medium/high/critical colour palette, independent of the
 OK/WARN/CRIT state palette — see §5c for where these badges appear on incident cards.
+
+## 5e. Admin mode (live demos)
+
+Opening the dashboard with `?admin=1` (read once at page load) turns it into a presenter console
+that fakes host UP/DOWN/UNREACHABLE states for live demos. Step-by-step usage is in the runbook,
+`docs/Incident demo with fake check results.md`, section "Admin mode (dashboard, Phase 16)".
+
+Modules: `src/lib/adminMode.ts` (detection, login loading, command/ack/faked parsing, folder and
+cascade-preview helpers), `src/store/adminStore.ts` (selection, faked map, pending command, last
+result), `publishAdminCommand` in `src/store/mqttClient.ts`, and `src/components/AdminBar.tsx`
+(banner, action bar, confirm dialog). Tree and map selection live in `Tree.tsx`/`TreeNode.tsx` and
+`TopologyMap.tsx`.
+
+MQTT contract (the poller turns commands into Livestatus external commands):
+
+| Topic | Direction | Payload |
+|---|---|---|
+| `admin/cmd` | dashboard to poller, QoS 1, not retained | `{"id": string, "action": "up"\|"down"\|"unreach"\|"restore"\|"restore_all", "hosts": string[]}` (max 200 hosts; `hosts` empty for `restore_all`) |
+| `admin/ack` | poller to dashboard, QoS 1, not retained | `{"id", "ok": bool, "action", "detail", "applied": [{"host", "state": "UP"\|"DOWN"\|"UNREACH"\|"RESTORED", "cascaded": bool}], "skipped": string[]}` |
+| `admin/faked` | poller to dashboard, QoS 1, retained, published on change | `{"hosts": {"<host>": "UP"\|"DOWN"\|"UNREACH"}, "source": string, "timestamp": ISO-8601}` |
+
+The page uses a single MQTT connection as `wsadmin`, which can also read `lan/#`, subscribes to
+`admin/ack` and `admin/faked`, and may write only `admin/cmd`. Admin mode and topology edit mode
+are mutually exclusive: "Edit topology" is disabled while `?admin=1` is active.
 
 ## 6. Version pins and why
 
