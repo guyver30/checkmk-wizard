@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": "2026-10-01T13:51:54.399Z",
+  "timestamp": "2026-10-02T10:05:35.912Z",
   "phase": "14.1",
   "phase_name": "Fleet History Store, Availability Rollups and Grafana",
   "phase_dir": ".planning/phases/14.1-fleet-history-store-availability-rollups-and-grafana",
@@ -9,37 +9,31 @@
   "total_tasks": 2,
   "status": "paused",
   "completed_tasks": [
-    {"id": "14.1-01..07", "name": "Waves 1-2 executed, merged, tracked", "status": "done", "commit": "2981b38"},
-    {"id": "14.1-08 T1", "name": "Offline pre-flight", "status": "done", "commit": "n/a"},
-    {"id": "14.1-08 T2", "name": "Operator live verification", "status": "in_progress", "progress": "Steps 1-5 PASS on kone-dmc-test (2026-09-30). Step 8 Grafana: dashboards provisioned but empty (Availability empty is expected until first rollup). Steps 6/7 need a completed Asia/Singapore day (now available)."},
-    {"id": "quick-261001-s0c", "name": "wizard --demo mode (N hosts in a subnet, no scan; faked UP host+PING via Livestatus after Phase 7)", "status": "done", "commit": "298da08"},
-    {"id": "quick-261001-tpy", "name": "reset-site.sh: confirm real site from volume, ask new name, Esc aborts, --site", "status": "done", "commit": "67b0ad6"},
-    {"id": "quick-261001-ts1", "name": "wizard Esc abort (Phases 1-4): pending-changes table, Apply/Revert(GUI action)/Leave; Esc off from Phase 5", "status": "done", "commit": "4743fa4"},
-    {"id": "fix", "name": "reset-site pre-flight: podman-compose 1.0.6 has no 'config -q' -> use 'config --services' and show error", "status": "done", "commit": "a28bd79"}
+    {"id": 1, "name": "Task 1: offline pre-flight (pytest 809, ruff, YAML/JSON/bash -n, --help)", "status": "done", "commit": "n/a (no files)"},
+    {"id": 2, "name": "Task 2: operator live verification of the history stack", "status": "in_progress", "progress": "steps 1-5 pass; step 7 smoke test 10/12 (2 rollup 404s expected today); step 8 Grafana: cap and SQL fixes committed, awaiting the user's re-check after git pull"}
   ],
   "remaining_tasks": [
-    {"id": "live-check quick tasks", "name": "On host: run-wizard.sh --demo; Esc in Phase 2 after creating a folder -> Revert -> folder gone; full demo run -> hosts UP + PING OK on dashboard", "status": "not_started"},
-    {"id": "14.1-08 step 8", "name": "Diagnose empty Grafana dashboards (Fleet State Timeline / Host Metrics Explorer)", "status": "in_progress"},
-    {"id": "14.1-08 step 6", "name": "Rollup JSON+Parquet exist for a past day; full down/up does not rewrite", "status": "not_started"},
-    {"id": "14.1-08 step 7", "name": "scripts/smoke_test_history_proxy.py all PASS against live host", "status": "not_started"},
-    {"id": "14.1-08 summary", "name": "Write 14.1-08-SUMMARY.md, verify phase (bm-verifier), mark ROADMAP complete", "status": "not_started"}
+    {"id": 3, "name": "Step 6: first daily rollup JSON+Parquet in fleet-availability; full down/up must not rewrite it", "status": "not_started"},
+    {"id": 4, "name": "Step 7 rerun without --date (defaults to yesterday, Asia/Singapore): rollup_json_get and rollup_parquet_get must return 200", "status": "not_started"},
+    {"id": 5, "name": "Step 8: confirm all three Grafana dashboards render; Availability needs rollup data", "status": "in_progress"},
+    {"id": 6, "name": "Write 14.1-08-SUMMARY.md, mark plan complete, verify and close phase 14.1", "status": "not_started"}
   ],
   "blockers": [
-    {"description": "Grafana dashboards show no history although ClickHouse has rows", "type": "technical", "workaround": "Awaiting operator diagnostics (commands listed in .continue-here.md)"}
+    {"description": "Rollup steps (6, 7 rollup GETs, Availability dashboard) need a finished Asia/Singapore day of data; the stack was wiped and recreated on 2026-10-02", "type": "external", "workaround": "run them on 2026-10-03 or later"}
   ],
   "human_actions_pending": [
-    {"action": "Live-test revert_pending_changes (GUI revert action) and Esc in a real terminal; report the printed reason if revert fails", "context": "quick 261001-ts1, never run against 2.4.0p35", "blocking": false},
-    {"action": "Run the 4 Grafana diagnostics and paste results", "context": "14.1-08 step 8", "blocking": true},
-    {"action": "Steps 6 and 7 (rollup + smoke test with --date of a rolled-up day)", "context": "14.1-08", "blocking": true},
-    {"action": "Fix systemd user unit: add [Install] WantedBy=default.target, daemon-reload, enable --now, loginctl enable-linger", "context": "unit shows 'static'", "blocking": false}
+    {"action": "On the deploy host: git pull; run the one-off ALTER SETTINGS PROFILE history_reader_profile ... MAX 120 (docs/DEPLOY-NEW-MACHINE.md, section 6) if not done; wait 60 s for Grafana to reload the Availability dashboard", "context": "quick 261002-nm2 and 261002-nqa fix the Grafana errors", "blocking": true},
+    {"action": "Report what the three Grafana dashboards show after the pull", "context": "step 8", "blocking": true},
+    {"action": "Deploy host: rm -rf .venv in the checkout, full down/up, run the wizard once and host uv sync (quick 261002-nlp .venv fix)", "context": "not yet verified live", "blocking": false},
+    {"action": "Check Phase 16 review fixes WR-02/WR-04 in a live admin-mode session", "context": "unit-tested only", "blocking": false}
   ],
   "decisions": [
-    {"decision": "Checkmk 2.4.0/2.5.0/master REST API has no revert endpoint; wizard reverts via GUI ModeRevertChanges (wato.py?mode=revert_changes&_action=discard + _transid/_csrf_token) as cmkadmin, confirmed by re-reading pending_changes", "rationale": "only way to discard pending changes programmatically", "phase": "quick-261001-ts1"},
-    {"decision": "Esc disabled from Phase 5 (SSH changes on remote hosts cannot be reverted)", "rationale": "user choice", "phase": "quick-261001-ts1"},
-    {"decision": "Demo hosts faked UP via Livestatus TCP COMMANDs (state 0), host check + PING service, after Phase 7 activation; never podman exec", "rationale": "container-boundary constraint; core ignores commands for unknown hosts", "phase": "quick-261001-s0c"},
-    {"decision": "Site rename = edit nothing by hand: reset-site.sh asks new name and writes CMK_SITE_ID to .env between volume removal and compose up; compose.yaml only holds the dmc fallback", "rationale": "removes chicken/egg", "phase": "quick-261001-tpy"}
+    {"decision": "Use a real Linux host (192.168.97.130) plus demo hosts for plan 14.1-08", "rationale": "history.metrics is built from CPU/RAM/disk perf data, which demo hosts do not have", "phase": "14.1"},
+    {"decision": "Restore in Phase 16 admin mode returns hosts to the demo baseline (UP, PING OK, PING stays disabled)", "rationale": "re-enabling PING pings non-existent IPs and goes CRITICAL", "phase": "16"},
+    {"decision": "WR-06 (keepalive on hand-disabled hosts) stays open and documented", "rationale": "fix needs a poller-owned faked set; user chose to defer", "phase": "16"},
+    {"decision": "Do not commit docs/*.png screenshots; leave HANDOFF.json handling to pause-work", "rationale": "user instruction", "phase": "n/a"}
   ],
-  "uncommitted_files": ["PROMPT_LOG.md", "docs/host_service_menu.png", "docs/hosts_down.png", "docs/hosts_down2.png", "docs/hosts_up.png"],
-  "next_action": "Get the operator's live results for the --demo / Esc-revert test, then the Grafana diagnostics, and fix the empty dashboards.",
-  "context_notes": "main is pushed-tracking again (upstream set 2026-10-01). Host clone was reset to origin/main; deploy/.env completed via init-env.sh; reset-site.sh ran OK on the host. podman-compose on hosts is 1.0.6 (Debian package) - avoid flags it lacks (e.g. config -q)."
+  "uncommitted_files": ["docs/host_service_menu.png", "docs/hosts_down.png", "docs/hosts_down2.png", "docs/hosts_up.png", "docs/incident1.png", ".planning/phases/16-dashboard-admin-mode-fake-host-up-down-for-live-demos-admin-/16-PATTERNS.md"],
+  "next_action": "Ask the user what the three Grafana dashboards show after git pull + the ALTER; then, on 2026-10-03 or later, rerun scripts/smoke_test_history_proxy.py without --date and do step 6",
+  "context_notes": "Phase 16 (admin mode) is complete and verified live. Remaining roadmap work: 14.1 plan 08 (this), Phase 10 human-verification debt (2 items), phases 14.2 and 15 unplanned. On the deploy host (dmc-server 192.168.97.129, site dmc_test) NEVER restart or stop a single container: it cuts Checkmk off from the LAN (reproduced 2026-10-02); use full podman compose down && up -d."
 }
