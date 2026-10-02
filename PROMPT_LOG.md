@@ -304,3 +304,65 @@
 - **2026-09-28 15:57** — do pending todos 1 (IP next to renamed hosts) and 2 (map grid/snap + edge hint) now
 - **2026-09-28 16:21** — in topology edit mode, map should be full screen: no cards, no history; keep the device tree visible
 - **2026-09-28 16:22** — move the state counter badges (ok, down, unknown...) into the header near the Overview link, smaller, to free space on the dashboard
+- **2026-09-30 11:47** — in @docs/WIZARD-OPERATION.md I don't see instructions on how to delete a checkmk site (remove the volume) and also the mosquitto data for retained messages we talked about in previous sessions.
+- **2026-09-30 12:09** — I started the wizard and it asked me for automation secret, even if it's properly set in .env
+- **2026-09-30 12:10** — you're right, my fault. Please ensure this is documented in @docs/WIZARD-OPERATION.md
+- **2026-09-30 12:14** — got this error at the end of the wizard (pasted: Phase 7 livestatus.query_host_states ConnectionResetError [Errno 104])
+- **2026-09-30 12:35** — tls is off
+- **2026-09-30 12:37** — when wizard crash happened, I still see two pending changes in checkmk (automation, 12:14:13: saved check config of internet-router with 0 services; updated discovered host labels with 0 labels). also I cannot edit topology: Editing is off until TOPOLOGY_EDITOR_SECRET is set
+- **2026-09-30 12:40** — yes, implement the discovery wait fix. but the TOPOLOGY_EDITOR_SECRET setup is quite annoying, too manual. Is there a better way?
+- **2026-09-30 12:45** — yes, go ahead with that design (TOPOLOGY_EDITOR_SECRET in .env, wizard provisions, nginx injects header, runtime probe)
+- **2026-09-30 12:51** — meanwhile, prepare two bash scripts to: delete a site in container mode (compose down, remove volumes, compose up); start the wizard
+- **2026-09-30 13:20** — status?
+- **2026-09-30 13:32** — prepare a bash script to generate all needed secrets for an empty .env (REST, topology editor), ask site id, select public host IP from machine IPs; don't overwrite existing values. Anything else to highlight on my approach?
+- **2026-09-30 13:36** — config.ts still to be updated manually?
+- **2026-09-30 13:38** — yes, I don't want to edit manually a config.ts file
+- **2026-09-30 14:00** — should mosquitto passwd (wsreader, poller) be managed by init-env.sh instead of gen-mosquitto-passwd.sh?
+- **2026-09-30 14:03** — ok go ahead (mosquitto passwords from .env, generated at container start)
+- **2026-09-30 14:15** — (answer) missing MQTT vars: whole compose refuses
+- **2026-09-30 17:02** — you already pushed to github?
+- **2026-09-30 17:03** — yes push
+- **2026-09-30 17:04** — (pasted git pull on host: forced update a773a39...5e8c236, divergent branches, fatal)
+- **2026-09-30 17:11** — yes make those 2 changes (wizard unreachable message; run-wizard.sh readiness wait)
+- **2026-09-30 17:14** — dashboard is not connecting
+- **2026-09-30 17:16** — (pasted curl /config.json now returns JSON with checkmkSite mysite)
+- **2026-09-30 17:17** — dashboard ok now, I check later on clickhouse
+- **2026-09-30 18:24** — let's go for point 1 (clickhouse)...what do I need to do?
+- **2026-09-30 18:25** — (pasted clickhouse diagnostics: minio-init Exited(2) 'mc: line 0: syntax error: unexpected end of file (expecting do)', clickhouse restart loop, ADMIN=0)
+- **2026-09-30 18:27** — (pasted clickhouse err.log tail: S3 object storage creation stack trace)
+- **2026-09-30 18:27** — (pasted: Code 36 Invalid S3 key: '/' (http://minio:9000/clickhouse-s3-disk//))
+- **2026-09-30 18:30** — (pasted: minio-init buckets created, clickhouse Up, initdb 01/02 ran, SHOW USERS lists 4 users, poller history writes + rollups enabled)
+- **2026-09-30 18:32** — (pasted 14.1-08 steps 3-4: SHOW CREATE TABLE ok, counts growing 128->144 etc)
+- **2026-09-30 19:53** — grafana opens, but I see no history on those 3 dashboards
+- **2026-09-30 19:54** — /bm:pause-work
+
+- **2026-10-01 20:02** — /bm:resume-work
+- **2026-10-01 20:03** — before grafana, I want to do a quick task
+- **2026-10-01 20:06** — /bm:quick --demo mode: create N hosts in a subnet without scanning, fake them UP via DISABLE_HOST_CHECK + PROCESS_HOST_CHECK_RESULT; any comments?
+- **2026-10-01 20:45** — what were the commands to allow a git pull? (pasted: divergent branches, forced update 7d41d9d...8961412)
+- **2026-10-01 20:46** — (pasted git status: M dashboard-react/src/lib/config.ts, M dashboard/js/config.js)
+- **2026-10-01 20:52** — podman compose down fails: RuntimeError: run deploy/init-env.sh (pasted podman ps: 6 containers from 3 days ago)
+- **2026-10-01 20:53** — .env has only CMK_REST_SECRET and CMK_PUBLIC_HOST
+- **2026-10-01 20:54** — but I need to rebuild the dashboard as well, and reset the site. proper sequence?
+- **2026-10-01 21:07** — how to remove site and create one with a different name (site ID in compose.yaml and .env, chicken/egg)? and: exit wizard anytime with Esc without committing changes — issues? which phases are safe?
+- **2026-10-01 21:22** — reset-site: confirm existing site name, ask new name (default old), Esc aborts. Check if REST API can revert changes; on Esc in wizard summarize pending changes and ask apply or revert
+- **2026-10-01 21:26** — (answers: revert via GUI revert action; Esc disabled from Phase 5)
+- **2026-10-01 21:48** — (pasted git push: no upstream branch for main)
+- **2026-10-01 21:50** — reset-site.sh says .env missing/incomplete though .env exists in deploy
+- **2026-10-01 21:51** — all ok (reset-site.sh worked)
+- **2026-10-01 21:51** — /bm:pause-work
+- **2026-10-01 21:53** — "0 ;" (likely accidental input)
+- **2026-10-02 08:04** — /bm:resume-work
+- **2026-10-02 08:18** — demo mode: only promoted host (router) faked UP, others not; dashboard shows router stale — don't want stale if faked up
+- **2026-10-02 08:22** — host details: don't show "faked up"/"faked down" in the output
+- **2026-10-02 08:35** — where do you generate message "OK - <ip> rta 0.412ms lost 0%"?
+- **2026-10-02 08:37** — clicking a host in the map shows nothing in the output column
+- **2026-10-02 08:39** — (pasted lq output: 198.51.100.3 PING has plugin_output 'OK - ... rta 0.412ms lost 0%')
+- **2026-10-02 08:41** — A (poller: republish services when plugin_output goes empty<->non-empty)
+- **2026-10-02 08:46** — it's fine now; put a random rta for OK pings so each host looks different
+- **2026-10-02 08:52** — (model switched to Sonnet 5.5) hold Grafana check; add dashboard 'admin' mode: ctrl+click multi-select hosts in map/device tree/folder, send ping UP/DOWN with realistic output so non-admin dashboards see it (management demo); unmanaged switch with faked-down children must still show combined inferred card with children listed
+- **2026-10-02 08:59** — also: incident cards take too much space (map/history); move incidents to the right like the host details pane, collapsible with a visible header showing the incident count
+- **2026-10-02 09:22** — screenshot docs/incident1.png: 'I see incident' (new right-column incidents pane live with a faked-down 198.51.100.3)
+- **2026-10-02 09:23** — yes (add fakeping <host> up|down helper to the incident demo doc)
+- **2026-10-02 09:28** — all good, let's proceed with phase 16
+- **2026-10-02 09:41** — /bm:plan-phase 16

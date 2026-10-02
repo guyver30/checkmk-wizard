@@ -274,6 +274,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 → 12 → 13
 **Scope**: see `.planning/phases/11-live-dashboard/11.1-SCOPE.md` for the full brief.
 
 Summary:
+
   1. KONE light palette, lifted from the contrast-audited preview override. Sourced from KONE's own `design-tokens.json`; every text pair >= 4.5:1 and every non-text mark >= 3.0:1, demonstrated by a computed audit
   2. Three panes — tree (left, full height), map-or-details (centre top), event history (centre bottom). `#sidebar-events` leaves the sidebar
   3. All three panes resizable and collapsible (not yet designed — see the scope doc's open questions on persistence and keyboard operability)
@@ -343,6 +344,7 @@ Plans:
 **Critical edition finding (verified against Checkmk docs 2026-09-16)**: Checkmk's own export to external metric databases (InfluxDB, Graphite) is a **commercial-edition** feature; **Grafana integration is available in all editions**. This site runs 2.4.0p36.**cre** (Raw). Therefore Checkmk cannot push metrics into a TSDB here — **our own poller must write them**. It already reads Livestatus and begins parsing `perf_data` in Phase 12, so this is a small addition to a component that exists. A second reason to own the history: Checkmk's built-in RRD storage downsamples as data ages by design, which is fine for "was it busy last Tuesday" and useless for "what is the slope of this drive's wear over three years".
 
 **Open decisions blocking planning**:
+
   - May monitoring data leave the network? Blocks any external-model narration. If no, a local model or template-based narration gets most of the effect and never invents a fact
   - Is the Checkmk edition fixed at Raw? Confirms our-own-pipeline as the only path
   - Retention target for history — sizes the store and sets how far predictions can reach
@@ -387,11 +389,13 @@ Plans:
 **Requirements**: HIST-01, HIST-02, HIST-03, HIST-04, HIST-05, HIST-06, HIST-07, HIST-07a, HIST-08, HIST-09, HIST-10, HIST-11
 **Depends on:** Phase 14
 **Locked inputs** (from `.planning/phases/14-fleet-intelligence/14-CONTEXT.md`, split out of Phase 14 by D-01/D-02):
+
   - D-20: Checkmk edition is fixed at Raw, so the poller writes metric history (no Checkmk-native export)
   - D-21: retention 3 years, downsampled (raw resolution roughly 30 days)
   - D-22: Grafana sits alongside the dashboard, for analysts; optional, never replaces it
   - D-23: TSDB container in the compose stack with MinIO as long-term tier; product choice is for research (resolved 2026-09-28: ClickHouse, see 14.1-CONTEXT.md D-40)
   - D-24: the dashboard queries the TSDB over HTTP, read-only. This amends the "no new backend" constraint, so PROJECT.md and CLAUDE.md must be updated during planning. The access mechanism is for research
+
 **Plans:** 7/8 plans executed
 
 Plans:
@@ -419,12 +423,15 @@ Plans:
 **Requirements**: TBD
 **Depends on:** Phase 14.1 (history to fit trends on) and Phase 14 (incidents to narrate)
 **Locked inputs** (from `.planning/phases/14-fleet-intelligence/14-CONTEXT.md`, split out of Phase 14 by D-01):
+
   - D-30: no monitoring data leaves the network; narration is template-based or a local model and never states a fact absent from the incident data
   - D-31: simple regression on monotonic metrics (filesystem growth, SSD/NVMe wear, reallocated sectors, memory creep), no ML. Dates show immediately with a confidence tag based on how much history exists. Risk to carry: a low-confidence drive-failure date could still trigger an engineer dispatch, so the tag and history span must be prominent
   - D-32: forecasts and narration are computed in a separate analytics container that reads the TSDB and publishes to retained MQTT topics. The poller stays small, and the dashboard stays a pure MQTT consumer for these outputs
+
 **Plans:** 0 plans
 
 Plans:
+
 - [ ] TBD (run /gsd-plan-phase 14.2 to break down)
 
 ### Phase 15: Location Hierarchy for Hosts and Dashboard Tower Tabs
@@ -442,6 +449,7 @@ Plans:
   4. Dashboard: one tab per tower (tower1, tower2, ...), each showing a map/view scoped to that tower's sublocations, plus filtering by sublocation within a tower.
 
 **Open questions for this phase's discussion** (deliberately not decided yet):
+
   - One flat location tag (e.g. `tower1-motor_room`) vs. two separate tag groups (`building` + `room`) for real hierarchy — trades simplicity against query/filter granularity.
   - Whether the per-tower map should reuse Phase 13's `parents`-derived topology map (vis-network) for positioning within a tower, or is a simpler non-topological sublocation list/grid — sequencing after Phase 13 may be preferable so real topology data exists first, but that dependency is not locked.
 
@@ -455,11 +463,22 @@ Plans:
 **Plans:** 8 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 16-01-PLAN.md — Poller admin core: command parsing, DOWN cascade/reverse planner, Livestatus command builder and sender, D-03 inferred-switch tests (wave 1)
-- [ ] 16-02-PLAN.md — Poller wiring: admin/cmd worker thread, acks, retained admin/faked from Livestatus with ledger fallback (wave 2)
 - [ ] 16-03-PLAN.md — Broker wsadmin user and ACL, ADMIN_WS_PASSWORD, /admin-config.json, live ACL smoke checks (wave 1)
 - [ ] 16-04-PLAN.md — Dashboard admin foundation: ?admin=1 detection, admin login, admin store, admin MQTT topics and publishAdminCommand (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 16-02-PLAN.md — Poller wiring: admin/cmd worker thread, acks, retained admin/faked from Livestatus with ledger fallback (wave 2)
 - [ ] 16-05-PLAN.md — Admin UI: banner, action bar, confirm dialog, ack feedback, tree selection and folder select, FAKED badge, edit-mode exclusion (wave 2)
 - [ ] 16-06-PLAN.md — Topology map ctrl+click multi-select and FAKED marker (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 16-07-PLAN.md — Docs: demo runbook admin section, dashboard README, deploy docs, constraint amendment (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 16-08-PLAN.md — Live UAT on the deployed stack and confirmation of open assumptions (wave 4, checkpoint)
