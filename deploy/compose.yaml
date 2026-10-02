@@ -167,8 +167,14 @@ services:
     # same reasoning as the `minio` service above.
     image: cgr.dev/chainguard/minio-client:latest-dev@sha256:19c80ef13b3bec25196b00c24345195f0d0e1305a339cebf6dc7d44b85782817
     container_name: minio-init
-    depends_on:
-      - minio
+    # Quick 261002-liq: no `depends_on: minio` here on purpose. podman-compose
+    # turns it into `--requires=minio`, and clickhouse (which requires both
+    # minio and minio-init) then fails on a fresh `up -d` with "container
+    # <minio-init> depends on container <minio> not found in input list":
+    # minio is already running by then, so podman leaves it out of the start
+    # list while minio-init's requirement on it is still unresolved (grafana
+    # fails the same way through clickhouse). Ordering is not needed: the
+    # entrypoint below retries `mc alias set` until MinIO answers.
     restart: "no"
     environment:
       - S3_ACCESS_KEY=minioadmin
