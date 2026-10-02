@@ -197,6 +197,19 @@ podman compose exec worker printenv CMK_PUBLIC_HOST             # this machine's
 
 If either is empty, fix `deploy/.env`, then `podman compose down && podman compose up -d`.
 
+**Grafana panels show `SETTING_CONSTRAINT_VIOLATION ... max_execution_time shouldn't be greater than 60`:**
+the read-only ClickHouse profile used to cap `max_execution_time` at 60 s, and Grafana's client sends a
+higher value (fixed for new installs in quick 261002-nm2). `02-users.sh` only runs when the
+`clickhouse_data` volume is first created, so an existing host needs the cap raised once:
+
+```bash
+cd ~/checkmk-stack/app/checkmk-wizard/deploy && set -a && . ./.env && set +a
+podman exec clickhouse clickhouse-client --user ch_admin --password "$CH_ADMIN_PASSWORD" -q \
+  "ALTER SETTINGS PROFILE history_reader_profile SETTINGS readonly = 1, max_execution_time = 30 MAX 120 CHANGEABLE_IN_READONLY"
+```
+Then reload the Grafana dashboard. No container restart is needed. (On this host, never restart or
+stop a single container: it cuts Checkmk off from the LAN, see the note in section 5.)
+
 ## 7. Run the wizard
 
 ```bash

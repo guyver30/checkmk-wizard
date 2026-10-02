@@ -61,6 +61,13 @@ done
 # docs/integrations/data-visualization/grafana/index.md "Making a read-only
 # user").
 #
+# Quick 261002-nm2: the cap was MAX 60, and every Grafana panel failed with code 452
+# SETTING_CONSTRAINT_VIOLATION "setting max_execution_time shouldn't be greater than 60" (live,
+# 2026-10-02): the Grafana plugin's client sends its own max_execution_time on every query, above
+# 60 with the default query timeout. MAX 120 leaves room for it; the default for a plain query is
+# still 30 s. This script only runs when the clickhouse_data volume is first created, so an
+# existing host needs the one-off ALTER SETTINGS PROFILE in docs/DEPLOY-NEW-MACHINE.md.
+#
 # poller_writer's S3 table-function privilege (needed for the Parquet export,
 # D-57) uses the legacy `GRANT S3 ON *.* TO user` form rather than the newer
 # `GRANT READ, WRITE ON S3 TO user` form: verified via ctx7 (clickhouse-docs
@@ -70,7 +77,7 @@ done
 # legacy form is the one that actually grants the privilege on this server.
 clickhouse client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery <<SQL
 CREATE SETTINGS PROFILE IF NOT EXISTS history_reader_profile
-    SETTINGS readonly = 1, max_execution_time = 30 MAX 60 CHANGEABLE_IN_READONLY;
+    SETTINGS readonly = 1, max_execution_time = 30 MAX 120 CHANGEABLE_IN_READONLY;
 
 CREATE USER IF NOT EXISTS dashboard_reader IDENTIFIED WITH sha256_password BY '$CH_READER_PASSWORD'
     SETTINGS PROFILE 'history_reader_profile';
