@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AdminActionBar, AdminBanner } from "./AdminBar";
@@ -21,10 +21,17 @@ const TOPOLOGY = [
   { id: "h1", parents: ["sw1"] },
 ];
 
-function renderBar(topologyDevices: unknown[] = []) {
+function renderBar(
+  topologyDevices: unknown[] = [],
+  visibleHostIds: string[] = ["h1", "h2", "sw1"],
+) {
   return render(
     <MemoryRouter>
-      <AdminActionBar devices={DEVICES} topologyDevices={topologyDevices} />
+      <AdminActionBar
+        devices={DEVICES}
+        topologyDevices={topologyDevices}
+        visibleHostIds={visibleHostIds}
+      />
     </MemoryRouter>,
   );
 }
@@ -71,7 +78,9 @@ describe("AdminActionBar", () => {
   it("disables actions with nothing selected and shows the empty hint", () => {
     renderBar();
     expect(screen.getByText("No hosts selected")).toBeInTheDocument();
-    expect(screen.getByText(/Ctrl\+click hosts/)).toBeInTheDocument();
+    expect(screen.getByText(
+        "Click a host on the map or in the tree to select it, Ctrl+click to add more, or tick a folder, then choose an action.",
+      )).toBeInTheDocument();
     for (const name of [
       "Set UP",
       "Set DOWN",
@@ -215,12 +224,41 @@ describe("AdminActionBar", () => {
     renderBar();
     fireEvent.click(screen.getByRole("button", { name: "Restore all" }));
     expect(screen.getByRole("dialog")).toHaveTextContent(
-      "Re-enable normal checks on all 2 faked hosts.",
+      "Return all 2 faked hosts to the demo baseline: UP with PING OK.",
     );
     fireEvent.click(
       screen.getByRole("button", { name: "Restore all 2 faked hosts" }),
     );
     expect(publishAdminCommand).toHaveBeenCalledWith("restore_all", []);
+  });
+
+  it("Select all replaces the selection with exactly the listed hosts", () => {
+    useAdminStore.setState({ selected: new Set(["zz"]) });
+    renderBar([], ["a", "b"]);
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect([...useAdminStore.getState().selected].sort()).toEqual(["a", "b"]);
+    expect(screen.getByRole("button", { name: "Select all" })).toBeDisabled();
+  });
+
+  it("Select all is enabled with an empty selection, disabled with nothing listed or on configError", () => {
+    const { unmount } = renderBar([], ["a"]);
+    expect(screen.getByRole("button", { name: "Select all" })).toBeEnabled();
+    unmount();
+    renderBar([], []);
+    expect(screen.getByRole("button", { name: "Select all" })).toBeDisabled();
+    cleanup();
+    useAdminStore.setState({ configError: true });
+    renderBar([], ["a"]);
+    expect(screen.getByRole("button", { name: "Select all" })).toBeDisabled();
+  });
+
+  it("restore selected describes the demo baseline", () => {
+    useAdminStore.setState({ selected: new Set(["h1"]), faked: { h1: "DOWN" } });
+    renderBar();
+    fireEvent.click(screen.getByRole("button", { name: "Restore selected" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "to the demo baseline: UP with PING OK. The host check is re-enabled, the PING check stays disabled.",
+    );
   });
 
   it("Escape and Clear selection clear the selection when no dialog is open", () => {

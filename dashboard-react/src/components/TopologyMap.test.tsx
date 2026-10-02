@@ -1232,11 +1232,34 @@ describe("TopologyMap admin mode", () => {
     expect(useAdminStore.getState().selected.has("h1")).toBe(true);
   });
 
-  it("plain click still navigates and leaves selection unchanged", async () => {
+  it("plain click selects exactly that host and does not navigate", () => {
     renderMap({ topologyDevices, statuses });
+    act(() => useAdminStore.setState({ selected: new Set(["h2"]) }));
     act(() => instances[0].emit("click", { nodes: ["h1"] }));
-    expect(await screen.findByTestId("host-probe")).toHaveTextContent("h1");
-    expect(useAdminStore.getState().selected.size).toBe(0);
+    expect([...useAdminStore.getState().selected]).toEqual(["h1"]);
+    expect(screen.queryByTestId("host-probe")).toBeNull();
+  });
+
+  it("plain click on a consequence node selects it and does not open the incident", () => {
+    renderMap({
+      topologyDevices,
+      statuses: {
+        h1: device({ id: "h1", state: "UNREACH", incidentRole: "consequence", incidentId: "inc-1" } as never),
+      },
+    });
+    act(() => instances[0].emit("click", { nodes: ["h1"] }));
+    expect([...useAdminStore.getState().selected]).toEqual(["h1"]);
+    expect(screen.queryByTestId("host-probe")).toBeNull();
+    expect(screen.queryByTestId("incident-probe")).toBeNull();
+  });
+
+  it("plain click on empty canvas or an edge changes neither selection nor location", () => {
+    renderMap({ topologyDevices, statuses });
+    act(() => useAdminStore.setState({ selected: new Set(["h1"]) }));
+    act(() => instances[0].emit("click", { nodes: [], edges: [] }));
+    act(() => instances[0].emit("click", { nodes: [], edges: ["e1"] }));
+    expect([...useAdminStore.getState().selected]).toEqual(["h1"]);
+    expect(screen.queryByTestId("host-probe")).toBeNull();
   });
 
   it("ctrl+click on empty canvas does nothing", () => {

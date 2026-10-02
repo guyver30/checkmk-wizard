@@ -466,7 +466,24 @@ describe("Tree admin mode", () => {
     expect(screen.getByTestId("loc")).toHaveTextContent("");
   });
 
-  it("ctrl+click and meta+click toggle selection without navigating; plain click navigates", async () => {
+  it("plain click selects exactly that row and does not navigate", async () => {
+    __setAdminModeForTests(true);
+    const user = userEvent.setup();
+    useAdminStore.setState({ selected: new Set(["a1"]) });
+    renderAdminTree("type");
+    await user.click(screen.getByText("b1"));
+    expect([...useAdminStore.getState().selected]).toEqual(["b1"]);
+    expect(screen.getByTestId("loc").textContent).toBe("");
+  });
+
+  it("non-admin: plain click on a host row navigates", async () => {
+    const user = userEvent.setup();
+    renderAdminTree("type");
+    await user.click(screen.getByText("b1"));
+    expect(screen.getByTestId("loc").textContent).toContain("host=b1");
+  });
+
+  it("ctrl+click and meta+click toggle selection without navigating", async () => {
     __setAdminModeForTests(true);
     const user = userEvent.setup();
     renderAdminTree("type");
@@ -479,8 +496,7 @@ describe("Tree admin mode", () => {
     await user.click(screen.getByText("b1"));
     await user.keyboard("{/Meta}");
     expect(useAdminStore.getState().selected.has("b1")).toBe(false);
-    await user.click(screen.getByText("b1"));
-    expect(screen.getByTestId("loc").textContent).toContain("host=b1");
+    expect(screen.getByTestId("loc").textContent).toBe("");
   });
 
   it("marks a selected row with the brand classes", () => {

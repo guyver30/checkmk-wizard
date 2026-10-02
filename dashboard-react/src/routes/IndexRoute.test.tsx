@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IndexRoute } from "./IndexRoute";
@@ -112,6 +112,25 @@ describe("IndexRoute admin mode", () => {
     expect(screen.getByRole("button", { name: "Set DOWN" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Edit topology" })).toBeDisabled();
     expect(screen.getByText("Unavailable in admin mode")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select all" })).toBeInTheDocument();
+  });
+
+  it("shows no host details pane in admin mode even with ?host= in the URL", () => {
+    act(() => {
+      useAppStore
+        .getState()
+        .handleMessage(
+          "lan/devices/web1/status",
+          encode({ id: "web1", state: "OK", timestamp: new Date().toISOString() }),
+        );
+    });
+    __setAdminModeForTests(true);
+    renderIndexAt("/?host=web1");
+    expect(screen.queryByRole("button", { name: /collapse host details/i })).not.toBeInTheDocument();
+    __setAdminModeForTests(false);
+    cleanup();
+    renderIndexAt("/?host=web1");
+    expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
   });
 });
 

@@ -95,9 +95,9 @@ function effectSentence(action: AdminAction, n: number): string {
     case "unreach":
       return `Mark ${hostsWord(n)} UNREACHABLE.`;
     case "restore":
-      return `Re-enable normal checks on ${hostsWord(n)}.`;
+      return `Return ${hostsWord(n)} to the demo baseline: UP with PING OK. The host check is re-enabled, the PING check stays disabled.`;
     case "restore_all":
-      return `Re-enable normal checks on all ${n} faked hosts.`;
+      return `Return all ${n} faked hosts to the demo baseline: UP with PING OK.`;
   }
 }
 
@@ -144,17 +144,21 @@ function formatTime(ms: number): string {
 export interface AdminActionBarProps {
   devices: Record<string, DevicePayload>;
   topologyDevices: unknown[];
+  // Ids of every host the dashboard currently lists; Select all selects exactly these.
+  visibleHostIds: string[];
 }
 
 export function AdminActionBar({
   devices,
   topologyDevices,
+  visibleHostIds,
 }: AdminActionBarProps) {
   const selected = useAdminStore((s) => s.selected);
   const faked = useAdminStore((s) => s.faked);
   const configError = useAdminStore((s) => s.configError);
   const lastResult = useAdminStore((s) => s.lastResult);
   const clearSelection = useAdminStore((s) => s.clearSelection);
+  const replaceSelection = useAdminStore((s) => s.replaceSelection);
 
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [waiting, setWaiting] = useState(false);
@@ -167,6 +171,11 @@ export function AdminActionBar({
   const selectedIds = useMemo(() => [...selected].sort(), [selected]);
   const fakedCount = Object.keys(faked).length;
   const noneSelected = selectedIds.length === 0;
+  // Replace (not union) so a host that is no longer listed never stays selected.
+  const allSelected =
+    visibleHostIds.length > 0 &&
+    selectedIds.length === visibleHostIds.length &&
+    visibleHostIds.every((id) => selected.has(id));
   const actionsDisabled = configError || waiting;
 
   const clearTimer = useCallback(() => {
@@ -312,8 +321,8 @@ export function AdminActionBar({
           </span>
           {noneSelected && (
             <span className="text-xs text-fg-tertiary">
-              Ctrl+click hosts on the map or in the tree, or tick a folder, then
-              choose an action.
+              Click a host on the map or in the tree to select it, Ctrl+click to
+              add more, or tick a folder, then choose an action.
             </span>
           )}
         </div>
@@ -323,6 +332,13 @@ export function AdminActionBar({
           onClick={clearSelection}
         >
           Clear selection
+        </Button>
+        <Button
+          variant="tertiary"
+          disabled={configError || visibleHostIds.length === 0 || allSelected}
+          onClick={() => replaceSelection(visibleHostIds)}
+        >
+          Select all
         </Button>
         <ButtonGroup>
           <Button

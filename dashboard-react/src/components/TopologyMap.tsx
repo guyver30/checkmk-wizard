@@ -490,16 +490,19 @@ export function TopologyMap({
       event?: { srcEvent?: { ctrlKey?: boolean; metaKey?: boolean } };
     }) => {
       const nodeId = params.nodes[0];
-      // Admin multi-select. vis-network `interaction.multiselect` is deliberately NOT enabled
-      // because it would also change plain-click selection behavior. The modifier keys are read
-      // from params.event.srcEvent (assumption: verified in a real browser; fallback is a window
-      // keydown/keyup tracker for Control/Meta read here instead).
-      if (
-        adminModeRef.current &&
-        (params.event?.srcEvent?.ctrlKey || params.event?.srcEvent?.metaKey)
-      ) {
+      // Admin selection: a plain click selects exactly that host, ctrl/cmd+click toggles it in
+      // the multi-selection, and nothing navigates or opens host details in admin mode. A click
+      // on empty canvas or an edge changes nothing (Escape / Clear selection clear the selection).
+      // vis-network `interaction.multiselect` is deliberately NOT enabled because it would also
+      // change plain-click selection behavior. The modifier keys are read from
+      // params.event.srcEvent.
+      if (adminModeRef.current) {
         if (nodeId) {
-          useAdminStore.getState().toggleSelected(nodeId);
+          if (params.event?.srcEvent?.ctrlKey || params.event?.srcEvent?.metaKey) {
+            useAdminStore.getState().toggleSelected(nodeId);
+          } else {
+            useAdminStore.getState().replaceSelection([nodeId]);
+          }
         }
         return;
       }

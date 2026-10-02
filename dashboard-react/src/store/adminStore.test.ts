@@ -28,6 +28,18 @@ describe("useAdminStore", () => {
     expect(useAdminStore.getState().selected.has("a")).toBe(false);
   });
 
+  it("replaceSelection makes the selection exactly the given ids with a new Set", () => {
+    useAdminStore.getState().setSelected(["a", "b"], true);
+    const before = useAdminStore.getState().selected;
+    useAdminStore.getState().replaceSelection(["c", "d"]);
+    const after = useAdminStore.getState().selected;
+    expect([...after].sort()).toEqual(["c", "d"]);
+    expect(after).not.toBe(before);
+    expect([...before].sort()).toEqual(["a", "b"]);
+    useAdminStore.getState().replaceSelection([]);
+    expect(useAdminStore.getState().selected.size).toBe(0);
+  });
+
   it("setSelected and clearSelection", () => {
     useAdminStore.getState().setSelected(["a", "b"], true);
     expect([...useAdminStore.getState().selected].sort()).toEqual(["a", "b"]);

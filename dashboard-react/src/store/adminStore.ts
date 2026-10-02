@@ -41,6 +41,7 @@ export interface AdminState {
   configError: boolean;
   toggleSelected: (id: string) => void;
   setSelected: (ids: string[], on: boolean) => void;
+  replaceSelection: (ids: string[]) => void;
   clearSelection: () => void;
   setPending: (p: AdminPending | null) => void;
   expirePending: (id: string) => void;
@@ -80,6 +81,10 @@ export const useAdminStore = create<AdminState>()((set, get) => ({
       }
     }
     set({ selected: next });
+  },
+
+  replaceSelection: (ids) => {
+    set({ selected: new Set(ids) });
   },
 
   clearSelection: () => {

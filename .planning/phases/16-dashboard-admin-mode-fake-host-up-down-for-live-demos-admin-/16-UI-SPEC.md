@@ -97,7 +97,7 @@ Rules:
 - Persistent: not dismissible, `position: sticky; top: 0`, always visible in admin view only.
 
 ### Selection (ctrl+click, map and tree)
-- Ctrl/Cmd+click toggles a host in the selection set. A plain click keeps its existing behavior (navigate / open details) and does not clear the selection. Escape clears the selection. [assumed]
+- (amended 2026-10-02, gap closure 16-10) In admin mode a plain click on a map node or tree host row selects exactly that host (it replaces the selection) and never navigates or opens host details; no host details pane is shown in admin mode, even with `?host=` in the URL. Ctrl/Cmd+click toggles a host in the selection set. A click on empty map canvas changes nothing. Escape clears the selection. Outside admin mode clicks behave as before.
 - Map: selected nodes get a 3px brand ring and stay selected across data refreshes. Faked hosts show a small `FAKED` caption badge under the node label (admin view only).
 - Tree: host rows show a `Checkbox` (16px) in admin mode (visible only in admin mode) that mirrors selection; ctrl+click on the row also toggles. Faked hosts show the `FAKED` badge (12px) right after the state badge.
 - Folder rows: a tri-state `Checkbox` (checked, unchecked, indeterminate) selects or deselects all hosts whose folder equals or is under that folder (subfolders included, per research Open Question 3). Label tooltip: "Select all hosts in this folder". Next to the folder name a muted `{k}/{n} selected` caption (12px) appears when k > 0.
@@ -105,7 +105,7 @@ Rules:
 
 ### Admin action bar
 - Placement: docked bar at the bottom of the viewport spanning the layout (56px high, `bg-subtle`, top border, `p-4`, `gap-2`), visible in admin mode only, always rendered (so layout does not jump).
-- Left: selection summary `{N} selected` (13px semibold) and a text `Button` (variant ghost) `Clear selection`. When N = 0 the summary reads `No hosts selected` and the four action buttons are disabled.
+- Left: selection summary `{N} selected` (13px semibold) and a text `Button` (variant ghost) `Clear selection` followed by `Select all` (amended 2026-10-02, gap closure 16-10: selects exactly the hosts the dashboard currently lists, replacing the selection, so hidden hosts are never selected; disabled when nothing is listed or all listed hosts are already selected). When N = 0 the summary reads `No hosts selected` and the four action buttons are disabled.
 - Center, a `ButtonGroup` in this order: `Set UP`, `Set DOWN`, `Set UNREACHABLE`, `Restore selected`.
 - Right: `Restore all` (secondary variant, always enabled when `admin/faked` is non-empty; independent of selection) and the last-ack indicator (see below).
 - Keyboard: buttons are tab-reachable in the order above; no global shortcuts (avoid accidental fakes during a demo). [assumed]
@@ -117,7 +117,7 @@ Rules:
   - UP: `Mark these hosts and their PING service as UP. Active checks stay disabled until you restore them.`
   - DOWN: `Mark these hosts DOWN. Managed hosts below them become UNREACHABLE; hosts behind an unmanaged switch are not changed unless selected.`
   - UNREACHABLE: `Mark these hosts UNREACHABLE. Active checks stay disabled until you restore them.`
-  - Restore selected / Restore all: `Re-enable normal active checks. Real states return on the next check.`
+  - Restore selected / Restore all: `Return {N hosts} to the demo baseline: UP with PING OK. The host check is re-enabled, the PING check stays disabled.` / Restore all: `Return all {n} faked hosts to the demo baseline: UP with PING OK.` (amended 2026-10-02, gap closure 16-10)
 - When a DOWN cascade applies, the list is split into `Selected ({a})` and `Also set UNREACHABLE ({b})` sections, computed in the browser from the same rule as the poller (the poller remains authoritative and its ack lists what it actually applied). [assumed]
 - Buttons: `Cancel` (secondary, left) and the confirm button (right) labelled with the action, e.g. `Set 3 hosts DOWN`. Confirm color: danger for DOWN, UNREACHABLE, Restore all; brand (primary) for UP and Restore selected. No extra warning text about notifications (D-14).
 - While waiting for the ack the confirm button shows a spinner state and is disabled; the dialog closes on ack.
@@ -144,13 +144,13 @@ Rules:
 | Primary CTA (action bar) | `Set DOWN` (with siblings `Set UP`, `Set UNREACHABLE`, `Restore selected`) |
 | Confirm CTA | `Set {N} hosts DOWN` / `Set {N} hosts UP` / `Set {N} hosts UNREACHABLE` / `Restore {N} hosts` / `Restore all {N} faked hosts` |
 | Empty state heading (nothing selected) | `No hosts selected` |
-| Empty state body | `Ctrl+click hosts on the map or in the tree, or tick a folder, then choose an action.` |
+| Empty state body | `Click a host on the map or in the tree to select it, Ctrl+click to add more, or tick a folder, then choose an action.` (amended 2026-10-02, gap closure 16-10) |
 | Empty faked state (Restore all disabled) | `No hosts are faked` (tooltip on disabled Restore all) |
 | Error state | `Could not apply: {reason}. Nothing changed. Try again in a few seconds.` |
 | Admin config unreachable | `Admin login unavailable. Reload the page, or check that the dashboard container has the admin password configured.` (Banner, danger status, replaces the ADMIN MODE banner; action bar disabled) |
 | Banner | `ADMIN MODE - {N} hosts faked` |
 | Faked badge | `FAKED` |
-| Destructive confirmation | `Set DOWN`: `Mark {N} hosts DOWN. Managed hosts below them become UNREACHABLE.` followed by the host list; confirm button `Set {N} hosts DOWN`. `Restore all`: `Re-enable normal checks on all {N} faked hosts.` |
+| Destructive confirmation | `Set DOWN`: `Mark {N} hosts DOWN. Managed hosts below them become UNREACHABLE.` followed by the host list; confirm button `Set {N} hosts DOWN`. `Restore all`: `Return all {N} faked hosts to the demo baseline: UP with PING OK.` (amended 2026-10-02, gap closure 16-10) |
 
 Destructive actions in this phase: Set DOWN, Set UNREACHABLE, Restore all (each via the confirm dialog above; no typed confirmation).
 
