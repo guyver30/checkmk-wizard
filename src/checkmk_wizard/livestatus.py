@@ -19,8 +19,14 @@ import time
 DEFAULT_PORT = 6557
 
 
+# Livestatus reports state 0 for hosts the core has never checked; the hosts
+# table's `has_been_checked` column distinguishes them, and they map to this.
+HOST_STATE_PENDING = -1
+
+
 def query_host_states(host: str, host_names: list[str], port: int = DEFAULT_PORT) -> dict[str, int]:
-    """Return {host_name: state} for the given hosts (0=UP, 1=DOWN, 2=UNREACHABLE).
+    """Return {host_name: state} for the given hosts (0=UP, 1=DOWN, 2=UNREACHABLE,
+    HOST_STATE_PENDING for hosts that have never been checked).
 
     Hosts not yet known to Livestatus (e.g. not yet activated) are omitted
     from the result.
@@ -30,7 +36,7 @@ def query_host_states(host: str, host_names: list[str], port: int = DEFAULT_PORT
 
     query = (
         "GET hosts\n"
-        "Columns: name state\n"
+        "Columns: name state has_been_checked\n"
         "OutputFormat: csv\n"
         "ColumnHeaders: off\n"
         "\n"
@@ -51,10 +57,11 @@ def query_host_states(host: str, host_names: list[str], port: int = DEFAULT_PORT
     for line in text.splitlines():
         if not line.strip():
             continue
-        name, _, state = line.partition(";")
+        name, _, rest = line.partition(";")
+        state, _, checked = rest.partition(";")
         if name in wanted:
             try:
-                states[name] = int(state)
+                states[name] = HOST_STATE_PENDING if checked == "0" else int(state)
             except ValueError:
                 continue
     return states

@@ -188,12 +188,24 @@ Phase 3 does not scan. For each Phase 2 folder with a subnet it asks how many
 hosts to create and in which subnet (default: the folder's subnet; with no
 folders, the root folder and `198.51.100.0/24`, the non-routable TEST-NET-2
 range) and stages the first N usable addresses not already in Checkmk. Phase 4
-keeps its prompts but the monitoring method defaults to `ping`. After Phase 7's
-activation, every host onboarded in that run is faked UP over Livestatus
-(host check disabled with an UP result injected, same for its `PING`
-service). To undo, send `ENABLE_HOST_CHECK;<host>` and
-`ENABLE_SVC_CHECK;<host>;PING`. If Livestatus is unreachable the wizard prints
-the manual `lq` commands instead of failing.
+keeps its prompts but the monitoring method defaults to `ping`, and its
+"Promote which hosts?" checkbox starts with every host generated in this run
+checked (deselect to skip; pre-existing pending hosts stay unchecked).
+
+Phase 7 creates a "Host check command: Always assume host to be up" rule
+(`host_check_commands`) for the promoted hosts before activation, so the core
+keeps running a host check that returns UP and the hosts stay UP and fresh
+(not STALE) on the dashboard. After activation each host also gets an UP
+result injected, and its `PING` service has its check disabled with an OK
+result injected. The injected plugin output is check_icmp-style text such as
+`OK - <ip> rta 0.412ms lost 0%`. If the rule cannot be created the wizard warns
+and falls back to also disabling the host check (`DISABLE_HOST_CHECK`). To
+undo, delete that rule (Setup > Hosts > Host monitoring rules > Host check
+command) and send `ENABLE_SVC_CHECK;<host>;PING` (plus
+`ENABLE_HOST_CHECK;<host>` if the fallback ran). If Livestatus is unreachable
+the wizard prints the manual `lq` commands instead of failing. The
+post-activation state table shows `PENDING` for hosts the core has never
+checked.
 
 ### Leaving early (Esc)
 

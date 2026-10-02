@@ -17,7 +17,8 @@ original design, see [PLAN-CONFORMANCE-AUDIT.md](PLAN-CONFORMANCE-AUDIT.md).
 
 `checkmk-wizard --demo` (added 2026-10-01) runs demo mode: Phase 3 generates
 host IPs instead of scanning, Phase 4 defaults the monitoring method to
-`ping`, and Phase 7 fakes the hosts UP after activation (see those sections).
+`ping` and pre-checks the generated hosts, and Phase 7 creates an always-up
+host check rule and fakes the hosts UP after activation (see those sections).
 `deploy/run-wizard.sh` forwards its arguments, so `deploy/run-wizard.sh --demo`
 works in container mode.
 
@@ -782,7 +783,9 @@ with a subnet (or once, into `/` with default `198.51.100.0/24`, when there is
 none) the wizard prompts for a host count and subnet, and stages the first N
 usable IPs not already in Checkmk (`_demo_host_ips`) with the same inert
 attributes as scanned hosts. They are returned as `ScannedHost` with no open
-ports.
+ports. (Changed 2026-10-02: generated hosts are flagged
+`ScannedHost.demo_generated=True`, which Phase 4 uses to pre-select them;
+pending hosts passed through are not flagged.)
 
 **Changed 2026-08-25: scans each Phase 2 folder's subnet directly into
 that folder**, instead of a single subnet always staged at root
@@ -859,7 +862,9 @@ retag flow and then reports there is nothing to promote.
 ## Phase 4 — Host Classification (`wizard.py:564-651`)
 
 In demo mode (`--demo`) the "Monitoring method" select defaults to `ping`; all
-prompts stay.
+prompts stay. (Changed 2026-10-02: the "Promote which hosts?" checkbox starts
+with every `demo_generated` host checked, so the user deselects rather than
+selects; non-demo runs start with nothing checked.)
 
 Purely interactive — **no fingerprinting, and (changed 2026-08-25) no
 folder prompt** — each host's folder is already known from which Phase 2
@@ -1676,13 +1681,30 @@ a different mechanism than the plan's wording, but the same outcome
 
 ## Phase 7 — Activation & Validation (`wizard.py:939-988`)
 
-In demo mode (`--demo`), right after the activation below succeeds,
-`_fake_demo_hosts_up` sends over Livestatus TCP (`livestatus.send_commands`,
-one connection per command) `DISABLE_HOST_CHECK`, `PROCESS_HOST_CHECK_RESULT;<host>;0`,
-`DISABLE_SVC_CHECK;<host>;PING` and `PROCESS_SERVICE_CHECK_RESULT;<host>;PING;0`
-for every host onboarded this run, so they show UP. It retries on connection
-reset and, on final failure, prints the manual `lq` commands without aborting.
-Undo with `ENABLE_HOST_CHECK` / `ENABLE_SVC_CHECK`.
+In demo mode (`--demo`) (changed 2026-10-02), before the activation below,
+`_create_demo_host_check_rule` creates one `host_check_commands` rule ("Host
+check command = Always assume host to be up", `value_raw="'ok'"`, scoped by
+explicit host names) for the hosts onboarded this run, so the activation applies
+it and the core keeps running a host check that returns UP; the Livestatus
+staleness the dashboard reads stays fresh instead of growing (STALE). The
+`'ok'` value comes from Checkmk GUI source knowledge and is not yet live-verified
+on 2.4.0p35 (cross-check by creating the rule in the GUI and comparing
+`extensions.value_raw` via `GET /objects/rule/{id}`). If creation fails a yellow
+warning prints and the run continues with the fallback below.
+
+Right after the activation succeeds, `_fake_demo_hosts_up` sends over Livestatus
+TCP (`livestatus.send_commands`, one connection per command) for every host
+onboarded this run `PROCESS_HOST_CHECK_RESULT;<host>;0;OK - <ip> rta 0.412ms
+lost 0%` (so the host is UP immediately rather than PENDING until the first
+scheduled check), `DISABLE_SVC_CHECK;<host>;PING` and
+`PROCESS_SERVICE_CHECK_RESULT;<host>;PING;0;OK - <ip> rta 0.412ms lost 0%`. The
+plugin output is check_icmp-style text built from the host's IP (no `;`, the
+Livestatus separator). With `fake_host_checks=True` (rule creation failed) it
+also sends `DISABLE_HOST_CHECK;<host>` first. It retries on connection reset
+and, on final failure, prints the manual `lq` commands without aborting. Undo:
+delete the Host check command rule (Setup > Hosts > Host monitoring rules >
+Host check command) and send `ENABLE_SVC_CHECK;<host>;PING` (plus
+`ENABLE_HOST_CHECK;<host>` if the fallback ran).
 
 1. `_activate_pending_changes(client, connection)` (added 2026-08-27,
    shared with Phase 6's pre-discovery activation above — the exact same
@@ -1725,12 +1747,16 @@ Undo with `ENABLE_HOST_CHECK` / `ENABLE_SVC_CHECK`.
      and the reuse-existing path in `phase1_site_bringup()`), so this
      works whether the wizard runs on the Checkmk host itself or from a
      separate container/host.
-   - Sends the raw LQL query `GET hosts\nColumns: name state\nOutputFormat:
-     csv\nColumnHeaders: off\n\n` and reads the socket until EOF.
-   - Parses each line by splitting on the **first** `;` only
-     (`line.partition(";")`, `livestatus.py:44`).
+   - Sends the raw LQL query `GET hosts\nColumns: name state
+     has_been_checked\nOutputFormat: csv\nColumnHeaders: off\n\n` and reads
+     the socket until EOF.
+   - Parses each line as `name;state;has_been_checked` (a missing third field
+     counts as checked).
    - Maps state `0→UP`, `1→DOWN`, `2→UNREACHABLE`, anything else →
-     `"unknown"`, and prints a table.
+     `"unknown"`, and prints a table. (Changed 2026-10-02: a host with
+     `has_been_checked=0` becomes `livestatus.HOST_STATE_PENDING` and shows
+     `PENDING`, because Livestatus reports state 0 for never-checked hosts and
+     they used to show as `UP`.)
    - **Never aborts the run (fixed 2026-09-30).** The query goes through
      `_query_host_states_best_effort()`. It retries any socket error after
      3, 5 and 10 seconds, because activation reloads the monitoring core and

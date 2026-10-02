@@ -47,7 +47,7 @@ fake state directly:
 cmk() { podman exec checkmk su - dmc -c "lq 'COMMAND [$(date +%s)] $1'"; }
 
 cmk "DISABLE_HOST_CHECK;<host>"                       # stop real checks overwriting the fake
-cmk "PROCESS_HOST_CHECK_RESULT;<host>;1;faked down"   # 0=UP 1=DOWN 2=UNREACHABLE
+cmk "PROCESS_HOST_CHECK_RESULT;<host>;1;CRITICAL - <ip>: rta nan, lost 100%"   # 0=UP 1=DOWN 2=UNREACHABLE
 cmk "ENABLE_HOST_CHECK;<host>"                        # undo; next real check restores truth
 ```
 
@@ -66,7 +66,7 @@ Audience narrative: "a device just went offline."
 
 ```bash
 cmk "DISABLE_HOST_CHECK;<plain_host>"
-cmk "PROCESS_HOST_CHECK_RESULT;<plain_host>;1;faked down"
+cmk "PROCESS_HOST_CHECK_RESULT;<plain_host>;1;CRITICAL - <ip>: rta nan, lost 100%"
 ```
 
 What the audience sees (within ~2 poll cycles): exactly one incident card,
@@ -78,7 +78,7 @@ anything else.
 Recover:
 
 ```bash
-cmk "PROCESS_HOST_CHECK_RESULT;<plain_host>;0;faked up"
+cmk "PROCESS_HOST_CHECK_RESULT;<plain_host>;0;OK - <ip> rta 0.412ms lost 0%"
 cmk "ENABLE_HOST_CHECK;<plain_host>"
 ```
 
@@ -90,7 +90,7 @@ Audience narrative: "a switch went down, and everything behind it lost its own c
 
 ```bash
 cmk "DISABLE_HOST_CHECK;<managed_switch>"
-cmk "PROCESS_HOST_CHECK_RESULT;<managed_switch>;1;faked down"
+cmk "PROCESS_HOST_CHECK_RESULT;<managed_switch>;1;CRITICAL - <ip>: rta nan, lost 100%"
 ```
 
 Checkmk itself marks each child UNREACH once its parent is DOWN and the child's own check next
@@ -109,7 +109,7 @@ inferred case below).
 Recover:
 
 ```bash
-cmk "PROCESS_HOST_CHECK_RESULT;<managed_switch>;0;faked up"
+cmk "PROCESS_HOST_CHECK_RESULT;<managed_switch>;0;OK - <ip> rta 0.412ms lost 0%"
 cmk "ENABLE_HOST_CHECK;<managed_switch>"
 ```
 
@@ -126,9 +126,9 @@ zero services in Checkmk and never turns WARN/CRIT itself) with at least two chi
 
 ```bash
 cmk "DISABLE_HOST_CHECK;<child_1>"
-cmk "PROCESS_HOST_CHECK_RESULT;<child_1>;1;faked down"
+cmk "PROCESS_HOST_CHECK_RESULT;<child_1>;1;CRITICAL - <ip>: rta nan, lost 100%"
 cmk "DISABLE_HOST_CHECK;<child_2>"
-cmk "PROCESS_HOST_CHECK_RESULT;<child_2>;1;faked down"
+cmk "PROCESS_HOST_CHECK_RESULT;<child_2>;1;CRITICAL - <ip>: rta nan, lost 100%"
 ```
 
 What the audience sees: ONE card rooted at the unmanaged switch — `"{switch label} —
@@ -142,7 +142,7 @@ DOWN/UNREACH red (its own Checkmk state is still UP/unchecked).
 **Split — restore one child:**
 
 ```bash
-cmk "PROCESS_HOST_CHECK_RESULT;<child_1>;0;faked up"
+cmk "PROCESS_HOST_CHECK_RESULT;<child_1>;0;OK - <ip> rta 0.412ms lost 0%"
 cmk "ENABLE_HOST_CHECK;<child_1>"
 ```
 
@@ -155,7 +155,7 @@ as an inferred root).
 **Clear:**
 
 ```bash
-cmk "PROCESS_HOST_CHECK_RESULT;<child_2>;0;faked up"
+cmk "PROCESS_HOST_CHECK_RESULT;<child_2>;0;OK - <ip> rta 0.412ms lost 0%"
 cmk "ENABLE_HOST_CHECK;<child_2>"
 ```
 
