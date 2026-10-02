@@ -4534,3 +4534,317 @@ def test_send_livestatus_commands_wraps_oserror(err):
         pytest.raises(poller.LivestatusError),
     ):
         poller.send_livestatus_commands("lh", 6557, ["A;h1"], 5.0)
+
+
+# --- Admin command worker, faked-set derivation and wiring (Phase 16) -------
+
+
+@pytest.fixture(autouse=True)
+def _no_admin_thread_in_run_forever_tests(request):
+    # The run_forever tests patch `threading.Event` globally, which breaks `Thread()`
+    # construction; the worker thread itself is covered by direct `_run`/`process_one` tests.
+    if request.node.name.startswith("test_run_forever"):
+        with (
+            patch.object(poller.AdminCommandWorker, "start"),
+            patch.object(poller.AdminCommandWorker, "stop"),
+        ):
+            yield
+    else:
+        yield
+
+
+def test_query_faked_hosts_requires_host_and_ping_disabled():
+    with patch.object(
+        poller,
+        "_livestatus_request",
+        side_effect=[json.dumps([["h1", 1, 0], ["h2", 0, 0]]), json.dumps([["h1", 0], ["h2", 1]])],
+    ):
+        assert poller.query_faked_hosts("lh", 6557, 5.0) == {"h1": "DOWN"}
+
+
+def test_query_faked_hosts_counts_host_without_ping_service():
+    with patch.object(
+        poller,
+        "_livestatus_request",
+        side_effect=[json.dumps([["um1", 0, 0]]), json.dumps([])],
+    ):
+        assert poller.query_faked_hosts("lh", 6557, 5.0) == {"um1": "UP"}
+
+
+def test_query_faked_hosts_empty_body_is_empty():
+    with patch.object(poller, "_livestatus_request", side_effect=["", ""]):
+        assert poller.query_faked_hosts("lh", 6557, 5.0) == {}
+
+
+def test_query_faked_hosts_malformed_raises():
+    with (
+        patch.object(poller, "_livestatus_request", side_effect=["not json", ""]),
+        pytest.raises(poller.LivestatusError),
+    ):
+        poller.query_faked_hosts("lh", 6557, 5.0)
+
+
+def test_refresh_admin_faked_publishes_only_on_change():
+    client = MagicMock()
+    context = poller.AdminContext()
+    results = [{"h1": "DOWN"}, {"h1": "DOWN"}, {"h1": "DOWN", "h2": "UNREACH"}]
+    with patch.object(poller, "query_faked_hosts", side_effect=results):
+        for _ in results:
+            poller.refresh_admin_faked(client, context, _make_config())
+
+    calls = _published(client, poller.TOPIC_ADMIN_FAKED)
+    assert len(calls) == 2
+    assert calls[0].kwargs["qos"] == 1 and calls[0].kwargs["retain"] is True
+    payload = json.loads(calls[0].args[1])
+    assert payload["hosts"] == {"h1": "DOWN"}
+    assert payload["source"] == "livestatus"
+    assert "timestamp" in payload
+
+
+def test_refresh_admin_faked_swallows_livestatus_error():
+    client = MagicMock()
+    context = poller.AdminContext()
+    with patch.object(poller, "query_faked_hosts", side_effect=poller.LivestatusError("x")):
+        poller.refresh_admin_faked(client, context, _make_config())
+
+    client.publish.assert_not_called()
+
+
+def test_admin_context_ledger_apply_and_prune():
+    client = MagicMock()
+    context = poller.AdminContext()
+    context.use_ledger = True
+    context.apply_ledger(
+        [poller.AdminAction("a", "down", False), poller.AdminAction("b", "unreach", True)]
+    )
+    context.apply_ledger([poller.AdminAction("a", "restore", False)])
+    assert context.faked() == {"b": "UNREACH"}
+
+    poller.refresh_admin_faked(client, context, _make_config())
+    payload = json.loads(_published(client, poller.TOPIC_ADMIN_FAKED)[0].args[1])
+    assert payload["source"] == "ledger"
+    assert payload["hosts"] == {"b": "UNREACH"}
+
+    context.update_snapshots([_snapshot("z")])
+    poller.refresh_admin_faked(client, context, _make_config())
+    assert context.faked() == {}
+
+
+def test_publish_admin_ack_not_retained():
+    client = MagicMock()
+    poller.publish_admin_ack(client, {"id": "x"})
+    args, kwargs = client.publish.call_args
+    assert args[0] == poller.TOPIC_ADMIN_ACK
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is False
+
+
+def _reconcile_with_admin_faked(payload: bytes):
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+
+        def _subscribe(topic, qos=None):
+            if topic == poller.TOPIC_ADMIN_FAKED:
+                mock_client.on_message(
+                    mock_client, None, _make_message(poller.TOPIC_ADMIN_FAKED, payload)
+                )
+
+        mock_client.subscribe.side_effect = _subscribe
+        state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
+    return state, mock_client
+
+
+def test_reconcile_state_seeds_admin_faked_from_retained_topic():
+    state, _ = _reconcile_with_admin_faked(b'{"hosts": {"h1": "DOWN"}}')
+    assert state.admin_faked == {"h1": "DOWN"}
+
+
+def test_reconcile_state_ignores_malformed_admin_faked():
+    state, _ = _reconcile_with_admin_faked(b"not json")
+    assert state.admin_faked == {}
+    state, _ = _reconcile_with_admin_faked(
+        b'{"hosts": {"h1": "BOGUS", "bad id!": "DOWN", "ok": "UP"}}'
+    )
+    assert state.admin_faked == {"ok": "UP"}
+
+
+def test_reconcile_state_subscribes_topology_after_admin_faked():
+    _, mock_client = _reconcile_with_admin_faked(b"{}")
+    topics = [c.args[0] for c in mock_client.subscribe.call_args_list]
+    assert topics.index(poller.TOPIC_ADMIN_FAKED) < topics.index(poller.TOPIC_TOPOLOGY)
+    assert topics[-1] == poller.TOPIC_TOPOLOGY
+
+
+def _admin_worker(snapshots=None, **kwargs):
+    context = poller.AdminContext()
+    if snapshots is not None:
+        context.update_snapshots(snapshots)
+    kwargs.setdefault("send_fn", MagicMock())
+    kwargs.setdefault("sleep_fn", MagicMock())
+    kwargs.setdefault("refresh_fn", MagicMock())
+    worker = poller.AdminCommandWorker(_make_config(), context, **kwargs)
+    client = MagicMock()
+    worker.attach_client(client)
+    return worker, client, context
+
+
+def _cmd(id_="c1", action="down", hosts=("h1",)):
+    return json.dumps({"id": id_, "action": action, "hosts": list(hosts)}).encode()
+
+
+def _acks(client):
+    return [json.loads(c.args[1]) for c in _published(client, poller.TOPIC_ADMIN_ACK)]
+
+
+def test_admin_worker_drops_retained_command():
+    worker, client, _ = _admin_worker([_snapshot("h1")])
+    worker.submit(_cmd(), retained=True)
+    assert worker._queue.empty()
+    client.publish.assert_not_called()
+
+
+def test_admin_worker_acks_unknown_action():
+    worker, client, _ = _admin_worker([_snapshot("h1")])
+    worker.submit(_cmd(action="reboot"), retained=False)
+    acks = _acks(client)
+    assert len(acks) == 1
+    assert acks[0]["ok"] is False and acks[0]["detail"] == "unknown action"
+
+
+def test_admin_worker_drops_payload_without_id():
+    worker, client, _ = _admin_worker([_snapshot("h1")])
+    worker.submit(b'{"action": "down"}', retained=False)
+    worker.submit(b"garbage", retained=False)
+    client.publish.assert_not_called()
+
+
+def test_admin_worker_acks_busy_when_queue_full():
+    worker, client, _ = _admin_worker([_snapshot("h1")])
+    for i in range(poller.ADMIN_QUEUE_MAX):
+        worker.submit(_cmd(id_=f"c{i}"), retained=False)
+    client.publish.assert_not_called()
+    worker.submit(_cmd(id_="overflow"), retained=False)
+    acks = _acks(client)
+    assert acks[0]["ok"] is False and acks[0]["detail"] == "poller busy, try again"
+
+
+def test_admin_worker_dedupes_command_ids():
+    worker, _, _ = _admin_worker([_snapshot("h1")])
+    worker.submit(_cmd(id_="same"), retained=False)
+    worker.submit(_cmd(id_="same"), retained=False)
+    assert worker._queue.qsize() == 1
+
+
+def test_admin_worker_no_host_list_yet():
+    worker, _, _ = _admin_worker()
+    ack = worker.process_one(poller.parse_admin_command(_cmd()))
+    assert ack["ok"] is False and ack["detail"] == "poller has no host list yet"
+
+
+def test_admin_worker_skips_unknown_hosts():
+    send = MagicMock()
+    worker, _, _ = _admin_worker([_snapshot("h1")], send_fn=send)
+    ack = worker.process_one(poller.parse_admin_command(_cmd(hosts=("h1", "ghost"))))
+    assert ack["ok"] is True
+    assert ack["skipped"] == ["ghost"]
+    sent = send.call_args.args[2]
+    assert all("ghost" not in c for c in sent) and any("h1" in c for c in sent)
+
+
+def test_admin_worker_all_hosts_unknown_fails():
+    worker, _, _ = _admin_worker([_snapshot("h1")])
+    ack = worker.process_one(poller.parse_admin_command(_cmd(hosts=("ghost",))))
+    assert ack["ok"] is False and ack["detail"] == "no known hosts in command"
+
+
+def test_admin_worker_retries_then_fails():
+    send = MagicMock(side_effect=poller.LivestatusError("down"))
+    sleep = MagicMock()
+    worker, _, _ = _admin_worker([_snapshot("h1")], send_fn=send, sleep_fn=sleep)
+    ack = worker.process_one(poller.parse_admin_command(_cmd()))
+    assert ack["ok"] is False
+    assert ack["detail"].startswith("Livestatus unreachable:")
+    assert [c.args[0] for c in sleep.call_args_list] == [3, 5, 10]
+    assert send.call_count == 4
+
+
+def test_admin_worker_retry_then_success():
+    send = MagicMock(side_effect=[poller.LivestatusError("down"), None])
+    worker, _, _ = _admin_worker([_snapshot("h1")], send_fn=send)
+    ack = worker.process_one(poller.parse_admin_command(_cmd()))
+    assert ack["ok"] is True
+    assert ack["detail"].startswith("sent ")
+
+
+def test_admin_worker_down_cascade_ack_shape():
+    refresh = MagicMock()
+    worker, _, _ = _admin_worker(
+        [_snapshot("p"), _snapshot("c", parents=["p"])], refresh_fn=refresh
+    )
+    ack = worker.process_one(poller.parse_admin_command(_cmd(hosts=("p",))))
+    assert ack["ok"] is True and ack["action"] == "down"
+    assert ack["applied"] == [
+        {"host": "p", "state": "DOWN", "cascaded": False},
+        {"host": "c", "state": "UNREACH", "cascaded": True},
+    ]
+    refresh.assert_called_once()
+
+
+def test_admin_worker_restore_all_nothing_to_do():
+    send = MagicMock()
+    worker, _, _ = _admin_worker([_snapshot("h1")], send_fn=send)
+    ack = worker.process_one(poller.parse_admin_command(_cmd(action="restore_all", hosts=())))
+    assert ack["ok"] is True and ack["detail"] == "nothing to do"
+    send.assert_not_called()
+
+
+def test_admin_worker_internal_error_acks_and_continues():
+    worker, client, _ = _admin_worker([_snapshot("h1")])
+    command = poller.parse_admin_command(_cmd())
+    with patch.object(worker, "process_one", side_effect=RuntimeError("boom")):
+        worker._handle(command)
+    acks = _acks(client)
+    assert acks[0]["ok"] is False and acks[0]["detail"] == "internal error"
+    # The worker still processes a later command normally.
+    worker._handle(poller.parse_admin_command(_cmd(id_="c2")))
+    assert _acks(client)[1]["ok"] is True
+
+
+def test_admin_worker_ledger_mode_records_actions():
+    worker, _, context = _admin_worker([_snapshot("h1")])
+    context.use_ledger = True
+    worker.process_one(poller.parse_admin_command(_cmd()))
+    assert context.faked() == {"h1": "DOWN"}
+
+
+def test_build_mqtt_client_subscribes_admin_cmd_on_connect():
+    worker, _, _ = _admin_worker()
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+        poller.build_mqtt_client(_make_config(), admin_worker=worker)
+        mock_client.on_connect(mock_client, None, {}, 0, None)
+
+    mock_client.subscribe.assert_called_once_with(poller.TOPIC_ADMIN_CMD, qos=1)
+
+
+def test_build_mqtt_client_routes_admin_cmd_to_worker():
+    worker = MagicMock()
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+        poller.build_mqtt_client(_make_config(), admin_worker=worker)
+        msg = SimpleNamespace(topic=poller.TOPIC_ADMIN_CMD, payload=b"x", retain=False)
+        mock_client.on_message(mock_client, None, msg)
+        mock_client.on_message(
+            mock_client, None, SimpleNamespace(topic="other", payload=b"y", retain=False)
+        )
+
+    worker.submit.assert_called_once_with(b"x", False)
+
+
+def test_build_mqtt_client_without_worker_does_not_subscribe_admin():
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+        poller.build_mqtt_client(_make_config())
+        mock_client.on_connect(mock_client, None, {}, 0, None)
+
+    mock_client.subscribe.assert_not_called()
