@@ -371,3 +371,4 @@
 - **2026-10-02 16:24** — skip 13 and 14, finish the plan and fix the gaps (Phase 16 UAT gaps: plain-click select, select all, restore = demo baseline, periodic re-inject of faked state)
 - **2026-10-02 16:47** — all good. quick note: empty-space click on the map should unselect selected hosts (admin mode); double click on a host in the device tree (not admin mode) should center that host on the map
 - **2026-10-02 16:51** — passed all items, but I haven't tried with 200 hosts
+- **2026-10-02 16:55** — I redid a full down and up -d and all containers gave exit code 0
