@@ -55,6 +55,53 @@ cmk "ENABLE_HOST_CHECK;<host>"                        # undo; next real check re
 deployment doc's "Choosing the site name" if yours differs). Always re-run `ENABLE_HOST_CHECK`
 for every host you touch — see the cleanup scenario (E) below.
 
+### `fakeping` helper: host and PING together
+
+Typing four commands per host gets old. This helper sets a host's state and its `PING` service in
+one call, with realistic `check_icmp`-style output (a random round-trip time on UP, like the
+wizard's `--demo` mode), so host details on the dashboard never shows anything that looks faked.
+It also disables the real host and PING checks first, so nothing overwrites the fake. Paste it
+once per shell, after `cmk()` above:
+
+```bash
+SITE=${SITE:-dmc}   # your site id, e.g. SITE=dmc_test
+cmk() { podman exec checkmk su - "$SITE" -c "lq 'COMMAND [$(date +%s)] $1'"; }
+
+# fakeping <host> up|down|unreach|restore [ip]   (ip defaults to the host name, used in the output text)
+fakeping() {
+  local h=$1 mode=$2 ip=${3:-$1} rta hs ss out
+  rta=$(awk -v s="$RANDOM" 'BEGIN { srand(s); printf "%.3f", 0.2 + rand() * 2.8 }')
+  case $mode in
+    restore)
+      cmk "ENABLE_HOST_CHECK;$h"; cmk "ENABLE_SVC_CHECK;$h;PING"; return ;;
+    up)       hs=0 ss=0 out="OK - $ip rta ${rta}ms lost 0%" ;;
+    down)     hs=1 ss=2 out="CRITICAL - $ip: rta nan, lost 100%" ;;
+    unreach)  hs=2 ss=2 out="CRITICAL - $ip: rta nan, lost 100%" ;;
+    *) echo "usage: fakeping <host> up|down|unreach|restore [ip]" >&2; return 1 ;;
+  esac
+  cmk "DISABLE_HOST_CHECK;$h"
+  cmk "DISABLE_SVC_CHECK;$h;PING"
+  cmk "PROCESS_HOST_CHECK_RESULT;$h;$hs;$out"
+  cmk "PROCESS_SERVICE_CHECK_RESULT;$h;PING;$ss;$out"
+}
+
+fakeping 198.51.100.3 down        # host DOWN, PING CRIT
+fakeping 198.51.100.1 unreach     # a child behind it: UNREACHABLE
+fakeping 198.51.100.3 up          # bring it back (random rta)
+fakeping 198.51.100.3 restore     # hand control back to the real checks
+```
+
+Notes:
+
+- `unreach` is for the children of a DOWN parent. Checkmk only works out UNREACHABLE from its own
+  host checks, so a faked DOWN on a parent does not change its children by itself — send them
+  `unreach` too.
+- Hosts from a `--demo` wizard run have an "Always assume host to be up" rule, so a real host
+  check would flip a faked DOWN back to UP. `fakeping` disables the check first, which is why
+  `restore` brings the host back to UP on its own for those hosts.
+- Keep the output text free of `;` (the command separator) and single quotes (they break the
+  `lq '…'` quoting).
+
 Timing to expect throughout: the poller polls every 15 seconds
 (`POLL_INTERVAL_SECONDS` in `deploy/compose.yaml`, default `DEFAULT_POLL_INTERVAL_SECONDS` in
 `scripts/mqtt_poller.py`); allow about two poll cycles (up to ~30 seconds) for a card to appear,
