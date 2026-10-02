@@ -64,7 +64,7 @@ def test_query_host_states_sends_expected_lql_query():
     sent = sock.sendall.call_args[0][0].decode()
     assert sent == (
         "GET hosts\n"
-        "Columns: name state\n"
+        "Columns: name state has_been_checked\n"
         "OutputFormat: csv\n"
         "ColumnHeaders: off\n"
         "\n"
@@ -114,3 +114,18 @@ def test_send_commands_propagates_oserror():
         pytest.raises(OSError),
     ):
         livestatus.send_commands("h", ["X;y"])
+
+
+def test_query_host_states_marks_never_checked_hosts_pending():
+    # Livestatus reports state 0 for never-checked hosts; has_been_checked=0 tells them apart.
+    sock = _fake_connection(b"web1;0;0\nweb2;0;1\nweb3;1;1\n")
+    with patch("socket.create_connection", return_value=sock):
+        result = livestatus.query_host_states("checkmk", ["web1", "web2", "web3"])
+    assert result == {"web1": livestatus.HOST_STATE_PENDING, "web2": 0, "web3": 1}
+
+
+def test_query_host_states_two_field_line_is_treated_as_checked():
+    sock = _fake_connection(b"web1;0\n")
+    with patch("socket.create_connection", return_value=sock):
+        result = livestatus.query_host_states("checkmk", ["web1"])
+    assert result == {"web1": 0}
