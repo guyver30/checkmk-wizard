@@ -216,6 +216,13 @@ podman compose exec worker bash -c "cd /app/checkmk-wizard && uv sync"
 podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && uv run checkmk-wizard"
 ```
 
+The worker keeps its virtualenv in the container (`UV_PROJECT_ENVIRONMENT=/opt/checkmk-wizard-venv`),
+not in the checkout, so `uv run` on the host and in the worker never share a `.venv`. If a host
+`uv run` fails with `failed to canonicalize path .../.venv/bin/python3: Permission denied`, the
+`.venv` was created by an older worker (its Python symlink points into the container). Delete it
+(`rm -rf ~/checkmk-stack/app/checkmk-wizard/.venv`) and let the host's next `uv sync` rebuild it,
+then do a full `podman compose down && podman compose up -d` so the worker picks up the variable.
+
 To start over later with a blank site, run `deploy/reset-site.sh`; it also lets
 you pick a new site name, and wipes the existing site
 ([`WIZARD-OPERATION.md`](WIZARD-OPERATION.md), "Starting over with a blank site").

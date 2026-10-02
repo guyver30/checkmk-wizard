@@ -298,6 +298,14 @@ services:
       # that the repo lands in the worker container at /app/checkmk-wizard.
       - ../..:/app:z
     environment:
+      # Quick 261002-nlp: keep the worker's uv virtualenv out of the bind-mounted checkout.
+      # `uv sync` in the container used to create <checkout>/.venv with its python symlink
+      # pointing at the container's own uv Python (under the container's /root), which the
+      # host user cannot resolve, so a host `uv run` in the checkout failed with
+      # "failed to canonicalize path .venv/bin/python3: Permission denied". With this
+      # variable the container's venv lives in the container (rebuilt by run-wizard.sh's
+      # `uv sync` after a recreate) and the host's .venv is the host's alone.
+      - UV_PROJECT_ENVIRONMENT=/opt/checkmk-wizard-venv
       - CMK_REST_API=http://checkmk:5000/${CMK_SITE_ID:-dmc}/check_mk/api/1.0
       - CMK_SITE=${CMK_SITE_ID:-dmc}
       # Same name/value as the checkmk service's own CMK_SITE_ID above —
