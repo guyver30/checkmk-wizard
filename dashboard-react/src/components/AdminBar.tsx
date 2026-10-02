@@ -2,7 +2,7 @@
 // its confirm dialog, ack wait and result Snackbar. Rendered only when isAdminMode(); copy
 // strings are taken verbatim from the admin UI contract's copywriting table.
 //
-// The dashboard says "Sent", never "confirmed": the poller's ack means the command was
+// The dashboard says "Sent" rather than claiming success: the poller's ack means the command was
 // applied to its fake-state map, and the next published status is what proves the change.
 // The design system has no Dialog component, so the confirm dialog is a fixed scrim plus a
 // role="dialog" panel styled with the same tokens.
