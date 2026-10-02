@@ -102,6 +102,13 @@ export class FakeNetwork {
     this.fitCallCount += 1;
   }
 
+  // TopologyMap centres on a host after a device-tree double-click via network.focus().
+  focusCalls: { id: string; options: Record<string, unknown> | undefined }[] = [];
+
+  focus(id: string, options?: Record<string, unknown>): void {
+    this.focusCalls.push({ id, options });
+  }
+
   disableEditMode(): void {
     this.editModeEnabled = false;
     this.disableEditModeCallCount += 1;

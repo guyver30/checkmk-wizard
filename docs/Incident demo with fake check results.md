@@ -52,8 +52,8 @@ What you see in admin mode:
 
 Selecting hosts: a plain click on a map node or tree row selects that host (replacing the current
 selection), ctrl/cmd+click adds or removes a host, or tick a host's or folder's checkbox (in folder
-grouping this includes its subfolders). "Select all" selects every listed host; Escape or "Clear
-selection" clears the selection. Admin mode shows no host details pane.
+grouping this includes its subfolders). "Select all" selects every listed host; Escape, "Clear
+selection" or a plain click on empty map canvas clears the selection. Admin mode shows no host details pane.
 
 Per host the poller sends the same Livestatus sequence as `fakeping`: disable the host check and
 the `PING` service check first, then inject the host and `PING` results.

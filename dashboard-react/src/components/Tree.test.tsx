@@ -9,6 +9,7 @@ import { buildTree } from "../lib/treeModel";
 import { useAppStore } from "../store/useAppStore";
 import { __setAdminModeForTests } from "../lib/adminMode";
 import { __resetAdminStoreForTests, useAdminStore } from "../store/adminStore";
+import { __resetMapFocusStoreForTests, useMapFocusStore } from "../store/mapFocusStore";
 import { useLocation } from "react-router";
 import { IndexRoute } from "../routes/IndexRoute";
 import type { DevicePayload } from "../lib/types";
@@ -445,6 +446,23 @@ describe("Tree admin mode", () => {
   });
   afterEach(() => {
     __setAdminModeForTests(false);
+  });
+
+  it("double-clicking a host row requests the map to centre on it outside admin mode", async () => {
+    __resetMapFocusStoreForTests();
+    const user = userEvent.setup();
+    renderAdminTree("type");
+    await user.dblClick(screen.getByText("a1"));
+    expect(useMapFocusStore.getState().request?.id).toBe("a1");
+  });
+
+  it("double-clicking a host row does not request centring in admin mode", async () => {
+    __resetMapFocusStoreForTests();
+    __setAdminModeForTests(true);
+    const user = userEvent.setup();
+    renderAdminTree("type");
+    await user.dblClick(screen.getByText("a1"));
+    expect(useMapFocusStore.getState().request).toBeNull();
   });
 
   it("renders no checkbox and no FAKED badge outside admin mode", () => {

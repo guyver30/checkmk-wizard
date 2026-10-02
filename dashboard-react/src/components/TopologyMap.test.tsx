@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes, useSearchParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TopologyMap } from "./TopologyMap";
 import { instances, resetFakeNetworks } from "../test/fakeVisNetwork";
+import { __resetMapFocusStoreForTests, useMapFocusStore } from "../store/mapFocusStore";
 import type { DevicePayload } from "../lib/types";
 import * as checkmkWrite from "../lib/checkmkWrite";
 import { nodeVisual } from "../lib/mapIcons";
@@ -1253,19 +1254,27 @@ describe("TopologyMap admin mode", () => {
     expect(screen.queryByTestId("incident-probe")).toBeNull();
   });
 
-  it("plain click on empty canvas or an edge changes neither selection nor location", () => {
+  it("plain click on empty canvas clears the selection and does not navigate", () => {
+    renderMap({ topologyDevices, statuses });
+    act(() => useAdminStore.setState({ selected: new Set(["h1", "h2"]) }));
+    act(() => instances[0].emit("click", { nodes: [], edges: [] }));
+    expect(useAdminStore.getState().selected.size).toBe(0);
+    expect(screen.queryByTestId("host-probe")).toBeNull();
+  });
+
+  it("a click on an edge keeps the selection", () => {
     renderMap({ topologyDevices, statuses });
     act(() => useAdminStore.setState({ selected: new Set(["h1"]) }));
-    act(() => instances[0].emit("click", { nodes: [], edges: [] }));
     act(() => instances[0].emit("click", { nodes: [], edges: ["e1"] }));
     expect([...useAdminStore.getState().selected]).toEqual(["h1"]);
     expect(screen.queryByTestId("host-probe")).toBeNull();
   });
 
-  it("ctrl+click on empty canvas does nothing", () => {
+  it("ctrl+click on empty canvas keeps the selection", () => {
     renderMap({ topologyDevices, statuses });
+    act(() => useAdminStore.setState({ selected: new Set(["h1"]) }));
     act(() => instances[0].emit("click", { nodes: [], edges: [], event: { srcEvent: { ctrlKey: true } } }));
-    expect(useAdminStore.getState().selected.size).toBe(0);
+    expect([...useAdminStore.getState().selected]).toEqual(["h1"]);
     expect(screen.queryByTestId("host-probe")).toBeNull();
   });
 
@@ -1309,5 +1318,42 @@ describe("TopologyMap admin mode", () => {
     expect(useAdminStore.getState().selected.size).toBe(0);
     act(() => useAdminStore.setState({ faked: { h1: "DOWN" } }));
     expect(nodeOf("h1").label).not.toMatch(/FAKED|\u2713/);
+  });
+});
+
+describe("TopologyMap centre-on-host request", () => {
+  const topologyDevices = [{ id: "h1", parents: [] }];
+  const statuses = { h1: device({ id: "h1" }) };
+
+  beforeEach(() => {
+    resetFakeNetworks();
+    __resetMapFocusStoreForTests();
+  });
+
+  it("focuses the requested node, keeping the current zoom", () => {
+    renderMap({ topologyDevices, statuses });
+    act(() => useMapFocusStore.getState().requestCenter("h1"));
+    expect(instances[0].focusCalls).toHaveLength(1);
+    expect(instances[0].focusCalls[0].id).toBe("h1");
+    expect(instances[0].focusCalls[0].options).toMatchObject({ scale: 1 });
+  });
+
+  it("centres again on a repeat request for the same host", () => {
+    renderMap({ topologyDevices, statuses });
+    act(() => useMapFocusStore.getState().requestCenter("h1"));
+    act(() => useMapFocusStore.getState().requestCenter("h1"));
+    expect(instances[0].focusCalls).toHaveLength(2);
+  });
+
+  it("ignores a host that is not on the map", () => {
+    renderMap({ topologyDevices, statuses });
+    act(() => useMapFocusStore.getState().requestCenter("nope"));
+    expect(instances[0].focusCalls).toHaveLength(0);
+  });
+
+  it("ignores a request that was already pending when the map mounted", () => {
+    useMapFocusStore.getState().requestCenter("h1");
+    renderMap({ topologyDevices, statuses });
+    expect(instances[0].focusCalls).toHaveLength(0);
   });
 });

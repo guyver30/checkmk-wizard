@@ -23,6 +23,7 @@ import { Banner } from "kone-design-system";
 import { nodeVisual, type NodeEmphasis } from "../lib/mapIcons";
 import { isAdminMode } from "../lib/adminMode";
 import { useAdminStore } from "../store/adminStore";
+import { useMapFocusStore } from "../store/mapFocusStore";
 import { createUnmanagedSwitch, isValidHostName, setMapPosition, updateParents } from "../lib/checkmkWrite";
 import { hostHref, incidentHref, withSearchParam } from "../lib/searchLinks";
 import {
@@ -491,8 +492,10 @@ export function TopologyMap({
     }) => {
       const nodeId = params.nodes[0];
       // Admin selection: a plain click selects exactly that host, ctrl/cmd+click toggles it in
-      // the multi-selection, and nothing navigates or opens host details in admin mode. A click
-      // on empty canvas or an edge changes nothing (Escape / Clear selection clear the selection).
+      // the multi-selection, and nothing navigates or opens host details in admin mode. A plain
+      // click on empty canvas (not on a node or an edge) clears the selection (2026-10-02 user
+      // request); ctrl/cmd+click on empty canvas does nothing so a slightly-off multi-select click
+      // does not drop the selection. An edge click changes nothing.
       // vis-network `interaction.multiselect` is deliberately NOT enabled because it would also
       // change plain-click selection behavior. The modifier keys are read from
       // params.event.srcEvent.
@@ -503,6 +506,12 @@ export function TopologyMap({
           } else {
             useAdminStore.getState().replaceSelection([nodeId]);
           }
+        } else if (
+          !params.edges?.length &&
+          !params.event?.srcEvent?.ctrlKey &&
+          !params.event?.srcEvent?.metaKey
+        ) {
+          useAdminStore.getState().clearSelection();
         }
         return;
       }
@@ -686,6 +695,23 @@ export function TopologyMap({
       }
     }
   }, [model, adminMode, adminSelected, adminFaked]);
+
+  // Device-tree double-click -> centre the map on that host (non-admin overview). Requests that
+  // were already pending when the map mounted are ignored (handledFocusSeq starts at the
+  // current seq), so navigating back to the overview never re-centres on an old double-click.
+  const focusRequest = useMapFocusStore((s) => s.request);
+  const handledFocusSeq = useRef(useMapFocusStore.getState().request?.seq ?? 0);
+  useEffect(() => {
+    if (!focusRequest || focusRequest.seq === handledFocusSeq.current) {
+      return;
+    }
+    handledFocusSeq.current = focusRequest.seq;
+    const network = networkRef.current;
+    if (!network || !nodesRef.current?.get(focusRequest.id)) {
+      return;
+    }
+    network.focus(focusRequest.id, { scale: network.getScale(), animation: ZOOM_ANIMATION });
+  }, [focusRequest]);
 
   const zoomBy = (factor: number) => {
     const network = networkRef.current;

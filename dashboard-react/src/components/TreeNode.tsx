@@ -15,6 +15,7 @@ import { badgeForState } from "../lib/stateMapping";
 import type { TreeGroupNode } from "../lib/treeModel";
 import type { GroupingMode } from "../lib/types";
 import { useAdminStore } from "../store/adminStore";
+import { useMapFocusStore } from "../store/mapFocusStore";
 import { useAppStore } from "../store/useAppStore";
 import { StateBadgeForState } from "./StateBadge";
 
@@ -171,6 +172,14 @@ export function TreeNode({
                       } else {
                         replaceSelection([device.id]);
                       }
+                    }
+                  }}
+                  onDoubleClick={() => {
+                    // Outside admin mode a double-click also centres the map on the host (the
+                    // first click already opened its details). In admin mode a double-click is
+                    // just two selection clicks.
+                    if (!admin) {
+                      useMapFocusStore.getState().requestCenter(device.id);
                     }
                   }}
                   className={[

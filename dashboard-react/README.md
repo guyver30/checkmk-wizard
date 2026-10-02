@@ -158,6 +158,8 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
 view and edit mode: **Zoom in** and **Zoom out** step the scale by 1.25x (clamped between 0.1x
 and 4x), and **Fit to view** frames every node. Mouse-wheel zoom and drag-to-pan still work.
 
+**Centre on a host:** outside admin mode, double-clicking a host row in the device tree also pans the map to that host (current zoom kept). The first click still opens the host's details, as before. In admin mode a double-click is just two selection clicks and does not move the map.
+
 **Edit mode:** the "Edit topology" toggle (off by default, on every page load) switches on
 vis-network's manipulation toolbar:
 
@@ -342,7 +344,7 @@ MQTT contract (the poller turns commands into Livestatus external commands):
 Interaction: a plain click on a map node or tree row selects exactly that host (replacing the
 selection, via `replaceSelection` in `src/store/adminStore.ts`); ctrl/cmd+click toggles a host;
 host and folder checkboxes also toggle. "Select all" selects every host in the current tree model
-(replace, not union); "Clear selection" and Escape clear it. Admin mode shows no host details pane.
+(replace, not union); "Clear selection", Escape and a plain click on empty map canvas clear it. Admin mode shows no host details pane.
 
 Ack state `RESTORED` means the demo baseline: host check enabled, host UP and `PING` OK injected,
 `PING` check left disabled. The poller also re-injects faked hosts' results every 30 s so the
