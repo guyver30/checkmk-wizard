@@ -83,7 +83,9 @@ export function IndexRoute() {
   // The right-hand host details pane (260928-l4h): present only while ?host= is set, opened
   // from the map/tree/incident cards. Closing it clears just ?host=, leaving ?incident= (and
   // any other param) untouched -- the two params coexist (operator decision 2).
-  const hostId = searchParams.get("host");
+  // In admin mode a click selects hosts instead of opening details (gap 1), so a ?host= from a
+  // shared link is ignored there: no details pane and no host filter on the event history.
+  const hostId = adminMode ? null : searchParams.get("host");
   const onTreeBackgroundClick = useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement;
@@ -116,6 +118,17 @@ export function IndexRoute() {
   const groups = useMemo(
     () => buildTree(devices, mode, nowMs, { orderBySeverity, incidentLookup }),
     [devices, mode, nowMs, orderBySeverity, incidentLookup],
+  );
+  // Hosts the dashboard currently lists, for the admin "Select all" button. "Listed" means the
+  // tree model built from the live device map; collapsed groups still count because their hosts
+  // stay visible on the map, and any future tree/map filter narrows `groups` and so narrows
+  // Select all automatically. There is no filter control today.
+  const visibleHostIds = useMemo(
+    () =>
+      Array.from(
+        new Set(groups.flatMap((group) => group.children.map((c) => c.id))),
+      ).sort(),
+    [groups],
   );
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
   const onToggleGroup = useCallback((key: string) => {
@@ -406,7 +419,11 @@ export function IndexRoute() {
         <div className="flex h-full min-h-0 flex-col">
           <AdminBanner />
           <div className="min-h-0 flex-1">{layout}</div>
-          <AdminActionBar devices={devices} topologyDevices={topologyDevices} />
+          <AdminActionBar
+            devices={devices}
+            topologyDevices={topologyDevices}
+            visibleHostIds={visibleHostIds}
+          />
         </div>
       ) : (
         layout
