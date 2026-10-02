@@ -5,7 +5,7 @@ import { CriticalityEditor } from "../components/CriticalityEditor";
 import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
 import { HostDetails } from "../components/HostDetails";
-import { IncidentList } from "../components/IncidentList";
+import { IncidentList, IncidentsSummary } from "../components/IncidentList";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { TopologyMap, type EditFailure } from "../components/TopologyMap";
 import { TopologyToolbar } from "../components/TopologyToolbar";
@@ -271,23 +271,13 @@ export function IndexRoute() {
           </div>
         }
         centreTop={
-          // The map takes the remaining height below the incident list (the D-25 stats strip
-          // moved to the header on 2026-09-28). Pointer/wheel/key activity anywhere in the
-          // toolbar+map wrapper below postpones the edit-mode idle timeout. Phase 14 (DASH-14
-          // UI-SPEC Layout Integration): when incidents are open the list is the focal point of
-          // the screen; when none are open it collapses to one quiet line and the topology map
-          // becomes the focal point.
+          // The map takes the whole centre height (the D-25 stats strip moved to the header on
+          // 2026-09-28; the incident cards live in the right column's Incidents pane, above host
+          // details). Pointer/wheel/key activity anywhere in the toolbar+map wrapper below
+          // postpones the edit-mode idle timeout. Topology edit mode gives the map the full centre
+          // area: no incidents pane, event history or host details pane; the device tree stays
+          // (260928).
           <div className="flex h-full flex-col gap-2 p-3">
-            {/* Topology edit mode gives the map the full centre area: no incident cards, event
-                history or host details pane; the device tree stays (260928). */}
-            {!editMode && (
-              <IncidentList
-                incidents={incidents}
-                devices={devices}
-                nowMs={nowMs}
-                highlightedId={highlightedIncidentId}
-              />
-            )}
             <div
               className="flex min-h-0 flex-1 flex-col gap-2"
               onPointerDown={touch}
@@ -330,6 +320,17 @@ export function IndexRoute() {
           </div>
         }
         centreBottom={editMode ? undefined : <EventHistory hostId={hostId} />}
+        incidents={
+          editMode ? undefined : (
+            <IncidentList
+              incidents={incidents}
+              devices={devices}
+              nowMs={nowMs}
+              highlightedId={highlightedIncidentId}
+            />
+          )
+        }
+        incidentsSummary={<IncidentsSummary incidents={incidents} />}
         details={hostId && !editMode ? <HostDetails id={hostId} /> : undefined}
         detailsKey={hostId}
         onCloseDetails={onCloseDetails}
