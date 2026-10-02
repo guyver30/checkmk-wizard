@@ -253,12 +253,16 @@ def parse_admin_command(payload: bytes, known_ids: set[str]) -> dict | None:
 | A4 | Core does not auto-translate a passive DOWN to UNREACHABLE for children | Pitfall 5 | Cascade double-applies harmlessly; UAT must confirm |
 | A5 | A single admin connection reading `lan/#` is acceptable under D-06 | Alternatives | Needs user confirmation (Open Question 1) |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does `wsadmin` read `lan/#`?** D-06 says "read only the admin-only topics", but the admin page needs the normal data. Recommendation: grant `read lan/#` too (it can still never write there) and use one connection; confirm with the user. Alternative: two connections.
+   **RESOLVED (user, 2026-10-02):** grant `read lan/#`, single connection (D-06 amended).
 2. **Does DOWN on a managed parent cascade UNREACHABLE onto an unmanaged switch child itself?** D-02 says the cascade does not walk *through* it. Recommendation: the switch itself is a host Checkmk can see, so mark it UNREACHABLE but stop there; confirm.
+   **RESOLVED (user, 2026-10-02):** switch itself UNREACHABLE, stop there.
 3. **Folder semantics:** selecting a folder includes subfolders? Recommendation: all hosts whose folder path equals or is under it; resolved in the browser.
+   **RESOLVED (user, 2026-10-02):** include subfolders (D-17).
 4. **Faked hosts in history/rollups:** leave as-is (indistinguishable from real failures, matching the demo goal) unless the user wants exclusion.
+   **RESOLVED (2026-10-02):** leave as-is (D-18).
 
 ## Environment Availability
 

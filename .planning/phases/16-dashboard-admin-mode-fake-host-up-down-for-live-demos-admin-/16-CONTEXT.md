@@ -26,7 +26,8 @@ switch card with its children listed below, as on a real site.
   Checkmk. UP / Restore reverses the cascade. (User chose "Auto-cascade UNREACHABLE".)
 - **D-02:** The cascade must **not** walk through an unmanaged switch (`unmanaged_switch` label): Checkmk
   cannot see past it, so hosts behind it are DOWN, not UNREACHABLE. Descendants behind an unmanaged switch
-  are only faked when selected explicitly.
+  are only faked when selected explicitly. (Clarified 2026-10-02 by user: the unmanaged switch itself IS marked
+  UNREACHABLE when its managed parent is faked DOWN, and the cascade stops there.)
 - **D-03:** **No special action on an unmanaged switch itself.** The operator selects the switch's children
   and sends DOWN to them; the existing inferred-root rule in `compute_incidents` (an unmanaged host with
   >= 2 non-OK children, at least one DOWN) must then produce the combined switch card with the children
@@ -44,7 +45,9 @@ switch card with its children listed below, as on a real site.
 ### Broker credential and ACL
 - **D-06:** A new broker user (working name `wsadmin`, password `ADMIN_WS_PASSWORD` generated into
   `deploy/.env` by `deploy/init-env.sh`, like `WS_PASSWORD`) may publish **only** on the admin command
-  topic and read only the admin-only topics. `wsreader` (read-only `lan/#`) is unchanged.
+  topic and read only the admin-only topics **plus `lan/#`** (amended 2026-10-02 by user during plan-phase:
+  the admin page uses a single MQTT connection and needs the normal host data; wsadmin still cannot write
+  `lan/#`). `wsreader` (read-only `lan/#`) is unchanged.
 - **D-07:** The admin login is delivered by a **separate `/admin-config.json`** rendered by the dashboard's
   nginx, **open** (no source-network restriction, user's choice for a closed demo network). The page fetches
   it only when `?admin=1` is present. The normal `/config.json` stays read-only. Security note carried
@@ -81,6 +84,8 @@ switch card with its children listed below, as on a real site.
   are disabled by design (e.g. unmanaged nodes): research must verify the columns; if no reliable signal
   exists, fall back to a poller-owned retained set while keeping the admin-only topic.
 
+- **D-17:** (2026-10-02, user) Folder checkbox includes all subfolders; resolved in the browser, re-validated by the poller.
+- **D-18:** (2026-10-02) Faked hosts flow into history/rollups like real failures (matches the demo goal; no exclusion).
 </decisions>
 
 <specifics>
