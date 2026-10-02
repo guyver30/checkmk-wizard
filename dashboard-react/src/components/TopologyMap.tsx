@@ -21,6 +21,8 @@ import { Network } from "vis-network/peer";
 import "vis-network/styles/vis-network.css";
 import { Banner } from "kone-design-system";
 import { nodeVisual, type NodeEmphasis } from "../lib/mapIcons";
+import { isAdminMode } from "../lib/adminMode";
+import { useAdminStore } from "../store/adminStore";
 import { createUnmanagedSwitch, isValidHostName, setMapPosition, updateParents } from "../lib/checkmkWrite";
 import { hostHref, incidentHref, withSearchParam } from "../lib/searchLinks";
 import {
@@ -190,7 +192,16 @@ const NETWORK_OPTIONS = {
 
 // Fields shared by nodes.update() (existing node) and nodes.add() (new node) -- NO x/y here,
 // so an update never disturbs a dragged/panned/zoomed position (Phase 11 D-09).
-function nodeBaseFields(node: MapNode) {
+// Canvas cannot read CSS variables: same hex as the existing highlight border and the index.css
+// brand colour (UI-SPEC Color rules).
+const SELECTED_BORDER_HEX = "#1450f5";
+
+interface AdminDecoration {
+  selected: boolean;
+  faked: boolean;
+}
+
+function nodeBaseFields(node: MapNode, admin?: AdminDecoration) {
   const emphasis: NodeEmphasis = node.inferredRoot ? "inferred-root" : node.dimmed ? "dimmed" : "normal";
   const title = node.inferredRoot
     ? INFERRED_ROOT_TITLE
@@ -199,11 +210,27 @@ function nodeBaseFields(node: MapNode) {
       : node.unmanaged
         ? UNMANAGED_SWITCH_TITLE
         : undefined;
+  const visual = nodeVisual(node.deviceType, node.state, emphasis);
+  if (!admin || (!admin.selected && !admin.faked)) {
+    return { id: node.id, label: node.label, title, ...visual };
+  }
+  // Admin-only decoration. Never mutate the cached visual: spread it. Selection is never
+  // colour-only, so it also gets a checkmark glyph in the label (UI-SPEC Accessibility).
+  const label = `${admin.selected ? "\u2713 " : ""}${node.label}${admin.faked ? "\nFAKED" : ""}`;
+  if (!admin.selected) {
+    return { id: node.id, label, title, ...visual };
+  }
   return {
     id: node.id,
-    label: node.label,
+    label,
     title,
-    ...nodeVisual(node.deviceType, node.state, emphasis),
+    ...visual,
+    borderWidth: 3,
+    color: {
+      ...visual.color,
+      border: SELECTED_BORDER_HEX,
+      hover: { ...visual.color.hover, border: SELECTED_BORDER_HEX },
+    },
   };
 }
 
@@ -224,6 +251,10 @@ export function TopologyMap({
   const edgesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
   const networkRef = useRef<Network | null>(null);
   const editModeRef = useRef(editMode);
+  const adminMode = isAdminMode();
+  const adminModeRef = useRef(adminMode);
+  const adminSelected = useAdminStore((s) => s.selected);
+  const adminFaked = useAdminStore((s) => s.faked);
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
   // The manipulation callbacks below are only re-registered with vis-network when editMode
@@ -453,8 +484,25 @@ export function TopologyMap({
     // in both read-only and edit mode.
     network.on("beforeDrawing", (ctx: CanvasRenderingContext2D) => drawGrid(ctx, network, container));
 
-    network.on("click", (params: { nodes: string[]; edges?: string[] }) => {
+    network.on("click", (params: {
+      nodes: string[];
+      edges?: string[];
+      event?: { srcEvent?: { ctrlKey?: boolean; metaKey?: boolean } };
+    }) => {
       const nodeId = params.nodes[0];
+      // Admin multi-select. vis-network `interaction.multiselect` is deliberately NOT enabled
+      // because it would also change plain-click selection behavior. The modifier keys are read
+      // from params.event.srcEvent (assumption: verified in a real browser; fallback is a window
+      // keydown/keyup tracker for Control/Meta read here instead).
+      if (
+        adminModeRef.current &&
+        (params.event?.srcEvent?.ctrlKey || params.event?.srcEvent?.metaKey)
+      ) {
+        if (nodeId) {
+          useAdminStore.getState().toggleSelected(nodeId);
+        }
+        return;
+      }
       if (editModeRef.current) {
         if (nodeId) {
           onSelectHostRef.current?.(nodeId);
@@ -599,11 +647,14 @@ export function TopologyMap({
     const effectiveNodeIds = new Set(positioned.map((n) => n.id));
 
     for (const node of positioned) {
+      const admin = adminMode
+        ? { selected: adminSelected.has(node.id), faked: node.id in adminFaked }
+        : undefined;
       if (existingNodeIds.has(node.id)) {
-        nodes.update(nodeBaseFields(node));
+        nodes.update(nodeBaseFields(node, admin));
       } else {
         nodes.add({
-          ...nodeBaseFields(node),
+          ...nodeBaseFields(node, admin),
           x: node.x,
           y: node.y,
           ...(node.saved ? { physics: false } : {}),
@@ -631,7 +682,7 @@ export function TopologyMap({
         edges.remove(id);
       }
     }
-  }, [model]);
+  }, [model, adminMode, adminSelected, adminFaked]);
 
   const zoomBy = (factor: number) => {
     const network = networkRef.current;
