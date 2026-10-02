@@ -6,7 +6,8 @@
 #
 # Generated: CMK_REST_SECRET, TOPOLOGY_EDITOR_SECRET, CH_ADMIN_PASSWORD,
 #            CH_WRITER_PASSWORD, CH_READER_PASSWORD, CH_GRAFANA_PASSWORD,
-#            GRAFANA_ADMIN_PASSWORD, MQTT_POLLER_PASSWORD, WS_PASSWORD
+#            GRAFANA_ADMIN_PASSWORD, MQTT_POLLER_PASSWORD, WS_PASSWORD,
+#            ADMIN_WS_PASSWORD
 # Asked:     CMK_SITE_ID (default dmc), CMK_PUBLIC_HOST
 #
 # Secrets are 32 URL-safe characters ([A-Za-z0-9_-]), which also satisfies
@@ -54,7 +55,7 @@ summary=()
 
 for key in CMK_REST_SECRET TOPOLOGY_EDITOR_SECRET CH_ADMIN_PASSWORD CH_WRITER_PASSWORD \
     CH_READER_PASSWORD CH_GRAFANA_PASSWORD GRAFANA_ADMIN_PASSWORD MQTT_POLLER_PASSWORD \
-    WS_PASSWORD; do
+    WS_PASSWORD ADMIN_WS_PASSWORD; do
     if [ -n "$(get_val "$key")" ]; then
         summary+=("$key: kept")
     else
@@ -130,10 +131,12 @@ Next steps:
   about single-container restarts breaking Checkmk egress)
   \`podman compose build dashboard\` is only needed after pulling code changes.
 
-  To rotate either Mosquitto password (MQTT_POLLER_PASSWORD or WS_PASSWORD),
+  To rotate a Mosquitto password (MQTT_POLLER_PASSWORD, WS_PASSWORD or ADMIN_WS_PASSWORD),
   edit it in deploy/.env, then \`podman compose down && podman compose up -d\`
   -- the mosquitto container rebuilds its password file from .env on every
   start. Note: an existing .env with WS_PASSWORD=wsreader already uncommented
   keeps that value (this script never overwrites a set value) -- blank it out
   and re-run this script to get a generated one instead.
+  Existing installs must re-run this script before `podman compose up`:
+  compose refuses to start mosquitto and dashboard without ADMIN_WS_PASSWORD.
 EOF

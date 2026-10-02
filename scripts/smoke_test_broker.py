@@ -29,6 +29,13 @@ Each check proves one requirement:
   PASS for exactly the property this phase exists to prove. The only
   reliable check is a bounded wait on an INDEPENDENT, privileged
   subscriber that should never receive the message.
+- `check_wsadmin_publish_admin_cmd`, `check_wsadmin_publish_lan_denied`,
+  `check_wsadmin_reads_lan`, `check_wsreader_cannot_read_admin` — the admin
+  broker user's grants (Phase 16 D-06/D-09): wsadmin may publish `admin/cmd`
+  only, may read `lan/#`, and wsreader cannot see admin topics. They use the
+  same independent-subscriber design as `check_ws_publish_denied`, and are
+  skipped (not failed) when ADMIN_WS_PASSWORD is unset. The usual invocation
+  is `set -a; . deploy/.env; set +a; uv run python scripts/smoke_test_broker.py`.
 - `check_persistence_across_restart` — a retained message survives a
   broker restart (BRK-02), skipped via `--skip-restart` for callers (e.g.
   the worker container) that must not restart a sibling service.
@@ -202,6 +209,158 @@ def check_ws_publish_denied(
     return True
 
 
+def _delivered(
+    host: str,
+    sub_port: int,
+    sub_transport: str,
+    sub_auth: tuple[str, str],
+    pub_port: int,
+    pub_transport: str,
+    pub_auth: tuple[str, str],
+    sub_topic: str,
+    pub_topic: str,
+    payload: str,
+    timeout: float,
+) -> bool | None:
+    """Publish once (non-retained) and report whether the subscriber received it.
+
+    Returns None on a connection error. The subscriber is confirmed subscribed
+    (SUBACK) before publishing, and the publisher's own PUBACK is never
+    trusted (see the module docstring): delivery is judged only from the
+    independent subscriber within a bounded wait.
+    """
+    received = threading.Event()
+    subscribed = threading.Event()
+
+    def on_message(client, userdata, msg):
+        received.set()
+
+    def on_subscribe(client, userdata, mid, reason_codes, properties=None):
+        subscribed.set()
+
+    subscriber = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport=sub_transport)
+    subscriber.username_pw_set(*sub_auth)
+    subscriber.on_message = on_message
+    subscriber.on_subscribe = on_subscribe
+    publisher = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport=pub_transport)
+    publisher.username_pw_set(*pub_auth)
+    try:
+        subscriber.connect(host, sub_port)
+        subscriber.subscribe(sub_topic)
+        subscriber.loop_start()
+        subscribed.wait(timeout=timeout)
+        publisher.connect(host, pub_port)
+        publisher.loop_start()
+        publisher.publish(pub_topic, payload, qos=1, retain=False)
+        return received.wait(timeout=timeout)
+    except (TimeoutError, OSError):
+        return None
+    finally:
+        publisher.loop_stop()
+        publisher.disconnect()
+        subscriber.loop_stop()
+        subscriber.disconnect()
+
+
+def _report(name: str, ok: bool | None, fail_detail: str) -> bool:
+    if ok:
+        print(f"[PASS] {name}")
+        return True
+    print(f"[FAIL] {name}: {fail_detail}")
+    return False
+
+
+def check_wsadmin_publish_admin_cmd(
+    host: str,
+    tcp_port: int,
+    ws_port: int,
+    poller_user: str,
+    poller_password: str,
+    admin_user: str,
+    admin_password: str,
+    seed: str,
+    timeout: float,
+) -> bool:
+    """wsadmin can publish on admin/cmd; the poller-side subscriber receives it.
+
+    A running poller will log and ack "unknown action" for this probe, which
+    is harmless.
+    """
+    probe = f'{{"id": "smoke-{seed}", "action": "smoke", "hosts": []}}'
+    ok = _delivered(
+        host, tcp_port, "tcp", (poller_user, poller_password),
+        ws_port, "websockets", (admin_user, admin_password),
+        "admin/cmd", "admin/cmd", probe, timeout,
+    )
+    return _report("wsadmin_publish_admin_cmd", ok, "admin/cmd publish did not arrive (or connection failed)")
+
+
+def check_wsadmin_publish_lan_denied(
+    host: str,
+    tcp_port: int,
+    ws_port: int,
+    poller_user: str,
+    poller_password: str,
+    admin_user: str,
+    admin_password: str,
+    seed: str,
+    timeout: float,
+) -> bool:
+    """A wsadmin publish under lan/ must never reach the privileged subscriber."""
+    topic = f"lan/smoke/{seed}"
+    ok = _delivered(
+        host, tcp_port, "tcp", (poller_user, poller_password),
+        ws_port, "websockets", (admin_user, admin_password),
+        topic, topic, "should-never-arrive", timeout,
+    )
+    if ok is None:
+        return _report("wsadmin_publish_lan_denied", False, "connection failed")
+    return _report("wsadmin_publish_lan_denied", not ok, "wsadmin publish under lan/ was delivered (ACL not enforced)")
+
+
+def check_wsadmin_reads_lan(
+    host: str,
+    tcp_port: int,
+    ws_port: int,
+    poller_user: str,
+    poller_password: str,
+    admin_user: str,
+    admin_password: str,
+    seed: str,
+    timeout: float,
+) -> bool:
+    """A wsadmin WebSocket subscriber receives what the poller publishes under lan/."""
+    topic = f"lan/smoke/{seed}/admin-read"
+    ok = _delivered(
+        host, ws_port, "websockets", (admin_user, admin_password),
+        tcp_port, "tcp", (poller_user, poller_password),
+        "lan/smoke/#", topic, "hello", timeout,
+    )
+    return _report("wsadmin_reads_lan", ok, "wsadmin did not receive a lan/ message")
+
+
+def check_wsreader_cannot_read_admin(
+    host: str,
+    tcp_port: int,
+    ws_port: int,
+    poller_user: str,
+    poller_password: str,
+    ws_user: str,
+    ws_password: str,
+    seed: str,
+    timeout: float,
+) -> bool:
+    """wsreader subscribed to admin/# must receive nothing the poller publishes there."""
+    ok = _delivered(
+        host, ws_port, "websockets", (ws_user, ws_password),
+        tcp_port, "tcp", (poller_user, poller_password),
+        "admin/#", "admin/ack", f'{{"id": "smoke-{seed}"}}', timeout,
+    )
+    if ok is None:
+        return _report("wsreader_cannot_read_admin", False, "connection failed")
+    return _report("wsreader_cannot_read_admin", not ok, "wsreader received an admin/ message (ACL not enforced)")
+
+
 def _wait_for_retained_payload(
     host: str,
     port: int,
@@ -328,6 +487,8 @@ def main() -> int:
     parser.add_argument("--poller-password", default=os.environ.get("MQTT_POLLER_PASSWORD", "poller"))
     parser.add_argument("--ws-user", default="wsreader")
     parser.add_argument("--ws-password", default=os.environ.get("WS_PASSWORD", "wsreader"))
+    parser.add_argument("--admin-ws-user", default="wsadmin")
+    parser.add_argument("--admin-ws-password", default=os.environ.get("ADMIN_WS_PASSWORD", ""))
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--skip-restart", action="store_true")
     parser.add_argument("--restart-cmd", default="podman compose restart mosquitto")
@@ -355,6 +516,36 @@ def main() -> int:
                 args.timeout,
             )
         )
+        if args.admin_ws_password:
+            admin_args = (
+                args.host,
+                args.tcp_port,
+                args.ws_port,
+                args.poller_user,
+                args.poller_password,
+                args.admin_ws_user,
+                args.admin_ws_password,
+                seed,
+                args.timeout,
+            )
+            results.append(check_wsadmin_publish_admin_cmd(*admin_args))
+            results.append(check_wsadmin_publish_lan_denied(*admin_args))
+            results.append(check_wsadmin_reads_lan(*admin_args))
+            results.append(
+                check_wsreader_cannot_read_admin(
+                    args.host,
+                    args.tcp_port,
+                    args.ws_port,
+                    args.poller_user,
+                    args.poller_password,
+                    args.ws_user,
+                    args.ws_password,
+                    seed,
+                    args.timeout,
+                )
+            )
+        else:
+            print("[SKIP] wsadmin checks: ADMIN_WS_PASSWORD not set")
         if args.skip_restart:
             print("[SKIP] persistence_across_restart (--skip-restart)")
         else:
