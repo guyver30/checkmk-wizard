@@ -22,6 +22,16 @@
 import mqtt, { type MqttClient } from "mqtt";
 import { WS_PORT } from "../lib/config";
 import { getRuntimeConfig } from "../lib/runtimeConfig";
+import {
+  ADMIN_TOPIC_ACK,
+  ADMIN_TOPIC_CMD,
+  ADMIN_TOPIC_FAKED,
+  buildAdminCommand,
+  isAdminMode,
+  newCommandId,
+  type AdminAction,
+} from "../lib/adminMode";
+import { useAdminStore } from "./adminStore";
 import { useAppStore } from "./useAppStore";
 
 export const BASE_DELAY_MS = 1000;
@@ -37,6 +47,9 @@ export const SUBSCRIBE_TOPICS = [
   "lan/poller/status",
   "lan/incidents/+/status", // Phase 14 -- retained delivery on SUBACK gives every open incident
 ];
+
+// Subscribed only on an admin page (?admin=1) whose wsadmin login loaded.
+export const ADMIN_SUBSCRIBE_TOPICS = [ADMIN_TOPIC_ACK, ADMIN_TOPIC_FAKED];
 
 export interface ConnectDeps {
   connectFn?: typeof mqtt.connect;
@@ -96,7 +109,8 @@ export function connect(deps: ConnectDeps = {}): void {
     // Don't-Hand-Roll table). Incidents are cleared first so the replay rebuilds them and
     // drops any that closed while disconnected (14-REVIEW CR-02).
     useAppStore.getState().resetIncidents();
-    client?.subscribe(SUBSCRIBE_TOPICS);
+    const withAdmin = isAdminMode() && !useAdminStore.getState().configError;
+    client?.subscribe(withAdmin ? [...SUBSCRIBE_TOPICS, ...ADMIN_SUBSCRIBE_TOPICS] : SUBSCRIBE_TOPICS);
     useAppStore.getState().setConnection({ phase: "connected" });
   });
 
@@ -114,8 +128,27 @@ export function connect(deps: ConnectDeps = {}): void {
   });
 
   client.on("message", (topic, payload) => {
+    if (topic.startsWith("admin/")) {
+      useAdminStore.getState().handleAdminMessage(topic, payload);
+      return;
+    }
     useAppStore.getState().handleMessage(topic, payload);
   });
+}
+
+// Publishes one admin command and records it as pending for ack correlation. Returns the
+// command id, or null when not in admin mode / not connected. Never retained: a retained
+// command would replay on every poller restart.
+export function publishAdminCommand(action: AdminAction, hosts: string[]): string | null {
+  if (!isAdminMode() || !client || !client.connected) {
+    return null;
+  }
+  const cmd = buildAdminCommand(action, hosts, newCommandId());
+  client.publish(ADMIN_TOPIC_CMD, JSON.stringify(cmd), { qos: 1, retain: false });
+  useAdminStore
+    .getState()
+    .setPending({ id: cmd.id, action, hosts: cmd.hosts, sentAtMs: Date.now() });
+  return cmd.id;
 }
 
 export function disconnect(): void {
