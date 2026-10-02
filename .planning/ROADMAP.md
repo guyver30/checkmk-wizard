@@ -460,14 +460,14 @@ Plans:
 **Goal:** An admin mode (`?admin=1`) lets an operator ctrl+click multi-select hosts in the map, device tree or a whole folder and send realistic UP/DOWN ping results (host + PING service, check_icmp-style output with random rta, as the wizard's `--demo` does) so non-admin dashboards show them live for management demos. Commands travel as MQTT messages on a new admin command topic that the poller turns into Livestatus commands (PROCESS_*_CHECK_RESULT, DISABLE/ENABLE_HOST_CHECK, plus a restore-real-checks action); no new server-side app; broker ACL grants publish on that topic only to the admin login. An unmanaged switch whose children are faked DOWN must still render the combined inferred switch card with its children listed below, as on a real site.
 **Requirements**: TBD
 **Depends on:** Phase 14.1
-**Plans:** 8 plans
+**Plans:** 3/8 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 16-01-PLAN.md — Poller admin core: command parsing, DOWN cascade/reverse planner, Livestatus command builder and sender, D-03 inferred-switch tests (wave 1)
-- [ ] 16-03-PLAN.md — Broker wsadmin user and ACL, ADMIN_WS_PASSWORD, /admin-config.json, live ACL smoke checks (wave 1)
-- [ ] 16-04-PLAN.md — Dashboard admin foundation: ?admin=1 detection, admin login, admin store, admin MQTT topics and publishAdminCommand (wave 1)
+- [x] 16-01-PLAN.md — Poller admin core: command parsing, DOWN cascade/reverse planner, Livestatus command builder and sender, D-03 inferred-switch tests (wave 1)
+- [x] 16-03-PLAN.md — Broker wsadmin user and ACL, ADMIN_WS_PASSWORD, /admin-config.json, live ACL smoke checks (wave 1)
+- [x] 16-04-PLAN.md — Dashboard admin foundation: ?admin=1 detection, admin login, admin store, admin MQTT topics and publishAdminCommand (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

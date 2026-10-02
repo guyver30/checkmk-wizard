@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 16 context gathered
-last_updated: "2026-10-02T05:36:34.603Z"
-last_activity: "2026-10-02 - Completed quick task 261002-ciu: incidents pane in the right column"
+last_updated: "2026-10-02T05:38:53.159Z"
+last_activity: 2026-10-02 -- Phase 16 execution started
 progress:
   total_phases: 13
   completed_phases: 9
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Phase 14.1 — Fleet History Store, Availability Rollups and Grafana
+**Current focus:** Phase 16 — dashboard-admin-mode-fake-host-up-down-for-live-demos-admin-
 
 ## Current Position
 
-Phase: 14.1 (Fleet History Store, Availability Rollups and Grafana) — EXECUTING
+Phase: 16 (dashboard-admin-mode-fake-host-up-down-for-live-demos-admin-) — EXECUTING
 Plan: 1 of 8
-Status: Executing Phase 14.1
-Last activity: 2026-10-02 - Completed quick task 261002-ciu: incidents pane in the right column
+Status: Executing Phase 16
+Last activity: 2026-10-02 -- Phase 16 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
