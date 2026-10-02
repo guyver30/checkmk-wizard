@@ -4386,7 +4386,7 @@ async def test_phase4_monitoring_method_defaults_to_ping_only_in_demo(monkeypatc
         assert method_kwargs["default"] == "ping"
 
 
-async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True):
+async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True, rule_status=200, states=None):
     monkeypatch.chdir(tmp_path)
     events = []
 
@@ -4396,17 +4396,31 @@ async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True):
 
     def fake_query(host, names):
         events.append(("query",))
-        return {"dh1": 0}
+        return states if states is not None else {"dh1": 0}
 
     async def fake_sleep(seconds):
         pass
+
+    def rule_effect(request):
+        events.append(("rule", json.loads(request.content)))
+        return Response(rule_status, json={})
+
+    def activate_effect(request):
+        events.append(("activate",))
+        return Response(200, json={"id": "run1"})
 
     monkeypatch.setattr("checkmk_wizard.wizard.livestatus.send_commands", fake_send)
     monkeypatch.setattr("checkmk_wizard.wizard.livestatus.query_host_states", fake_query)
     monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
     host = OnboardedHost(ip="10.0.0.5", hostname="dh1", folder="/", os_family="ping")
     with respx.mock:
-        _mock_activation_routes()
+        respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
+            return_value=Response(200, json={}, headers={"ETag": '"etag1"'})
+        )
+        respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
+            side_effect=activate_effect
+        )
+        respx.post(f"{BASE}/domain-types/rule/collections/all").mock(side_effect=rule_effect)
         _mock_list_hosts([_host("dh1", "10.0.0.5")])
         respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
             return_value=Response(200, json={"value": []})
@@ -4416,27 +4430,73 @@ async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True):
     return events
 
 
+_DEMO_OUTPUT = "OK - 10.0.0.5 rta 0.412ms lost 0%"
+
+
 @pytest.mark.asyncio
 async def test_phase7_demo_fakes_hosts_up_before_state_query(monkeypatch, tmp_path):
     events = await _run_phase7_demo(monkeypatch, tmp_path, lambda host, commands: None)
 
-    assert events[0] == (
+    send = next(e for e in events if e[0] == "send")
+    # Rule created: host stays fresh via the rule, so only the one-shot host
+    # result (no DISABLE_HOST_CHECK) and the PING disable + result are sent.
+    assert send == (
         "send",
         CONN.host,
         [
-            "DISABLE_HOST_CHECK;dh1",
-            "PROCESS_HOST_CHECK_RESULT;dh1;0;faked up",
+            f"PROCESS_HOST_CHECK_RESULT;dh1;0;{_DEMO_OUTPUT}",
             "DISABLE_SVC_CHECK;dh1;PING",
-            "PROCESS_SERVICE_CHECK_RESULT;dh1;PING;0;faked up",
+            f"PROCESS_SERVICE_CHECK_RESULT;dh1;PING;0;{_DEMO_OUTPUT}",
         ],
     )
-    assert events[1] == ("query",)
+    assert events.index(send) < events.index(("query",))
+    assert not any("faked" in c for c in send[2])
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_creates_always_up_rule_before_activation(monkeypatch, tmp_path):
+    events = await _run_phase7_demo(monkeypatch, tmp_path, lambda host, commands: None)
+
+    names = [e[0] for e in events]
+    assert names.index("rule") < names.index("activate") < names.index("send")
+    assert names.count("rule") == 1
+    body = next(e[1] for e in events if e[0] == "rule")
+    assert body["ruleset"] == "host_check_commands"
+    assert body["folder"] == "/"
+    assert body["value_raw"] == "'ok'"
+    assert body["conditions"]["host_name"] == {"match_on": ["dh1"], "operator": "one_of"}
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_rule_failure_falls_back_to_disabling_host_check(monkeypatch, tmp_path, capsys):
+    events = await _run_phase7_demo(monkeypatch, tmp_path, lambda host, commands: None, rule_status=500)
+
+    out = capsys.readouterr().out
+    assert "Always assume host to be up" in out and "falling back" in out
+    send = next(e for e in events if e[0] == "send")
+    assert send[2] == [
+        "DISABLE_HOST_CHECK;dh1",
+        f"PROCESS_HOST_CHECK_RESULT;dh1;0;{_DEMO_OUTPUT}",
+        "DISABLE_SVC_CHECK;dh1;PING",
+        f"PROCESS_SERVICE_CHECK_RESULT;dh1;PING;0;{_DEMO_OUTPUT}",
+    ]
+    assert list(tmp_path.glob("config_snapshot_*.json"))
 
 
 @pytest.mark.asyncio
 async def test_phase7_without_demo_never_sends_commands(monkeypatch, tmp_path):
     events = await _run_phase7_demo(monkeypatch, tmp_path, lambda host, commands: None, demo=False)
-    assert all(e[0] != "send" for e in events)
+    assert all(e[0] not in ("send", "rule") for e in events)
+
+
+@pytest.mark.asyncio
+async def test_phase7_table_shows_pending_for_never_checked_hosts(monkeypatch, tmp_path, capsys):
+    from checkmk_wizard import livestatus
+
+    await _run_phase7_demo(
+        monkeypatch, tmp_path, lambda host, commands: None, demo=False, states={"dh1": livestatus.HOST_STATE_PENDING}
+    )
+    assert "PENDING" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
@@ -4447,8 +4507,35 @@ async def test_phase7_demo_livestatus_failure_warns_with_manual_commands(monkeyp
     await _run_phase7_demo(monkeypatch, tmp_path, reset)
 
     out = capsys.readouterr().out
-    assert "lq" in out and "PROCESS_HOST_CHECK_RESULT;dh1;0;faked up" in out
+    # rich wraps long lines; compare with all whitespace removed
+    flat = "".join(out.split())
+    assert "lq" in out and "".join(f"PROCESS_HOST_CHECK_RESULT;dh1;0;{_DEMO_OUTPUT}".split()) in flat
     assert list(tmp_path.glob("config_snapshot_*.json"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("demo", [True, False])
+async def test_phase4_precheck_only_demo_generated_hosts(monkeypatch, demo):
+    from checkmk_wizard import wizard as wiz
+
+    generated = ScannedHost(ip="10.0.0.5", open_ports=[], folder="/", demo_generated=True)
+    pending = ScannedHost(ip="10.0.0.6", open_ports=[], folder="/")
+    captured = {}
+
+    def fake_checkbox(message, choices, **kwargs):
+        captured["choices"] = choices
+
+        class _Q:
+            async def ask_async(self, *a, **k):
+                return []
+
+        return _Q()
+
+    monkeypatch.setattr(wiz.questionary, "checkbox", fake_checkbox)
+    await phase4_classification([generated, pending], demo=demo)
+
+    checked = {c.value.ip: c.checked for c in captured["choices"]}
+    assert checked == {"10.0.0.5": demo, "10.0.0.6": False}
 
 
 # -- Esc / Ctrl+C abort -------------------------------------------------------

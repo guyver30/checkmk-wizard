@@ -273,6 +273,7 @@ class ScannedHost:
     ip: str
     open_ports: list[int]
     folder: str  # which Phase 2 folder's subnet this host was discovered in ("/" if none)
+    demo_generated: bool = False  # set only by _demo_discovery for hosts it generated
 
 
 @dataclass
@@ -1650,7 +1651,7 @@ async def _demo_discovery(
                 console.print(f"[red]{exc} — try again.[/red]")
         for ip in ips or []:
             used.add(ip)
-            all_results.append(ScannedHost(ip=ip, open_ports=[], folder=folder))
+            all_results.append(ScannedHost(ip=ip, open_ports=[], folder=folder, demo_generated=True))
             try:
                 await client.create_host(
                     host_name=ip,
@@ -1836,7 +1837,12 @@ async def phase4_classification(
     console.print("No automatic fingerprinting — pick which IPs to promote to named hosts.")
 
     choices = [
-        questionary.Choice(f"{r.ip} [{r.folder}] (ports: {r.open_ports})", value=r) for r in scan_results
+        questionary.Choice(
+            f"{r.ip} [{r.folder}] (ports: {r.open_ports})",
+            value=r,
+            checked=demo and r.demo_generated,
+        )
+        for r in scan_results
     ]
     selected: list[ScannedHost] = []
     if choices:
@@ -2086,6 +2092,45 @@ async def _create_ping_check_rule(client: CheckmkClient, hostnames: list[str]) -
         )
     except CheckmkAPIError as exc:
         console.print(f"  [yellow]could not create PING check for {', '.join(hostnames)}: {exc}[/yellow]")
+
+
+async def _create_demo_host_check_rule(client: CheckmkClient, hostnames: list[str]) -> bool:
+    """Demo mode: one "Host check command = Always assume host to be up" rule
+    (`host_check_commands`) scoped by explicit host names to the promoted demo
+    hosts. Returns True if the rule exists (or there was nothing to do), False
+    if creation failed (the caller then falls back to disabling the host
+    checks and injecting a one-shot UP result).
+
+    Why a rule rather than only an injected result: a one-shot
+    PROCESS_HOST_CHECK_RESULT never advances the core's schedule, so the
+    Livestatus staleness the dashboard poller reads (scripts/mqtt_poller.py)
+    keeps growing and the host turns STALE. With this rule the core keeps
+    running a host check that always returns UP, so the host stays fresh.
+
+    `value_raw="'ok'"`: the ruleset's valuespec is a CascadingDropdown whose
+    "Always assume host to be up" choice is the bare string "ok", sent as the
+    Python-literal repr Checkmk's "export for API" emits. This comes from
+    Checkmk GUI source knowledge and is NOT yet live-verified on 2.4.0p35. To
+    check: create the rule in the GUI (Setup > Hosts > Host monitoring rules >
+    Host check command), then `GET /objects/rule/{id}` and compare
+    `extensions.value_raw`.
+    """
+    if not hostnames:
+        return True
+    try:
+        await client.create_rule(
+            ruleset="host_check_commands",
+            folder="/",
+            value_raw="'ok'",
+            conditions={"host_name": {"match_on": hostnames, "operator": "one_of"}},
+        )
+    except CheckmkAPIError as exc:
+        console.print(
+            "[yellow]could not create 'Always assume host to be up' rule for the demo hosts "
+            f"({exc}); falling back to disabling the host checks[/yellow]"
+        )
+        return False
+    return True
 
 
 _DEFAULT_CPU_LOAD_LEVELS = (5.0, 10.0)  # per core
@@ -3031,26 +3076,38 @@ async def _query_host_states_best_effort(host: str, host_names: list[str]) -> di
     return {}
 
 
-async def _fake_demo_hosts_up(livestatus_host: str, host_names: list[str]) -> None:
+async def _fake_demo_hosts_up(
+    livestatus_host: str, hosts: list[OnboardedHost], *, fake_host_checks: bool = False
+) -> None:
     """Demo mode: make hosts that do not exist report UP, via Livestatus.
 
-    Per host: disable the active host check and inject an UP result, and do the
-    same for the auto-created PING service (OK). Best-effort and never raising:
-    activation reloads the core, so the first attempt can hit a connection
-    reset (retried like `_query_host_states_best_effort`); after the retries it
-    prints the manual commands. To undo, send ENABLE_HOST_CHECK;<host> and
-    ENABLE_SVC_CHECK;<host>;PING.
+    Per host: inject an UP result for the host (so it shows UP immediately
+    rather than PENDING until the first scheduled check), and disable the
+    auto-created PING service's check and inject an OK result for it. Plugin
+    output is realistic check_icmp-style text built from the host's IP (the
+    dashboard shows it); it must not contain `;`, the Livestatus command
+    separator. The "Always assume host to be up" rule
+    (`_create_demo_host_check_rule`) keeps the host fresh afterwards; only when
+    that rule could not be created (`fake_host_checks=True`) is the host check
+    also disabled, so the injected result sticks. Best-effort and never
+    raising: activation reloads the core, so the first attempt can hit a
+    connection reset (retried like `_query_host_states_best_effort`); after the
+    retries it prints the manual commands. To undo, delete the "Host check
+    command" rule for these hosts (Setup > Hosts > Host monitoring rules > Host
+    check command) and send ENABLE_SVC_CHECK;<host>;PING (plus
+    ENABLE_HOST_CHECK;<host> if the fallback ran).
     """
-    commands = [
-        cmd
-        for name in host_names
-        for cmd in (
-            f"DISABLE_HOST_CHECK;{name}",
-            f"PROCESS_HOST_CHECK_RESULT;{name};0;faked up",
-            f"DISABLE_SVC_CHECK;{name};PING",
-            f"PROCESS_SERVICE_CHECK_RESULT;{name};PING;0;faked up",
-        )
-    ]
+    host_names = [h.hostname for h in hosts]
+    commands = []
+    for h in hosts:
+        output = f"OK - {h.ip} rta 0.412ms lost 0%"
+        if fake_host_checks:
+            commands.append(f"DISABLE_HOST_CHECK;{h.hostname}")
+        commands += [
+            f"PROCESS_HOST_CHECK_RESULT;{h.hostname};0;{output}",
+            f"DISABLE_SVC_CHECK;{h.hostname};PING",
+            f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};PING;0;{output}",
+        ]
     last_error: Exception | None = None
     for delay in (*_LIVESTATUS_RETRY_DELAYS_SECONDS, None):
         try:
@@ -3058,7 +3115,8 @@ async def _fake_demo_hosts_up(livestatus_host: str, host_names: list[str]) -> No
         except OSError as exc:
             last_error = exc
         else:
-            console.print(f"[green]Faked {len(host_names)} demo host(s) UP (checks disabled).[/green]")
+            detail = "checks disabled" if fake_host_checks else "host check: always up; PING check disabled"
+            console.print(f"[green]Faked {len(host_names)} demo host(s) UP ({detail}).[/green]")
             # Let the core apply the injected results before the state table query.
             await asyncio.sleep(2)
             return
@@ -3087,12 +3145,18 @@ async def phase7_activation(
     # is for what Phase 6's own fix_all discovery produced: accepting a
     # newly discovered service (moving it from undecided to monitored) is
     # itself a pending WATO change, same as any host/rule edit.
+    # Demo mode: the always-up host check rule must exist before activation so
+    # activating applies it.
+    demo_rule_ok = True
+    if demo and hosts:
+        demo_rule_ok = await _create_demo_host_check_rule(client, [h.hostname for h in hosts])
+
     if not await _activate_pending_changes(client, connection):
         return
 
     if demo and hosts:
         # Livestatus is a different port than REST — bare host only.
-        await _fake_demo_hosts_up(connection.host, [h.hostname for h in hosts])
+        await _fake_demo_hosts_up(connection.host, hosts, fake_host_checks=not demo_rule_ok)
 
     # Pull the site's actual current host/folder configuration, not just a
     # log of what this run touched — used for the state table below and for
@@ -3134,7 +3198,7 @@ async def phase7_activation(
         table.add_column("State")
         table.add_column("This run")
         for name, folder in rows:
-            label = {0: "UP", 1: "DOWN", 2: "UNREACHABLE"}.get(states.get(name), "unknown")
+            label = {0: "UP", 1: "DOWN", 2: "UNREACHABLE", livestatus.HOST_STATE_PENDING: "PENDING"}.get(states.get(name), "unknown")
             table.add_row(name, folder, label, "✓" if name in this_run else "")
         console.print(table)
 
