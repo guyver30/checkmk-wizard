@@ -239,6 +239,11 @@ settings come from `deploy/.env` at container start, not from an edited source f
 for how it fits into the wider deployment. To deploy the whole stack on a new machine, follow the
 checklist in [`docs/DEPLOY-NEW-MACHINE.md`](docs/DEPLOY-NEW-MACHINE.md).
 
+Admin mode (`?admin=1`) lets a presenter fake host UP/DOWN/UNREACHABLE states for live demos;
+see the runbook section in
+[`docs/Incident demo with fake check results.md`](<docs/Incident demo with fake check results.md>)
+and `dashboard-react/README.md` section 5e.
+
 Device-type icons are drop-in SVG files (file name = device type) — see
 [`docs/DEVICE-TYPE-ICONS.md`](docs/DEVICE-TYPE-ICONS.md).
 
