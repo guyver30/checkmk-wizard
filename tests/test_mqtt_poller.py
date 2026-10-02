@@ -2461,6 +2461,15 @@ def test_services_signature_order_independent_and_excludes_plugin_output():
     assert poller.services_signature(rows_a) == poller.services_signature(rows_b_diff_output_only)
 
 
+def test_services_signature_differs_when_first_output_arrives():
+    # Regression (2026-10-02): a pending service publishes as OK with empty
+    # output; its first result (still OK, now with text) must republish, or
+    # the dashboard's Output column stays blank.
+    rows_pending = [{"description": "PING", "state": "OK", "plugin_output": ""}]
+    rows_checked = [{"description": "PING", "state": "OK", "plugin_output": "OK - 198.51.100.3 rta 0.412ms lost 0%"}]
+    assert poller.services_signature(rows_pending) != poller.services_signature(rows_checked)
+
+
 def test_services_signature_differs_on_state_change():
     rows_a = [{"description": "PING", "state": "OK", "plugin_output": ""}]
     rows_b = [{"description": "PING", "state": "CRIT", "plugin_output": ""}]

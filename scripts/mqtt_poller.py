@@ -1200,12 +1200,19 @@ def services_signature(rows: list[dict]) -> tuple:
     (description, state) pairs, order-independent so a same-content list
     from a different underlying row order still compares equal.
 
-    Deliberately excludes plugin_output (12-RESEARCH.md Pitfall 2): a
+    Deliberately excludes plugin_output's text (12-RESEARCH.md Pitfall 2): a
     chatty check's embedded numbers would otherwise force a republish
     almost every cycle, defeating D-12's whole point in splitting gauges
     from the service list.
+
+    It does include whether plugin_output is non-empty (bug fixed
+    2026-10-02, quick 261002-c2m): a never-checked service reports state
+    OK with empty output, and its first real result often keeps state OK
+    (e.g. a demo host's injected PING result). With only (description,
+    state) that first output never republished, so the dashboard's Output
+    column stayed blank until some later state change or a poller restart.
     """
-    return tuple(sorted((row["description"], row["state"]) for row in rows))
+    return tuple(sorted((row["description"], row["state"], bool(row["plugin_output"])) for row in rows))
 
 
 # Leading numeric prefix of a Nagios perfdata value token: an optional
