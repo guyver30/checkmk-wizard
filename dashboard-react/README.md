@@ -339,6 +339,15 @@ MQTT contract (the poller turns commands into Livestatus external commands):
 | `admin/ack` | poller to dashboard, QoS 1, not retained | `{"id", "ok": bool, "action", "detail", "applied": [{"host", "state": "UP"\|"DOWN"\|"UNREACH"\|"RESTORED", "cascaded": bool}], "skipped": string[]}` |
 | `admin/faked` | poller to dashboard, QoS 1, retained, published on change | `{"hosts": {"<host>": "UP"\|"DOWN"\|"UNREACH"}, "source": string, "timestamp": ISO-8601}` |
 
+Interaction: a plain click on a map node or tree row selects exactly that host (replacing the
+selection, via `replaceSelection` in `src/store/adminStore.ts`); ctrl/cmd+click toggles a host;
+host and folder checkboxes also toggle. "Select all" selects every host in the current tree model
+(replace, not union); "Clear selection" and Escape clear it. Admin mode shows no host details pane.
+
+Ack state `RESTORED` means the demo baseline: host check enabled, host UP and `PING` OK injected,
+`PING` check left disabled. The poller also re-injects faked hosts' results every 30 s so the
+dashboard does not show them STALE.
+
 The page uses a single MQTT connection as `wsadmin`, which can also read `lan/#`, subscribes to
 `admin/ack` and `admin/faked`, and may write only `admin/cmd`. Admin mode and topology edit mode
 are mutually exclusive: "Edit topology" is disabled while `?admin=1` is active.

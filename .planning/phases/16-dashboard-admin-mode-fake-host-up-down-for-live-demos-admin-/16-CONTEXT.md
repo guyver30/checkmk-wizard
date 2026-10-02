@@ -86,6 +86,15 @@ switch card with its children listed below, as on a real site.
 
 - **D-17:** (2026-10-02, user) Folder checkbox includes all subfolders; resolved in the browser, re-validated by the poller.
 - **D-18:** (2026-10-02) Faked hosts flow into history/rollups like real failures (matches the demo goal; no exclusion).
+### Amendments from live UAT (2026-10-02, gap closure 16-09..16-11)
+- **D-05 amended ("Always demo baseline"):** Restore = `ENABLE_HOST_CHECK` + host UP + PING OK (D-04 UP
+  text); the PING check stays disabled, no `ENABLE_SVC_CHECK`, no forced checks. Applies to Restore
+  selected, Restore all and the D-01 reverse cascade.
+- **D-11 clarified:** a fake lasts until restored and the poller keeps it fresh by re-injecting the
+  current state every 30 s (`PROCESS_*` commands only).
+- **Selection UX (was Claude's discretion):** in admin mode plain click selects, ctrl/cmd+click toggles,
+  no host details; Select all selects the listed hosts.
+
 </decisions>
 
 <specifics>
