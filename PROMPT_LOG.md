@@ -374,3 +374,4 @@
 - **2026-10-02 16:55** — I redid a full down and up -d and all containers gave exit code 0
 - **2026-10-02 16:57** — all containers are up, except minio-init; trim the info in DEPLOY-NEW-MACHINE.md; let's do in sequence: code-review findings, then .venv permissions
 - **2026-10-02 16:59** — (pasted .venv diagnostics: .venv owned by kone, python3 -> uv python under /home/kone; asked to fix .venv permissions)
+- **2026-10-02 17:18** — keep WR-06 documented for now

@@ -72,6 +72,13 @@ DISABLE commands, and only for hosts in the faked set. Admin-mode fakes therefor
 STALE after about 3 minutes (live UAT 2026-10-02 measured staleness 2.9 to 11.2 on faked hosts
 before the fix).
 
+Known limitation (code review WR-06, kept open by decision 2026-10-02): the faked set is derived from
+Livestatus (host check disabled and `PING` disabled or absent), so a host someone disabled by hand for another
+reason looks faked and gets the keepalive results too, which can hide a real outage on it. Fine on a pure
+demo site. On a site with real hosts, do not disable a host's checks by hand while admin mode is deployed.
+The fix would be a poller-owned faked set persisted in the retained `admin/faked` message
+(`.planning/phases/16-*/16-REVIEW-FIX.md`).
+
 Cascade rules:
 
 - Set DOWN on a managed parent sets its managed descendants to UNREACHABLE.
