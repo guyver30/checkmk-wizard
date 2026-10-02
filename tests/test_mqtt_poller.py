@@ -4248,3 +4248,289 @@ def test_maybe_run_rollups_reuses_s3_client_across_calls():
         scheduler.last_completed_local_date = None
         poller.maybe_run_rollups(config, scheduler, s3_holder, tz, now_local, poller.time.monotonic())
     mock_build.assert_called_once()
+
+
+# --- admin command channel: parsing ---------------------------------------------------
+
+
+def _admin_payload(**overrides):
+    data = {"id": "a1", "action": "down", "hosts": ["sw1"]}
+    data.update(overrides)
+    return json.dumps(data).encode()
+
+
+def test_parse_admin_command_valid():
+    cmd = poller.parse_admin_command(_admin_payload())
+    assert cmd == poller.AdminCommand(id="a1", action="down", hosts=["sw1"])
+
+
+def test_parse_admin_command_bad_json_rejected_without_id():
+    with pytest.raises(poller.AdminCommandError) as exc:
+        poller.parse_admin_command(b"not json")
+    assert exc.value.reason == "malformed command"
+    assert exc.value.command_id is None
+
+
+def test_parse_admin_command_unknown_action_keeps_id():
+    with pytest.raises(poller.AdminCommandError) as exc:
+        poller.parse_admin_command(_admin_payload(action="reboot"))
+    assert exc.value.reason == "unknown action"
+    assert exc.value.command_id == "a1"
+
+
+@pytest.mark.parametrize("bad_id", ["a;b", "", "x" * 65, 5, None])
+def test_parse_admin_command_bad_id_rejected(bad_id):
+    with pytest.raises(poller.AdminCommandError) as exc:
+        poller.parse_admin_command(_admin_payload(id=bad_id))
+    assert exc.value.command_id is None
+
+
+@pytest.mark.parametrize(
+    "bad_hosts",
+    ["sw1", [1], ["a;b"], ["a b"], [], [f"h{i}" for i in range(201)], None],
+)
+def test_parse_admin_command_bad_hosts_rejected(bad_hosts):
+    with pytest.raises(poller.AdminCommandError) as exc:
+        poller.parse_admin_command(_admin_payload(hosts=bad_hosts))
+    assert exc.value.reason == "invalid host list"
+    assert exc.value.command_id == "a1"
+
+
+def test_parse_admin_command_max_hosts_accepted_and_deduplicated():
+    cmd = poller.parse_admin_command(_admin_payload(hosts=[f"h{i}" for i in range(200)]))
+    assert len(cmd.hosts) == 200
+    cmd = poller.parse_admin_command(_admin_payload(hosts=["b", "a", "b"]))
+    assert cmd.hosts == ["b", "a"]
+
+
+def test_parse_admin_command_restore_all_accepts_missing_or_empty_hosts():
+    for payload in (
+        json.dumps({"id": "r", "action": "restore_all"}).encode(),
+        json.dumps({"id": "r", "action": "restore_all", "hosts": []}).encode(),
+    ):
+        assert poller.parse_admin_command(payload).hosts == []
+
+
+# --- admin command channel: cascade planner -------------------------------------------
+
+
+def _ops(actions):
+    return {a.host: (a.op, a.cascaded) for a in actions}
+
+
+def _chain():
+    return [
+        _snapshot("r1"),
+        _snapshot("s1", parents=["r1"]),
+        _snapshot("h1", parents=["s1"]),
+    ]
+
+
+def test_plan_admin_actions_down_cascades_unreach_to_managed_descendants():
+    result = poller.plan_admin_actions("down", ["r1"], _chain(), {})
+    assert _ops(result) == {
+        "r1": ("down", False),
+        "s1": ("unreach", True),
+        "h1": ("unreach", True),
+    }
+
+
+def test_plan_admin_actions_down_cascade_stops_at_unmanaged_switch():
+    snaps = [
+        _snapshot("r1"),
+        _snapshot("um1", parents=["r1"], unmanaged=True),
+        _snapshot("gc1", parents=["um1"]),
+        _snapshot("gc2", parents=["um1"]),
+    ]
+    result = poller.plan_admin_actions("down", ["r1"], snaps, {})
+    assert _ops(result) == {"r1": ("down", False), "um1": ("unreach", True)}
+
+
+def test_plan_admin_actions_down_on_unmanaged_host_does_not_cascade():
+    snaps = [
+        _snapshot("um1", unmanaged=True),
+        _snapshot("gc1", parents=["um1"]),
+    ]
+    result = poller.plan_admin_actions("down", ["um1"], snaps, {})
+    assert _ops(result) == {"um1": ("down", False)}
+
+
+def test_plan_admin_actions_explicit_selection_wins_over_cascade():
+    result = poller.plan_admin_actions("down", ["r1", "h1"], _chain(), {})
+    ops = _ops(result)
+    assert ops["h1"] == ("down", False)
+    assert ops["s1"] == ("unreach", True)
+    assert len(result) == 3
+
+
+def test_plan_admin_actions_parents_cycle_terminates():
+    snaps = [_snapshot("a", parents=["b"]), _snapshot("b", parents=["a"])]
+    result = poller.plan_admin_actions("down", ["a"], snaps, {})
+    hosts = [r.host for r in result]
+    assert sorted(hosts) == ["a", "b"]
+    assert len(hosts) == len(set(hosts))
+    assert poller.plan_admin_actions("up", ["a"], snaps, {"a": "DOWN", "b": "UNREACH"})
+
+
+def test_plan_admin_actions_up_reverses_cascade():
+    faked = {"r1": "DOWN", "s1": "UNREACH", "h1": "UNREACH"}
+    result = poller.plan_admin_actions("up", ["r1"], _chain(), faked)
+    assert _ops(result) == {
+        "r1": ("up", False),
+        "s1": ("restore", True),
+        "h1": ("restore", True),
+    }
+
+
+def test_plan_admin_actions_reverse_cascade_keeps_host_under_other_down_parent():
+    snaps = [
+        _snapshot("r1"),
+        _snapshot("r2"),
+        _snapshot("h1", parents=["r1", "r2"]),
+    ]
+    faked = {"r1": "DOWN", "r2": "DOWN", "h1": "UNREACH"}
+    result = poller.plan_admin_actions("up", ["r1"], snaps, faked)
+    assert _ops(result) == {"r1": ("up", False)}
+
+
+def test_plan_admin_actions_restore_all_restores_every_faked_host():
+    snaps = [_snapshot("b"), _snapshot("a"), _snapshot("c")]
+    result = poller.plan_admin_actions(
+        "restore_all", [], snaps, {"b": "UP", "a": "DOWN", "gone": "DOWN"}
+    )
+    assert [(r.host, r.op, r.cascaded) for r in result] == [
+        ("a", "restore", False),
+        ("b", "restore", False),
+    ]
+
+
+def test_plan_admin_actions_ignores_unknown_host_ids():
+    result = poller.plan_admin_actions("down", ["nope", "h1"], _chain(), {})
+    assert _ops(result) == {"h1": ("down", False)}
+
+
+# --- D-03: inferred switch card with faked children -----------------------------------
+
+
+def test_compute_incidents_faked_down_children_behind_unmanaged_switch_give_inferred_card():
+    # D-03: demo flow fakes two children DOWN behind an unmanaged switch; the existing
+    # inferred-switch rule must produce one combined card with no new engine rule.
+    snapshots = [
+        _snapshot("um1", host_state_raw="UP", unmanaged=True),
+        _snapshot("gc1", host_state_raw="DOWN", parents=["um1"]),
+        _snapshot("gc2", host_state_raw="DOWN", parents=["um1"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+    assert incidents[0]["inferred"] is True
+    assert incidents[0]["root"] == "um1"
+    assert incidents[0]["not_observable"] == ["gc1", "gc2"]
+
+
+def test_compute_incidents_single_faked_down_child_stays_plain_root():
+    # D-03: one faked child must not blame the switch.
+    snapshots = [
+        _snapshot("um1", host_state_raw="UP", unmanaged=True),
+        _snapshot("gc1", host_state_raw="DOWN", parents=["um1"]),
+        _snapshot("gc2", host_state_raw="UP", parents=["um1"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    assert len(incidents) == 1
+    assert incidents[0]["root"] == "gc1"
+    assert incidents[0]["inferred"] is False
+
+
+def test_compute_incidents_faked_managed_parent_down_above_unmanaged_switch_keeps_children_listed():
+    # D-03: a faked managed DOWN above the switch (switch UNREACH by cascade, children
+    # faked DOWN) must still list both children in the combined card.
+    snapshots = [
+        _snapshot("r1", host_state_raw="DOWN"),
+        _snapshot("um1", host_state_raw="UNREACH", unmanaged=True, parents=["r1"]),
+        _snapshot("gc1", host_state_raw="DOWN", parents=["um1"]),
+        _snapshot("gc2", host_state_raw="DOWN", parents=["um1"]),
+    ]
+    incidents = poller.compute_incidents(snapshots)
+    listed = set()
+    for inc in incidents:
+        listed.update(inc["confirmed_down"])
+        listed.update(inc["not_observable"])
+    assert {"gc1", "gc2"} <= listed
+
+
+# --- admin command channel: Livestatus builder and sender -----------------------------
+
+
+def test_build_admin_commands_down():
+    cmds = poller.build_admin_commands(poller.AdminAction("h1", "down", False), "10.0.0.5")
+    assert cmds == [
+        "DISABLE_HOST_CHECK;h1",
+        "DISABLE_SVC_CHECK;h1;PING",
+        "PROCESS_HOST_CHECK_RESULT;h1;1;CRITICAL - 10.0.0.5: rta nan, lost 100%",
+        "PROCESS_SERVICE_CHECK_RESULT;h1;PING;2;CRITICAL - 10.0.0.5: rta nan, lost 100%",
+    ]
+
+
+def test_build_admin_commands_unreach():
+    cmds = poller.build_admin_commands(poller.AdminAction("h1", "unreach", True), "10.0.0.5")
+    assert cmds[2] == "PROCESS_HOST_CHECK_RESULT;h1;2;CRITICAL - 10.0.0.5: rta nan, lost 100%"
+    assert cmds[3] == "PROCESS_SERVICE_CHECK_RESULT;h1;PING;2;CRITICAL - 10.0.0.5: rta nan, lost 100%"
+
+
+def test_build_admin_commands_up_text_and_rta_range():
+    import re
+
+    for _ in range(20):
+        cmds = poller.build_admin_commands(poller.AdminAction("h1", "up", False), "10.0.0.5")
+        assert cmds[:2] == ["DISABLE_HOST_CHECK;h1", "DISABLE_SVC_CHECK;h1;PING"]
+        host_prefix = "PROCESS_HOST_CHECK_RESULT;h1;0;"
+        svc_prefix = "PROCESS_SERVICE_CHECK_RESULT;h1;PING;0;"
+        assert cmds[2].startswith(host_prefix) and cmds[3].startswith(svc_prefix)
+        text = cmds[2][len(host_prefix):]
+        assert re.match(r"^OK - 10\.0\.0\.5 rta \d+\.\d{3}ms lost 0%$", text)
+        assert 0.2 <= float(text.split("rta ")[1].split("ms")[0]) <= 3.0
+
+
+def test_build_admin_commands_restore():
+    cmds = poller.build_admin_commands(poller.AdminAction("h1", "restore", False), "10.0.0.5")
+    assert cmds == ["ENABLE_HOST_CHECK;h1", "ENABLE_SVC_CHECK;h1;PING"]
+
+
+@pytest.mark.parametrize("bad", ["a;b", "x'y", "1.2.3.4 5", "a\nb", "a\rb", ""])
+def test_build_admin_commands_unsafe_address_falls_back_to_host_id(bad):
+    cmds = poller.build_admin_commands(poller.AdminAction("h1", "down", False), bad)
+    assert cmds[2] == "PROCESS_HOST_CHECK_RESULT;h1;1;CRITICAL - h1: rta nan, lost 100%"
+    for cmd in cmds:
+        assert "\n" not in cmd and "\r" not in cmd and "'" not in cmd
+        if cmd.startswith("PROCESS_HOST"):
+            assert ";" not in cmd.split(";", 3)[3]
+
+
+def test_build_admin_commands_rejects_bad_host_id():
+    with pytest.raises(ValueError):
+        poller.build_admin_commands(poller.AdminAction("h;1", "down", False), "10.0.0.5")
+
+
+def test_send_livestatus_commands_one_connection_per_command():
+    socks = [_fake_connection(b""), _fake_connection(b"")]
+    with patch("socket.create_connection", side_effect=socks) as create:
+        poller.send_livestatus_commands("lh", 6557, ["A;h1", "B;h1"], 5.0)
+    assert create.call_count == 2
+    sent = [s.sendall.call_args[0][0].decode() for s in socks]
+    assert sent[0].startswith("COMMAND [") and sent[0].endswith("] A;h1\n\n")
+    assert sent[1].endswith("] B;h1\n\n")
+    socks[0].shutdown.assert_called_once()
+
+
+def test_send_livestatus_commands_rejects_newline_before_sending():
+    with patch("socket.create_connection") as create, pytest.raises(ValueError):
+        poller.send_livestatus_commands("lh", 6557, ["ok;h1", "bad\nx"], 5.0)
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("err", [OSError("boom"), TimeoutError("slow")])
+def test_send_livestatus_commands_wraps_oserror(err):
+    with (
+        patch("socket.create_connection", side_effect=err),
+        pytest.raises(poller.LivestatusError),
+    ):
+        poller.send_livestatus_commands("lh", 6557, ["A;h1"], 5.0)

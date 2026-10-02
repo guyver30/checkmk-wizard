@@ -42,6 +42,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import signal
 import socket
@@ -113,6 +114,11 @@ FLEET_GROUP_KEY = "all"
 TOPIC_TOPOLOGY = "lan/devices/topology"
 TOPIC_EVENTS = "lan/events/recent"
 TOPIC_POLLER_STATUS = "lan/poller/status"
+# Admin command channel topics. Deliberately outside `lan/` so the wsreader's
+# `read lan/#` ACL never matches them (D-09).
+TOPIC_ADMIN_CMD = "admin/cmd"
+TOPIC_ADMIN_ACK = "admin/ack"
+TOPIC_ADMIN_FAKED = "admin/faked"
 
 # Phase 14 (D-13/PLR-14): prefix for the incident id `compute_incidents()`
 # below mints (`f"{INCIDENT_ID_PREFIX}{root_id}"`) and topic segment
@@ -1060,6 +1066,239 @@ def incident_signature(incident: dict) -> tuple:
         incident.get("worst_criticality"),
         incident.get("since"),
     )
+
+
+# --- Admin command channel (D-01..D-14) -------------------------------------------------
+
+ADMIN_ACTIONS = ("up", "down", "unreach", "restore", "restore_all")
+ADMIN_MAX_HOSTS_PER_COMMAND = 200
+_ADMIN_COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+# Mirrors wizard.py `_LIVESTATUS_RETRY_DELAYS_SECONDS`: the core reloads on activation and
+# resets connections, so a send can fail transiently.
+ADMIN_LIVESTATUS_RETRY_DELAYS_SECONDS = (3, 5, 10)
+_ADMIN_SAFE_ADDRESS_RE = re.compile(r"^[0-9A-Za-z.:_-]{1,253}$")
+
+
+class AdminCommandError(ValueError):
+    """A rejected admin command; `reason` is the short text that goes into the ack detail."""
+
+    def __init__(self, reason: str, command_id: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.command_id = command_id
+
+
+@dataclass
+class AdminCommand:
+    id: str
+    action: str
+    hosts: list[str]
+
+
+@dataclass
+class AdminAction:
+    host: str
+    op: str  # "up" | "down" | "unreach" | "restore"
+    cascaded: bool
+
+
+def parse_admin_command(payload: bytes) -> AdminCommand:
+    """Validate an `admin/cmd` payload. The browser is untrusted input (T-16-01).
+
+    Host ids are regex-checked here even though the worker later resolves them against
+    the snapshot list: defence in depth, so a malformed id can never reach any text that
+    is built from it. Never touches snapshots.
+    """
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise AdminCommandError("malformed command") from None
+    if not isinstance(data, dict):
+        raise AdminCommandError("malformed command")
+    command_id = data.get("id")
+    if not isinstance(command_id, str) or not _ADMIN_COMMAND_ID_RE.match(command_id):
+        raise AdminCommandError("malformed command")
+    action = data.get("action")
+    if action not in ADMIN_ACTIONS:
+        raise AdminCommandError("unknown action", command_id)
+    hosts = data.get("hosts")
+    if action == "restore_all" and not hosts:
+        hosts = []
+    if not isinstance(hosts, list):
+        raise AdminCommandError("invalid host list", command_id)
+    if action == "restore_all":
+        # Hosts are ignored for restore_all.
+        return AdminCommand(id=command_id, action=action, hosts=[])
+    if (
+        not 1 <= len(hosts) <= ADMIN_MAX_HOSTS_PER_COMMAND
+        or not all(isinstance(h, str) and _HOST_ID_RE.match(h) for h in hosts)
+    ):
+        raise AdminCommandError("invalid host list", command_id)
+    return AdminCommand(id=command_id, action=action, hosts=list(dict.fromkeys(hosts)))
+
+
+def _admin_children_map(by_id: dict[str, DeviceSnapshot]) -> dict[str, list[str]]:
+    children: dict[str, list[str]] = {}
+    for snap in by_id.values():
+        for parent in snap.parents:
+            if parent in by_id:
+                children.setdefault(parent, []).append(snap.id)
+    return children
+
+
+def _admin_descendants(
+    start_id: str, by_id: dict[str, DeviceSnapshot], children: dict[str, list[str]]
+) -> list[str]:
+    """Descendants of `start_id` (visited-set BFS, cycle safe), not expanding past an
+    unmanaged host: the unmanaged switch itself is included, its subtree is not (D-02)."""
+    visited = {start_id}
+    queue = [start_id]
+    reached: list[str] = []
+    while queue:
+        current = queue.pop(0)
+        if current != start_id and by_id[current].unmanaged:
+            continue
+        for child in children.get(current, []):
+            if child in visited:
+                continue
+            visited.add(child)
+            reached.append(child)
+            queue.append(child)
+    return reached
+
+
+def _has_other_faked_down_ancestor(
+    host_id: str,
+    by_id: dict[str, DeviceSnapshot],
+    faked: dict[str, str],
+    excluded: set[str],
+) -> bool:
+    """True if a managed ancestor outside `excluded` is still faked DOWN and covers
+    `host_id` (D-01 reverse cascade). The walk does not continue above an unmanaged
+    ancestor, mirroring the downward stop rule (D-02)."""
+    visited = {host_id}
+    queue = list(by_id[host_id].parents)
+    while queue:
+        current = queue.pop()
+        if current in visited or current not in by_id:
+            continue
+        visited.add(current)
+        node = by_id[current]
+        if node.unmanaged:
+            continue
+        if faked.get(current) == "DOWN" and current not in excluded:
+            return True
+        queue.extend(node.parents)
+    return False
+
+
+def plan_admin_actions(
+    action: str,
+    host_ids: list[str],
+    snapshots: list[DeviceSnapshot],
+    faked: dict[str, str],
+) -> list[AdminAction]:
+    """Turn one admin command into per-host operations (pure, D-01/D-02).
+
+    Hosts named explicitly always get the command's own state. DOWN on a managed host
+    cascades UNREACH to its descendants; the walk includes an unmanaged switch (UNREACH)
+    but stops there, because Checkmk cannot see past it (clarified 2026-10-02). UP/restore
+    on a managed host reverses the cascade for descendants faked UNREACH, unless another
+    faked-DOWN managed ancestor still covers them. Unknown host ids are ignored; the
+    caller reports them as skipped.
+    """
+    by_id = {s.id: s for s in snapshots}
+    if action == "restore_all":
+        return [AdminAction(h, "restore", False) for h in sorted(faked) if h in by_id]
+
+    explicit = [h for h in dict.fromkeys(host_ids) if h in by_id]
+    explicit_set = set(explicit)
+    result = [AdminAction(h, action, False) for h in explicit]
+    if action not in ("down", "up", "restore"):
+        return result
+
+    children = _admin_children_map(by_id)
+    cascaded: set[str] = set()
+    for host in explicit:
+        if by_id[host].unmanaged:
+            continue
+        for desc in _admin_descendants(host, by_id, children):
+            if desc in explicit_set or desc in cascaded:
+                continue
+            covered = faked.get(desc) != "UNREACH" or _has_other_faked_down_ancestor(
+                desc, by_id, faked, explicit_set
+            )
+            if action == "down" or not covered:
+                cascaded.add(desc)
+    cascade_op = "unreach" if action == "down" else "restore"
+    result.extend(AdminAction(h, cascade_op, True) for h in sorted(cascaded))
+    return result
+
+
+def _admin_output_address(address: str, host_id: str) -> str:
+    return address if _ADMIN_SAFE_ADDRESS_RE.match(address or "") else host_id
+
+
+def build_admin_commands(action: AdminAction, address: str) -> list[str]:
+    """Livestatus external command bodies for one AdminAction (D-04/D-05).
+
+    Mirrors wizard.py `_fake_demo_hosts_up` and the runbook's live-verified fakeping
+    sequence. The host check and the PING service check are DISABLED first so neither
+    the scheduled check nor the demo "Always assume host to be up" rule overwrites the
+    injected result (D-05). Livestatus returns nothing for COMMAND, so success means
+    "sent", not "applied". Fails closed (ValueError) on any character that could break
+    out of the command.
+    """
+    host = action.host
+    if not _HOST_ID_RE.match(host):
+        raise ValueError(f"invalid host id: {host!r}")
+    if action.op == "restore":
+        commands = [f"ENABLE_HOST_CHECK;{host}", f"ENABLE_SVC_CHECK;{host};PING"]
+    elif action.op in ("up", "down", "unreach"):
+        ip = _admin_output_address(address, host)
+        if action.op == "up":
+            host_code, svc_code = 0, 0
+            output = f"OK - {ip} rta {random.uniform(0.2, 3.0):.3f}ms lost 0%"
+        else:
+            host_code, svc_code = (1, 2) if action.op == "down" else (2, 2)
+            output = f"CRITICAL - {ip}: rta nan, lost 100%"
+        commands = [
+            f"DISABLE_HOST_CHECK;{host}",
+            f"DISABLE_SVC_CHECK;{host};PING",
+            f"PROCESS_HOST_CHECK_RESULT;{host};{host_code};{output}",
+            f"PROCESS_SERVICE_CHECK_RESULT;{host};PING;{svc_code};{output}",
+        ]
+    else:
+        raise ValueError(f"unknown op: {action.op!r}")
+    for command in commands:
+        if "\n" in command or "\r" in command or "'" in command:
+            raise ValueError(f"unsafe Livestatus command: {command!r}")
+    return commands
+
+
+def send_livestatus_commands(
+    host: str, port: int, commands: list[str], timeout: float
+) -> None:
+    """Send external commands, one connection per command.
+
+    Deliberate twin of src/checkmk_wizard/livestatus.py `send_commands` (this standalone
+    container script cannot import the wizard package). One connection per command is
+    load-bearing: without `KeepAlive: on` a connection ends after one request, so several
+    COMMAND lines on one socket are not reliably processed. CR/LF is rejected before any
+    connection is opened so a value cannot smuggle in a second request. The caller owns
+    retries (ADMIN_LIVESTATUS_RETRY_DELAYS_SECONDS).
+    """
+    for command in commands:
+        if "\n" in command or "\r" in command:
+            raise ValueError(f"Livestatus command must not contain newlines: {command!r}")
+    for command in commands:
+        payload = f"COMMAND [{int(time.time())}] {command}\n\n"
+        try:
+            with socket.create_connection((host, port), timeout=timeout) as sock:
+                sock.sendall(payload.encode())
+                sock.shutdown(socket.SHUT_WR)
+        except (TimeoutError, OSError) as exc:
+            raise LivestatusError(f"Livestatus command send failed: {exc}") from exc
 
 
 def extract_device_type(tags: dict) -> str:
