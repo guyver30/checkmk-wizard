@@ -143,19 +143,6 @@ MinIO comes from `cgr.dev/chainguard/minio`, pinned by digest, because `minio/mi
 Docker Hub and `quay.io/minio/minio` no longer allows anonymous pulls (§3 "Note on the MinIO
 image").
 
-**`clickhouse` and `grafana` stuck in `Created`** with `depends on container … not found in input
-list` (seen 2026-10-02, podman-compose 1.0.6): podman leaves already-running dependencies out of
-the start list, so a container whose dependency chain includes a running one cannot start. The
-`minio-init` service no longer has `depends_on: minio` (quick 261002-liq), which should prevent
-it. If a host still hits it, stop the running dependencies so they are back in the start list,
-then start the stuck containers:
-
-```bash
-podman stop minio clickhouse && podman start clickhouse
-podman stop clickhouse minio && podman start grafana
-podman ps --format '{{.Names}} {{.Status}}'
-```
-
 ## 6. Checks after startup
 
 **All six containers are up:**
