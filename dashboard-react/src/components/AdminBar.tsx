@@ -7,8 +7,21 @@
 // The design system has no Dialog component, so the confirm dialog is a fixed scrim plus a
 // role="dialog" panel styled with the same tokens.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Banner, Button, ButtonGroup, Snackbar, Tooltip } from "kone-design-system";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
+import {
+  Banner,
+  Button,
+  ButtonGroup,
+  Snackbar,
+  Tooltip,
+} from "kone-design-system";
 import { previewCascade, type AdminAction } from "../lib/adminMode";
 import { displayName } from "../lib/display";
 import type { DevicePayload } from "../lib/types";
@@ -18,7 +31,8 @@ import { useAdminStore, type AdminResult } from "../store/adminStore";
 const ACK_TIMEOUT_MS = 15000;
 const CONFIG_ERROR_TEXT =
   "Admin login unavailable. Reload the page, or check that the dashboard container has the admin password configured.";
-const NO_ANSWER_TEXT = "No answer from the poller. Check that it is running, then try again.";
+const NO_ANSWER_TEXT =
+  "No answer from the poller. Check that it is running, then try again.";
 
 const STATE_WORD: Record<AdminAction, string> = {
   up: "UP",
@@ -132,7 +146,10 @@ export interface AdminActionBarProps {
   topologyDevices: unknown[];
 }
 
-export function AdminActionBar({ devices, topologyDevices }: AdminActionBarProps) {
+export function AdminActionBar({
+  devices,
+  topologyDevices,
+}: AdminActionBarProps) {
   const selected = useAdminStore((s) => s.selected);
   const faked = useAdminStore((s) => s.faked);
   const configError = useAdminStore((s) => s.configError);
@@ -240,7 +257,9 @@ export function AdminActionBar({ devices, topologyDevices }: AdminActionBarProps
     if (event.key !== "Tab" || !panelRef.current) {
       return;
     }
-    const focusable = panelRef.current.querySelectorAll<HTMLElement>("button:not([disabled])");
+    const focusable = panelRef.current.querySelectorAll<HTMLElement>(
+      "button:not([disabled])",
+    );
     if (focusable.length === 0) {
       return;
     }
@@ -257,7 +276,10 @@ export function AdminActionBar({ devices, topologyDevices }: AdminActionBarProps
 
   const nameFor = (id: string) => displayName(devices[id] ?? { id });
   const cascaded = useMemo(
-    () => (dialog?.action === "down" ? previewCascade(dialog.hosts, topologyDevices) : []),
+    () =>
+      dialog?.action === "down"
+        ? previewCascade(dialog.hosts, topologyDevices)
+        : [],
     [dialog, topologyDevices],
   );
 
@@ -271,35 +293,64 @@ export function AdminActionBar({ devices, topologyDevices }: AdminActionBarProps
     </Button>
   );
 
-  const destructive = dialog?.action === "down" || dialog?.action === "unreach" || dialog?.action === "restore_all";
+  const destructive =
+    dialog?.action === "down" ||
+    dialog?.action === "unreach" ||
+    dialog?.action === "restore_all";
 
   return (
     <>
-      <div className="flex items-center gap-2 border-t bg-bg-subtle p-4" data-testid="admin-action-bar">
+      <div
+        className="flex items-center gap-2 border-t bg-bg-subtle p-4"
+        data-testid="admin-action-bar"
+      >
         <div className="flex flex-col">
           <span className="text-sm font-semibold text-fg-primary">
-            {noneSelected ? "No hosts selected" : `${selectedIds.length} selected`}
+            {noneSelected
+              ? "No hosts selected"
+              : `${selectedIds.length} selected`}
           </span>
           {noneSelected && (
             <span className="text-xs text-fg-tertiary">
-              Ctrl+click hosts on the map or in the tree, or tick a folder, then choose an action.
+              Ctrl+click hosts on the map or in the tree, or tick a folder, then
+              choose an action.
             </span>
           )}
         </div>
-        <Button variant="tertiary" disabled={noneSelected} onClick={clearSelection}>
+        <Button
+          variant="tertiary"
+          disabled={noneSelected}
+          onClick={clearSelection}
+        >
           Clear selection
         </Button>
         <ButtonGroup>
-          <Button variant="secondary" disabled={noneSelected || actionsDisabled} onClick={() => open("up", selectedIds)}>
+          <Button
+            variant="secondary"
+            disabled={noneSelected || actionsDisabled}
+            onClick={() => open("up", selectedIds)}
+          >
             Set UP
           </Button>
-          <Button variant="secondary" disabled={noneSelected || actionsDisabled} onClick={() => open("down", selectedIds)}>
+          <Button
+            variant="secondary"
+            disabled={noneSelected || actionsDisabled}
+            onClick={() => open("down", selectedIds)}
+          >
             Set DOWN
           </Button>
-          <Button variant="secondary" disabled={noneSelected || actionsDisabled} onClick={() => open("unreach", selectedIds)}>
+          <Button
+            variant="secondary"
+            disabled={noneSelected || actionsDisabled}
+            onClick={() => open("unreach", selectedIds)}
+          >
             Set UNREACHABLE
           </Button>
-          <Button variant="secondary" disabled={noneSelected || actionsDisabled} onClick={() => open("restore", selectedIds)}>
+          <Button
+            variant="secondary"
+            disabled={noneSelected || actionsDisabled}
+            onClick={() => open("restore", selectedIds)}
+          >
             Restore selected
           </Button>
         </ButtonGroup>
@@ -334,11 +385,19 @@ export function AdminActionBar({ devices, topologyDevices }: AdminActionBarProps
             onClick={(event) => event.stopPropagation()}
             onKeyDown={trapTab}
           >
-            <h2 id="admin-dialog-title" className="text-xl font-semibold text-fg-primary">
+            <h2
+              id="admin-dialog-title"
+              className="text-xl font-semibold text-fg-primary"
+            >
               {dialogTitle(dialog.action)}
             </h2>
             <p className="mt-2 text-sm text-fg-secondary">
-              {effectSentence(dialog.action, dialog.action === "restore_all" ? fakedCount : dialog.hosts.length)}
+              {effectSentence(
+                dialog.action,
+                dialog.action === "restore_all"
+                  ? fakedCount
+                  : dialog.hosts.length,
+              )}
             </p>
             {dialog.action !== "restore_all" && (
               <div className="mt-4 max-h-60 overflow-auto rounded-md bg-bg-subtle p-3">
@@ -374,7 +433,12 @@ export function AdminActionBar({ devices, topologyDevices }: AdminActionBarProps
               </div>
             )}
             <div className="mt-6 flex justify-end gap-2">
-              <Button ref={cancelRef} variant="secondary" disabled={waiting} onClick={cancel}>
+              <Button
+                ref={cancelRef}
+                variant="secondary"
+                disabled={waiting}
+                onClick={cancel}
+              >
                 Cancel
               </Button>
               <Button
@@ -382,7 +446,12 @@ export function AdminActionBar({ devices, topologyDevices }: AdminActionBarProps
                 loading={waiting}
                 onClick={confirm}
               >
-                {confirmLabel(dialog.action, dialog.action === "restore_all" ? fakedCount : dialog.hosts.length)}
+                {confirmLabel(
+                  dialog.action,
+                  dialog.action === "restore_all"
+                    ? fakedCount
+                    : dialog.hosts.length,
+                )}
               </Button>
             </div>
           </div>

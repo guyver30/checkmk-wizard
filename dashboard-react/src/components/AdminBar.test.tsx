@@ -45,7 +45,11 @@ describe("AdminBanner", () => {
     act(() => useAdminStore.setState({ faked: { h1: "DOWN" } }));
     rerender(<AdminBanner />);
     expect(screen.getByText("ADMIN MODE - 1 host faked")).toBeInTheDocument();
-    act(() => useAdminStore.setState({ faked: { h1: "DOWN", h2: "UP", sw1: "UNREACH" } }));
+    act(() =>
+      useAdminStore.setState({
+        faked: { h1: "DOWN", h2: "UP", sw1: "UNREACH" },
+      }),
+    );
     expect(screen.getByText("ADMIN MODE - 3 hosts faked")).toBeInTheDocument();
   });
 
@@ -68,13 +72,23 @@ describe("AdminActionBar", () => {
     renderBar();
     expect(screen.getByText("No hosts selected")).toBeInTheDocument();
     expect(screen.getByText(/Ctrl\+click hosts/)).toBeInTheDocument();
-    for (const name of ["Set UP", "Set DOWN", "Set UNREACHABLE", "Restore selected", "Restore all"]) {
+    for (const name of [
+      "Set UP",
+      "Set DOWN",
+      "Set UNREACHABLE",
+      "Restore selected",
+      "Restore all",
+    ]) {
       expect(screen.getByRole("button", { name })).toBeDisabled();
     }
   });
 
   it("disables every action when configError is set", () => {
-    useAdminStore.setState({ selected: new Set(["h1"]), faked: { h2: "DOWN" }, configError: true });
+    useAdminStore.setState({
+      selected: new Set(["h1"]),
+      faked: { h2: "DOWN" },
+      configError: true,
+    });
     renderBar();
     expect(screen.getByRole("button", { name: "Set DOWN" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Restore all" })).toBeDisabled();
@@ -87,7 +101,9 @@ describe("AdminActionBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set DOWN" }));
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(dialog).toHaveTextContent("Mark 2 hosts DOWN. Managed hosts below them become UNREACHABLE.");
+    expect(dialog).toHaveTextContent(
+      "Mark 2 hosts DOWN. Managed hosts below them become UNREACHABLE.",
+    );
     expect(dialog).toHaveTextContent("h1");
     expect(dialog).toHaveTextContent("h2");
     expect(publishAdminCommand).not.toHaveBeenCalled();
@@ -128,7 +144,13 @@ describe("AdminActionBar", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     act(() =>
       useAdminStore.setState({
-        lastResult: { ok: true, action: "down", count: 2, detail: "", atMs: Date.now() },
+        lastResult: {
+          ok: true,
+          action: "down",
+          count: 2,
+          detail: "",
+          atMs: Date.now(),
+        },
       }),
     );
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -142,11 +164,19 @@ describe("AdminActionBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set 1 hosts UP" }));
     act(() =>
       useAdminStore.setState({
-        lastResult: { ok: false, action: "up", count: 0, detail: "livestatus down", atMs: Date.now() },
+        lastResult: {
+          ok: false,
+          action: "up",
+          count: 0,
+          detail: "livestatus down",
+          atMs: Date.now(),
+        },
       }),
     );
     expect(
-      screen.getByText("Could not apply: livestatus down. Nothing changed. Try again in a few seconds."),
+      screen.getByText(
+        "Could not apply: livestatus down. Nothing changed. Try again in a few seconds.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -163,7 +193,9 @@ describe("AdminActionBar", () => {
       vi.advanceTimersByTime(15000);
     });
     expect(
-      screen.getByText("No answer from the poller. Check that it is running, then try again."),
+      screen.getByText(
+        "No answer from the poller. Check that it is running, then try again.",
+      ),
     ).toBeInTheDocument();
     expect(useAdminStore.getState().pending).toBeNull();
   });
@@ -182,8 +214,12 @@ describe("AdminActionBar", () => {
     useAdminStore.setState({ faked: { h1: "DOWN", h2: "UP" } });
     renderBar();
     fireEvent.click(screen.getByRole("button", { name: "Restore all" }));
-    expect(screen.getByRole("dialog")).toHaveTextContent("Re-enable normal checks on all 2 faked hosts.");
-    fireEvent.click(screen.getByRole("button", { name: "Restore all 2 faked hosts" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "Re-enable normal checks on all 2 faked hosts.",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore all 2 faked hosts" }),
+    );
     expect(publishAdminCommand).toHaveBeenCalledWith("restore_all", []);
   });
 
