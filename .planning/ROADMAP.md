@@ -428,6 +428,12 @@ Plans:
   - D-31: simple regression on monotonic metrics (filesystem growth, SSD/NVMe wear, reallocated sectors, memory creep), no ML. Dates show immediately with a confidence tag based on how much history exists. Risk to carry: a low-confidence drive-failure date could still trigger an engineer dispatch, so the tag and history span must be prominent
   - D-32: forecasts and narration are computed in a separate analytics container that reads the TSDB and publishes to retained MQTT topics. The poller stays small, and the dashboard stays a pure MQTT consumer for these outputs
 
+**Carried in from the 14.1 history-store review (2026-10-03, `docs/Retrieving-Checkmk-Event-History.md` vs the built stack); to be decided in `/bm:discuss-phase 14.2`:**
+
+  - Open decision A: S3 disk read cache. `deploy/clickhouse-config/config.d/` defines the `s3_tiered` policy with no filesystem cache, so a forecast fitting more than 31 days of history reads cold parts from MinIO on every query. Decide whether to add a ClickHouse filesystem cache on the S3 disk (config only) before the analytics container depends on long-range reads.
+  - Open decision B: event and incident history. `history.metrics`, `host_state` and `service_state` hold per-poll samples, so state transitions can be derived, but incident open/close, plugin output text and acknowledgments exist only on bounded retained MQTT topics (events capped at 1000). Narration and any "what happened last Tuesday" question need a durable store: decide whether the poller writes a `history.events` / `history.incidents` table (D-44 posture: push-only, no on-disk state in the poller) or the analytics container derives everything from the sample tables.
+  - Context for both: tiering (31-day move to MinIO) and the 30/365-day TTL rollups have never fired on the live stack, which is only days old; first proof is about a month out. `SELECT table, disk_name, count() FROM system.parts WHERE database='history' AND active GROUP BY table, disk_name` as `ch_admin` shows where parts live.
+
 **Plans:** 0 plans
 
 Plans:
