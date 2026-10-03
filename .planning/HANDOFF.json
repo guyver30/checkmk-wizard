@@ -1,39 +1,41 @@
 {
   "version": "1.0",
-  "timestamp": "2026-10-02T10:05:35.912Z",
-  "phase": "14.1",
-  "phase_name": "Fleet History Store, Availability Rollups and Grafana",
-  "phase_dir": ".planning/phases/14.1-fleet-history-store-availability-rollups-and-grafana",
-  "plan": 8,
-  "task": 2,
-  "total_tasks": 2,
+  "timestamp": "2026-10-03T12:53:31.618Z",
+  "phase": "14.2",
+  "phase_name": "Fleet Failure Prediction and Incident Narration",
+  "phase_dir": ".planning/phases/14.2-fleet-failure-prediction-and-incident-narration",
+  "plan": 0,
+  "task": 0,
+  "total_tasks": 0,
   "status": "paused",
   "completed_tasks": [
-    {"id": 1, "name": "Task 1: offline pre-flight (pytest 809, ruff, YAML/JSON/bash -n, --help)", "status": "done", "commit": "n/a (no files)"},
-    {"id": 2, "name": "Task 2: operator live verification of the history stack", "status": "in_progress", "progress": "steps 1-5 pass; step 7 smoke test 10/12 (2 rollup 404s expected today); step 8 Grafana: cap and SQL fixes committed, awaiting the user's re-check after git pull"}
+    {"id": 1, "name": "Phase 14.1 live verification closed (plan 08 summary, roadmap ticked)", "status": "done", "commit": "93465d3"},
+    {"id": 2, "name": "poller_writer CREATE TEMPORARY TABLE grant in 02-users.sh + docs (quick 261003-le3)", "status": "done", "commit": "990684e"},
+    {"id": 3, "name": "Agent host state from dashboard-visible services only (quick 261003-lnr)", "status": "done", "commit": "b37bce9"},
+    {"id": 4, "name": "Admin-mode presenter cheat sheet", "status": "done", "commit": "2d76a4f"},
+    {"id": 5, "name": "discuss-phase 14.2 area 1: History inputs for analytics", "status": "done", "commit": "n/a (checkpoint)"},
+    {"id": 6, "name": "discuss-phase 14.2 area 2: Forecast scope and output", "status": "in_progress", "progress": "tiers, bands, confidence, cadence and topic shape agreed; dashboard placement suggested, awaiting user confirmation"}
   ],
   "remaining_tasks": [
-    {"id": 3, "name": "Step 6: first daily rollup JSON+Parquet in fleet-availability; full down/up must not rewrite it", "status": "not_started"},
-    {"id": 4, "name": "Step 7 rerun without --date (defaults to yesterday, Asia/Singapore): rollup_json_get and rollup_parquet_get must return 200", "status": "not_started"},
-    {"id": 5, "name": "Step 8: confirm all three Grafana dashboards render; Availability needs rollup data", "status": "in_progress"},
-    {"id": 6, "name": "Write 14.1-08-SUMMARY.md, mark plan complete, verify and close phase 14.1", "status": "not_started"}
+    {"id": 7, "name": "Confirm needs placement in dashboard (Needs pane beside incidents, tier markers, details section)", "status": "not_started"},
+    {"id": 8, "name": "discuss-phase 14.2 area 3: Service needs and triage storage (D-35: where triage state lives, how the dashboard writes it with no backend)", "status": "not_started"},
+    {"id": 9, "name": "discuss-phase 14.2 area 4: Narration approach and surfaces (template vs self-hosted model, triggers, facts allowed, where shown)", "status": "not_started"},
+    {"id": 10, "name": "Write 14.2-CONTEXT.md and DISCUSSION-LOG.md, delete checkpoint, commit, then /bm:plan-phase 14.2", "status": "not_started"}
   ],
-  "blockers": [
-    {"description": "Rollup steps (6, 7 rollup GETs, Availability dashboard) need a finished Asia/Singapore day of data; the stack was wiped and recreated on 2026-10-02", "type": "external", "workaround": "run them on 2026-10-03 or later"}
-  ],
+  "blockers": [],
   "human_actions_pending": [
-    {"action": "On the deploy host: git pull; run the one-off ALTER SETTINGS PROFILE history_reader_profile ... MAX 120 (docs/DEPLOY-NEW-MACHINE.md, section 6) if not done; wait 60 s for Grafana to reload the Availability dashboard", "context": "quick 261002-nm2 and 261002-nqa fix the Grafana errors", "blocking": true},
-    {"action": "Report what the three Grafana dashboards show after the pull", "context": "step 8", "blocking": true},
-    {"action": "Deploy host: rm -rf .venv in the checkout, full down/up, run the wizard once and host uv sync (quick 261002-nlp .venv fix)", "context": "not yet verified live", "blocking": false},
-    {"action": "Check Phase 16 review fixes WR-02/WR-04 in a live admin-mode session", "context": "unit-tested only", "blocking": false}
+    {"action": "Optional: verify on the live site how often Checkmk's last_check advances (are 3 of 4 15s samples repeats?) and count rows per cycle in history.metrics", "context": "Estimates in docs/MQTT-CONTRACT-WALKTHROUGH.md Part 4 are assumptions", "blocking": false},
+    {"action": "Deploy host: rebuild dashboard image, full down/up (already done for double-click and host-state fixes); rm -rf .venv fix 261002-nlp and Phase 16 WR-02/WR-04 still unverified live", "context": "non-blocking", "blocking": false}
   ],
   "decisions": [
-    {"decision": "Use a real Linux host (192.168.97.130) plus demo hosts for plan 14.1-08", "rationale": "history.metrics is built from CPU/RAM/disk perf data, which demo hosts do not have", "phase": "14.1"},
-    {"decision": "Restore in Phase 16 admin mode returns hosts to the demo baseline (UP, PING OK, PING stays disabled)", "rationale": "re-enabling PING pings non-existent IPs and goes CRITICAL", "phase": "16"},
-    {"decision": "WR-06 (keepalive on hand-disabled hosts) stays open and documented", "rationale": "fix needs a poller-owned faked set; user chose to defer", "phase": "16"},
-    {"decision": "Do not commit docs/*.png screenshots; leave HANDOFF.json handling to pause-work", "rationale": "user instruction", "phase": "n/a"}
+    {"decision": "Own cloud tenancy counts as inside the network (restates Phase 14 D-30)", "rationale": "Broker, S3, ClickHouse, new dashboard and Grafana move to the cloud; nothing may go to third-party model providers or SaaS the operator does not control", "phase": "14.2"},
+    {"decision": "Analytics container subscribes to MQTT and writes history.events/history.incidents; in 14.2 it reads today's lan/events/recent and lan/incidents/+/status and dedupes; no poller change", "rationale": "Cloud split; per-event messages belong to a later transport phase", "phase": "14.2"},
+    {"decision": "Daily availability rollup job moves from the poller to the analytics container in 14.2", "rationale": "Poller will have no ClickHouse or S3 access after the cloud split", "phase": "14.2"},
+    {"decision": "Add a filesystem read cache on the ClickHouse S3 disk (config only)", "rationale": "Forecasts read more than 31 days of history from MinIO", "phase": "14.2"},
+    {"decision": "Cloud-ready transport work is a SEPARATE phase (per-site namespace, per-event messages, last_check sample dedup, gzip + 1-min aggregation, status-by-exception); 60 s gauge freshness is fine; dashboard reads events/history from ClickHouse over HTTP", "rationale": "Metered 4G links and hundreds of sites", "phase": "new"},
+    {"decision": "Service-need tier derives from criticality by fixed mapping (critical->immediate, high->urgent, medium/low->standard); bands immediate <3 days or already critical, urgent 3-20, standard >20, horizon 90 days; confidence low <14d, medium 14-60d, high >60d with good fit; evaluate every 15 min; publish lan/needs/{need_id}/status retained QoS 1", "rationale": "User answers 2026-10-03", "phase": "14.2"}
   ],
-  "uncommitted_files": ["docs/host_service_menu.png", "docs/hosts_down.png", "docs/hosts_down2.png", "docs/hosts_up.png", "docs/incident1.png", ".planning/phases/16-dashboard-admin-mode-fake-host-up-down-for-live-demos-admin-/16-PATTERNS.md"],
-  "next_action": "Ask the user what the three Grafana dashboards show after git pull + the ALTER; then, on 2026-10-03 or later, rerun scripts/smoke_test_history_proxy.py without --date and do step 6",
-  "context_notes": "Phase 16 (admin mode) is complete and verified live. Remaining roadmap work: 14.1 plan 08 (this), Phase 10 human-verification debt (2 items), phases 14.2 and 15 unplanned. On the deploy host (dmc-server 192.168.97.129, site dmc_test) NEVER restart or stop a single container: it cuts Checkmk off from the LAN (reproduced 2026-10-02); use full podman compose down && up -d."
+  "uncommitted_files": ["docs/host_service_menu.png", "docs/hosts_down.png", "docs/hosts_down2.png", "docs/hosts_up.png", "docs/incident1.png", "docs/Retrieving-Checkmk-Event-History.md", ".planning/phases/16-dashboard-admin-mode-fake-host-up-down-for-live-demos-admin-/16-PATTERNS.md"],
+  "next_action": "Re-run /bm:discuss-phase 14.2 and choose Resume at the checkpoint prompt; first ask the user to confirm the Needs pane placement, then discuss area 3 (triage storage) and area 4 (narration)",
+  "context_notes": "Discussion in default (single-question) mode. The user prefers to clarify in prose when structured questions do not fit (two AskUserQuestion calls were rejected for that); give a recommendation with defaults they can accept. docs/MQTT-CONTRACT-WALKTHROUGH.md (4 parts) is the shared reference for the cloud team. On dmc-server NEVER restart or stop a single container; use full podman compose down && up -d."
 }

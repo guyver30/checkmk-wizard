@@ -385,3 +385,8 @@
 - **2026-10-03 16:40** — document all admin-mode guidelines (set up/down/unreachable/restore, baseline, faked set) so I do not mess up during the demo
 - **2026-10-03 17:00** — /bm:next, then 1 (remove stale .continue-here.md and continue)
 - **2026-10-03 17:25** — carry both (S3 filesystem cache, events/incidents table) into 14.2 CONTEXT
+- **2026-10-03 18:10** — write the last 2 answers (poller publishing today + history over MQTT; message walkthrough) to a .md file
+- **2026-10-03 18:40** — explain in the same doc how the current dashboard uses all these topics
+- **2026-10-03 19:00** — add the bandwidth options discussion to the same .md
+- **2026-10-03 19:15** — 60s is fine for gauges, read events from ClickHouse; transport work belongs to a separate phase
+- **2026-10-03 19:45** — /bm:pause-work (also: answered A for criticality->tier mapping, bands fine, defaults fine; asked for placement of needs in dashboard)

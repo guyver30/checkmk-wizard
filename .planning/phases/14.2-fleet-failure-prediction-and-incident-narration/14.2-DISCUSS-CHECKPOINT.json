@@ -1,0 +1,127 @@
+{
+  "phase": "14.2",
+  "phase_name": "fleet-failure-prediction-and-incident-narration",
+  "timestamp": "2026-10-03T12:53:31Z",
+  "areas_completed": [
+    "History inputs for analytics"
+  ],
+  "areas_remaining": [
+    "Forecast scope and output (confirm dashboard placement)",
+    "Service needs and triage storage",
+    "Narration approach and surfaces"
+  ],
+  "decisions": {
+    "History inputs for analytics": [
+      {
+        "question": "S3 read cache on the ClickHouse S3 disk?",
+        "answer": "Add it now (config only, filesystem cache on the s3 disk)",
+        "options_presented": [
+          "Add it now",
+          "Skip until measured",
+          "You decide"
+        ]
+      },
+      {
+        "question": "Source of durable event/incident history",
+        "answer": "Analytics container subscribes to MQTT and writes history tables (user: needed because broker, S3, ClickHouse and dashboard move to the cloud)",
+        "options_presented": [
+          "Poller writes history tables",
+          "Analytics derives from samples",
+          "Analytics container records it"
+        ]
+      },
+      {
+        "question": "D-30 restated",
+        "answer": "Own cloud tenancy counts as inside the network; nothing goes to third-party model providers or SaaS you do not control",
+        "options_presented": [
+          "Own tenancy is inside",
+          "Keep D-30 strict for narration only",
+          "Strict, move needs sign-off"
+        ]
+      },
+      {
+        "question": "Interim ingestion before the transport phase",
+        "answer": "Subscriber reads today's lan/events/recent and lan/incidents/+/status, dedupes, writes history.events/history.incidents; no poller change",
+        "options_presented": [
+          "Subscriber reads today's topics",
+          "Poller publishes per-event messages now",
+          "Defer durable events"
+        ]
+      },
+      {
+        "question": "Rollup job location",
+        "answer": "Move the daily availability rollup from the poller to the analytics container in 14.2",
+        "options_presented": [
+          "Move it in 14.2",
+          "Leave it in the poller"
+        ]
+      },
+      {
+        "question": "Cloud transport optimisation scope",
+        "answer": "Separate phase: per-site namespace, per-event messages, last_check sample dedup, compression/aggregation, status-by-exception. 60 s gauge freshness OK; dashboard reads events/history from ClickHouse over HTTP",
+        "options_presented": [
+          "in 14.2",
+          "separate phase"
+        ]
+      }
+    ],
+    "Forecast scope and output": [
+      {
+        "question": "What counts as a service need and who sets the tier",
+        "answer": "Three sources: (1) host/service failure (ping host DOWN, TCP port, monitored systemd/Windows service) with an operator-set tier per host and per service; (2) trend to threshold for disk fill, SSD/NVMe wear, reallocated sectors, memory creep, tier by days-to-threshold bands; (3) sustained or already-breached (disk already critical, CPU ~100% most of the time) = immediate. Case 3 is a new rule type (sustained breach), not regression.",
+        "options_presented": []
+      },
+      {
+        "question": "Relation of response tier to existing criticality",
+        "answer": "A for now: derive tier from criticality by fixed mapping (critical->immediate, high->urgent, medium/low->standard); no new setting, extend existing map edit-mode CriticalityEditor; revisit later (parked todo on the criticality model)",
+        "options_presented": [
+          "A derive by mapping",
+          "B separate if-it-fails tier",
+          "C replace criticality with tiers"
+        ]
+      },
+      {
+        "question": "Trend bands and horizon",
+        "answer": "immediate: already critical or under 3 days; urgent: 3 to 20 days; standard: over 20 days; nothing shown beyond 90 days; all configurable (updates D-34 defaults of 3/15)",
+        "options_presented": []
+      },
+      {
+        "question": "Confidence tag",
+        "answer": "low <14 days history, medium 14-60 days, high >60 days with good straight-line fit; noisy/flat/away-from-threshold series gets no date ('stable' / 'no clear trend'); a low-confidence SMART/wear date is never immediate on its own",
+        "options_presented": []
+      },
+      {
+        "question": "Evaluation cadence and publication",
+        "answer": "Analytics container evaluates every 15 min; publishes one retained QoS1 topic per active need lan/needs/{need_id}/status (source, host, service/metric, tier, days_to_threshold, confidence, history_days, narration text), tombstoned when resolved; failure and sustained needs derived from live status/services/topology topics, trends from ClickHouse",
+        "options_presented": []
+      },
+      {
+        "question": "Dashboard placement (suggested, user has not yet confirmed)",
+        "answer": "PENDING confirmation: new Needs pane in right column beside incidents (tier badge, host, what, date, prominent confidence badge + history span, click selects host, triage controls for experts); tier marker on tree rows and map nodes separate from state colour; Needs section in host details; no double counting for hosts covered by an open incident (incident card shows derived tier); must fit kiosk mode",
+        "options_presented": [
+          "Needs inside incident card",
+          "Separate Needs pane (suggested)"
+        ]
+      }
+    ]
+  },
+  "deferred_ideas": [
+    "Cloud-ready transport phase (per-site namespace, per-event messages, last_check dedup, gzip + 1-min aggregation, status-by-exception, dashboard staleness from site heartbeat)",
+    "Topology edit command path via broker for a cloud dashboard",
+    "Poller history samples over MQTT instead of direct ClickHouse HTTP (cloud split)",
+    "Dashboard event pane reading history.events via /ch-api/",
+    "Revisit criticality and dependency model todo (Phase 14 leftover)"
+  ],
+  "canonical_refs": [
+    "docs/MQTT-CONTRACT-WALKTHROUGH.md",
+    "docs/Retrieving-Checkmk-Event-History.md",
+    ".planning/phases/14-fleet-intelligence/14-CONTEXT.md",
+    ".planning/phases/14.1-fleet-history-store-availability-rollups-and-grafana/14.1-CONTEXT.md",
+    "deploy/clickhouse-config/initdb/01-schema.sql",
+    "deploy/clickhouse-config/config.d/",
+    "docs/Podman setup for checkmk, minio, mosquitto, worker.md",
+    "dashboard-react/src/components/CriticalityEditor.tsx",
+    ".planning/todos/pending/2026-09-28-revisit-criticality-and-dependency-model.md"
+  ],
+  "in_progress_area": "Forecast scope and output"
+}
