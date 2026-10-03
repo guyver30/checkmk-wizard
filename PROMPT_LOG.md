@@ -383,3 +383,4 @@
 - **2026-10-03 15:30** — go (apply the poller_writer CREATE TEMPORARY TABLE grant fix via /gsd-quick)
 - **2026-10-03 16:05** — (Systemd Timesyncd Time is the critical one; dashboard shows Systemd Service systemd-timesyncd OK) then: option 2, hidden services must not alter the host overall status
 - **2026-10-03 16:40** — document all admin-mode guidelines (set up/down/unreachable/restore, baseline, faked set) so I do not mess up during the demo
+- **2026-10-03 17:00** — /bm:next, then 1 (remove stale .continue-here.md and continue)
