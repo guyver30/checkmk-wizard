@@ -741,6 +741,65 @@ def compute_overall_state(host_state: int, worst_service_state: int) -> str:
     return _SERVICE_STATE_NAMES.get(worst_service_state, "UNKNOWN")
 
 
+# Quick 261003-lnr (operator-chosen 2026-10-03): an agent host's overall state is the worst of the
+# services the dashboard SHOWS, not Livestatus's `worst_service_state` (which counts every service).
+# Live finding: a host went CRIT because of Checkmk's "Systemd Timesyncd Time" check, a service the
+# dashboard never lists, so the CRIT badge had no visible cause. The operator picks which services
+# to monitor in the wizard and does not want hidden ones to alter the host's status. "Shown" mirrors
+# dashboard-react/src/lib/agentDetail.ts (`displayedServices`, `CHOSEN_SERVICE_RE`) plus the
+# gauge-backed services (CPU/RAM/filesystems/SMART) and the agent-connection and uptime rows; keep
+# the two in step. Non-agent hosts (SNMP/ping) show their full service table, so they are unchanged.
+AGENT_INFO_SERVICE = "Check_MK Agent"
+_VISIBLE_AGENT_SERVICES_EXACT = frozenset({"Check_MK", "Uptime", GAUGE_CPU_SERVICE, GAUGE_RAM_SERVICE})
+_CHOSEN_SERVICE_RE = re.compile(r"^(Systemd Service|Service) (?!Summary$)")
+_TCP_PORT_SERVICE_RE = re.compile(r"^TCP Port \d+")
+# Checkmk's own worst-state order (Livestatus docs): OK < WARN < UNKNOWN < CRIT.
+_SERVICE_STATE_SEVERITY = {"OK": 0, "WARN": 1, "UNKNOWN": 2, "CRIT": 3}
+
+
+def is_visible_agent_service(description: str) -> bool:
+    """True if the dashboard shows this service of an agent host (so it may drive the host state)."""
+    return (
+        description in _VISIBLE_AGENT_SERVICES_EXACT
+        or description.startswith(GAUGE_FILESYSTEM_PREFIX)
+        or bool(SMART_HEALTH_SERVICE_RE.match(description))
+        or bool(_CHOSEN_SERVICE_RE.match(description))
+        or bool(_TCP_PORT_SERVICE_RE.match(description))
+    )
+
+
+def apply_visible_service_state(
+    snapshots: list[DeviceSnapshot], services: list[ServiceSnapshot]
+) -> None:
+    """Recompute each agent host's `state` from its dashboard-visible services only.
+
+    A host that is DOWN/UNREACHABLE keeps `"DOWN"`, and a host with no `Check_MK Agent` service
+    (not an agent host) keeps the Livestatus-derived state. Runs before anything reads
+    `snapshot.state`, so the status topic, events, history, topology and incidents all agree.
+    Skipped by the caller on a cycle whose services query failed (`services is None`): the host
+    column's state is then published unchanged, which can briefly differ for a host with a hidden
+    non-OK service.
+    """
+    by_host: dict[str, list[ServiceSnapshot]] = {}
+    for service in services:
+        by_host.setdefault(service.host_name, []).append(service)
+    for snapshot in snapshots:
+        if snapshot.state == "DOWN":
+            continue
+        host_services = by_host.get(snapshot.id, [])
+        if not any(s.description == AGENT_INFO_SERVICE for s in host_services):
+            continue
+        worst = max(
+            (
+                _SERVICE_STATE_SEVERITY.get(s.state, _SERVICE_STATE_SEVERITY["UNKNOWN"])
+                for s in host_services
+                if is_visible_agent_service(s.description)
+            ),
+            default=0,
+        )
+        snapshot.state = next(name for name, rank in _SERVICE_STATE_SEVERITY.items() if rank == worst)
+
+
 def host_state_label(host_state: int) -> str:
     """Map a raw Livestatus host-state int to "UP"/"DOWN"/"UNREACH" (D-17).
 
@@ -4121,6 +4180,9 @@ def run_cycle(
     UNREACH set) still triggers exactly one republish.
     """
     now = utc_now_iso()
+
+    if services is not None:
+        apply_visible_service_state(snapshots, services)
 
     services_by_host: dict[str, list[ServiceSnapshot]] = {}
     if services is not None:

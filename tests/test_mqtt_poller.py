@@ -5038,3 +5038,67 @@ def test_run_calls_keepalive_every_iteration_and_survives_errors():
     worker._queue.put(poller.parse_admin_command(_cmd(action="down", hosts=("h1",))))
     worker._run()
     assert calls == [123.0, 123.0]
+
+
+# Quick 261003-lnr: a live agent host went CRIT because of Checkmk's "Systemd Timesyncd Time" check,
+# a service the dashboard never lists, so the CRIT badge had no visible cause. The host state must
+# follow only the services the dashboard shows.
+def _agent_services(host, **states):
+    base = {
+        "Check_MK Agent": "OK",
+        "Check_MK": "OK",
+        "Uptime": "OK",
+        "Systemd Service systemd-timesyncd": "OK",
+    }
+    base.update({k.replace("_", " "): v for k, v in states.items()})
+    return [_service(host, description, state) for description, state in base.items()]
+
+
+def test_hidden_critical_service_does_not_change_agent_host_state():
+    snapshot = _snapshot("linux1", state="CRIT")
+    services = _agent_services("linux1") + [_service("linux1", "Systemd Timesyncd Time", "CRIT")]
+    poller.apply_visible_service_state([snapshot], services)
+    assert snapshot.state == "OK"
+
+
+def test_systemd_summary_is_hidden_so_it_does_not_change_agent_host_state():
+    snapshot = _snapshot("linux1", state="CRIT")
+    services = _agent_services("linux1") + [_service("linux1", "Systemd Service Summary", "CRIT")]
+    poller.apply_visible_service_state([snapshot], services)
+    assert snapshot.state == "OK"
+
+
+@pytest.mark.parametrize(
+    "description",
+    ["Systemd Service cron", "Service Spooler", "TCP Port 22 (expected open)", "CPU utilization",
+     "Memory", "Filesystem /var", "SMART /dev/sda Stats", "Check_MK", "Uptime"],
+)
+def test_visible_critical_service_drives_agent_host_state(description):
+    snapshot = _snapshot("linux1", state="OK")
+    services = _agent_services("linux1") + [_service("linux1", description, "CRIT")]
+    poller.apply_visible_service_state([snapshot], services)
+    assert snapshot.state == "CRIT"
+
+
+def test_worst_visible_state_uses_checkmk_order_unknown_below_crit():
+    snapshot = _snapshot("linux1", state="CRIT")
+    services = _agent_services("linux1", Uptime="UNKNOWN", Check_MK="WARN")
+    poller.apply_visible_service_state([snapshot], services)
+    assert snapshot.state == "UNKNOWN"
+
+
+def test_non_agent_host_and_down_host_keep_their_state():
+    ping_only = _snapshot("sw1", state="CRIT")
+    down = _snapshot("linux2", state="DOWN", host_state_raw="DOWN")
+    services = [_service("sw1", "Interface 1", "CRIT")] + _agent_services("linux2")
+    poller.apply_visible_service_state([ping_only, down], services)
+    assert ping_only.state == "CRIT"
+    assert down.state == "DOWN"
+
+
+def test_run_cycle_publishes_state_from_visible_services():
+    client = MagicMock()
+    services = _agent_services("linux1") + [_service("linux1", "Systemd Timesyncd Time", "CRIT")]
+    poller.run_cycle(client, _make_config(), _poller_state(), [_snapshot("linux1", state="CRIT")], services)
+    payload = json.loads(_published(client, "lan/devices/linux1/status")[0].args[1])
+    assert payload["state"] == "OK"
