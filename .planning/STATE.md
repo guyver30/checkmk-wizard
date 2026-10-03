@@ -135,6 +135,7 @@ None.
 | fast | Add docs/DEPLOY-NEW-MACHINE.md new-machine deploy checklist, linked from README | 2026-09-30 | 62d64e0 | - |
 | 261003-le3 | poller_writer gains CREATE TEMPORARY TABLE (initdb + one-off doc) so the Parquet rollup writes; found live in 14.1-08 | 2026-10-03 | 990684e | [261003-le3-poller-writer-create-temporary-table-gra](./quick/261003-le3-poller-writer-create-temporary-table-gra/) |
 | 261003-lnr | Agent host overall state = worst dashboard-visible service (hidden checks like Systemd Timesyncd Time no longer turn the host CRIT) | 2026-10-03 | b37bce9 | [261003-lnr-host-overall-state-from-visible-services](./quick/261003-lnr-host-overall-state-from-visible-services/) |
+| fast | Admin-mode presenter cheat sheet in docs/Incident demo with fake check results.md | 2026-10-03 | 2d76a4f | - |
 
 ## Deferred Items
 
