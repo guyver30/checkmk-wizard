@@ -134,6 +134,7 @@ None.
 | fast | Switch MinIO image to cgr.dev/chainguard/minio pinned by digest (Docker Hub and quay.io both unpullable) | 2026-09-30 | c77c3fd | - |
 | fast | Add docs/DEPLOY-NEW-MACHINE.md new-machine deploy checklist, linked from README | 2026-09-30 | 62d64e0 | - |
 | 261003-le3 | poller_writer gains CREATE TEMPORARY TABLE (initdb + one-off doc) so the Parquet rollup writes; found live in 14.1-08 | 2026-10-03 | 990684e | [261003-le3-poller-writer-create-temporary-table-gra](./quick/261003-le3-poller-writer-create-temporary-table-gra/) |
+| 261003-lnr | Agent host overall state = worst dashboard-visible service (hidden checks like Systemd Timesyncd Time no longer turn the host CRIT) | 2026-10-03 | b37bce9 | [261003-lnr-host-overall-state-from-visible-services](./quick/261003-lnr-host-overall-state-from-visible-services/) |
 
 ## Deferred Items
 

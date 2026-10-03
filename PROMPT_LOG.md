@@ -381,3 +381,4 @@
 - **2026-10-02 18:05** — /bm:pause-work
 - **2026-10-03 14:52** — /bm:resume-work
 - **2026-10-03 15:30** — go (apply the poller_writer CREATE TEMPORARY TABLE grant fix via /gsd-quick)
+- **2026-10-03 16:05** — (Systemd Timesyncd Time is the critical one; dashboard shows Systemd Service systemd-timesyncd OK) then: option 2, hidden services must not alter the host overall status
