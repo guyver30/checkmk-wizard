@@ -379,3 +379,5 @@
 - **2026-10-02 18:00** — (Grafana dashboards all error: SETTING_CONSTRAINT_VIOLATION max_execution_time shouldn't be greater than 60)
 - **2026-10-02 18:04** — (Grafana Availability dashboard: 'Per device over range' and 'Per folder over range' error 184 illegal_aggregation; 'Fleet availability' panel empty)
 - **2026-10-02 18:05** — /bm:pause-work
+- **2026-10-03 14:52** — /bm:resume-work
+- **2026-10-03 15:30** — go (apply the poller_writer CREATE TEMPORARY TABLE grant fix via /gsd-quick)
