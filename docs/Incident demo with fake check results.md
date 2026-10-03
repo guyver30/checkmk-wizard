@@ -88,6 +88,60 @@ Cascade rules:
 - Fakes last until restored. Use "Restore selected" for some hosts or "Restore all" for every
   faked host.
 
+### Presenter cheat sheet (read this before a demo)
+
+**The baseline.** A demo host's normal state is the *baseline*: host check **enabled** (the "Always
+assume host to be up" rule keeps it UP), `PING` check **disabled** and showing OK. `wizard --demo`
+leaves every host there, and **Restore** puts a host back there. A baseline host is *not* in the
+faked set, so the 30 s keepalive does nothing for it.
+
+**The faked set** is every host whose host check is disabled. Any Set UP, Set DOWN or Set UNREACHABLE
+disables the host check and the `PING` check, injects the result, and so adds the host to the faked
+set. The keepalive then re-injects its result every 30 s until you Restore it.
+
+| Button | Host check afterwards | `PING` check | Result shown | Cascade |
+|---|---|---|---|---|
+| Set UP | disabled (faked) | disabled | host UP, `PING` OK | Reverses UNREACH on managed descendants |
+| Set DOWN | disabled (faked) | disabled | host DOWN, `PING` CRIT | Managed descendants become UNREACHABLE (stops at an unmanaged switch, which itself goes UNREACHABLE) |
+| Set UNREACHABLE | disabled (faked) | disabled | host UNREACH, `PING` CRIT | None |
+| Restore selected | **enabled** (baseline) | disabled | host UP, `PING` OK | Reverses UNREACH on managed descendants |
+| Restore all | **enabled** (baseline) | disabled | every faked host back to baseline | Hosts already at baseline are left alone |
+
+**Rules of thumb**
+
+1. **Start clean:** press **Restore all** before the demo. Every host is then at baseline, the banner
+   says "no hosts" faked, and no host carries a FAKED badge.
+2. **Break things with Set DOWN** on the thing you want to fail (a switch, a server). Its managed
+   children go UNREACHABLE by themselves and the incident card roots at the DOWN host.
+3. **Put things back with Restore**, not Set UP. Set UP looks identical on screen but leaves the host
+   faked (check disabled, keepalive running), so it is not a clean baseline and Restore all will still
+   count it. Set UP is only for forcing a host green while its real state is bad, for example a real
+   host that is genuinely down.
+4. **Set UNREACHABLE is for fine-tuning**, not for normal use. It marks one host as a consequence
+   without cascading. In real Checkmk a host is only UNREACHABLE when a parent is DOWN, so a lone
+   UNREACH host has no root cause and looks odd on an incident card. Use it on a child of a host you
+   have already set DOWN.
+5. **Restore a parent to reverse its cascade.** A child that still shows UNREACH afterwards is covered
+   by another faked-DOWN managed ancestor: restore that one too (or Restore all).
+6. **Same red on screen:** DOWN and UNREACH both show red and `state` is `DOWN` for both; the real
+   state is in `host_state_raw`, and the tree/details badge is solid for DOWN and outline for UNREACH.
+7. **"Sent" is not "applied".** The result message only means Livestatus got the command; confirm on
+   the next 15 s poll before you move on.
+8. **Real hosts (for example a real Linux box) behave differently:** Set DOWN works on them, but
+   Restore re-enables the host check and leaves their `PING` check **disabled**. Re-enable it by hand
+   with `cmk "ENABLE_SVC_CHECK;<host>;PING"`. And never disable a real host's checks by hand while admin
+   mode is deployed, or it counts as faked and the keepalive can hide a real outage (WR-06).
+
+**Reading a host's state at a glance**
+
+| What you see | What it is |
+|---|---|
+| UP, check enabled | Baseline (restored or never touched) |
+| UP, check disabled | Faked UP (Set UP). Not a clean baseline; Restore it |
+| DOWN, check disabled | Faked DOWN |
+| UNREACH, check disabled | Faked UNREACH (by Set UNREACHABLE, or by a parent's Set DOWN cascade) |
+| FAKED badge in the tree, FAKED caption on the map | In the faked set |
+
 ### Scenario A, B and C with admin mode
 
 Scenario A (single host down):
