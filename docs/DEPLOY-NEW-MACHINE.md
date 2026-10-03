@@ -210,6 +210,17 @@ podman exec clickhouse clickhouse-client --user ch_admin --password "$CH_ADMIN_P
 Then reload the Grafana dashboard. No container restart is needed. (On this host, never restart or
 stop a single container: it cuts Checkmk off from the LAN, see the note in section 5.)
 
+**Poller log repeats `Availability rollup for ... failed ... poller_writer: Not enough privileges ...
+CREATE TEMPORARY TABLE ON *.*`:** the Parquet export (`INSERT INTO FUNCTION s3`) needs that grant, and
+`poller_writer` lacked it (fixed for new installs in quick 261003-le3). An existing host needs it once;
+the poller retries every 5 minutes, so no restart is needed:
+
+```bash
+cd ~/checkmk-stack/app/checkmk-wizard/deploy && set -a && . ./.env && set +a
+podman exec clickhouse clickhouse-client --user ch_admin --password "$CH_ADMIN_PASSWORD" -q \
+  "GRANT CREATE TEMPORARY TABLE ON *.* TO poller_writer"
+```
+
 ## 7. Run the wizard
 
 ```bash

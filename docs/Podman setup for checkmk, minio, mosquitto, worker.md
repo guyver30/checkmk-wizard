@@ -240,7 +240,7 @@ Five new secrets in `deploy/.env` back the ClickHouse history store and Grafana 
 | Variable | Read by | Purpose |
 | --- | --- | --- |
 | `CH_ADMIN_PASSWORD` | `clickhouse` (init scripts, operator CLI) | `ch_admin`, ClickHouse's own admin user |
-| `CH_WRITER_PASSWORD` | `poller` | `poller_writer`, INSERT/SELECT on `history.*` plus the S3 export privilege |
+| `CH_WRITER_PASSWORD` | `poller` | `poller_writer`, INSERT/SELECT on `history.*` plus the S3 export privilege and `CREATE TEMPORARY TABLE` (required by `INSERT INTO FUNCTION s3`) |
 | `CH_READER_PASSWORD` | `dashboard` (nginx, `/ch-api/`) | `dashboard_reader`, SELECT-only, never reaches the browser |
 | `CH_GRAFANA_PASSWORD` | `grafana` | `grafana_reader`, SELECT-only, used by the provisioned ClickHouse datasource |
 | `GRAFANA_ADMIN_PASSWORD` | `grafana` | Grafana's own admin login |

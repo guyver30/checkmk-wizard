@@ -90,6 +90,10 @@ GRANT SELECT ON history.* TO grafana_reader;
 CREATE USER IF NOT EXISTS poller_writer IDENTIFIED WITH sha256_password BY '$CH_WRITER_PASSWORD';
 GRANT SELECT, INSERT ON history.* TO poller_writer;
 GRANT S3 ON *.* TO poller_writer;
+-- Live-verified 2026-10-03: without this, the poller's INSERT INTO FUNCTION s3(...) fails with
+-- ACCESS_DENIED (code 497, "necessary to have the grant CREATE TEMPORARY TABLE ON *.*") because
+-- ClickHouse requires it for every table function, so the Parquet rollup never wrote.
+GRANT CREATE TEMPORARY TABLE ON *.* TO poller_writer;
 SQL
 
 echo "Created ClickHouse users: dashboard_reader, grafana_reader, poller_writer"
