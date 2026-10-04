@@ -14,6 +14,7 @@ import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
 import { HostDetails } from "../components/HostDetails";
 import { IncidentList, IncidentsSummary } from "../components/IncidentList";
+import { NeedsPane, NeedsSummary } from "../components/NeedsPane";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { TopologyMap, type EditFailure } from "../components/TopologyMap";
 import { TopologyToolbar } from "../components/TopologyToolbar";
@@ -29,6 +30,7 @@ import {
   countPendingChanges,
   probeEditingAvailable,
 } from "../lib/checkmkWrite";
+import { newestGeneratedAt, selectVisibleNeeds } from "../lib/forecast";
 import { buildIncidentLookup, selectOpenIncidents } from "../lib/incidents";
 import { buildTree } from "../lib/treeModel";
 import type { GroupingMode, TopologyNode } from "../lib/types";
@@ -77,6 +79,16 @@ export function IndexRoute() {
   const incidentLookup = useMemo(
     () => buildIncidentLookup(incidents),
     [incidents],
+  );
+  // Service needs: sorted, non-cancelled list plus the freshness of the analytics output. Both
+  // are derived from the store slices on every change, never cached elsewhere.
+  const needRecord = useAppStore((s) => s.needs);
+  const forecastRecord = useAppStore((s) => s.forecasts);
+  const reconnecting = useAppStore((s) => s.connection.phase === "reconnecting");
+  const visibleNeeds = useMemo(() => selectVisibleNeeds(needRecord), [needRecord]);
+  const needsUpdatedAtMs = useMemo(
+    () => newestGeneratedAt(needRecord, forecastRecord),
+    [needRecord, forecastRecord],
   );
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightedIncidentId = searchParams.get("incident");
@@ -407,6 +419,21 @@ export function IndexRoute() {
         )
       }
       incidentsSummary={<IncidentsSummary incidents={incidents} />}
+      // D-24 / research Pitfall 7: triage lives only in topology edit mode, so the Needs pane is
+      // the one right-column pane that is NOT hidden in edit mode (incidents and host details
+      // are). It is passed unconditionally.
+      needs={
+        <NeedsPane
+          needs={visibleNeeds}
+          nameFor={nameFor}
+          nowMs={nowMs}
+          highlightedHost={hostId ?? selectedHost}
+          editMode={editMode}
+          updatedAtMs={needsUpdatedAtMs}
+          reconnecting={reconnecting}
+        />
+      }
+      needsSummary={<NeedsSummary needs={visibleNeeds} />}
       details={hostId && !editMode ? <HostDetails id={hostId} /> : undefined}
       detailsKey={hostId}
       onCloseDetails={onCloseDetails}

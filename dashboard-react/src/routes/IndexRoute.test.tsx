@@ -198,6 +198,68 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
   });
 
+  it("the Service needs pane stays visible in edit mode while the incidents pane is hidden", async () => {
+    vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValue(0);
+    renderIndex();
+    await flush();
+    expect(screen.getByRole("region", { name: "Service needs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /collapse incidents/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
+    await flush();
+
+    expect(screen.getByRole("region", { name: "Service needs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /collapse incidents/i })).not.toBeInTheDocument();
+  });
+
+  it("lists needs from the store and hides cancelled ones", async () => {
+    const base = {
+      source: "trend" as const,
+      service: "Filesystem /",
+      metric: "fs_used_percent",
+      unit: "%",
+      tier: "urgent" as const,
+      computed_tier: "urgent" as const,
+      days_to_warn: null,
+      days_to_crit: 30,
+      warn_date: null,
+      crit_date: "2026-11-03T00:00:00Z",
+      confidence: "high" as const,
+      history_days: 21,
+      value: null,
+      warn: null,
+      crit: null,
+      sustained_fraction: null,
+      window_hours: null,
+      since: "",
+      narration: "",
+      generated_at: new Date().toISOString(),
+    };
+    useAppStore.setState({
+      needs: {
+        keep: { ...base, id: "keep", host: "srv-keep", triage: null },
+        gone: {
+          ...base,
+          id: "gone",
+          host: "srv-gone",
+          triage: {
+            action: "cancel",
+            tier: "urgent",
+            set_at: "",
+            computed_tier_at_set: "urgent",
+            note: "",
+            by: "",
+          },
+        },
+      },
+    });
+    renderIndex();
+    await flush();
+    const region = screen.getByRole("region", { name: "Service needs" });
+    expect(within(region).getByText("srv-keep")).toBeInTheDocument();
+    expect(within(region).queryByText("srv-gone")).not.toBeInTheDocument();
+  });
+
   it("turning the switch on calls countPendingChanges once and shows its result as the pending count", async () => {
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValueOnce(2);
     renderIndex();

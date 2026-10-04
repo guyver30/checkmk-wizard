@@ -146,7 +146,8 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
     run `npm install ../design-system/kone-design-system-0.1.0.tgz` in `dashboard-react/` so its
     lockfile records the new tarball's integrity hash, or the image build's `npm ci` fails.
   - In topology edit mode the map fills the centre area: the Incidents pane, event history and
-    host details pane are hidden until edit mode is turned off. The device tree stays.
+    host details pane are hidden until edit mode is turned off. The device tree stays, and so
+    does the Service needs pane (triage lives only in edit mode).
 - A saved position (`map_position`, a Checkmk host label written by edit mode) is applied only
   the first time a node appears on the map; positions are never re-applied to a node a viewer
   has since dragged locally, and the map never moves a node out from under someone looking at
@@ -244,6 +245,16 @@ The file name **is** the device type — the `tag_device_type` value from `devic
   mask, so it follows the text colour. Multi-colour/gradient icons will not recolour.
 
 ## 5c. Incidents
+
+**Service needs pane.** Beside the Incidents pane (side by side from 1280px viewport width,
+stacked below it under that) sits `NeedsPane`: the analytics service's predicted and observed
+service needs from the store's `needs` slice, sorted by `selectVisibleNeeds` (tier, days to
+critical, host; cancelled needs hidden). Each row shows the tier badge, host, date, what,
+source and, for trend needs, a confidence badge with the history span; clicking a row selects
+the host. The header has a tier filter and "Updated hh:mm", which becomes "Stale, last update
+hh:mm" after 45 minutes and "Reconnecting" (rows dimmed) while the broker connection is down.
+The pane is collapsible like the Incidents pane and, unlike it, stays visible in topology edit
+mode. While it is present the right column is at least 640px wide.
 
 In the Incidents pane at the top of the right-hand column (above the host details pane),
 `IncidentList` (DASH-14) shows one card per open root-cause incident. The pane header always
