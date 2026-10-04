@@ -139,6 +139,7 @@ None.
 | 261003-lnr | Agent host overall state = worst dashboard-visible service (hidden checks like Systemd Timesyncd Time no longer turn the host CRIT) | 2026-10-03 | b37bce9 | [261003-lnr-host-overall-state-from-visible-services](./quick/261003-lnr-host-overall-state-from-visible-services/) |
 | 261004-kbt | Remove per-device `history` and `service_history` MQTT topics; transition history comes from ClickHouse | 2026-10-04 | 3444f15 | [261004-kbt-remove-history-and-service-history-mqtt-](./quick/261004-kbt-remove-history-and-service-history-mqtt-/) |
 | 261004-lyz | Remove legacy pre-14.3 poller ACL grants (lan/#, admin/#), legacy sweep and admin_faked seed | 2026-10-04 | 454cb53 | [261004-lyz-remove-legacy-lan-and-admin-poller-grant](./quick/261004-lyz-remove-legacy-lan-and-admin-poller-grant/) |
+| fast | Patch site.omd_installed in the manual registration address test so it passes on hosts without omd | 2026-10-04 | 60ea1ce | — |
 | fast | Admin-mode presenter cheat sheet in docs/Incident demo with fake check results.md | 2026-10-03 | 2d76a4f | - |
 
 ## Deferred Items
