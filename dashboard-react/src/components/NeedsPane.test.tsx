@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NeedsPane, NeedsSummary } from "./NeedsPane";
 import { hostHref } from "../lib/searchLinks";
 import type { NeedPayload } from "../lib/types";
@@ -216,6 +216,32 @@ describe("NeedsPane", () => {
       ],
     });
     expect(screen.getByText(/^Upgraded from urgent, \d\d:\d\d$/)).toBeInTheDocument();
+  });
+});
+
+describe("NeedsPane edit mode and chart entry", () => {
+  it("shows the Triage menu only in edit mode", () => {
+    const { unmount } = renderPane({ needs: [need({ id: "n1" })], editMode: false });
+    expect(screen.queryByRole("button", { name: "Triage" })).toBeNull();
+    unmount();
+    renderPane({ needs: [need({ id: "n1" })], editMode: true });
+    expect(screen.getByRole("button", { name: "Triage" })).toBeInTheDocument();
+  });
+
+  it("shows View chart only for trend needs and opens the forecast dialog", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 500 })));
+    renderPane({
+      needs: [
+        need({ id: "t1", host: "srv-t" }),
+        need({ id: "f1", host: "srv-f", source: "failure", confidence: null, since: "2026-10-04T10:15:00Z" }),
+      ],
+    });
+    const buttons = screen.getAllByRole("button", { name: "View chart" });
+    expect(buttons).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(buttons[0]);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    vi.unstubAllGlobals();
   });
 });
 

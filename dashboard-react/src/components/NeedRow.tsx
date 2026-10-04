@@ -3,8 +3,11 @@
 // analytics service's own text, rendered verbatim as a React text node (never as HTML, and
 // never composed in the browser).
 
+import { useState } from "react";
 import { Link, useLocation } from "react-router";
-import { Badge, Tooltip } from "kone-design-system";
+import { Badge, Button, Tooltip } from "kone-design-system";
+import { ForecastDialog } from "./ForecastDialog";
+import { TriageMenu } from "./TriageMenu";
 import { TIER_BADGE, formatClock } from "../lib/needDisplay";
 import { hostHref } from "../lib/searchLinks";
 import type { ForecastConfidence, NeedPayload } from "../lib/types";
@@ -15,8 +18,7 @@ export interface NeedRowProps {
   nowMs: number;
   highlighted: boolean;
   dimmed: boolean;
-  // Topology edit mode: the triage menu and "View chart" button are rendered by a later layer
-  // when this is set; the read-only row ignores it.
+  // Topology edit mode: shows the Triage menu; never rendered in view mode.
   editMode: boolean;
 }
 
@@ -109,8 +111,9 @@ function triageCaption(need: NeedPayload): string | null {
   return `${verb} from ${need.computed_tier}${by}${when}`;
 }
 
-export function NeedRow({ need, hostLabel, nowMs, highlighted, dimmed }: NeedRowProps) {
+export function NeedRow({ need, hostLabel, nowMs, highlighted, dimmed, editMode }: NeedRowProps) {
   const { search } = useLocation();
+  const [chartOpen, setChartOpen] = useState(false);
   const tier = TIER_BADGE[need.tier];
   const lowConfidence = need.source === "trend" && need.confidence === "low";
   const caption = triageCaption(need);
@@ -157,6 +160,24 @@ export function NeedRow({ need, hostLabel, nowMs, highlighted, dimmed }: NeedRow
         </Tooltip>
       ) : (
         link
+      )}
+      {(need.source === "trend" || editMode) && (
+        <div className="flex items-center justify-end gap-2 px-2 pb-1">
+          {need.source === "trend" && (
+            <Button variant="tertiary" size="sm" onClick={() => setChartOpen(true)}>
+              View chart
+            </Button>
+          )}
+          {editMode && <TriageMenu need={need} hostLabel={hostLabel} />}
+        </div>
+      )}
+      {chartOpen && (
+        <ForecastDialog
+          host={need.host}
+          service={need.service}
+          metric={need.metric}
+          onClose={() => setChartOpen(false)}
+        />
       )}
     </li>
   );

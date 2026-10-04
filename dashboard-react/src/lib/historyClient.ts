@@ -1,5 +1,5 @@
 // Hourly metric history for the forecast chart (D-20). The fifth lib module allowed to do
-// network I/O, after runtimeConfig.ts, checkmkWrite.ts, mqttClient.ts and adminMode.ts, and
+// network I/O, after runtimeConfig.ts, checkmkWrite.ts, mqttClient.ts and adminMode.ts (triageMode.ts is the sixth), and
 // the only dashboard feature that reads /ch-api/.
 //
 // /ch-api/ is the dashboard nginx's same-origin GET path to ClickHouse's HTTP interface,
