@@ -17,7 +17,7 @@
 // dev/vitest only; production values come from WS_PASSWORD in deploy/.env via /config.json
 // (quick 260930-jj4 -- the mosquitto container now builds its own password file from
 // deploy/.env at every start, rather than reading one from a tracked file). The grant
-// behind them is read-only (`topic read lan/#` in deploy/mosquitto.acl), which bounds the
+// behind them is read-only (`topic read sites/<site_id>/lan/#` in deploy/mosquitto.acl), which bounds the
 // exposure to reading the device list, never writing anything back to the broker.
 //
 // POLL_INTERVAL_SECONDS mirrors DEFAULT_POLL_INTERVAL_SECONDS in scripts/mqtt_poller.py and
