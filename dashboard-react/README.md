@@ -69,6 +69,8 @@ Then open `http://<HOST_IP>:5173/` from a LAN browser.
 
 ## 4. Configuration — runtime `/config.json` and `src/lib/config.ts`
 
+**MQTT namespace (Phase 14.3).** Every topic lives under `sites/<site_id>/`. `checkmkSite` from `/config.json` selects the subtree the dashboard subscribes to and publishes under. `src/lib/topics.ts` and `src/store/mqttClient.ts` are the only prefix-aware modules: the client adds the prefix on subscribe/publish and strips it from incoming messages, so stores and components see relative topics (`lan/...`, `admin/...`). The topic names elsewhere in this README are written in the full prefixed form.
+
 Per-deployment values (`checkmkSite`, `wsUsername`, `wsPassword`) are loaded at startup from
 `/config.json` (`src/lib/runtimeConfig.ts`), which the production nginx renders from
 `deploy/.env` (`CMK_SITE_ID`, `WS_USERNAME`, `WS_PASSWORD` — see `deploy/dashboard-nginx.conf`).
@@ -223,7 +225,7 @@ A From / To filter above the list narrows the rows to an inclusive range:
 - A From later than To shows an inline error and leaves the list unfiltered.
 - Clear resets both bounds; when events exist but none match, the pane says "No events in
   this range" (distinct from "No recent events" for an empty feed).
-- Filtering is client-side only, over the retained `lan/events/recent` array. That array is
+- Filtering is client-side only, over the retained `sites/<site_id>/lan/events/recent` array. That array is
   capped by the poller's `EVENTS_MAX_ENTRIES` (default 1000, about 160 KB when full), so the
   range can only reach as far back as the last 1000 events.
 
@@ -253,7 +255,7 @@ collapsible: collapsing it keeps the header (count and severity badge) visible, 
 pane in the right column is collapsed the column becomes a 40px rail that still shows the badge
 and the expand chevrons. The pane's height and collapsed state persist across a reload
 (`usePaneLayout`). The map and event history take the whole centre column; topology edit mode
-hides the pane. Cards are sourced from the poller's `lan/incidents/{incident_id}/status` topics (see the deployment doc's
+hides the pane. Cards are sourced from the poller's `sites/<site_id>/lan/incidents/{incident_id}/status` topics (see the deployment doc's
 MQTT topic contract). It never re-sorts its input — ordering is `selectOpenIncidents`'s job
 (D-12): worst criticality tier first, then longest-open within a tier (a null `since` sorts
 last within its tier), ties broken by incident id.
@@ -337,9 +339,9 @@ MQTT contract (the poller turns commands into Livestatus external commands):
 
 | Topic | Direction | Payload |
 |---|---|---|
-| `admin/cmd` | dashboard to poller, QoS 1, not retained | `{"id": string, "action": "up"\|"down"\|"unreach"\|"restore"\|"restore_all", "hosts": string[]}` (max 200 hosts; `hosts` empty for `restore_all`) |
-| `admin/ack` | poller to dashboard, QoS 1, not retained | `{"id", "ok": bool, "action", "detail", "applied": [{"host", "state": "UP"\|"DOWN"\|"UNREACH"\|"RESTORED", "cascaded": bool}], "skipped": string[]}` |
-| `admin/faked` | poller to dashboard, QoS 1, retained, published on change | `{"hosts": {"<host>": "UP"\|"DOWN"\|"UNREACH"}, "source": string, "timestamp": ISO-8601}` |
+| `sites/<site_id>/admin/cmd` | dashboard to poller, QoS 1, not retained | `{"id": string, "action": "up"\|"down"\|"unreach"\|"restore"\|"restore_all", "hosts": string[]}` (max 200 hosts; `hosts` empty for `restore_all`) |
+| `sites/<site_id>/admin/ack` | poller to dashboard, QoS 1, not retained | `{"id", "ok": bool, "action", "detail", "applied": [{"host", "state": "UP"\|"DOWN"\|"UNREACH"\|"RESTORED", "cascaded": bool}], "skipped": string[]}` |
+| `sites/<site_id>/admin/faked` | poller to dashboard, QoS 1, retained, published on change | `{"hosts": {"<host>": "UP"\|"DOWN"\|"UNREACH"}, "source": string, "timestamp": ISO-8601}` |
 
 Interaction: a plain click on a map node or tree row selects exactly that host (replacing the
 selection, via `replaceSelection` in `src/store/adminStore.ts`); ctrl/cmd+click toggles a host;
@@ -350,8 +352,8 @@ Ack state `RESTORED` means the demo baseline: host check enabled, host UP and `P
 `PING` check left disabled. The poller also re-injects faked hosts' results every 30 s so the
 dashboard does not show them STALE.
 
-The page uses a single MQTT connection as `wsadmin`, which can also read `lan/#`, subscribes to
-`admin/ack` and `admin/faked`, and may write only `admin/cmd`. Admin mode and topology edit mode
+The page uses a single MQTT connection as `wsadmin`, which can also read `sites/<site_id>/lan/#`, subscribes to
+`sites/<site_id>/admin/ack` and `sites/<site_id>/admin/faked`, and may write only `sites/<site_id>/admin/cmd`. Admin mode and topology edit mode
 are mutually exclusive: "Edit topology" is disabled while `?admin=1` is active.
 
 ## 6. Version pins and why
