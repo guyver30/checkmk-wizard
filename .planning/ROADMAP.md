@@ -448,7 +448,6 @@ Plans:
 ### Phase 14.2: Fleet Failure Prediction and Incident Narration (INSERTED)
 
 **Goal:** The dashboard reports forecasts and explains incidents: a separate analytics container fits trends from 14.1's history, extrapolates to threshold to give a date, writes incident summaries from Phase 14's incident data, and publishes both to retained MQTT topics
-**Requirements**: TBD
 **Depends on:** Phase 14.1 (history to fit trends on) and Phase 14 (incidents to narrate)
 **Locked inputs** (from `.planning/phases/14-fleet-intelligence/14-CONTEXT.md`, split out of Phase 14 by D-01):
 
@@ -462,11 +461,48 @@ Plans:
   - Open decision B: event and incident history. `history.metrics`, `host_state` and `service_state` hold per-poll samples, so state transitions can be derived, but incident open/close, plugin output text and acknowledgments exist only on bounded retained MQTT topics (events capped at 1000). Narration and any "what happened last Tuesday" question need a durable store: decide whether the poller writes a `history.events` / `history.incidents` table (D-44 posture: push-only, no on-disk state in the poller) or the analytics container derives everything from the sample tables.
   - Context for both: tiering (31-day move to MinIO) and the 30/365-day TTL rollups have never fired on the live stack, which is only days old; first proof is about a month out. `SELECT table, disk_name, count() FROM system.parts WHERE database='history' AND active GROUP BY table, disk_name` as `ch_admin` shows where parts live.
 
-**Plans:** 0 plans
+**Requirements**: none mapped; coverage target is every 14.2-CONTEXT.md decision (D-01..D-31, D-19a)
+
+**Plans:** 19 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 14.2 to break down)
+**Wave 1**
+
+- [ ] 14.2-01-PLAN.md — Live facts on dmc-server: metric catalog, levels, row volume, /ch-api/ typed params, ClickHouse version (non-autonomous, user runs read-only queries)
+- [ ] 14.2-02-PLAN.md — ClickHouse: s3 filesystem cache, events/incidents/need_triage tables, analytics_writer, idempotent migration
+- [ ] 14.2-03-PLAN.md — Broker logins analytics/wstriage + exact ACL test, compose analytics service, /triage-config.json, secrets, smoke checks
+- [ ] 14.2-04-PLAN.md — TDD analytics/fit.py: sharp-drop cut, r2 gate, crossings, confidence
+- [ ] 14.2-05-PLAN.md — TDD analytics/narrate.py: field-gated incident/need narration
+- [ ] 14.2-06-PLAN.md — Dashboard data layer: payload types, parsers, subscriptions, store slices
+
+**Wave 2**
+
+- [ ] 14.2-07-PLAN.md — analytics config (env-only), topics, ClickHouse client and queries
+- [ ] 14.2-08-PLAN.md — TDD analytics/rules.py: failure/trend/sustained needs, tiers, anti-flap, triage carry-over
+- [ ] 14.2-09-PLAN.md — Needs pane and layout (kept visible in edit mode)
+- [ ] 14.2-10-PLAN.md — Forecast chart (SVG + d3-scale) and /ch-api/ history client
+
+**Wave 3**
+
+- [ ] 14.2-11-PLAN.md — Availability rollup copied into analytics with its tests
+- [ ] 14.2-12-PLAN.md — Event/incident recorders and triage command engine
+- [ ] 14.2-13-PLAN.md — Triage UI (edit mode) and View chart on need rows
+- [ ] 14.2-14-PLAN.md — Host details: Service needs section and Trends list
+- [ ] 14.2-15-PLAN.md — Narrated incident cards and tier markers on tree and map
+
+**Wave 4**
+
+- [ ] 14.2-16-PLAN.md — Analytics service: MQTT wiring, restore/reconcile, 15-min cycle, entry point
+- [ ] 14.2-17-PLAN.md — Remove the rollup from the poller and its compose env
+
+**Wave 5**
+
+- [ ] 14.2-18-PLAN.md — Docs: MQTT contract, Podman/deploy docs, CLAUDE.md/PROJECT.md constraint amendment
+
+**Wave 6**
+
+- [ ] 14.2-19-PLAN.md — Live deploy on dmc-server (full down/up, migration, checks) and user verification (non-autonomous)
 
 ### Phase 15: Location Hierarchy for Hosts and Dashboard Tower Tabs
 
