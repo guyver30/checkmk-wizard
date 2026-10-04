@@ -29,3 +29,21 @@ topic read sites/@SITE_ID@/lan/#
 topic read sites/@SITE_ID@/admin/ack
 topic read sites/@SITE_ID@/admin/faked
 topic write sites/@SITE_ID@/admin/cmd
+
+# Analytics container login (D-17). Reads the lan topics it derives from, plus
+# the triage command topic, and its own retained outputs (covered by the lan
+# read) for restore after a restart. Writes only its three output subtrees.
+# It deliberately has no write on `lan/incidents/+/status` (D-29): that topic
+# belongs to the poller.
+user analytics
+topic read sites/@SITE_ID@/lan/#
+topic read sites/@SITE_ID@/needs/triage/cmd
+topic write sites/@SITE_ID@/lan/needs/#
+topic write sites/@SITE_ID@/lan/forecasts/#
+topic write sites/@SITE_ID@/lan/incidents/+/narration
+
+# Dashboard triage login (D-21). Served openly on /triage-config.json for the
+# closed network, like wsadmin. Its only effect is a tier-change command that
+# analytics validates and audits before acting on it.
+user wstriage
+topic write sites/@SITE_ID@/needs/triage/cmd

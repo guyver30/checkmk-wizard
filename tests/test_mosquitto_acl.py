@@ -68,6 +68,14 @@ def test_rendered_grants_are_exact(tmp_path):
             ("read", "sites/testsite/admin/faked"),
             ("write", "sites/testsite/admin/cmd"),
         },
+        "analytics": {
+            ("read", "sites/testsite/lan/#"),
+            ("read", "sites/testsite/needs/triage/cmd"),
+            ("write", "sites/testsite/lan/needs/#"),
+            ("write", "sites/testsite/lan/forecasts/#"),
+            ("write", "sites/testsite/lan/incidents/+/narration"),
+        },
+        "wstriage": {("write", "sites/testsite/needs/triage/cmd")},
     }
 
 
@@ -116,3 +124,23 @@ def test_compose_wires_the_renderer():
         in text
     )
     assert "./mosquitto.acl:" not in text
+
+
+def test_analytics_cannot_write_incident_status(tmp_path):
+    # incidents/+/status is the poller's topic; analytics only owns narration.
+    _, out = _render(tmp_path, "testsite")
+    for access, topic in _parse(out.read_text())["analytics"]:
+        if access in ("write", "readwrite"):
+            assert not topic.endswith("incidents/+/status"), topic
+            assert topic != "sites/testsite/lan/#", topic
+
+
+def test_compose_creates_new_broker_users():
+    text = COMPOSE.read_text()
+    chown = text.index("chown mosquitto:mosquitto /mosquitto/config/mosquitto.passwd")
+    for user, var in (("analytics", "MQTT_ANALYTICS_PASSWORD"), ("wstriage", "TRIAGE_WS_PASSWORD")):
+        line = (
+            f'mosquitto_passwd -b /mosquitto/config/mosquitto.passwd {user} "$${var}"'
+        )
+        assert line in text
+        assert text.index(line) < chown

@@ -36,6 +36,14 @@ Each check proves one requirement:
   same independent-subscriber design as `check_ws_publish_denied`, and are
   skipped (not failed) when ADMIN_WS_PASSWORD is unset. The usual invocation
   is `set -a; . deploy/.env; set +a; uv run python scripts/smoke_test_broker.py`.
+- `check_analytics_writes_allowed`, `check_analytics_incident_status_denied`,
+  `check_wstriage_publish_cmd`, `check_wstriage_publish_lan_denied` — the
+  analytics and triage logins' grants: analytics may write
+  `lan/needs/...` and `lan/incidents/<id>/narration` (the latter proves a `+`
+  in an ACL write line works) but not `lan/incidents/<id>/status`, which is the
+  poller's; wstriage may publish only `sites/<id>/needs/triage/cmd`. Each is
+  skipped when its password (MQTT_ANALYTICS_PASSWORD / TRIAGE_WS_PASSWORD) is
+  unset. Probes are non-retained so nothing is left on the broker.
 - `check_persistence_across_restart` — a retained message survives a
   broker restart (BRK-02), skipped via `--skip-restart` for callers (e.g.
   the worker container) that must not restart a sibling service.
@@ -361,6 +369,103 @@ def check_wsadmin_reads_lan(
     return _report("wsadmin_reads_lan", ok, "wsadmin did not receive a sites/<id>/lan/ message")
 
 
+def check_analytics_writes_allowed(
+    host: str,
+    site_id: str,
+    tcp_port: int,
+    poller_user: str,
+    poller_password: str,
+    analytics_user: str,
+    analytics_password: str,
+    seed: str,
+    timeout: float,
+) -> bool:
+    """analytics can publish under lan/needs/ and lan/incidents/<id>/narration.
+
+    Both probes must reach the poller-side subscriber; the narration one proves
+    `+` in an ACL write line works on the broker.
+    """
+    ok = True
+    for suffix in ("lan/needs/smoketest/status", "lan/incidents/smoketest/narration"):
+        topic = _site_topic(site_id, suffix)
+        delivered = _delivered(
+            host, tcp_port, "tcp", (poller_user, poller_password),
+            tcp_port, "tcp", (analytics_user, analytics_password),
+            topic, topic, f"smoke-{seed}", timeout,
+        )
+        ok = bool(delivered) and ok
+    return _report("analytics_writes_allowed", ok, "an allowed analytics publish did not arrive (or connection failed)")
+
+
+def check_analytics_incident_status_denied(
+    host: str,
+    site_id: str,
+    tcp_port: int,
+    poller_user: str,
+    poller_password: str,
+    analytics_user: str,
+    analytics_password: str,
+    seed: str,
+    timeout: float,
+) -> bool:
+    """An analytics publish on lan/incidents/<id>/status must not be delivered (D-29)."""
+    topic = _site_topic(site_id, "lan/incidents/smoketest/status")
+    delivered = _delivered(
+        host, tcp_port, "tcp", (poller_user, poller_password),
+        tcp_port, "tcp", (analytics_user, analytics_password),
+        topic, topic, f"smoke-{seed}", timeout,
+    )
+    if delivered is None:
+        return _report("analytics_incident_status_denied", False, "connection failed")
+    return _report("analytics_incident_status_denied", not delivered, "analytics publish on incidents/<id>/status was delivered (ACL not enforced)")
+
+
+def check_wstriage_publish_cmd(
+    host: str,
+    site_id: str,
+    tcp_port: int,
+    ws_port: int,
+    analytics_user: str,
+    analytics_password: str,
+    triage_user: str,
+    triage_password: str,
+    seed: str,
+    timeout: float,
+) -> bool:
+    """wstriage can publish sites/<id>/needs/triage/cmd; the analytics login receives it."""
+    topic = _site_topic(site_id, "needs/triage/cmd")
+    ok = _delivered(
+        host, tcp_port, "tcp", (analytics_user, analytics_password),
+        ws_port, "websockets", (triage_user, triage_password),
+        topic, topic, f'{{"id": "smoke-{seed}", "action": "smoke"}}', timeout,
+    )
+    return _report("wstriage_publish_cmd", ok, "sites/<id>/needs/triage/cmd publish did not arrive (or connection failed)")
+
+
+def check_wstriage_publish_lan_denied(
+    host: str,
+    site_id: str,
+    tcp_port: int,
+    ws_port: int,
+    poller_user: str,
+    poller_password: str,
+    triage_user: str,
+    triage_password: str,
+    seed: str,
+    timeout: float,
+) -> bool:
+    """A wstriage publish under sites/<id>/lan/ must never reach the privileged subscriber."""
+    topic = _site_topic(site_id, f"lan/smoke/{seed}/triage")
+    delivered = _delivered(
+        host, tcp_port, "tcp", (poller_user, poller_password),
+        ws_port, "websockets", (triage_user, triage_password),
+        topic, topic, "should-never-arrive", timeout,
+    )
+    if delivered is None:
+        return _report("wstriage_publish_lan_denied", False, "connection failed")
+    return _report("wstriage_publish_lan_denied", not delivered, "wstriage publish under sites/<id>/lan/ was delivered (ACL not enforced)")
+
+
 def check_wsreader_cannot_read_admin(
     host: str,
     site_id: str,
@@ -523,6 +628,10 @@ def main() -> int:
     parser.add_argument("--ws-password", default=os.environ.get("WS_PASSWORD", "wsreader"))
     parser.add_argument("--admin-ws-user", default="wsadmin")
     parser.add_argument("--admin-ws-password", default=os.environ.get("ADMIN_WS_PASSWORD", ""))
+    parser.add_argument("--analytics-user", default="analytics")
+    parser.add_argument("--analytics-password", default=os.environ.get("MQTT_ANALYTICS_PASSWORD", ""))
+    parser.add_argument("--triage-ws-user", default="wstriage")
+    parser.add_argument("--triage-ws-password", default=os.environ.get("TRIAGE_WS_PASSWORD", ""))
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--skip-restart", action="store_true")
     parser.add_argument("--restart-cmd", default="podman compose restart mosquitto")
@@ -586,6 +695,41 @@ def main() -> int:
             )
         else:
             print("[SKIP] wsadmin checks: ADMIN_WS_PASSWORD not set")
+        if args.analytics_password:
+            analytics_args = (
+                args.host,
+                args.site_id,
+                args.tcp_port,
+                args.poller_user,
+                args.poller_password,
+                args.analytics_user,
+                args.analytics_password,
+                seed,
+                args.timeout,
+            )
+            results.append(check_analytics_writes_allowed(*analytics_args))
+            results.append(check_analytics_incident_status_denied(*analytics_args))
+        else:
+            print("[SKIP] analytics checks: MQTT_ANALYTICS_PASSWORD not set")
+        if args.triage_ws_password and args.analytics_password:
+            results.append(
+                check_wstriage_publish_cmd(
+                    args.host, args.site_id, args.tcp_port, args.ws_port,
+                    args.analytics_user, args.analytics_password,
+                    args.triage_ws_user, args.triage_ws_password,
+                    seed, args.timeout,
+                )
+            )
+            results.append(
+                check_wstriage_publish_lan_denied(
+                    args.host, args.site_id, args.tcp_port, args.ws_port,
+                    args.poller_user, args.poller_password,
+                    args.triage_ws_user, args.triage_ws_password,
+                    seed, args.timeout,
+                )
+            )
+        else:
+            print("[SKIP] wstriage checks: TRIAGE_WS_PASSWORD or MQTT_ANALYTICS_PASSWORD not set")
         if args.skip_restart:
             print("[SKIP] persistence_across_restart (--skip-restart)")
         else:
