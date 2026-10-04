@@ -1,5 +1,5 @@
-import { act, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostDetails } from "./HostDetails";
 import { useAppStore } from "../store/useAppStore";
 
@@ -242,6 +242,116 @@ describe("HostDetails", () => {
     });
     renderAt("web1");
     expect(screen.getByText("No additional services.")).toBeInTheDocument();
+  });
+
+  describe("failure prediction", () => {
+    function seedHost(id = "web1") {
+      useAppStore.getState().handleMessage(`lan/devices/${id}/status`, encode({ id, state: "OK" }));
+    }
+    function seedNeed(over: Record<string, unknown>) {
+      useAppStore.getState().handleMessage(
+        `lan/needs/${over.id}/status`,
+        encode({ host: "web1", tier: "urgent", source: "trend", service: "Filesystem /", metric: "fs_used_percent", ...over }),
+      );
+    }
+    function seedForecast(fits: Record<string, unknown>[], host = "web1") {
+      useAppStore.getState().handleMessage(`lan/forecasts/${host}`, encode({ host, generated_at: "2026-10-04T10:00:00Z", fits }));
+    }
+    beforeEach(() => {
+      // The chart dialog fetches history; a never-resolving fetch keeps it in its loading state.
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("lists the host's visible needs with narration, excluding cancelled and other hosts' needs", () => {
+      act(() => {
+        seedHost();
+        seedNeed({
+          id: "n1",
+          crit_date: "2026-10-20T00:00:00Z",
+          confidence: "medium",
+          history_days: 21,
+          narration: "Disk fills up in about two weeks.",
+        });
+        seedNeed({ id: "n2", tier: "immediate", source: "failure", service: "PING", metric: "", since: "2026-10-04T08:15:00Z", narration: "Ping is failing." });
+        seedNeed({ id: "n3", triage: { action: "cancel", tier: "urgent", set_at: "2026-10-04T09:00:00Z", by: "op" }, service: "Cancelled svc" });
+        seedNeed({ id: "n4", host: "other", service: "Other host svc" });
+      });
+      renderAt("web1");
+      expect(screen.getByText("Service needs")).toBeInTheDocument();
+      expect(screen.getByText("Immediate")).toBeInTheDocument();
+      expect(screen.getByText("Urgent")).toBeInTheDocument();
+      expect(screen.getByText("Filesystem / · fs_used_percent")).toBeInTheDocument();
+      expect(screen.getByText(/^Critical by 20 Oct/)).toBeInTheDocument();
+      expect(screen.getByText("Confidence: medium")).toBeInTheDocument();
+      expect(screen.getByText("21 days of history")).toBeInTheDocument();
+      expect(screen.getByText("Disk fills up in about two weeks.")).toBeInTheDocument();
+      expect(screen.getByText("Ping is failing.")).toBeInTheDocument();
+      expect(screen.queryByText("Cancelled svc")).not.toBeInTheDocument();
+      expect(screen.queryByText("Other host svc")).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "View chart" })).toHaveLength(1);
+      expect(screen.queryByText(/Triage/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Triage/ })).not.toBeInTheDocument();
+    });
+
+    it("omits the Service needs heading when the host has no needs", () => {
+      act(() => {
+        seedHost();
+        seedNeed({ id: "n4", host: "other" });
+      });
+      renderAt("web1");
+      expect(screen.queryByText("Service needs")).toBeNull();
+    });
+
+    it("opens the forecast chart from View chart", () => {
+      act(() => {
+        seedHost();
+        seedNeed({ id: "n1", crit_date: "2026-10-20T00:00:00Z", confidence: "high" });
+      });
+      renderAt("web1");
+      fireEvent.click(screen.getByRole("button", { name: "View chart" }));
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("lists every fit under Trends with value, unit and caption", () => {
+      act(() => {
+        seedHost();
+        seedForecast([
+          { service: "Filesystem /", metric: "fs_used_percent", unit: "%", status: "trending", last_value: 71.26, crit_date: "2026-10-20T00:00:00Z" },
+          { service: "Memory", metric: "mem_used_percent", unit: "%", status: "stable", last_value: 40 },
+          { service: "CPU", metric: "util", unit: "%", status: "no_clear_trend", last_value: 12 },
+        ]);
+      });
+      renderAt("web1");
+      expect(screen.getByText("Trends")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Filesystem \/ · fs_used_percent 71\.3 % Trending, Critical by 20 Oct/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Memory · mem_used_percent 40 % Stable" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "CPU · util 12 % No clear trend" })).toBeInTheDocument();
+    });
+
+    it("opens the chart for a stable metric with no need and returns focus on close", () => {
+      act(() => {
+        seedHost();
+        seedForecast([{ service: "Memory", metric: "mem_used_percent", unit: "%", status: "stable", last_value: 40 }]);
+      });
+      renderAt("web1");
+      const entry = screen.getByRole("button", { name: /Stable/ });
+      fireEvent.click(entry);
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(entry).toHaveFocus();
+    });
+
+    it("omits Trends when the host has no forecast", () => {
+      act(() => {
+        seedHost();
+      });
+      renderAt("web1");
+      expect(screen.queryByText("Trends")).toBeNull();
+    });
   });
 
   it("shows no history section; history lives in the event history pane (260928 follow-up)", () => {

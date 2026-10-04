@@ -1,12 +1,16 @@
-import { Badge, ProgressCircle, Table } from "kone-design-system";
+import { useMemo, useRef, useState } from "react";
+import { Badge, Button, ProgressCircle, Table } from "kone-design-system";
 import type { BadgeColor, ProgressColor, TableColumn } from "kone-design-system";
 import { gaugeColor, otherMountsLabel, smartBadge } from "../lib/gauges";
 import { classifyAgentServices } from "../lib/agentDetail";
 import { compareServices } from "../lib/serviceSort";
 import { displayNameWithAddress } from "../lib/display";
 import { StateBadge, StateBadgeForState } from "./StateBadge";
+import { selectVisibleNeeds } from "../lib/forecast";
+import { TIER_BADGE, formatClock } from "../lib/needDisplay";
+import { ForecastDialog } from "./ForecastDialog";
 import { useAppStore } from "../store/useAppStore";
-import type { ServiceEntry } from "../lib/types";
+import type { FitPayload, ForecastConfidence, NeedPayload, ServiceEntry } from "../lib/types";
 
 // The host details view: gauges, agent-host focused view and services table for one
 // device. Lives in the overview's right-hand pane (opened at ?host=<id>, see ThreePaneLayout /
@@ -53,6 +57,83 @@ function toBadgeColor(color: ProgressColor): BadgeColor {
   return color === "brand" ? "info" : color;
 }
 
+const CONFIDENCE_VARIANT: Record<ForecastConfidence, "outline" | "soft" | "solid"> = {
+  high: "solid",
+  medium: "soft",
+  low: "outline",
+};
+
+// Same date wording as the Service needs pane rows (NeedRow), kept local because that file
+// does not export its helpers; "12 Oct", with the year only when it differs from the current one.
+function formatDay(iso: string, nowMs: number): string | null {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) {
+    return null;
+  }
+  const date = new Date(ms);
+  const sameYear = date.getFullYear() === new Date(nowMs).getFullYear();
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "numeric" }),
+  }).format(date);
+}
+
+function formatHours(hours: number): string {
+  if (hours < 1) {
+    return `${Math.max(1, Math.round(hours * 60))} min`;
+  }
+  if (hours < 48) {
+    return `${Math.round(hours)} h`;
+  }
+  return `${Math.round(hours / 24)} d`;
+}
+
+function needDateText(need: NeedPayload, nowMs: number): string {
+  if (need.source === "trend") {
+    const day = need.crit_date ? formatDay(need.crit_date, nowMs) : null;
+    return day ? `Critical by ${day}` : "Critical date unknown";
+  }
+  if (need.source === "sustained") {
+    if (need.window_hours === null || need.sustained_fraction === null) {
+      return "Critical";
+    }
+    return `Critical for ${formatHours(need.window_hours * need.sustained_fraction)}`;
+  }
+  const since = Date.parse(need.since);
+  const clock = Number.isNaN(since) ? null : formatClock(since);
+  if (need.service === "") {
+    return clock ? `Down since ${clock}` : "Down";
+  }
+  return clock ? `Failing since ${clock}` : "Failing";
+}
+
+function needWhat(need: NeedPayload): string {
+  if (need.service === "") {
+    return "Host";
+  }
+  return need.metric ? `${need.service} · ${need.metric}` : need.service;
+}
+
+function fitCaption(fit: FitPayload, nowMs: number): string {
+  if (fit.status === "stable") {
+    return "Stable";
+  }
+  if (fit.status === "no_clear_trend") {
+    return "No clear trend";
+  }
+  const day = fit.crit_date ? formatDay(fit.crit_date, nowMs) : null;
+  return day ? `Trending, Critical by ${day}` : "Trending";
+}
+
+function formatValue(fit: FitPayload): string {
+  if (fit.last_value === null) {
+    return "";
+  }
+  const value = Math.round(fit.last_value * 10) / 10;
+  return fit.unit ? `${value} ${fit.unit}` : String(value);
+}
+
 function EmptyState({ heading, body }: { heading: string; body: string }) {
   return (
     <div className="px-4 py-3">
@@ -81,6 +162,15 @@ function GaugeValue({ percent }: { percent: number }) {
 export function HostDetails({ id }: { id: string }) {
   const device = useAppStore((s) => s.devices[id]);
   const services = useAppStore((s) => s.services[id]);
+  const needRecord = useAppStore((s) => s.needs);
+  const forecast = useAppStore((s) => s.forecasts[id]);
+  const [chart, setChart] = useState<{ service: string; metric: string } | null>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const [nowMs] = useState(() => Date.now());
+  const hostNeeds = useMemo(
+    () => selectVisibleNeeds(needRecord).filter((need) => need.host === id),
+    [needRecord, id],
+  );
 
   if (!device) {
     return (
@@ -181,6 +271,86 @@ export function HostDetails({ id }: { id: string }) {
         )
   );
 
+  const openChart = (service: string, metric: string, trigger: HTMLElement) => {
+    triggerRef.current = trigger;
+    setChart({ service, metric });
+  };
+  const closeChart = () => {
+    setChart(null);
+    // The dialog unmounts, so hand focus back to the entry that opened it.
+    triggerRef.current?.focus();
+  };
+
+  const needsSection =
+    hostNeeds.length > 0 ? (
+      <section className="mt-3">
+        <h2 className="text-sm font-semibold">Service needs</h2>
+        <ul className="mt-1 flex flex-col gap-2">
+          {hostNeeds.map((need) => {
+            const tier = TIER_BADGE[need.tier];
+            return (
+              <li key={need.id} className="flex list-none flex-col gap-1 rounded-md bg-bg-surface p-2 shadow-card">
+                <span className="flex min-w-0 items-center gap-2">
+                  <Badge color={tier.color} variant={tier.variant}>
+                    {tier.label}
+                  </Badge>
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold">{needWhat(need)}</span>
+                  <span className="shrink-0 text-xs">{needDateText(need, nowMs)}</span>
+                </span>
+                {need.source === "trend" && need.confidence !== null && (
+                  <span className="flex items-center gap-2 text-xs text-fg-secondary">
+                    <Badge color="neutral" variant={CONFIDENCE_VARIANT[need.confidence]}>
+                      {`Confidence: ${need.confidence}`}
+                    </Badge>
+                    {need.history_days !== null && <span>{`${need.history_days} days of history`}</span>}
+                  </span>
+                )}
+                {need.narration && <p className="text-sm text-fg-secondary">{need.narration}</p>}
+                {need.source === "trend" && need.metric !== "" && (
+                  <span>
+                    <Button
+                      variant="tertiary"
+                      size="sm"
+                      onClick={(event) => openChart(need.service, need.metric, event.currentTarget)}
+                    >
+                      View chart
+                    </Button>
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    ) : null;
+
+  const trendsSection =
+    forecast && forecast.fits.length > 0 ? (
+      <section className="mt-3">
+        <h2 className="text-sm font-semibold">Trends</h2>
+        <ul className="mt-1 flex flex-col">
+          {forecast.fits.map((fit) => {
+            const value = formatValue(fit);
+            return (
+              <li key={`${fit.service}|${fit.metric}`} className="list-none">
+                <Button
+                  variant="tertiary"
+                  size="sm"
+                  onClick={(event) => openChart(fit.service, fit.metric, event.currentTarget)}
+                >
+                  {`${fit.service} · ${fit.metric}${value ? ` ${value}` : ""} ${fitCaption(fit, nowMs)}`}
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    ) : null;
+
+  const chartDialog = chart ? (
+    <ForecastDialog host={id} service={chart.service} metric={chart.metric} onClose={closeChart} />
+  ) : null;
+
   // Agent hosts get the focused view (2026-09-25): gauges, SMART (inside the disk gauge),
   // agent connection, uptime, the services chosen in the wizard and the monitored TCP ports
   // -- no generic service table and no history. Hosts without an agent keep the full view.
@@ -196,6 +366,9 @@ export function HostDetails({ id }: { id: string }) {
         </div>
 
         {gauges}
+
+        {needsSection}
+        {trendsSection}
 
         <section className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
           <span className="flex items-center gap-2">
@@ -231,6 +404,7 @@ export function HostDetails({ id }: { id: string }) {
             <Table columns={PORT_COLUMNS} rows={ports} rowKey={(row) => row.description ?? ""} />
           </section>
         )}
+        {chartDialog}
       </div>
     );
   }
@@ -250,6 +424,9 @@ export function HostDetails({ id }: { id: string }) {
 
       {gauges}
 
+      {needsSection}
+      {trendsSection}
+
       <section className="mt-3">
         {services === undefined ? (
           <p className="text-sm text-fg-tertiary">{SERVICES_NOT_ARRIVED_TEXT}</p>
@@ -260,6 +437,7 @@ export function HostDetails({ id }: { id: string }) {
         )}
       </section>
 
+      {chartDialog}
     </div>
   );
 }
