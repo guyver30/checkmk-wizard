@@ -463,7 +463,7 @@ Plans:
 
 **Requirements**: none mapped; coverage target is every 14.2-CONTEXT.md decision (D-01..D-31, D-19a)
 
-**Plans:** 6/19 plans executed
+**Plans:** 10/19 plans executed
 
 Plans:
 
@@ -478,10 +478,10 @@ Plans:
 
 **Wave 2**
 
-- [ ] 14.2-07-PLAN.md — analytics config (env-only), topics, ClickHouse client and queries
-- [ ] 14.2-08-PLAN.md — TDD analytics/rules.py: failure/trend/sustained needs, tiers, anti-flap, triage carry-over
-- [ ] 14.2-09-PLAN.md — Needs pane and layout (kept visible in edit mode)
-- [ ] 14.2-10-PLAN.md — Forecast chart (SVG + d3-scale) and /ch-api/ history client
+- [x] 14.2-07-PLAN.md — analytics config (env-only), topics, ClickHouse client and queries
+- [x] 14.2-08-PLAN.md — TDD analytics/rules.py: failure/trend/sustained needs, tiers, anti-flap, triage carry-over
+- [x] 14.2-09-PLAN.md — Needs pane and layout (kept visible in edit mode)
+- [x] 14.2-10-PLAN.md — Forecast chart (SVG + d3-scale) and /ch-api/ history client
 
 **Wave 3**
 
