@@ -6,7 +6,7 @@ import { useEffect, useRef } from "react";
 import { Badge } from "kone-design-system";
 import { displayNameWithAddress } from "../lib/display";
 import { worstIncidentStatus, type Incident } from "../lib/incidents";
-import type { DevicePayload } from "../lib/types";
+import type { DevicePayload, NarrationPayload } from "../lib/types";
 import { IncidentCard } from "./IncidentCard";
 
 export interface IncidentListProps {
@@ -14,6 +14,7 @@ export interface IncidentListProps {
   devices: Record<string, DevicePayload>;
   nowMs: number;
   highlightedId?: string | null;
+  narrations?: Record<string, NarrationPayload>;
 }
 
 // The Incidents pane header's at-a-glance summary: a count badge coloured by the worst open
@@ -36,7 +37,7 @@ export function IncidentsSummary({ incidents }: { incidents: Incident[] }) {
   );
 }
 
-export function IncidentList({ incidents, devices, nowMs, highlightedId }: IncidentListProps) {
+export function IncidentList({ incidents, devices, nowMs, highlightedId, narrations }: IncidentListProps) {
   const sectionRef = useRef<HTMLElement | null>(null);
 
   // T-14-12: `highlightedId` comes from the `?incident=` query string (user-controllable). An
@@ -86,6 +87,7 @@ export function IncidentList({ incidents, devices, nowMs, highlightedId }: Incid
           rootDeviceType={devices[incident.root]?.device_type}
           nowMs={nowMs}
           highlighted={highlightedId === incident.id}
+          narration={narrations?.[incident.id] ?? null}
         />
       ))}
     </section>

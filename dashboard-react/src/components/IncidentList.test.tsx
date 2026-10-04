@@ -236,3 +236,45 @@ describe("IncidentsSummary", () => {
     expect(screen.getByTestId("incidents-severity")).toHaveAttribute("data-severity", "warning");
   });
 });
+
+describe("IncidentList narration (D-29, D-31)", () => {
+  const inc = incident({
+    id: "incident-sw-edge-a",
+    root: "sw-edge-a",
+    confirmedDown: ["sw-edge-a"],
+    worstCriticality: "high",
+  });
+  const narration = {
+    id: "incident-sw-edge-a",
+    headline: "Switch A is down",
+    sentences: ["Two cameras behind it lost their uplink.", "A <b>x</b> sentence."],
+    tier: "urgent" as const,
+    generated_at: "2026-09-26T12:00:00Z",
+  };
+
+  it("falls back to the consequence summary when no narration exists", () => {
+    renderList({ incidents: [inc], narrations: {} });
+    expect(screen.getByText("1 confirmed down")).toBeInTheDocument();
+    expect(screen.queryByText("Urgent")).not.toBeInTheDocument();
+  });
+
+  it("shows headline, sentences and tier badge instead of the summary", () => {
+    renderList({ incidents: [inc], narrations: { [inc.id]: narration } });
+    expect(screen.getByText("Switch A is down")).toBeInTheDocument();
+    expect(screen.getByText("Two cameras behind it lost their uplink.")).toBeInTheDocument();
+    expect(screen.getByText("Urgent")).toBeInTheDocument();
+    expect(screen.getByText("high")).toBeInTheDocument();
+    expect(screen.queryByText("1 confirmed down")).not.toBeInTheDocument();
+  });
+
+  it("renders sentence text literally, never as HTML", () => {
+    renderList({ incidents: [inc], narrations: { [inc.id]: narration } });
+    expect(screen.getByText("A <b>x</b> sentence.")).toBeInTheDocument();
+  });
+
+  it("omits the tier badge when the narration tier is null", () => {
+    renderList({ incidents: [inc], narrations: { [inc.id]: { ...narration, tier: null } } });
+    expect(screen.getByText("Switch A is down")).toBeInTheDocument();
+    expect(screen.queryByText("Urgent")).not.toBeInTheDocument();
+  });
+});

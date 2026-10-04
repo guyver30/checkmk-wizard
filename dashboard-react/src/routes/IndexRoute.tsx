@@ -84,6 +84,7 @@ export function IndexRoute() {
   // are derived from the store slices on every change, never cached elsewhere.
   const needRecord = useAppStore((s) => s.needs);
   const forecastRecord = useAppStore((s) => s.forecasts);
+  const narrationRecord = useAppStore((s) => s.narrations);
   const reconnecting = useAppStore((s) => s.connection.phase === "reconnecting");
   const visibleNeeds = useMemo(() => selectVisibleNeeds(needRecord), [needRecord]);
   const needsUpdatedAtMs = useMemo(
@@ -415,6 +416,7 @@ export function IndexRoute() {
             devices={devices}
             nowMs={nowMs}
             highlightedId={highlightedIncidentId}
+            narrations={narrationRecord}
           />
         )
       }
