@@ -353,8 +353,8 @@ ignore it, or start using it.
    config, and **`wss://`** (TLS), since `ws://` is plain text.
 4. **The browser login is served openly** from `/config.json`. That is acceptable on a closed LAN, but a
    cloud dashboard needs real per-user authentication and ACLs.
-5. **Initial load size.** On connect the client receives every retained message at once: one `status`,
-   `services`, `history` and `service_history` per host, plus the topology, the events array (up to
+5. **Initial load size.** On connect the client receives every retained message at once: one `status`
+   and `services` per host, plus the topology, the events array (up to
    about 125 to 160 KB) and the open incidents.
 6. **Topology editing and admin commands cross the same boundary the other way.** Editing needs a command
    path to on-prem Checkmk. Admin commands already travel over MQTT.
@@ -378,7 +378,7 @@ the host, service and metric counts are assumptions. Replace them with live numb
 | `status` every cycle, per host | about 590 bytes (gzip only halves it) | about 3.4 MB per host, about 100 MB for 30 hosts | Mostly unchanged data, 5760 times a day. |
 | History samples over MQTT (the Part 1 proposal) | about 380 KB per cycle for an assumed 2400 rows (20 agent hosts x 40 services x 3 metrics) | about 2.2 GB raw, about 210 MB gzipped | By far the biggest. The test data was random, so real data likely compresses better. |
 | `sites/<site_id>/lan/events/recent` | up to about 127 KB per republish | small normally, up to about 730 MB if it changes every cycle | A flapping fleet is the worst case. |
-| Per-device `history` and `service_history` | 1.5 to 2.3 KB each, per transition | small | Not read by the UI at all (Part 3). |
+| Per-device `history` and `service_history` | none | none | Removed 2026-10-04 (quick 261004-kbt); transition history comes from ClickHouse. |
 
 Downstream matters too: a cloud dashboard that pulls every retained message on connect would fetch tens of
 MB when hundreds of sites share one broker.
