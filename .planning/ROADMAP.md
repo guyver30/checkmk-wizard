@@ -22,6 +22,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 13: Wizard Parents Support and Topology Map** - The wizard populates Checkmk's `parents` attribute so the dashboard can render a real auto-derived topology map (completed 2026-09-23)
 - [x] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, operator-set criticality and dependencies, and kiosk mode (history and prediction split out to 14.1/14.2 per 14-CONTEXT.md D-01) (completed 2026-09-28)
 - [x] **Phase 14.1: Fleet History Store, Availability Rollups and Grafana** (INSERTED) - Poller-written TSDB on MinIO, daily availability rollups, read-only dashboard access, and Grafana for analysts
+- [ ] **Phase 14.3: Per-site MQTT Namespace** (INSERTED) - Move all topics under sites/<site_id>/, per-site ACLs, legacy retained-topic sweep, wizard uniqueness warning; runs before 14.2
 - [ ] **Phase 14.2: Fleet Failure Prediction and Incident Narration** (INSERTED) - Separate analytics container: regression-based forecasts with confidence tags and template/local incident narration over MQTT
 
 ## Phase Details
@@ -382,6 +383,16 @@ Plans:
 **Wave 6** *(blocked on 14-06, 14-07, 14-08)*
 
 - [x] 14-09-PLAN.md — Label/kiosk docs + live verification checkpoint (non-autonomous)
+
+### Phase 14.3: Per-site MQTT Namespace (INSERTED)
+
+**Goal:** Every poller, dashboard and admin MQTT topic moves under `sites/<site_id>/` (site_id = the Checkmk site id from `CMK_SITE_ID`, passed to the dashboard via `/config.json`), with per-site ACLs, a one-time startup sweep of the old un-namespaced retained `lan/*` topics, and a wizard site-name warning that the name must be globally unique. Runs BEFORE Phase 14.2 (decided 2026-10-04); 14.2's needs topic becomes `sites/<site_id>/lan/needs/{need_id}/status`.
+**Requirements**: TBD
+**Depends on:** Phase 14
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 14.3 to break down)
 
 ### Phase 14.1: Fleet History Store, Availability Rollups and Grafana (INSERTED)
 

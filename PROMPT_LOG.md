@@ -390,3 +390,7 @@
 - **2026-10-03 19:00** — add the bandwidth options discussion to the same .md
 - **2026-10-03 19:15** — 60s is fine for gauges, read events from ClickHouse; transport work belongs to a separate phase
 - **2026-10-03 19:45** — /bm:pause-work (also: answered A for criticality->tier mapping, bands fine, defaults fine; asked for placement of needs in dashboard)
+- **2026-10-04 12:56** — /bm:resume-work
+- **2026-10-04 13:05** — add the per-site namespace now (site_id = the Checkmk site id, must be unique per provisioned site); then discuss 14.2
+- **2026-10-04 13:10** — agree with the per-site namespace defaults, go straight to plan
+- **2026-10-04 13:20** — 1 (insert after 14 as 14.3, run before 14.2)

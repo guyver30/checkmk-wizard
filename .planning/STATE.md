@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: milestone_complete
-stopped_at: Milestone complete (Phase 16 was final phase)
-last_updated: 2026-10-02T08:51:11.189Z
-last_activity: 2026-10-02 -- Phase 16 execution started
+status: completed
+stopped_at: Phase 16 context gathered
+last_updated: "2026-10-04T05:30:53.590Z"
+last_activity: 2026-10-02
 progress:
-  total_phases: 13
-  completed_phases: 10
+  total_phases: 14
+  completed_phases: 11
   total_plans: 77
-  completed_plans: 76
-  percent: 77
+  completed_plans: 77
+  percent: 79
 ---
 
 # Project State
@@ -68,6 +68,7 @@ Progress: [██████████] 99%
 - Phase 14.1 inserted after Phase 14: Fleet history store (TSDB on MinIO, poller-written), daily availability rollups on MinIO, Grafana for analysts; split out of Phase 14 per 14-CONTEXT.md D-01/D-20..D-24
 - Phase 14.2 inserted after Phase 14: Failure prediction (regression, dates with confidence tag) and template/local-model incident narration in a separate analytics container; split out of Phase 14 per 14-CONTEXT.md D-01/D-30..D-32
 - Phase 16 added: Dashboard admin mode (?admin=1) to fake host UP/DOWN for live management demos via an MQTT command topic consumed by the poller (Livestatus commands); includes keeping the inferred unmanaged-switch card with faked-DOWN children. Gate is the query flag only (user choice 2026-10-02: closed demo network).
+- Phase 14.3 inserted after Phase 14: Per-site MQTT namespace (sites/<site_id>/...), runs before 14.2; decided 2026-10-04 (URGENT)
 
 ### Decisions
 
