@@ -1,5 +1,6 @@
 -- History schema: metric/state series and the availability-rollup staging
--- table (D-21, D-40b, D-42, D-43, D-48). Runs once, before 02-users.sh, on
+-- table (D-21, D-40b, D-42, D-43, D-48), plus the 14.2 events / incidents /
+-- need_triage tables at the end. Runs once, before 02-users.sh, on
 -- the first start of an empty ClickHouse data volume (docker-entrypoint-initdb.d,
 -- verified via ctx7, clickhouse/clickhouse-docs: scripts in this directory run
 -- in alphabetical order before the server accepts connections).
@@ -158,3 +159,70 @@ CREATE TABLE IF NOT EXISTS history.availability_daily
 ENGINE = ReplacingMergeTree(generated_at)
 ORDER BY (day, entity_type, group_type, entity_key)
 TTL day + INTERVAL 1095 DAY DELETE;
+
+-- history.events (14.2 D-02, D-03): durable copy of the published state-change /
+-- added / removed events. from_state / to_state are not named from / to because
+-- those are SQL keywords; '' stands for JSON null.
+-- The ORDER BY is the dedup key (ReplacingMergeTree), belt and braces for the
+-- in-memory dedup in the analytics container.
+CREATE TABLE IF NOT EXISTS history.events
+(
+    ts          DateTime('UTC'),
+    device_id   LowCardinality(String),
+    event       LowCardinality(String), -- state_change / added / removed as published
+    from_state  LowCardinality(String) DEFAULT '',
+    to_state    LowCardinality(String) DEFAULT '',
+    recorded_at DateTime('UTC') DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(recorded_at)
+PARTITION BY toYYYYMM(ts)
+ORDER BY (device_id, ts, event, from_state, to_state)
+TTL ts + INTERVAL 1095 DAY DELETE;
+
+-- history.incidents (14.2 D-02, D-03, D-30): one row per incident, rewritten as
+-- it changes. ReplacingMergeTree(updated_at) keeps the latest version; readers
+-- must use FINAL.
+CREATE TABLE IF NOT EXISTS history.incidents
+(
+    incident_id       LowCardinality(String),
+    opened_at         DateTime('UTC'),
+    closed_at         Nullable(DateTime('UTC')),
+    duration_s        Nullable(UInt32),
+    status            LowCardinality(String), -- open / closed
+    close_source      LowCardinality(String) DEFAULT '', -- tombstone / reconcile
+    root              LowCardinality(String),
+    root_state        LowCardinality(String),
+    inferred          UInt8,
+    confirmed_down    Array(String),
+    not_observable    Array(String),
+    dependents        Array(String),
+    worst_criticality LowCardinality(String),
+    summary           String, -- D-30: closed summary, or the latest open narration headline
+    updated_at        DateTime('UTC')
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (incident_id, opened_at)
+TTL toDate(opened_at) + INTERVAL 1095 DAY DELETE;
+
+-- history.need_triage (14.2 D-21, D-23): append-only audit log of operator
+-- triage actions on the "needs attention" list.
+CREATE TABLE IF NOT EXISTS history.need_triage
+(
+    ts            DateTime('UTC'),
+    need_id       String,
+    source        LowCardinality(String),
+    host          LowCardinality(String),
+    service       String DEFAULT '',
+    metric        String DEFAULT '',
+    action        LowCardinality(String), -- downgrade / upgrade / cancel / auto_reset
+    computed_tier LowCardinality(String),
+    tier_before   LowCardinality(String),
+    tier_after    LowCardinality(String),
+    note          String DEFAULT '',
+    actor         String DEFAULT '',
+    command_id    String DEFAULT ''
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(ts)
+ORDER BY (ts, need_id)
+TTL ts + INTERVAL 1095 DAY DELETE;

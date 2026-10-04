@@ -46,7 +46,7 @@ check_password() {
     esac
 }
 
-for password_var in CLICKHOUSE_PASSWORD CH_WRITER_PASSWORD CH_READER_PASSWORD CH_GRAFANA_PASSWORD; do
+for password_var in CLICKHOUSE_PASSWORD CH_WRITER_PASSWORD CH_READER_PASSWORD CH_GRAFANA_PASSWORD CH_ANALYTICS_PASSWORD; do
     check_password "$password_var"
 done
 
@@ -94,6 +94,16 @@ GRANT S3 ON *.* TO poller_writer;
 -- ACCESS_DENIED (code 497, "necessary to have the grant CREATE TEMPORARY TABLE ON *.*") because
 -- ClickHouse requires it for every table function, so the Parquet rollup never wrote.
 GRANT CREATE TEMPORARY TABLE ON *.* TO poller_writer;
+
+-- 14.2 D-04 moves the rollup (Parquet export via the s3 table function) to the analytics container,
+-- so analytics_writer gets the same S3 and CREATE TEMPORARY TABLE grants (the latter is the same
+-- live-verified requirement documented for poller_writer above). poller_writer keeps its S3 grants
+-- for now (harmless, later cleanup). dashboard_reader and grafana_reader need no change: their
+-- SELECT ON history.* already covers the new tables.
+CREATE USER IF NOT EXISTS analytics_writer IDENTIFIED WITH sha256_password BY '$CH_ANALYTICS_PASSWORD';
+GRANT SELECT, INSERT ON history.* TO analytics_writer;
+GRANT S3 ON *.* TO analytics_writer;
+GRANT CREATE TEMPORARY TABLE ON *.* TO analytics_writer;
 SQL
 
-echo "Created ClickHouse users: dashboard_reader, grafana_reader, poller_writer"
+echo "Created ClickHouse users: dashboard_reader, grafana_reader, poller_writer, analytics_writer"
