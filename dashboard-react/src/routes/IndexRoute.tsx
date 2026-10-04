@@ -31,6 +31,7 @@ import {
   probeEditingAvailable,
 } from "../lib/checkmkWrite";
 import { newestGeneratedAt, selectVisibleNeeds } from "../lib/forecast";
+import { buildTierLookup } from "../lib/needDisplay";
 import { buildIncidentLookup, selectOpenIncidents } from "../lib/incidents";
 import { buildTree } from "../lib/treeModel";
 import type { GroupingMode, TopologyNode } from "../lib/types";
@@ -87,6 +88,7 @@ export function IndexRoute() {
   const narrationRecord = useAppStore((s) => s.narrations);
   const reconnecting = useAppStore((s) => s.connection.phase === "reconnecting");
   const visibleNeeds = useMemo(() => selectVisibleNeeds(needRecord), [needRecord]);
+  const tierLookup = useMemo(() => buildTierLookup(visibleNeeds), [visibleNeeds]);
   const needsUpdatedAtMs = useMemo(
     () => newestGeneratedAt(needRecord, forecastRecord),
     [needRecord, forecastRecord],
@@ -129,8 +131,8 @@ export function IndexRoute() {
   }, [setSearchParams]);
 
   const groups = useMemo(
-    () => buildTree(devices, mode, nowMs, { orderBySeverity, incidentLookup }),
-    [devices, mode, nowMs, orderBySeverity, incidentLookup],
+    () => buildTree(devices, mode, nowMs, { orderBySeverity, incidentLookup, tierLookup }),
+    [devices, mode, nowMs, orderBySeverity, incidentLookup, tierLookup],
   );
   // Hosts the dashboard currently lists, for the admin "Select all" button. "Listed" means the
   // tree model built from the live device map; collapsed groups still count because their hosts
@@ -402,6 +404,7 @@ export function IndexRoute() {
                 onEditSaved={onEditSaved}
                 onEditFailed={onEditFailed}
                 incidentLookup={incidentLookup}
+                tierLookup={tierLookup}
                 onSelectHost={setSelectedHost}
               />
             </div>

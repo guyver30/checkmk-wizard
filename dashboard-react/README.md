@@ -256,6 +256,15 @@ hh:mm" after 45 minutes and "Reconnecting" (rows dimmed) while the broker connec
 The pane is collapsible like the Incidents pane and, unlike it, stays visible in topology edit
 mode. While it is present the right column is at least 640px wide.
 
+**Narration and tier markers.** When the analytics service has published a narration for an
+incident (`narrations` slice), its card shows the headline and sentences in place of the
+consequence summary line, plus a tier badge beside the criticality badge when the narration
+carries a tier; without a narration the card is unchanged. Hosts with an urgent or immediate
+need also get a marker separate from their state colour: `TierMarker` on tree rows (filled dot
+immediate, ring urgent, none for standard; the worst need's narration is the tooltip) and a
+small dot at the node's top-right on the map, drawn in vis-network's `afterDrawing` hook. Both
+read a `tierLookup` built by `buildTierLookup` from the visible needs.
+
 In the Incidents pane at the top of the right-hand column (above the host details pane),
 `IncidentList` (DASH-14) shows one card per open root-cause incident. The pane header always
 reads "Incidents" plus a count badge coloured by the worst open incident (danger when any card

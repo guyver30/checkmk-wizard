@@ -14,6 +14,7 @@ import { useLocation } from "react-router";
 import { IndexRoute } from "../routes/IndexRoute";
 import type { DevicePayload } from "../lib/types";
 import type { IncidentLookup } from "../lib/incidents";
+import type { TierLookup } from "../lib/needDisplay";
 
 const NOW_MS = Date.parse("2026-09-21T12:00:00Z");
 const FRESH_TIMESTAMP = new Date(NOW_MS - 5 * 1000).toISOString();
@@ -592,5 +593,30 @@ describe("Tree admin mode", () => {
         name: "Select all hosts in this folder",
       }),
     ).toBeNull();
+  });
+});
+
+describe("Tree tier markers (D-26)", () => {
+  function renderWithTiers(tierLookup: TierLookup) {
+    const groups = buildTree(threeGroupDevices(), "type", NOW_MS, { tierLookup });
+    const openKeys = new Set(groups.map((group) => group.key));
+    return render(
+      <MemoryRouter>
+        <Tree groups={groups} openKeys={openKeys} onToggle={() => {}} />
+      </MemoryRouter>,
+    );
+  }
+
+  it("shows the tier marker beside the state badge without replacing it", () => {
+    renderWithTiers({ nd1: { tier: "immediate", narration: "Disk full soon" } });
+    const row = screen.getByRole("treeitem", { name: "nd1 — WARN" });
+    expect(within(row).getByLabelText("Immediate service need")).toBeInTheDocument();
+    expect(within(row).getByText("WARN")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Urgent service need")).toBeNull();
+  });
+
+  it("shows no marker for a standard tier or an unlisted host", () => {
+    renderWithTiers({ nd1: { tier: "standard", narration: "x" } });
+    expect(screen.queryByLabelText(/service need/)).toBeNull();
   });
 });

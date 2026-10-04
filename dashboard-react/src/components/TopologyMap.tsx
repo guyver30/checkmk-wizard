@@ -35,6 +35,7 @@ import {
   type MapNode,
 } from "../lib/topologyLayout";
 import type { IncidentLookup } from "../lib/incidents";
+import type { TierLookup } from "../lib/needDisplay";
 import type { DevicePayload } from "../lib/types";
 
 export interface EditFailure {
@@ -50,6 +51,8 @@ export interface TopologyMapProps {
   onEditSaved?: () => void;
   onEditFailed?: (failure: EditFailure) => void;
   incidentLookup?: IncidentLookup;
+  // Worst service-need tier per host; drawn as a small dot at the node's top-right.
+  tierLookup?: TierLookup;
   onSelectHost?: (id: string) => void;
 }
 
@@ -173,6 +176,55 @@ function drawGrid(ctx: CanvasRenderingContext2D, network: Network, container: HT
   ctx.restore();
 }
 
+// Fallback for canvas drawing when the CSS variable cannot be resolved (canvas cannot use
+// var(...) directly, so the token is read once per frame from the container's computed style).
+const TIER_MARKER_FALLBACK_COLOR = "#f59e0b";
+const TIER_MARKER_RADIUS = 4;
+// Offset from the node centre to its top-right, in canvas units (node size is 16).
+const TIER_MARKER_OFFSET = 12;
+
+// Draws the service-need tier marker (filled dot immediate, ring urgent) at each node's
+// top-right, in network coordinates (called from afterDrawing, so it pans and zooms with the
+// map). It sits on top of the node and never changes the node's own colour or border.
+function drawTierMarkers(
+  ctx: CanvasRenderingContext2D,
+  network: Network,
+  container: HTMLElement,
+  tierLookup: TierLookup,
+): void {
+  const ids = Object.keys(tierLookup).filter((id) => tierLookup[id].tier !== "standard");
+  if (ids.length === 0) {
+    return;
+  }
+  const positions = network.getPositions(ids);
+  const resolved = getComputedStyle(container).getPropertyValue("--color-warning-default").trim();
+  const color = resolved || TIER_MARKER_FALLBACK_COLOR;
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  for (const id of ids) {
+    const position = positions[id];
+    if (!position) {
+      continue;
+    }
+    ctx.beginPath();
+    ctx.arc(
+      position.x + TIER_MARKER_OFFSET,
+      position.y - TIER_MARKER_OFFSET,
+      TIER_MARKER_RADIUS,
+      0,
+      2 * Math.PI,
+    );
+    if (tierLookup[id].tier === "immediate") {
+      ctx.fill();
+    } else {
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
 // 13-UI-SPEC.md "Topology Map Rendering" -- node/edge/physics/interaction options, locked.
 const NETWORK_OPTIONS = {
   nodes: {
@@ -243,6 +295,7 @@ export function TopologyMap({
   onEditSaved,
   onEditFailed,
   incidentLookup,
+  tierLookup,
   onSelectHost,
 }: TopologyMapProps) {
   const navigate = useNavigate();
@@ -298,6 +351,14 @@ export function TopologyMap({
   // The click handler below is registered once, in the mount effect -- it reads the latest
   // model through this ref (rather than closing over `model` directly) so a consequence node's
   // incidentId/incidentRole is always current, exactly like editModeRef does for editMode.
+  // The afterDrawing handler (registered once) reads the latest tier lookup through this ref;
+  // a change redraws the canvas so the markers appear without waiting for a node update.
+  const tierLookupRef = useRef<TierLookup>(tierLookup ?? {});
+  useEffect(() => {
+    tierLookupRef.current = tierLookup ?? {};
+    networkRef.current?.redraw();
+  }, [tierLookup]);
+
   const modelRef = useRef(model);
   useEffect(() => {
     modelRef.current = model;
@@ -484,6 +545,10 @@ export function TopologyMap({
     // D-01: registered unconditionally (not gated on editMode) so the grid is always visible,
     // in both read-only and edit mode.
     network.on("beforeDrawing", (ctx: CanvasRenderingContext2D) => drawGrid(ctx, network, container));
+
+    network.on("afterDrawing", (ctx: CanvasRenderingContext2D) =>
+      drawTierMarkers(ctx, network, container, tierLookupRef.current),
+    );
 
     network.on("click", (params: {
       nodes: string[];
