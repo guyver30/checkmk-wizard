@@ -3770,7 +3770,8 @@ def run_forever(config: PollerConfig) -> int:
                 snapshots, services, datetime.datetime.now(datetime.UTC)
             ))
         # 2026-10-04 (Phase 14.2 D-04): the daily availability rollup (the old
-        # maybe_run_rollups call) moved to analytics/rollup.py; never-overwrite writes made the hand-over safe.
+        # maybe_run_rollups call) moved to analytics/rollup.py;
+        # never-overwrite writes made the hand-over safe.
         stop_event.wait(timeout=config.poll_interval_seconds)
 
     # Graceful stop must leave the same retained value the LWT would have
