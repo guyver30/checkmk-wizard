@@ -1,7 +1,6 @@
 """Poller for the LAN monitoring dashboard: Livestatus-over-TCP -> per-device
 retained MQTT topics (`sites/<site_id>/lan/devices/{id}/status`,
-`sites/<site_id>/lan/devices/topology`, `sites/<site_id>/lan/devices/{id}/history`,
-`sites/<site_id>/lan/events/recent`).
+`sites/<site_id>/lan/devices/topology`, `sites/<site_id>/lan/events/recent`).
 
 Standalone script, not part of the installable `checkmk_wizard` package
 --------------------------------------------------------------------
@@ -66,15 +65,9 @@ import paho.mqtt.client as mqtt
 DEFAULT_LIVESTATUS_PORT = 6557
 DEFAULT_MQTT_PORT = 1883
 DEFAULT_POLL_INTERVAL_SECONDS = 15
-DEFAULT_HISTORY_MAX_ENTRIES = 20
 # 2026-09-25: raised from 50 by operator decision so the dashboard's date-range
 # filter has days of history to work with (~160 KB retained payload at 1000).
 DEFAULT_EVENTS_MAX_ENTRIES = 1000
-# Phase 12 (D-14): bounds `lan/devices/{id}/service_history`, the same
-# convention as DEFAULT_HISTORY_MAX_ENTRIES above but on its own topic and
-# its own env var (SERVICE_HISTORY_MAX_ENTRIES) so the two bounded logs'
-# caps can be tuned independently.
-DEFAULT_SERVICE_HISTORY_MAX_ENTRIES = 20
 DEFAULT_RECONCILE_TIMEOUT_SECONDS = 5.0
 # Not env-configurable (D-04 scopes env vars to the settings it names): this
 # is the per-request socket timeout for the poller's own Livestatus calls,
@@ -401,7 +394,6 @@ class PollerConfig:
     mqtt_username: str
     mqtt_password: str
     poll_interval_seconds: int
-    history_max_entries: int
     events_max_entries: int
     reconcile_timeout_seconds: float
     log_level: str
@@ -412,11 +404,7 @@ class PollerConfig:
     cmk_site_id: str = "dmc"
     cmk_rest_username: str = ""
     cmk_rest_secret: str = ""
-    # Phase 12 (D-14). Appended after cmk_rest_secret for the same reason
-    # those fields were: no existing positional PollerConfig(...) call site
-    # breaks.
-    service_history_max_entries: int = DEFAULT_SERVICE_HISTORY_MAX_ENTRIES
-    # Phase 14.1 (D-44). Appended after service_history_max_entries so no
+    # Phase 14.1 (D-44). Appended after cmk_rest_secret so no
     # positional PollerConfig(...) call site breaks. An empty
     # clickhouse_url (the default) means history writes are disabled
     # entirely (write_history() below is a no-op) -- the poller behaves
@@ -454,8 +442,6 @@ class PollerConfig:
             f"mqtt_username={self.mqtt_username!r}, "
             "mqtt_password='***', "
             f"poll_interval_seconds={self.poll_interval_seconds!r}, "
-            f"history_max_entries={self.history_max_entries!r}, "
-            f"service_history_max_entries={self.service_history_max_entries!r}, "
             f"events_max_entries={self.events_max_entries!r}, "
             f"reconcile_timeout_seconds={self.reconcile_timeout_seconds!r}, "
             f"log_level={self.log_level!r}, "
@@ -487,10 +473,6 @@ class PollerConfig:
             mqtt_username=os.environ.get("MQTT_USERNAME", "poller"),
             mqtt_password=os.environ.get("MQTT_PASSWORD", "poller"),
             poll_interval_seconds=_env_int("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS),
-            history_max_entries=_env_int("HISTORY_MAX_ENTRIES", DEFAULT_HISTORY_MAX_ENTRIES),
-            service_history_max_entries=_env_int(
-                "SERVICE_HISTORY_MAX_ENTRIES", DEFAULT_SERVICE_HISTORY_MAX_ENTRIES
-            ),
             events_max_entries=_env_int("EVENTS_MAX_ENTRIES", DEFAULT_EVENTS_MAX_ENTRIES),
             reconcile_timeout_seconds=_env_float(
                 "RECONCILE_TIMEOUT_SECONDS", DEFAULT_RECONCILE_TIMEOUT_SECONDS
@@ -739,16 +721,8 @@ def device_status_topic(device_id: str) -> str:
     return site_topic(f"lan/devices/{device_id}/status")
 
 
-def device_history_topic(device_id: str) -> str:
-    return site_topic(f"lan/devices/{device_id}/history")
-
-
 def device_services_topic(device_id: str) -> str:
     return site_topic(f"lan/devices/{device_id}/services")
-
-
-def device_service_history_topic(device_id: str) -> str:
-    return site_topic(f"lan/devices/{device_id}/service_history")
 
 
 def incident_status_topic(incident_id: str) -> str:
@@ -851,11 +825,6 @@ def host_state_label(host_state: int) -> str:
     in `compute_overall_state()`'s own inline comment.
     """
     return {0: "UP", 1: "DOWN", 2: "UNREACH"}.get(host_state, "UP")
-
-
-def append_bounded(entries: list[dict], entry: dict, max_entries: int) -> list[dict]:
-    """Return a new bounded list with `entry` appended, never mutating `entries`."""
-    return (entries + [entry])[-max_entries:]
 
 
 def topology_nodes(snapshots: list[DeviceSnapshot]) -> list[dict]:
@@ -3670,25 +3639,12 @@ def publish_topology(client: mqtt.Client, nodes: list[dict], timestamp: str) -> 
     _publish_json(client, site_topic(TOPIC_TOPOLOGY), payload, qos=1, retain=True)
 
 
-def publish_history(client: mqtt.Client, device_id: str, entries: list[dict]) -> None:
-    """Publish one device's full bounded transition history (already truncated by the caller)."""
-    _publish_json(client, device_history_topic(device_id), entries, qos=1, retain=True)
-
-
 def publish_services(client: mqtt.Client, device_id: str, rows: list[dict]) -> None:
     """Publish one device's per-service row list. QoS 1: change-triggered (D-12/D-13), not
     republished every cycle -- the caller only calls this when `services_signature` differs
     from the previously published signature.
     """
     _publish_json(client, device_services_topic(device_id), rows, qos=1, retain=True)
-
-
-def publish_service_history(client: mqtt.Client, device_id: str, entries: list[dict]) -> None:
-    """Publish one device's full bounded per-service transition history (already truncated by
-    the caller). QoS 1: change-triggered (D-14), published only on a per-service state
-    transition.
-    """
-    _publish_json(client, device_service_history_topic(device_id), entries, qos=1, retain=True)
 
 
 def publish_events(client: mqtt.Client, entries: list[dict]) -> None:
@@ -3704,9 +3660,22 @@ def publish_raw_tombstone(client: mqtt.Client, full_topic: str) -> None:
     because that builds site-prefixed per-device topics. Relies on the
     temporary poller legacy ACL grants in deploy/mosquitto.acl.template
     (Mosquitto silently drops an unauthorized publish). Refuses anything under
-    `sites/` so the sweep can never clear the live namespace.
+    `sites/` so the sweep can never clear the live namespace, except this
+    site's retired per-device `history`/`service_history` topics.
+
+    2026-10-04 (quick 261004-kbt): the poller no longer publishes per-device
+    history/service_history (ClickHouse holds transition history); already-
+    retained ones are cleared once via legacy_retained_topics. Remove the
+    allowance together with that sweep after one release.
     """
-    if full_topic.startswith("sites/"):
+    rel = relative_topic(full_topic)
+    rel_parts = rel.split("/") if rel is not None else []
+    retired_history = (
+        len(rel_parts) == 4
+        and rel_parts[:2] == ["lan", "devices"]
+        and rel_parts[3] in ("history", "service_history")
+    )
+    if full_topic.startswith("sites/") and not retired_history:
         _logger.warning("Refusing to tombstone namespaced topic %s", full_topic)
         return
     try:
@@ -3717,7 +3686,8 @@ def publish_raw_tombstone(client: mqtt.Client, full_topic: str) -> None:
 
 
 def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
-    """Clear a removed device's retained status, history, services and service_history topics.
+    """Clear a removed device's retained status and services topics (plus the retired
+    history and service_history topics, for one release).
 
     A zero-length retained payload is MQTT's own defined "clear this
     retained topic" semantic -- the same mechanism as
@@ -3732,9 +3702,12 @@ def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
     """
     for topic in (
         device_status_topic(device_id),
-        device_history_topic(device_id),
         device_services_topic(device_id),
-        device_service_history_topic(device_id),
+        # legacy since 2026-10-04 (quick 261004-kbt): no longer published; tombstoned for
+        # one release so hosts removed right after the upgrade leave no retained ghost;
+        # drop later.
+        site_topic(f"lan/devices/{device_id}/history"),
+        site_topic(f"lan/devices/{device_id}/service_history"),
     ):
         try:
             info = client.publish(topic, payload=None, retain=True, qos=1)
@@ -3813,30 +3786,15 @@ class PollerState:
 
     previous_nodes: dict[str, dict]
     last_status: dict[str, str]
-    history: dict[str, list[dict]]
     events: list[dict]
     since: str
-    # Phase 12 (D-13/D-14). `default_factory=dict` so every existing
-    # `PollerState(...)` construction in tests and in `reconcile_state`
-    # stays valid without passing these explicitly.
-    #
-    # `previous_services` (device id -> last published `services_signature`)
-    # and `last_service_states` (device id -> description -> state) are
-    # deliberately NOT reconciled from a retained topic on restart -- they
-    # live only in memory and rebuild from live Livestatus every cycle, the
-    # same argument the pre-existing `last_status` comment in `run_cycle`
-    # already makes for device-level status. This makes a first-cycle false
-    # transition structurally impossible, and 12-RESEARCH.md Pitfall 3
-    # concludes the cost of not reconciling is just one redundant
-    # `services` republish per device after a restart -- cheap, and simpler
-    # than reconciling two more retained shapes.
+    # Phase 12 (D-13). `previous_services` (device id -> last published
+    # `services_signature`) is deliberately NOT reconciled from a retained
+    # topic on restart -- it lives only in memory and rebuilds from live
+    # Livestatus every cycle, the same argument the `last_status` comment in
+    # `run_cycle` makes for device-level status. The cost is one redundant
+    # `services` republish per device after a restart.
     previous_services: dict[str, tuple] = field(default_factory=dict)
-    last_service_states: dict[str, dict[str, str]] = field(default_factory=dict)
-    # `service_history` IS reconciled by `reconcile_state` below (mirrors
-    # `history`'s own reconciliation): 12-RESEARCH.md Pitfall 3 also notes
-    # that reconciling the bounded history prevents a restart from
-    # clobbering a good retained history with a one-entry array.
-    service_history: dict[str, list[dict]] = field(default_factory=dict)
     # 2026-09-25 (quick 260925-b81): device ids that had any non-empty
     # retained per-device topic at startup. This can include ghosts that are
     # NOT in the retained topology, which `previous_nodes` alone can never
@@ -4022,19 +3980,17 @@ def _normalise_restored_node(node: dict) -> dict:
 
 
 def parse_events_payload(payload: bytes) -> list[dict]:
-    """Parse a retained bounded-array payload (`lan/events/recent` or a per-device history topic).
+    """Parse the retained `lan/events/recent` bounded-array payload.
 
     Same empty/malformed-degrades-to-empty contract as
-    `parse_topology_payload`. Reused for per-device history payloads too:
-    both are "a bounded JSON array of entry dicts", so one parser covers
-    both shapes.
+    `parse_topology_payload`.
     """
     if not payload:
         return []
     try:
         data = json.loads(payload)
     except (json.JSONDecodeError, ValueError) as exc:
-        _logger.warning("Malformed events/history payload during reconciliation: %s", exc)
+        _logger.warning("Malformed events payload during reconciliation: %s", exc)
         return []
     return data if isinstance(data, list) else []
 
@@ -4049,27 +4005,18 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     arrived yet" wait, unlike a wildcard subscription across N per-device
     topics would have (RESEARCH.md's resolved reconciliation strategy).
 
-    The wildcard `lan/devices/+/history` subscription below is
-    best-effort cosmetic restoration only: a history array that arrives
-    late simply gets rebuilt from the next transition onward -- a
-    bounded, self-correcting log gap, never a wrong tombstone or a wrong
-    status.
-
-    The ids of every device with a retained `status`/`history`/`services`/
-    `service_history` topic are also collected into `retained_ids`, so
-    `run_cycle` can clear topics of hosts the site no longer has.
+    The ids of every device with a retained `status`/`services` topic are
+    also collected into `retained_ids`, so `run_cycle` can clear topics of
+    hosts the site no longer has. Retained non-empty `history`/
+    `service_history` topics (no longer published) are collected by full
+    topic into `legacy_retained_topics` and cleared once by the same sweep.
 
     Per-device status is deliberately NOT reconciled at all: it is
     republished fresh from live Livestatus every cycle (`run_cycle`), so
     it has no "previous" value worth recovering.
 
-    Phase 12 (D-13/D-14): `previous_services` and `last_service_states` are
-    likewise deliberately NOT reconciled here -- see the dated comment on
-    `PollerState` above; `lan/devices/+/service_history` IS subscribed and
-    reconciled, mirroring the existing `lan/devices/+/history` wildcard's
-    same best-effort-cosmetic-restoration contract (12-RESEARCH.md
-    Pitfall 3: reconciling the bounded history prevents a restart from
-    clobbering a good retained history with a one-entry array).
+    Phase 12 (D-13): `previous_services` is likewise deliberately NOT
+    reconciled here -- see the dated comment on `PollerState` above.
 
     This is what satisfies "self-heals across restarts with no persisted
     state of its own" (PLR-02): the durable store is Mosquitto's
@@ -4084,7 +4031,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     viewer, since the payload is the same) or tombstones one that closed
     while the poller was down. Only the topic *name* is read here, never
     the retained payload body, per the malformed-payload posture already
-    applied to `history`/`service_history` above.
+    applied to the per-device topics above.
 
     This function's client deliberately has no will configured -- its own
     (normal) disconnect at the end of this function must never publish a
@@ -4092,8 +4039,6 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     """
     topology_result: list[bytes] = []
     events_result: list[bytes] = []
-    history_payloads: dict[str, bytes] = {}
-    service_history_payloads: dict[str, bytes] = {}
     retained_ids: set[str] = set()
     retained_incident_ids: set[str] = set()
     admin_faked_result: list[bytes] = []
@@ -4129,11 +4074,24 @@ def reconcile_state(config: PollerConfig) -> PollerState:
             len(parts) == 4
             and parts[0] == "lan"
             and parts[1] == "devices"
-            and parts[3] in ("status", "history", "services", "service_history")
+            and parts[3] in ("status", "services")
             and msg.payload
             and is_publishable_device_id(parts[2])
         ):
             retained_ids.add(parts[2])
+        # 2026-10-04 (quick 261004-kbt): the poller no longer publishes per-device
+        # history/service_history (ClickHouse holds transition history); already-
+        # retained ones are cleared once via legacy_retained_topics. Remove this and
+        # the two subscriptions together after one release.
+        if (
+            len(parts) == 4
+            and parts[0] == "lan"
+            and parts[1] == "devices"
+            and parts[3] in ("history", "service_history")
+            and getattr(msg, "retain", False)
+            and msg.payload
+        ):
+            legacy_topics.add(msg.topic)
         if (
             len(parts) == 4
             and parts[0] == "lan"
@@ -4149,15 +4107,6 @@ def reconcile_state(config: PollerConfig) -> PollerState:
             topology_received.set()
         elif rel == TOPIC_EVENTS:
             events_result.append(msg.payload)
-        elif len(parts) == 4 and parts[0] == "lan" and parts[1] == "devices" and parts[3] == "history":
-            history_payloads[parts[2]] = msg.payload
-        elif (
-            len(parts) == 4
-            and parts[0] == "lan"
-            and parts[1] == "devices"
-            and parts[3] == "service_history"
-        ):
-            service_history_payloads[parts[2]] = msg.payload
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.username_pw_set(config.mqtt_username, config.mqtt_password)
@@ -4196,11 +4145,6 @@ def reconcile_state(config: PollerConfig) -> PollerState:
 
     previous_nodes = parse_topology_payload(topology_result[0] if topology_result else b"")
     events = parse_events_payload(events_result[0] if events_result else b"")
-    history = {device_id: parse_events_payload(payload) for device_id, payload in history_payloads.items()}
-    service_history = {
-        device_id: parse_events_payload(payload)
-        for device_id, payload in service_history_payloads.items()
-    }
 
     # New-namespace admin/faked wins; the legacy retained payload only seeds
     # fake states injected before the upgrade.
@@ -4215,10 +4159,8 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     return PollerState(
         previous_nodes=previous_nodes,
         last_status={},
-        history=history,
         events=events,
         since=utc_now_iso(),
-        service_history=service_history,
         retained_ids=retained_ids,
         previous_incidents={incident_id: None for incident_id in retained_incident_ids},
         admin_faked=parse_admin_faked_payload(admin_faked_payload),
@@ -4237,7 +4179,7 @@ def run_cycle(
     """Run one poll cycle: publish status, detect changes, tombstone removals.
 
     Status publishes first for every snapshot -- it's correct regardless
-    of anything else this cycle discovers. Topology/tombstone/history/
+    of anything else this cycle discovers. Topology/tombstone/
     events are then computed from the diff between this cycle's live
     Livestatus snapshot and `state.previous_nodes`/`state.last_status`.
 
@@ -4248,17 +4190,14 @@ def run_cycle(
     cycle -- the suppression falls out of the data structure rather than
     needing a flag.
 
-    Phase 12 (D-12/D-13/D-14): `services` is `None` on a cycle whose
+    Phase 12 (D-12/D-13): `services` is `None` on a cycle whose
     services query failed (or hasn't run yet) -- the status topic then
     keeps publishing every snapshot's core fields with no gauge keys at
     all, rather than publishing wrong `null`s over a good retained value,
-    and neither `services` nor `service_history` is touched. When
-    `services` is a list (including an empty one), each snapshot's rows
-    are diffed via `services_signature()` against `state.previous_services`
-    -- the row list republishes only on a real change (D-13) -- and any
-    per-service state transition appends one bounded entry to that
-    device's `service_history`, republished once per cycle rather than
-    once per transition.
+    and `services` is not touched. When `services` is a list (including an
+    empty one), each snapshot's rows are diffed via `services_signature()`
+    against `state.previous_services` -- the row list republishes only on a
+    real change (D-13). Transition history lives in ClickHouse, not MQTT.
 
     `allow_stale_sweep` (2026-09-25, quick 260925-b81): when true, retained
     per-device topics collected at startup (`state.retained_ids`) whose id is
@@ -4303,27 +4242,6 @@ def run_cycle(
             publish_services(client, snapshot.id, rows)
             state.previous_services[snapshot.id] = signature
 
-        # A description absent from the previous map is a first
-        # observation, never a transition -- only descriptions present in
-        # BOTH maps can produce a `service_history` entry.
-        previous_service_states = state.last_service_states.get(snapshot.id, {})
-        current_service_states = {row["description"]: row["state"] for row in rows}
-        transitions = [
-            {"timestamp": now, "description": description, "from": previous_service_states[description], "to": current_state}
-            for description, current_state in current_service_states.items()
-            if description in previous_service_states
-            and previous_service_states[description] != current_state
-        ]
-        if transitions:
-            device_service_history = state.service_history.get(snapshot.id, [])
-            for entry in transitions:
-                device_service_history = append_bounded(
-                    device_service_history, entry, config.service_history_max_entries
-                )
-            state.service_history[snapshot.id] = device_service_history
-            publish_service_history(client, snapshot.id, device_service_history)
-        state.last_service_states[snapshot.id] = current_service_states
-
     nodes = topology_nodes(snapshots)
     snapshots_by_id = {snapshot.id: snapshot for snapshot in snapshots}
     current_ids = set(snapshots_by_id)
@@ -4336,13 +4254,10 @@ def run_cycle(
     for device_id in removed_ids:
         publish_tombstone(client, device_id)
         last_state = state.last_status.pop(device_id, None)
-        state.history.pop(device_id, None)
         # The tombstone published above already clears the broker side of
-        # all four per-device topics (task 2); these three pops clear the
-        # in-process side so a re-added host with the same id starts clean.
+        # the per-device topics; this pop clears the in-process side so a
+        # re-added host with the same id starts clean.
         state.previous_services.pop(device_id, None)
-        state.last_service_states.pop(device_id, None)
-        state.service_history.pop(device_id, None)
         events_this_cycle.append(
             {
                 "timestamp": now,
@@ -4363,20 +4278,18 @@ def run_cycle(
         for device_id in sorted(stale_ids):
             publish_tombstone(client, device_id)
             state.last_status.pop(device_id, None)
-            state.history.pop(device_id, None)
             state.previous_services.pop(device_id, None)
-            state.last_service_states.pop(device_id, None)
-            state.service_history.pop(device_id, None)
             _logger.info("Cleared stale retained topics for absent host %s", device_id)
         # The sweep runs once per process; `previous_nodes` tracks from here.
         state.retained_ids = set()
         # Phase 14.3: the whole un-namespaced legacy tree is stale by
-        # definition; clear it once, emitting no events.
+        # definition; clear it once, emitting no events. Also holds this
+        # site's retired per-device history/service_history topics.
         if state.legacy_retained_topics:
             for legacy_topic in sorted(state.legacy_retained_topics):
                 publish_raw_tombstone(client, legacy_topic)
             _logger.info(
-                "Cleared %d pre-14.3 un-namespaced retained topics",
+                "Cleared %d legacy retained topics",
                 len(state.legacy_retained_topics),
             )
         state.legacy_retained_topics = set()
@@ -4404,13 +4317,6 @@ def run_cycle(
                     "to": snapshot.state,
                 }
             )
-            device_history = append_bounded(
-                state.history.get(snapshot.id, []),
-                {"timestamp": now, "from": previous_state, "to": snapshot.state},
-                config.history_max_entries,
-            )
-            state.history[snapshot.id] = device_history
-            publish_history(client, snapshot.id, device_history)
 
     if topology_signature(nodes) != topology_signature(list(state.previous_nodes.values())):
         publish_topology(client, nodes, now)

@@ -44,24 +44,10 @@ export interface DevicePayload {
   smart_failing?: number | null;
 }
 
-export interface HistoryEntry {
-  state?: string;
-  timestamp?: string;
-  [key: string]: unknown;
-}
-
 export interface ServiceEntry {
   description?: string;
   state?: string;
   plugin_output?: string;
-  [key: string]: unknown;
-}
-
-export interface ServiceHistoryEntry {
-  timestamp?: string;
-  description?: string;
-  from?: string | null;
-  to?: string | null;
   [key: string]: unknown;
 }
 

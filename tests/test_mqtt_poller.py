@@ -132,13 +132,6 @@ def test_is_publishable_device_id_accepts_normal_hostnames():
     assert poller.is_publishable_device_id("switch-01.lan") is True
 
 
-# --- append_bounded ----------------------------------------------------------
-
-
-def test_append_bounded_keeps_newest_drops_oldest():
-    assert poller.append_bounded([{"a": 1}], {"a": 2}, 1) == [{"a": 2}]
-
-
 # --- topology_nodes -----------------------------------------------------------
 
 
@@ -621,7 +614,6 @@ _ENV_VARS = (
     "MQTT_USERNAME",
     "MQTT_PASSWORD",
     "POLL_INTERVAL_SECONDS",
-    "HISTORY_MAX_ENTRIES",
     "EVENTS_MAX_ENTRIES",
     "RECONCILE_TIMEOUT_SECONDS",
     "LOG_LEVEL",
@@ -655,7 +647,6 @@ def test_poller_config_from_env_defaults_with_empty_environment(monkeypatch):
     _clear_poller_env(monkeypatch)
     config = poller.PollerConfig.from_env()
     assert config.poll_interval_seconds == 15
-    assert config.history_max_entries == 20
     assert config.events_max_entries == 1000
     assert config.livestatus_port == 6557
     assert config.mqtt_port == 1883
@@ -2542,7 +2533,6 @@ def _make_config(**overrides) -> "poller.PollerConfig":
         "mqtt_username": "poller",
         "mqtt_password": "secret",
         "poll_interval_seconds": 60,
-        "history_max_entries": 2,
         "events_max_entries": 3,
         "reconcile_timeout_seconds": 5.0,
         "log_level": "INFO",
@@ -2694,18 +2684,6 @@ def test_publish_topology_uses_qos1_and_devices_envelope():
     assert kwargs["retain"] is True
 
 
-def test_publish_history_publishes_full_array():
-    mock_client = MagicMock()
-    entries = [{"timestamp": "t1", "from": "OK", "to": "CRIT"}]
-    poller.publish_history(mock_client, "web1", entries)
-
-    args, kwargs = mock_client.publish.call_args
-    assert args[0] == "sites/testsite/lan/devices/web1/history"
-    assert json.loads(args[1]) == entries
-    assert kwargs["qos"] == 1
-    assert kwargs["retain"] is True
-
-
 def test_publish_events_publishes_full_array():
     mock_client = MagicMock()
     entries = [{"timestamp": "t1", "device_id": "web1", "event": "added", "from": None, "to": "OK"}]
@@ -2726,18 +2704,6 @@ def test_publish_services_uses_qos1_and_bare_array():
     args, kwargs = mock_client.publish.call_args
     assert args[0] == "sites/testsite/lan/devices/web1/services"
     assert json.loads(args[1]) == rows
-    assert kwargs["qos"] == 1
-    assert kwargs["retain"] is True
-
-
-def test_publish_service_history_uses_qos1_and_bare_array():
-    mock_client = MagicMock()
-    entries = [{"timestamp": "t1", "description": "PING", "from": "OK", "to": "CRIT"}]
-    poller.publish_service_history(mock_client, "web1", entries)
-
-    args, kwargs = mock_client.publish.call_args
-    assert args[0] == "sites/testsite/lan/devices/web1/service_history"
-    assert json.loads(args[1]) == entries
     assert kwargs["qos"] == 1
     assert kwargs["retain"] is True
 
@@ -3137,11 +3103,10 @@ def _snapshot(
     )
 
 
-def _poller_state(previous_nodes=None, last_status=None, history=None, events=None):
+def _poller_state(previous_nodes=None, last_status=None, events=None):
     return poller.PollerState(
         previous_nodes=previous_nodes or {},
         last_status=last_status or {},
-        history=history or {},
         events=events if events is not None else [],
         since="2026-09-06T00:00:00+00:00",
     )
@@ -3258,13 +3223,11 @@ def test_run_cycle_publishes_topology_on_remove():
     assert len(_published(client, poller.site_topic(poller.TOPIC_TOPOLOGY))) == 1
 
 
-def test_run_cycle_removed_device_tombstones_status_and_history_and_events():
+def test_run_cycle_removed_device_tombstones_per_device_topics_and_events():
     client = MagicMock()
     node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
-    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
     state.previous_services["a"] = (("PING", "OK"),)
-    state.last_service_states["a"] = {"PING": "OK"}
-    state.service_history["a"] = []
 
     poller.run_cycle(client, _make_config(), state, [])
 
@@ -3279,10 +3242,7 @@ def test_run_cycle_removed_device_tombstones_status_and_history_and_events():
         assert call.kwargs["retain"] is True
         assert call.kwargs["qos"] == 1
     assert "a" not in state.last_status
-    assert "a" not in state.history
     assert "a" not in state.previous_services
-    assert "a" not in state.last_service_states
-    assert "a" not in state.service_history
 
     events_calls = _published(client, poller.site_topic(poller.TOPIC_EVENTS))
     assert len(events_calls) == 1
@@ -3309,18 +3269,12 @@ def test_run_cycle_added_device_appends_added_event():
     assert entry["to"] == "WARN"
 
 
-def test_run_cycle_state_change_appends_history_and_event_and_publishes_both_topics():
+def test_run_cycle_state_change_appends_event_and_publishes_events_topic():
     client = MagicMock()
     node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
-    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a", state="CRIT")])
-
-    history_calls = _published(client, "sites/testsite/lan/devices/a/history")
-    assert len(history_calls) == 1
-    history_entries = json.loads(history_calls[0].args[1])
-    assert history_entries[-1]["from"] == "OK"
-    assert history_entries[-1]["to"] == "CRIT"
 
     events_calls = _published(client, poller.site_topic(poller.TOPIC_EVENTS))
     assert len(events_calls) == 1
@@ -3333,7 +3287,7 @@ def test_run_cycle_state_change_appends_history_and_event_and_publishes_both_top
 def test_run_cycle_no_changes_publishes_no_history_or_events():
     client = MagicMock()
     node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
-    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"}, history={"a": []})
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
 
     poller.run_cycle(client, _make_config(), state, [_snapshot("a", state="OK")])
 
@@ -3353,20 +3307,18 @@ def test_run_cycle_cold_start_emits_no_state_change_events():
         assert all(entry["event"] != "state_change" for entry in entries)
 
 
-def test_run_cycle_truncates_history_and_events_to_configured_bounds():
+def test_run_cycle_truncates_events_to_configured_bound():
     client = MagicMock()
-    config = _make_config(history_max_entries=2, events_max_entries=1)
+    config = _make_config(events_max_entries=1)
     node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
     state = _poller_state(
         previous_nodes={"a": node_a},
         last_status={"a": "OK"},
-        history={"a": [{"timestamp": "t0", "from": "UNKNOWN", "to": "OK"}]},
         events=[{"timestamp": "t0", "device_id": "z", "event": "added", "from": None, "to": "OK"}],
     )
 
     poller.run_cycle(client, config, state, [_snapshot("a", state="CRIT")])
 
-    assert len(state.history["a"]) <= 2
     assert len(state.events) <= 1
 
 
@@ -3502,7 +3454,7 @@ def test_run_cycle_healthy_fleet_publishes_nothing_on_incident_topics():
     assert incident_calls == []
 
 
-# --- run_cycle: services / service_history (D-12/D-13/D-14) -----------------
+# --- run_cycle: services (D-12/D-13) -----------------
 
 
 def test_run_cycle_identical_services_across_two_cycles_publishes_services_once():
@@ -3530,42 +3482,25 @@ def test_run_cycle_plugin_output_only_change_does_not_republish_services():
     assert len(_published(client, "sites/testsite/lan/devices/web1/services")) == 1
 
 
-def test_run_cycle_service_state_change_republishes_services_and_appends_one_history_entry():
+def test_run_cycle_state_changes_publish_no_history_topics_but_keep_events_and_services():
     client = MagicMock()
-    state = _poller_state()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
     config = _make_config()
-    services_cycle1 = [_service("web1", "PING", "OK")]
-    services_cycle2 = [_service("web1", "PING", "CRIT")]
 
-    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle1)
-    poller.run_cycle(client, config, state, [_snapshot("web1")], services=services_cycle2)
+    poller.run_cycle(
+        client, config, state, [_snapshot("a")], services=[_service("a", "PING", "OK")]
+    )
+    client.reset_mock()
+    poller.run_cycle(
+        client, config, state, [_snapshot("a", state="CRIT")], services=[_service("a", "PING", "CRIT")]
+    )
 
-    assert len(_published(client, "sites/testsite/lan/devices/web1/services")) == 2
-    history_calls = _published(client, "sites/testsite/lan/devices/web1/service_history")
-    assert len(history_calls) == 1
-    entries = json.loads(history_calls[0].args[1])
-    assert len(entries) == 1
-    assert entries[0]["from"] == "OK"
-    assert entries[0]["to"] == "CRIT"
-    assert entries[0]["description"] == "PING"
-
-
-def test_run_cycle_service_history_bounded_to_configured_max_entries():
-    client = MagicMock()
-    state = _poller_state()
-    config = _make_config(service_history_max_entries=2)
-
-    states = ["OK", "WARN", "OK", "CRIT"]
-    for service_state in states:
-        poller.run_cycle(
-            client,
-            config,
-            state,
-            [_snapshot("web1")],
-            services=[_service("web1", "PING", service_state)],
-        )
-
-    assert len(state.service_history["web1"]) <= 2
+    topics = [c.args[0] for c in client.publish.call_args_list]
+    assert not [t for t in topics if t.endswith("/history") or t.endswith("/service_history")]
+    events = json.loads(_published(client, poller.site_topic(poller.TOPIC_EVENTS))[0].args[1])
+    assert events[-1]["event"] == "state_change"
+    assert len(_published(client, "sites/testsite/lan/devices/a/services")) == 1
 
 
 def test_run_cycle_services_none_publishes_status_but_nothing_on_services_topic():
@@ -3942,7 +3877,7 @@ def test_once_branch_enriches_snapshots_with_folder_map(monkeypatch):
     with (
         patch.object(poller.PollerConfig, "from_env", staticmethod(lambda: _make_config())),
         patch.object(poller, "configure_logging"),
-        patch.object(poller, "reconcile_state", return_value=poller.PollerState(previous_nodes={}, last_status={}, history={}, events=[], since="t")),
+        patch.object(poller, "reconcile_state", return_value=poller.PollerState(previous_nodes={}, last_status={}, events=[], since="t")),
         patch.object(poller, "build_mqtt_client"),
         patch.object(poller, "shutdown_mqtt_client"),
         patch.object(poller, "available_host_columns", return_value={"name", "state", "alias"}),
@@ -3967,7 +3902,7 @@ def test_once_branch_degrades_when_folder_fetch_fails(monkeypatch):
     with (
         patch.object(poller.PollerConfig, "from_env", staticmethod(lambda: _make_config())),
         patch.object(poller, "configure_logging"),
-        patch.object(poller, "reconcile_state", return_value=poller.PollerState(previous_nodes={}, last_status={}, history={}, events=[], since="t")),
+        patch.object(poller, "reconcile_state", return_value=poller.PollerState(previous_nodes={}, last_status={}, events=[], since="t")),
         patch.object(poller, "build_mqtt_client"),
         patch.object(poller, "shutdown_mqtt_client"),
         patch.object(poller, "available_host_columns", return_value={"name", "state"}),
@@ -4021,7 +3956,11 @@ def test_reconcile_state_collects_retained_ids_from_per_device_topics():
         mock_client.subscribe.side_effect = _subscribe
         state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
 
-    assert state.retained_ids == {"x", "y", "z", "w"}
+    assert state.retained_ids == {"x", "y"}
+    assert state.legacy_retained_topics == {
+        "sites/testsite/lan/devices/z/history",
+        "sites/testsite/lan/devices/w/service_history",
+    }
 
 
 def test_reconcile_state_subscribes_topology_after_per_device_wildcards():
@@ -4152,7 +4091,6 @@ def test_reconcile_state_legacy_messages_do_not_touch_site_state():
     assert state.retained_ids == set()
     assert state.previous_nodes == {}
     assert state.events == []
-    assert state.history == {}
     assert state.previous_incidents == {}
 
 
@@ -4222,8 +4160,40 @@ def test_publish_raw_tombstone_refuses_namespaced_topics(caplog):
     client = MagicMock()
     with caplog.at_level("WARNING"):
         poller.publish_raw_tombstone(client, "sites/testsite/lan/devices/x/status")
+        poller.publish_raw_tombstone(client, "sites/othersite/lan/devices/x/history")
     client.publish.assert_not_called()
     assert "Refusing" in caplog.text
+
+
+def test_publish_raw_tombstone_accepts_this_sites_retired_history_topic():
+    client = MagicMock()
+    poller.publish_raw_tombstone(client, "sites/testsite/lan/devices/x/history")
+    assert client.publish.call_args.args[0] == "sites/testsite/lan/devices/x/history"
+    assert client.publish.call_args.kwargs["payload"] is None
+
+
+def test_reconcile_collects_retained_history_topics_and_sweep_clears_them_once():
+    history = "sites/testsite/lan/devices/web1/history"
+    service_history = "sites/testsite/lan/devices/web1/service_history"
+    state, _ = _reconcile_with_messages(
+        [
+            _make_message(history, b"[{}]"),
+            _make_message(service_history, b"[{}]"),
+            _make_message("sites/testsite/lan/devices/a/history", b""),
+            _make_message("sites/testsite/lan/devices/b/history", b"[{}]", retain=False),
+        ]
+    )
+    assert state.legacy_retained_topics == {history, service_history}
+
+    client = MagicMock()
+    poller.run_cycle(client, _make_config(), state, [_snapshot("web1")], allow_stale_sweep=False)
+    assert _tombstones(client) == []
+    assert state.legacy_retained_topics == {history, service_history}
+
+    client.reset_mock()
+    poller.run_cycle(client, _make_config(), state, [_snapshot("web1")], allow_stale_sweep=True)
+    assert {c.args[0] for c in _tombstones(client)} == {history, service_history}
+    assert state.legacy_retained_topics == set()
 
 
 def test_legacy_sweep_emits_no_event_and_no_sites_tombstone():

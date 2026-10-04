@@ -30,16 +30,16 @@ describe("stripSitePrefix", () => {
 });
 
 describe("subscribeTopics", () => {
-  it("prefixes the 8 lan topics in order outside admin mode", () => {
+  it("prefixes the 6 lan topics in order outside admin mode", () => {
     const topics = subscribeTopics("dmc", false);
-    expect(topics).toHaveLength(8);
+    expect(topics).toHaveLength(6);
     expect(topics).toEqual(RELATIVE_SUBSCRIBE_TOPICS.map((t) => `sites/dmc/${t}`));
   });
 
   it("appends the admin ack and faked topics in admin mode", () => {
     const topics = subscribeTopics("dmc", true);
     expect(topics.slice(-2)).toEqual(["sites/dmc/admin/ack", "sites/dmc/admin/faked"]);
-    expect(topics).toHaveLength(10);
+    expect(topics).toHaveLength(8);
   });
 
   it("never subscribes across sites", () => {

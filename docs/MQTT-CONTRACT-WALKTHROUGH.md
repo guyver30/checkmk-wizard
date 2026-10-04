@@ -35,17 +35,19 @@ a live broker, and timestamps are shortened. The Podman doc stays the reference 
 |---|---|---|---|
 | `sites/<site_id>/lan/devices/{id}/status` | every cycle, every host | 0 | yes |
 | `sites/<site_id>/lan/devices/{id}/services` | only when the service list changes | 1 | yes |
-| `sites/<site_id>/lan/devices/{id}/history` | only on a state transition of that host | 1 | yes |
-| `sites/<site_id>/lan/devices/{id}/service_history` | only on a per-service state transition | 1 | yes |
 | `sites/<site_id>/lan/events/recent` | only on any host's state change, add or remove | 1 | yes |
 | `sites/<site_id>/lan/incidents/{incident_id}/status` | only when an incident opens or its content changes | 1 | yes |
 | `sites/<site_id>/lan/devices/topology` | only when structure or a label changes | 1 | yes |
 | `sites/<site_id>/lan/poller/status` | birth, every cycle, last will | 1 | yes |
 
+Removed 2026-10-04 (quick 261004-kbt): per-device `history` and `service_history` are no longer published;
+host/service transition history comes only from ClickHouse (`history.host_state`, `history.service_state`).
+Already-retained copies are cleared once at poller startup.
+
 Things to know:
 
-- It is all MQTT and mostly **retained whole-state**, not a stream of events. `history`, `service_history`
-  and `events` are bounded arrays that are rewritten whole.
+- It is all MQTT and mostly **retained whole-state**, not a stream of events. `events` is a bounded array
+  that is rewritten whole.
 - A closed incident is **tombstoned**: an empty retained payload clears its topic. No "closed" message is
   ever delivered, and a subscriber that is offline at that moment never learns the incident ended.
 - The history rows for ClickHouse are **not** on MQTT. After MQTT publishing, `build_history_rows()` turns the
@@ -154,15 +156,14 @@ What differs from `linux1`:
   only to hosts that have a `Check_MK Agent` service. A non-agent host's full service table is what the
   dashboard shows, so nothing is hidden from it.
 - **The other topics are the same, just quieter.** `sw1` and `cam1` each have a `services` topic
-  (published at startup and whenever a service state changes), plus `history` and `service_history` that
-  only change on transitions. A steady `PING` OK produces nothing beyond the per-cycle `status`.
+  (published at startup and whenever a service state changes). A steady `PING` OK produces nothing beyond the per-cycle `status`.
 
 **12:00:00 and 12:00:15:** nothing changes. For all three hosts, only `status` (and the `lan/poller/status`
 heartbeat) is published.
 
 ### 12:00:30: a service changes (`Systemd Service cron` goes OK to CRIT)
 
-This is a service that is **not** CPU, RAM, disk or SMART. Four kinds of message follow in the same cycle.
+This is a service that is **not** CPU, RAM, disk or SMART. Three kinds of message follow in the same cycle.
 
 1. **`lan/devices/linux1/services`**, QoS 1, retained. The whole list is republished because its signature
    changed. The signature is the sorted (description, state) pairs; a change in `plugin_output` text alone
@@ -177,22 +178,12 @@ This is a service that is **not** CPU, RAM, disk or SMART. Four kinds of message
     {"description":"Uptime","state":"OK","plugin_output":"up since ..."}]
    ```
 
-2. **`lan/devices/linux1/service_history`**, QoS 1, retained. The whole bounded array, with the new entry
-   appended:
-
-   ```json
-   [{"timestamp":"2026-10-03T04:00:30+00:00","description":"Systemd Service cron","from":"OK","to":"CRIT"}]
-   ```
-
-3. **`lan/devices/linux1/status`** now has `"state":"CRIT"`, because `cron` is a service the dashboard
+2. **`lan/devices/linux1/status`** now has `"state":"CRIT"`, because `cron` is a service the dashboard
    shows. The status topic is the only topic that carries the host-level result.
 
-4. **`lan/devices/linux1/history`** (the host's own transitions) and **`lan/events/recent`** (the global
-   feed):
+3. **`lan/events/recent`** (the global feed):
 
    ```json
-   // history (whole bounded array)
-   [{"timestamp":"2026-10-03T04:00:30+00:00","from":"OK","to":"CRIT"}]
    // events (whole bounded array, up to 1000 entries; shown with one entry)
    [{"timestamp":"2026-10-03T04:00:30+00:00","device_id":"linux1","event":"state_change","from":"OK","to":"CRIT"}]
    ```
@@ -206,13 +197,12 @@ This is a service that is **not** CPU, RAM, disk or SMART. Four kinds of message
 above. So when `/var` goes from 70% to 82%:
 
 - The `status` payload's `disk_other_worst_percent` changes. That is all that is published for the numbers.
-- If `/var` crosses its warning threshold the host state changes from OK to WARN, which publishes `history`
-  and an `events` entry, exactly as in the `cron` example. But there is **no `service_history` entry and no
-  `services` republish**, because those services are not in the list.
+- If `/var` crosses its warning threshold the host state changes from OK to WARN, which publishes an `events`
+  entry, exactly as in the `cron` example. But there is **no `services` republish**, because those services are not in the list.
 
 ### 12:05:00: `sw1` goes DOWN, so `linux1` and `cam1` become UNREACH
 
-Each of the three hosts has a state change, so each gets a `history` array update and an `events` entry. The
+Each of the three hosts has a state change, so each gets an `events` entry. The
 `events` array gains three entries, for example `{"device_id":"sw1","event":"state_change","from":"OK","to":"DOWN"}`.
 The status payloads have `"state":"DOWN"` for all three, because `state` never contains `UNREACH`; the
 children differ only in `"host_state_raw":"UNREACH"`. For example, on that cycle:
@@ -243,7 +233,7 @@ It is published again only when its content changes (a signature check), not eve
 
 ### 12:08:00: `sw1` recovers
 
-- `status`, `history` and `events` for each of the three hosts, back to `OK`/`UP`.
+- `status` and `events` for each of the three hosts, back to `OK`/`UP`.
 - The incident is **tombstoned**: an empty retained payload on `lan/incidents/incident-sw1/status`, QoS 1.
   A consumer never receives an "incident closed" message. It only sees the topic cleared, and only if it is
   connected at that moment.
@@ -255,14 +245,14 @@ It is published again only when its content changes (a signature check), not eve
 - **`lan/poller/status`**, every cycle, QoS 1, retained:
   `{"status":"online","since":...,"last_poll":...,"device_count":N}`. A broker-side Last Will publishes
   `{"status":"offline"}` if the poller drops.
-- **Host removal** tombstones the host's four retained topics (`status`, `history`, `services`,
-  `service_history`) and adds an `events` entry with `"event":"removed"` and `"to":null`.
+- **Host removal** tombstones the host's retained `status` and `services` topics (plus, for one release, the
+  retired `history` and `service_history` paths) and adds an `events` entry with `"event":"removed"` and `"to":null`.
 
 ### What a cloud-side programmer must know
 
 1. **Almost everything is retained and whole-state, not a stream.** A new subscriber gets the latest state per
-   topic immediately. That is why `history`, `service_history` and `events` are rewritten as whole arrays:
-   they are bounded, not append-only.
+   topic immediately. That is why `events` is rewritten as a whole array:
+   it is bounded, not append-only.
 2. **There is no per-event message anywhere today.** To store events durably, a consumer must diff the bounded
    arrays or deduplicate by (timestamp, device_id, event). That is the reason for the proposed dedicated
    `history/events` and `history/incidents` topics.
@@ -304,8 +294,7 @@ the components that read the store. Verified by reading the code, not by running
 `mqttClient.ts` subscribes to `sites/<checkmkSite>/...`, with `checkmkSite` read from the runtime `/config.json`. It strips the prefix once, in `dashboard-react/src/lib/topics.ts`, so the store sees the relative topics below; a message outside this site's prefix is dropped.
 
 ```
-lan/devices/+/status           lan/devices/+/history
-lan/devices/+/services         lan/devices/+/service_history
+lan/devices/+/status           lan/devices/+/services
 lan/devices/topology           lan/events/recent
 lan/poller/status              lan/incidents/+/status
 ```
@@ -318,7 +307,7 @@ lan/poller/status              lan/incidents/+/status
 - A payload that fails to parse, or has the wrong shape, is dropped and the last good value stays. A bad
   message can't blank the page.
 - A **zero-length retained payload is a tombstone.** On a `status` tombstone the device and all its
-  per-device slices (`history`, `services`, `service_history`) are removed together. On an incident
+  per-device slices (`services`) are removed together. On an incident
   tombstone the incident is removed.
 
 ### Which topic feeds which part of the screen
@@ -330,12 +319,10 @@ lan/poller/status              lan/incidents/+/status
 | `sites/<site_id>/lan/devices/{id}/services` | `services` | The **host details pane**'s service tables. For an agent host it shows the chosen `Systemd Service` and `Service` entries, `TCP Port` checks, `Check_MK` (agent connected) and `Uptime`. For any other host it shows the full table. Also the editor's per-service criticality list (the same filtered set). |
 | `sites/<site_id>/lan/events/recent` | `events` | The **event history pane** (newest first, filtered to the open host, with a From/To date-time filter). |
 | `sites/<site_id>/lan/incidents/{id}/status` | `incidents` | The **incident pane** (cards ordered by criticality tier, then longest open) and the markers that dim or flag affected hosts in the tree and map. |
-| `sites/<site_id>/lan/devices/{id}/history` | `history` | **Stored, but no component reads it today.** |
-| `sites/<site_id>/lan/devices/{id}/service_history` | `serviceHistory` | **Stored, but no component reads it today.** |
 | `sites/<site_id>/lan/poller/status` | `pollerStatus`, `lastKnownPollerTimestamp` | **Stored, but not displayed.** `isPollerStale()` exists in `lib/staleness.ts` but only tests call it. |
 
-The two per-device history topics and the poller heartbeat are published and kept in memory, but the UI
-doesn't show them yet. A new dashboard can ignore them, or start using them.
+The poller heartbeat is published and kept in memory, but the UI doesn't show it yet. A new dashboard can
+ignore it, or start using it.
 
 ### Staleness: why `status` is published every cycle
 
@@ -411,8 +398,8 @@ MB when hundreds of sites share one broker.
 2. **Stop shipping whole arrays across the WAN.**
    - Events become one small non-retained message each (about 125 bytes), written to ClickHouse by the
      cloud subscriber.
-   - Drop the per-device `history` and `service_history` topics from the WAN. The UI does not read them,
-     and the durable copy is in ClickHouse.
+   - Drop the per-device `history` and `service_history` topics from the WAN. **Done 2026-10-04 (quick
+     261004-kbt):** the poller no longer publishes them; the durable copy is in ClickHouse.
    - The dashboard then reads recent events and history from ClickHouse over the existing read-only HTTP
      path (`/ch-api/`), not from retained MQTT arrays. A small retained "last 20 events" (about 2.5 KB)
      could stay for instant fill on page load.

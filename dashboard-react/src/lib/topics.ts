@@ -11,9 +11,7 @@ import { ADMIN_TOPIC_ACK, ADMIN_TOPIC_FAKED } from "./adminMode";
 
 export const RELATIVE_SUBSCRIBE_TOPICS = [
   "lan/devices/+/status",
-  "lan/devices/+/history",
   "lan/devices/+/services",
-  "lan/devices/+/service_history",
   "lan/devices/topology",
   "lan/events/recent",
   "lan/poller/status",

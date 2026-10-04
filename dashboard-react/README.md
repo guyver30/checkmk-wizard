@@ -89,8 +89,6 @@ The constants in `src/lib/config.ts`:
 - `POLL_INTERVAL_SECONDS` (15) / `STALENESS_FACTOR` (3) — must be kept in step with
   `scripts/mqtt_poller.py`'s own defaults; a mismatch would make staleness flip at the wrong
   time.
-- `HISTORY_MAX_ENTRIES` — mirrors the poller's per-device history bound (20); it does not
-  bound the global event feed (see "Event history" below).
 - `CHECKMK_REST_ORIGIN` — the same-origin `/checkmk-api` path prefix the browser calls,
   because Checkmk does not answer CORS preflights (13-01 VERDICT V-CORS). `vite.config.ts`'s
   `server.proxy`/`preview.proxy` forward it to Checkmk; set `CHECKMK_PROXY_TARGET` if Checkmk
