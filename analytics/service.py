@@ -19,40 +19,65 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
+import signal
+import sys
 import threading
+import time
 import zoneinfo
 from dataclasses import replace
 from datetime import UTC, datetime, tzinfo
 
 from analytics import history as _history
+from analytics import rollup as _rollup
 from analytics.config import (
     CONFIDENCE_HIGH_DAYS,
     CONFIDENCE_MEDIUM_DAYS,
     DROP_MIN_ABS,
     DROP_RANGE_FRACTION,
+    FALLBACK_LEVELS,
     FIT_BUCKET_HOURS,
     FIT_MIN_BUCKETS,
     FIT_MIN_SPAN_DAYS,
+    METRIC_UNITS,
     RESOLVE_AFTER_CLEAN_CYCLES,
     SUSTAINED_FRACTION,
+    SUSTAINED_WINDOW_HOURS,
     WEAR_METRICS,
     AnalyticsConfig,
+    smart_allowlist_warning,
 )
-from analytics.fit import FitParams
+from analytics.fit import FitParams, fit_series
 from analytics.narrate import incident_narration
 from analytics.publish import publish_retained_json, publish_tombstone
 from analytics.recorder import EventRecorder, IncidentRecorder
-from analytics.rules import Need, NeedTracker, RuleParams, tier_from_criticality
+from analytics.rules import (
+    Need,
+    NeedTracker,
+    RuleParams,
+    failure_needs,
+    sustained_need,
+    tier_from_criticality,
+    trend_need,
+)
 from analytics.topics import (
     NEED_ID_RE,
     TRIAGE_CMD_TOPIC,
+    forecast_topic,
     incident_narration_topic,
+    is_publishable_device_id,
     need_status_topic,
     relative_topic,
+    set_site_id,
     site_topic,
 )
-from analytics.triage import TriageCommandError, apply_triage, parse_triage_command
+from analytics.triage import (
+    TriageCommandError,
+    apply_triage,
+    audit_row,
+    parse_triage_command,
+)
 
 _logger = logging.getLogger("analytics.service")
 
@@ -68,6 +93,8 @@ INPUT_FILTERS = (
 # Subscribed only for the restore window.
 RESTORE_FILTERS = ("lan/needs/+/status", "lan/incidents/+/narration")
 RESTORE_WINDOW_SECONDS = 5
+# Loop granularity: how often the rollup scheduler and the stop flag are checked.
+TICK_SECONDS = 30
 
 _NEED_SOURCES = ("failure", "trend", "sustained")
 _NEED_TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -191,8 +218,10 @@ class AnalyticsService:
         history_mod=_history,
         now_fn=None,
         sleep_fn=None,
+        rollup_mod=_rollup,
     ) -> None:
         self.config = config
+        self.rollup_mod = rollup_mod
         self._client_factory = client_factory
         self.history = history_mod
         self._now = now_fn or (lambda: datetime.now(UTC))
@@ -491,3 +520,204 @@ class AnalyticsService:
         self._insert("history.incidents", rows)
         for incident_id in orphans:
             publish_tombstone(self.client, incident_narration_topic(incident_id))
+
+    # --- evaluation cycle -------------------------------------------------
+
+    def _snapshot_inputs(self) -> tuple[dict, dict, dict, dict]:
+        with self.lock:
+            return (
+                dict(self.statuses),
+                dict(self.services),
+                dict(self.topology_nodes),
+                dict(self.open_incidents),
+            )
+
+    def _fetch(self):
+        """(buckets, levels, hourly) or None when ClickHouse is unavailable this cycle."""
+        if not self.config.clickhouse_url:
+            return None
+        metrics = self.config.chart_metrics
+        try:
+            return (
+                self.history.fetch_fit_buckets(self.config, metrics),
+                self.history.fetch_levels(self.config, metrics),
+                self.history.fetch_recent_hourly(self.config, metrics, SUSTAINED_WINDOW_HOURS),
+            )
+        except (self.history.ClickHouseError, ValueError) as exc:
+            _logger.warning("ClickHouse fetch failed; skipping forecasts and trend needs this cycle: %s", exc)
+            return None
+
+    def _evaluate_series(self, fetched, now: datetime):
+        """Fit every chartable series; return (fits by host, trend/sustained candidates)."""
+        buckets, levels, hourly = fetched
+        now_ts = now.timestamp()
+        fits_by_host: dict[str, list[dict]] = {}
+        candidates: list[Need] = []
+        for key in sorted(buckets):
+            host, service, metric = key
+            warn, crit = levels.get(key, (None, None))
+            if warn is None and crit is None:
+                # D-12: Checkmk gave no levels for this series, so use the configured fallback.
+                warn, crit = FALLBACK_LEVELS.get(metric, (None, None))
+            unit = METRIC_UNITS.get(metric, "")
+            fit = fit_series(buckets[key], warn, crit, self.fit_params, now_ts)
+            fits_by_host.setdefault(host, []).append(fit.to_payload(service, metric, unit))
+            trend = trend_need(host, service, metric, unit, fit, self.rule_params, now, self.tz)
+            if trend is not None:
+                candidates.append(trend)
+            values = [v for _, v in hourly.get(key, [])]
+            latest = values[-1] if values else fit.last_value
+            sustained = sustained_need(
+                host,
+                service,
+                metric,
+                unit,
+                values,
+                latest,
+                crit,
+                warn,
+                self.rule_params,
+                now,
+                self.tz,
+                SUSTAINED_WINDOW_HOURS,
+            )
+            if sustained is not None:
+                candidates.append(sustained)
+        return fits_by_host, candidates
+
+    def _publish_forecasts(self, fits_by_host: dict[str, list[dict]], now: datetime) -> None:
+        published: set[str] = set()
+        for host in sorted(fits_by_host):
+            if not is_publishable_device_id(host):
+                _logger.warning("Skipping forecast for host %r: unsafe as a topic segment", host)
+                continue
+            publish_retained_json(
+                self.client,
+                forecast_topic(host),
+                {"host": host, "generated_at": iso_utc(now), "fits": fits_by_host[host]},
+            )
+            published.add(host)
+        for host in sorted(self._forecast_hosts - published):
+            publish_tombstone(self.client, forecast_topic(host))
+        self._forecast_hosts = published
+
+    def run_cycle(self, now: datetime) -> None:
+        """One evaluation: forecasts, trend/sustained/failure needs, publish and tombstone."""
+        self._warned = False
+        statuses, services, nodes, incidents = self._snapshot_inputs()
+        candidates = failure_needs(statuses, services, nodes, incidents, now, self.tz)
+        fetched = self._fetch()
+        if fetched is not None:
+            fits_by_host, slow = self._evaluate_series(fetched, now)
+            self._publish_forecasts(fits_by_host, now)
+            self._slow_candidates = {n.id: n for n in slow}
+        # With ClickHouse down, last cycle's trend/sustained needs are carried over
+        # so an outage is not mistaken for those needs resolving.
+        candidates.extend(self._slow_candidates.values())
+        with self.lock:
+            publish, tombstones = self.tracker.update(candidates, now)
+            resets = list(self.tracker.auto_resets)
+        for need, audit in resets:
+            row = audit_row(need, "auto_reset", audit["tier_before"], audit["tier_after"], now)
+            self._insert("history.need_triage", [row])
+        for need in publish:
+            self.publish_need(need, now)
+        for need_id in tombstones:
+            self._slow_candidates.pop(need_id, None)
+            publish_tombstone(self.client, need_status_topic(need_id))
+
+    # --- main loop --------------------------------------------------------
+
+    def run_forever(self, stop_event: threading.Event, clock=time.monotonic) -> None:
+        """Run cycles every EVAL_INTERVAL_SECONDS until stopped.
+
+        Cycles run on this one thread, so they cannot overlap: a slow cycle
+        pushes the next one back (skip, not queue). The rollup scheduler is
+        ticked every loop pass and decides for itself whether a run is due.
+        """
+        try:
+            rollup_tz = zoneinfo.ZoneInfo(self.config.rollup_tz)
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+            rollup_tz = zoneinfo.ZoneInfo("UTC")
+        scheduler = self.rollup_mod.RollupScheduler(delay_minutes=self.config.rollup_delay_minutes)
+        s3_holder: dict = {}
+        interval = self.config.eval_interval_seconds
+        next_run = clock()
+        while not stop_event.is_set():
+            started = clock()
+            if started >= next_run:
+                try:
+                    self.run_cycle(self._now())
+                except Exception:
+                    _logger.exception("Evaluation cycle failed")
+                next_run = max(started + interval, clock())
+            self.rollup_mod.maybe_run_rollups(
+                self.config,
+                scheduler,
+                s3_holder,
+                rollup_tz,
+                self._now().astimezone(rollup_tz),
+                clock(),
+            )
+            stop_event.wait(max(0.0, min(TICK_SECONDS, next_run - clock())))
+
+
+def _log_series_matches(config: AnalyticsConfig, history_mod=_history) -> None:
+    """One INFO line per chart metric with its matched series count; WARNING at zero (Pitfall 5)."""
+    try:
+        buckets = history_mod.fetch_fit_buckets(config, config.chart_metrics)
+    except (history_mod.ClickHouseError, ValueError) as exc:
+        _logger.warning("Could not count matched series at startup: %s", exc)
+        return
+    counts = dict.fromkeys(config.chart_metrics, 0)
+    for _host, _service, metric in buckets:
+        counts[metric] = counts.get(metric, 0) + 1
+    for metric, count in counts.items():
+        if count:
+            _logger.info("Chart metric %s matched %d series", metric, count)
+        else:
+            _logger.warning("Chart metric %s matched 0 series; check the metric name", metric)
+
+
+def main() -> int:
+    config = AnalyticsConfig.from_env()
+    logging.basicConfig(
+        level=getattr(logging, config.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    try:
+        set_site_id(config.cmk_site_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "CMK_SITE_ID" not in os.environ:
+        _logger.warning(
+            "CMK_SITE_ID is not set; using the default site id 'dmc', so the MQTT "
+            "namespace is sites/dmc/. This collides with any other unconfigured "
+            "site sharing the broker."
+        )
+    if config.clickhouse_url:
+        _log_series_matches(config)
+    warning = smart_allowlist_warning(config)
+    if warning:
+        _logger.warning(warning)
+
+    stop_event = threading.Event()
+
+    def _handle_signal(signum, frame):
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    service = AnalyticsService(config)
+    service.start()
+    _logger.info("Analytics service running (%r)", config)
+    try:
+        # Failure needs share the D-13 15-minute cadence (EVAL_INTERVAL_SECONDS can be
+        # lowered by env). Incidents themselves still appear instantly from the poller,
+        # and most DOWN hosts are incident-covered (D-27), so the cadence costs little.
+        service.run_forever(stop_event)
+    finally:
+        service.stop()
+    return 0

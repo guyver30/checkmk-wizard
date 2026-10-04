@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 
 from analytics import topics
-from analytics.config import AnalyticsConfig
-from analytics.service import INPUT_FILTERS, AnalyticsService
+from analytics.config import FALLBACK_LEVELS, AnalyticsConfig
+from analytics.service import INPUT_FILTERS, AnalyticsService, iso_utc
 
 NOW = datetime(2026, 10, 4, 6, 0, tzinfo=UTC)
 P = "sites/testsite/"
@@ -286,3 +287,170 @@ def test_need_payload_roundtrip_ignores_garbage():
 
     assert need_from_payload("x", None) is None
     assert need_from_payload({"id": "bad", "source": "failure"}, None) is None
+
+
+# --- evaluation cycle ---------------------------------------------------------
+
+NOW_TS = int(NOW.timestamp())
+
+
+def _ramp(start=30.0, step=0.5, count=80):
+    return [(NOW_TS - (count - i) * 6 * 3600, start + i * step) for i in range(count)]
+
+
+def _noise(count=80):
+    return [(NOW_TS - (count - i) * 6 * 3600, 40.0 if i % 2 else 60.0) for i in range(count)]
+
+
+def published_json(client, prefix):
+    return {
+        topic: json.loads(payload)
+        for topic, payload, _, _ in client.published
+        if topic.startswith(P + prefix) and payload is not None
+    }
+
+
+@pytest.fixture
+def cycle_svc(svc):
+    svc.history.buckets = {
+        ("srv1", "Filesystem /", "fs_used_percent"): _ramp(),
+        ("srv1", "Memory", "mem_used_percent"): _noise(),
+        ("srv2", "CPU utilization", "util"): _ramp(start=10, step=0.0, count=80),
+    }
+    svc.history.levels = {
+        ("srv1", "Filesystem /", "fs_used_percent"): (80.0, 90.0),
+        ("srv1", "Memory", "mem_used_percent"): (80.0, 90.0),
+        ("srv2", "CPU utilization", "util"): (None, None),
+    }
+    return svc
+
+
+def test_cycle_ramp_publishes_trend_need_and_noise_gets_fit_without_need(cycle_svc):
+    cycle_svc.run_cycle(NOW)
+    needs = published_json(cycle_svc.client, "lan/needs/")
+    assert len(needs) == 1
+    ((topic, need),) = needs.items()
+    assert re.fullmatch(P + r"lan/needs/t-[0-9a-f]{12}/status", topic)
+    assert need["source"] == "trend" and need["host"] == "srv1" and need["generated_at"] == iso_utc(NOW)
+    forecast = published_json(cycle_svc.client, "lan/forecasts/srv1")[P + "lan/forecasts/srv1"]
+    by_metric = {f["metric"]: f for f in forecast["fits"]}
+    assert by_metric["mem_used_percent"]["status"] == "no_clear_trend"
+    assert by_metric["fs_used_percent"]["status"] == "trending"
+    assert forecast["host"] == "srv1" and forecast["generated_at"] == iso_utc(NOW)
+    assert P + "lan/forecasts/srv2" in published_json(cycle_svc.client, "lan/forecasts/")
+
+
+def test_cycle_fallback_levels_only_when_checkmk_gives_none(cycle_svc):
+    cycle_svc.run_cycle(NOW)
+    forecasts = published_json(cycle_svc.client, "lan/forecasts/")
+    util = forecasts[P + "lan/forecasts/srv2"]["fits"][0]
+    assert (util["warn"], util["crit"]) == FALLBACK_LEVELS["util"]
+    fs = next(f for f in forecasts[P + "lan/forecasts/srv1"]["fits"] if f["metric"] == "fs_used_percent")
+    assert (fs["warn"], fs["crit"]) == (80.0, 90.0)
+
+
+def test_cycle_sustained_breach_raises_immediate_need(cycle_svc):
+    cycle_svc.history.hourly = {("srv2", "CPU utilization", "util"): [(NOW_TS - h * 3600, 99.0) for h in range(24)]}
+    cycle_svc.run_cycle(NOW)
+    needs = published_json(cycle_svc.client, "lan/needs/")
+    sustained = [n for n in needs.values() if n["source"] == "sustained"]
+    assert len(sustained) == 1 and sustained[0]["tier"] == "immediate" and sustained[0]["host"] == "srv2"
+
+
+def test_cycle_clickhouse_down_still_publishes_failure_need(svc):
+    svc.history.fail_fetch = True
+    svc.on_message(None, None, msg("lan/devices/h1/status", {"host_state_raw": "DOWN"}))
+    svc.on_message(None, None, msg("lan/devices/topology", {"devices": [{"id": "h1", "criticality": "critical"}]}))
+    svc.run_cycle(NOW)
+    needs = published_json(svc.client, "lan/needs/")
+    assert len(needs) == 1
+    (need,) = needs.values()
+    assert need["source"] == "failure" and need["tier"] == "immediate"
+    assert published_json(svc.client, "lan/forecasts/") == {}
+
+
+def test_cycle_outage_does_not_resolve_trend_needs(cycle_svc):
+    cycle_svc.run_cycle(NOW)
+    cycle_svc.history.fail_fetch = True
+    cycle_svc.client.published.clear()
+    for _ in range(3):
+        cycle_svc.run_cycle(NOW)
+    assert [p for p in cycle_svc.client.published if p[1] is None] == []
+    assert len(published_json(cycle_svc.client, "lan/needs/")) == 1
+
+
+def test_cycle_tombstones_resolved_need_after_clean_cycles_and_vanished_forecast(cycle_svc):
+    cycle_svc.run_cycle(NOW)
+    cycle_svc.history.buckets = {}
+    cycle_svc.client.published.clear()
+    cycle_svc.run_cycle(NOW)
+    cycle_svc.run_cycle(NOW)
+    tombstones = {p[0] for p in cycle_svc.client.published if p[1] is None}
+    assert any(t.startswith(P + "lan/needs/t-") for t in tombstones)
+    assert {P + "lan/forecasts/srv1", P + "lan/forecasts/srv2"} <= tombstones
+
+
+def test_cycle_unsafe_host_gets_no_forecast_topic(cycle_svc):
+    cycle_svc.history.buckets = {("bad/host", "s", "util"): _noise()}
+    cycle_svc.run_cycle(NOW)
+    assert published_json(cycle_svc.client, "lan/forecasts/") == {}
+
+
+def test_cycle_writes_auto_reset_audit_row(svc):
+    svc.on_message(None, None, msg("lan/devices/h1/status", {"host_state_raw": "DOWN"}))
+    svc.on_message(None, None, msg("lan/devices/topology", {"devices": [{"id": "h1", "criticality": "low"}]}))
+    svc.run_cycle(NOW)
+    (need_id,) = [t.split("/")[-2] for t in published_json(svc.client, "lan/needs/")]
+    svc.on_message(None, None, msg("needs/triage/cmd", triage_cmd(need_id, "cancel")))
+    svc.on_message(None, None, msg("needs/triage/cmd", triage_cmd(need_id, "downgrade", "c2")))
+    # Computed tier gets worse than at triage time: the override must be dropped and audited.
+    svc.on_message(None, None, msg("lan/devices/topology", {"devices": [{"id": "h1", "criticality": "critical"}]}))
+    svc.history.inserts.clear()
+    svc.run_cycle(NOW)
+    rows = [r for t, rows in svc.history.inserts if t == "history.need_triage" for r in rows]
+    assert [r["action"] for r in rows] == ["auto_reset"]
+    assert rows[0]["actor"] == "" and rows[0]["command_id"] == ""
+
+
+def test_run_forever_runs_cycles_and_ticks_rollups_until_stopped(svc):
+    calls = {"cycles": 0, "rollups": 0}
+    clock_value = [0.0]
+
+    class FakeStop:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, timeout=None):
+            clock_value[0] += svc.config.eval_interval_seconds
+
+    class FakeRollup:
+        class RollupScheduler:
+            def __init__(self, delay_minutes):
+                self.delay_minutes = delay_minutes
+
+        @staticmethod
+        def maybe_run_rollups(config, scheduler, holder, tz, now_local, now_monotonic):
+            calls["rollups"] += 1
+
+    stop = FakeStop()
+
+    def run_cycle(now):
+        calls["cycles"] += 1
+        if calls["cycles"] == 2:
+            stop.stopped = True
+
+    svc.rollup_mod = FakeRollup
+    svc.run_cycle = run_cycle
+    svc.run_forever(stop, clock=lambda: clock_value[0])
+    assert calls["cycles"] == 2 and calls["rollups"] >= 2
+
+
+def test_main_rejects_invalid_site_id(monkeypatch, capsys):
+    from analytics.service import main
+
+    monkeypatch.setenv("CMK_SITE_ID", "1bad")
+    assert main() == 2
+    assert "error:" in capsys.readouterr().err
