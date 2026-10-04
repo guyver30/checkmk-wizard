@@ -3696,6 +3696,26 @@ def publish_events(client: mqtt.Client, entries: list[dict]) -> None:
     _publish_json(client, site_topic(TOPIC_EVENTS), entries, qos=1, retain=True)
 
 
+def publish_raw_tombstone(client: mqtt.Client, full_topic: str) -> None:
+    """Clear one retained topic given its full, already-final topic string.
+
+    Phase 14.3 cutover: used to remove pre-namespace `lan/*` and
+    `admin/faked` retained topics. It does not reuse `publish_tombstone`
+    because that builds site-prefixed per-device topics. Relies on the
+    temporary poller legacy ACL grants in deploy/mosquitto.acl.template
+    (Mosquitto silently drops an unauthorized publish). Refuses anything under
+    `sites/` so the sweep can never clear the live namespace.
+    """
+    if full_topic.startswith("sites/"):
+        _logger.warning("Refusing to tombstone namespaced topic %s", full_topic)
+        return
+    try:
+        info = client.publish(full_topic, payload=None, retain=True, qos=1)
+        info.wait_for_publish(timeout=5)
+    except (TimeoutError, OSError) as exc:
+        _logger.warning("Failed to publish tombstone to %s: %s", full_topic, exc)
+
+
 def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
     """Clear a removed device's retained status, history, services and service_history topics.
 
@@ -3827,6 +3847,11 @@ class PollerState:
     # 2026-10-02 (Phase 16 D-10 fallback seed): faked hosts restored from the retained
     # `admin/faked` topic; only used when the site lacks `active_checks_enabled`.
     admin_faked: dict[str, str] = field(default_factory=dict)
+    # 2026-10-04 (Phase 14.3): full pre-namespace topic strings (`lan/...` and
+    # `admin/faked`) that had a non-empty retained message at startup.
+    # `run_cycle` clears them once behind `allow_stale_sweep`; remove together
+    # with the temporary poller legacy ACL grants.
+    legacy_retained_topics: set[str] = field(default_factory=set)
     # Phase 14 (PLR-14): incident id -> last-published `incident_signature()`
     # (or `None` for an id seeded by `reconcile_state` from a retained topic
     # whose payload was never parsed -- a seeded `None` always differs from
@@ -4072,13 +4097,25 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     retained_ids: set[str] = set()
     retained_incident_ids: set[str] = set()
     admin_faked_result: list[bytes] = []
+    legacy_topics: set[str] = set()
+    legacy_admin_faked: list[bytes] = []
     topology_received = threading.Event()
 
     def on_message(client, userdata, msg):
         rel = relative_topic(msg.topic)
         if rel is None:
-            # Not under this site's prefix. (A later change adds the legacy
-            # un-namespaced branch here.)
+            # Not under this site's prefix: record retained non-empty
+            # pre-namespace topics so run_cycle can clear them once.
+            # TOPIC_ADMIN_FAKED is the relative suffix "admin/faked", which
+            # is also the legacy full topic.
+            if (
+                getattr(msg, "retain", False)
+                and msg.payload
+                and (msg.topic == TOPIC_ADMIN_FAKED or msg.topic.startswith("lan/"))
+            ):
+                legacy_topics.add(msg.topic)
+                if msg.topic == TOPIC_ADMIN_FAKED:
+                    legacy_admin_faked.append(msg.payload)
             return
         parts = rel.split("/")
         if rel == TOPIC_ADMIN_FAKED:
@@ -4136,6 +4173,8 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         # This is an assumption about broker ordering that has not been
         # verified live. If it is wrong the failure is safe: a missed id is
         # simply not swept, and a live host is never tombstoned.
+        # The first post-upgrade start waits the full reconcile timeout once,
+        # because the new-namespace topology does not exist yet.
         client.subscribe(site_topic(TOPIC_EVENTS), qos=1)
         client.subscribe(site_topic("lan/devices/+/status"), qos=1)
         client.subscribe(site_topic("lan/devices/+/history"), qos=1)
@@ -4143,6 +4182,11 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         client.subscribe(site_topic("lan/devices/+/service_history"), qos=1)
         client.subscribe(site_topic("lan/incidents/+/status"), qos=1)
         client.subscribe(site_topic(TOPIC_ADMIN_FAKED), qos=1)
+        # Legacy un-namespaced topics (Phase 14.3 cutover). Exact
+        # `admin/faked`, never `admin/#`: that would also receive the live
+        # `admin/cmd` command topic.
+        client.subscribe("lan/#", qos=1)
+        client.subscribe(TOPIC_ADMIN_FAKED, qos=1)
         client.subscribe(site_topic(TOPIC_TOPOLOGY), qos=1)
         client.loop_start()
         topology_received.wait(timeout=config.reconcile_timeout_seconds)
@@ -4158,6 +4202,16 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         for device_id, payload in service_history_payloads.items()
     }
 
+    # New-namespace admin/faked wins; the legacy retained payload only seeds
+    # fake states injected before the upgrade.
+    if admin_faked_result:
+        admin_faked_payload = admin_faked_result[0]
+    elif legacy_admin_faked:
+        admin_faked_payload = legacy_admin_faked[0]
+        _logger.info("Seeded admin_faked from the legacy un-namespaced admin/faked topic")
+    else:
+        admin_faked_payload = b""
+
     return PollerState(
         previous_nodes=previous_nodes,
         last_status={},
@@ -4167,9 +4221,8 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         service_history=service_history,
         retained_ids=retained_ids,
         previous_incidents={incident_id: None for incident_id in retained_incident_ids},
-        admin_faked=parse_admin_faked_payload(
-            admin_faked_result[0] if admin_faked_result else b""
-        ),
+        admin_faked=parse_admin_faked_payload(admin_faked_payload),
+        legacy_retained_topics=legacy_topics,
     )
 
 
@@ -4212,7 +4265,9 @@ def run_cycle(
     in neither this cycle's snapshots nor `state.previous_nodes` are
     tombstoned once, and `retained_ids` is then emptied. The caller sets it
     only when the host list is confirmed (see the gate in `run_forever`);
-    when false, `retained_ids` is left intact for a later cycle.
+    when false, `retained_ids` is left intact for a later cycle. The same
+    gate clears `state.legacy_retained_topics` (pre-14.3 un-namespaced
+    retained topics) once, with no live-id subtraction.
 
     Phase 14 (PLR-14/PLR-16): `compute_incidents(snapshots)` is re-derived
     from scratch every cycle -- no incident state persists between cycles
@@ -4315,6 +4370,16 @@ def run_cycle(
             _logger.info("Cleared stale retained topics for absent host %s", device_id)
         # The sweep runs once per process; `previous_nodes` tracks from here.
         state.retained_ids = set()
+        # Phase 14.3: the whole un-namespaced legacy tree is stale by
+        # definition; clear it once, emitting no events.
+        if state.legacy_retained_topics:
+            for legacy_topic in sorted(state.legacy_retained_topics):
+                publish_raw_tombstone(client, legacy_topic)
+            _logger.info(
+                "Cleared %d pre-14.3 un-namespaced retained topics",
+                len(state.legacy_retained_topics),
+            )
+        state.legacy_retained_topics = set()
 
     for device_id in added_ids:
         events_this_cycle.append(

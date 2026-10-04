@@ -2991,8 +2991,8 @@ def test_parse_events_payload_malformed_json_returns_empty_list():
 # --- reconcile_state ----------------------------------------------------------
 
 
-def _make_message(topic: str, payload: bytes):
-    return SimpleNamespace(topic=topic, payload=payload)
+def _make_message(topic: str, payload: bytes, retain: bool = True):
+    return SimpleNamespace(topic=topic, payload=payload, retain=retain)
 
 
 def test_reconcile_state_does_not_set_a_will():
@@ -4097,6 +4097,145 @@ def test_run_cycle_sweep_emits_no_removed_event_for_stale_ids():
 
     events = json.loads(_published(client, poller.site_topic(poller.TOPIC_EVENTS))[0].args[1])
     assert all(e["device_id"] != "ghost" for e in events)
+
+
+def _reconcile_with_messages(messages):
+    """Run reconcile_state, delivering `messages` when the topology subscribe is sent."""
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_client = mock_mqtt.Client.return_value
+
+        def _subscribe(topic, qos=None):
+            if topic == poller.site_topic(poller.TOPIC_TOPOLOGY):
+                for msg in messages:
+                    mock_client.on_message(mock_client, None, msg)
+
+        mock_client.subscribe.side_effect = _subscribe
+        state = poller.reconcile_state(_make_config(reconcile_timeout_seconds=0.01))
+    return state, mock_client
+
+
+def test_reconcile_state_collects_legacy_retained_topics():
+    legacy = [
+        "lan/devices/x/status",
+        "lan/devices/topology",
+        "lan/events/recent",
+        "lan/poller/status",
+        "lan/incidents/inc-a/status",
+        "admin/faked",
+    ]
+    state, _ = _reconcile_with_messages([_make_message(t, b"{}") for t in legacy])
+    assert state.legacy_retained_topics == set(legacy)
+
+
+def test_reconcile_state_ignores_non_retained_or_empty_legacy_messages():
+    state, _ = _reconcile_with_messages(
+        [
+            _make_message("lan/devices/a/status", b"{}", retain=False),
+            _make_message("lan/devices/b/status", b""),
+            _make_message("admin/cmd", b"{}"),
+            _make_message("other/topic", b"{}"),
+        ]
+    )
+    assert state.legacy_retained_topics == set()
+
+
+def test_reconcile_state_legacy_messages_do_not_touch_site_state():
+    state, _ = _reconcile_with_messages(
+        [
+            _make_message("lan/devices/x/status", b"{}"),
+            _make_message("lan/devices/x/history", b"[{}]"),
+            _make_message("lan/devices/topology", b'{"devices": [{"id": "x"}]}'),
+            _make_message("lan/events/recent", b'[{"a": 1}]'),
+            _make_message("lan/incidents/inc-a/status", b"{}"),
+        ]
+    )
+    assert state.retained_ids == set()
+    assert state.previous_nodes == {}
+    assert state.events == []
+    assert state.history == {}
+    assert state.previous_incidents == {}
+
+
+def test_reconcile_state_subscribes_legacy_topics_before_topology_never_admin_wildcard():
+    _, mock_client = _reconcile_with_messages([])
+    topics = [c.args[0] for c in mock_client.subscribe.call_args_list]
+    assert topics[-1] == poller.site_topic(poller.TOPIC_TOPOLOGY)
+    assert topics.index("lan/#") < len(topics) - 1
+    assert topics.index("admin/faked") < len(topics) - 1
+    assert "admin/#" not in topics
+
+
+def test_reconcile_state_admin_faked_prefers_new_namespace_over_legacy():
+    state, _ = _reconcile_with_messages(
+        [
+            _make_message("admin/faked", b'{"hosts": {"old": "DOWN"}}'),
+            _make_message(
+                poller.site_topic(poller.TOPIC_ADMIN_FAKED), b'{"hosts": {"new": "UP"}}'
+            ),
+        ]
+    )
+    assert state.admin_faked == {"new": "UP"}
+
+
+def test_reconcile_state_admin_faked_seeded_from_legacy_when_new_absent():
+    state, _ = _reconcile_with_messages(
+        [_make_message("admin/faked", b'{"hosts": {"old": "DOWN"}}')]
+    )
+    assert state.admin_faked == {"old": "DOWN"}
+    assert "admin/faked" in state.legacy_retained_topics
+
+
+_LEGACY_SET = {"lan/devices/x/status", "lan/devices/topology", "admin/faked"}
+
+
+def test_run_cycle_sweep_tombstones_legacy_topics_once():
+    client = MagicMock()
+    state = _poller_state()
+    state.legacy_retained_topics = set(_LEGACY_SET)
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("live")], allow_stale_sweep=True)
+
+    tombstones = _tombstones(client)
+    assert [c.args[0] for c in tombstones] == sorted(_LEGACY_SET)
+    for call in tombstones:
+        assert call.kwargs["retain"] is True
+        assert call.kwargs["qos"] == 1
+    assert state.legacy_retained_topics == set()
+
+    client.reset_mock()
+    poller.run_cycle(client, _make_config(), state, [_snapshot("live")], allow_stale_sweep=True)
+    assert _tombstones(client) == []
+
+
+def test_run_cycle_sweep_gate_off_keeps_legacy_topics():
+    client = MagicMock()
+    state = _poller_state()
+    state.legacy_retained_topics = set(_LEGACY_SET)
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("live")])
+
+    assert _tombstones(client) == []
+    assert state.legacy_retained_topics == _LEGACY_SET
+
+
+def test_publish_raw_tombstone_refuses_namespaced_topics(caplog):
+    client = MagicMock()
+    with caplog.at_level("WARNING"):
+        poller.publish_raw_tombstone(client, "sites/testsite/lan/devices/x/status")
+    client.publish.assert_not_called()
+    assert "Refusing" in caplog.text
+
+
+def test_legacy_sweep_emits_no_event_and_no_sites_tombstone():
+    client = MagicMock()
+    state = _poller_state()
+    state.legacy_retained_topics = set(_LEGACY_SET)
+
+    poller.run_cycle(client, _make_config(), state, [_snapshot("live")], allow_stale_sweep=True)
+
+    assert all(not c.args[0].startswith("sites/") for c in _tombstones(client))
+    events = json.loads(_published(client, poller.site_topic(poller.TOPIC_EVENTS))[0].args[1])
+    assert all(e["device_id"] != "x" for e in events)
 
 
 def _run_forever_one_cycle(*, patch_run_cycle, state=None, rest=None, devices=None):
