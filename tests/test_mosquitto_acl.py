@@ -60,11 +60,7 @@ def test_rendered_grants_are_exact(tmp_path):
     text = out.read_text()
     assert "@SITE_ID@" not in text
     assert _parse(text) == {
-        "poller": {
-            ("readwrite", "sites/testsite/#"),
-            ("readwrite", "lan/#"),
-            ("readwrite", "admin/#"),
-        },
+        "poller": {("readwrite", "sites/testsite/#")},
         "wsreader": {("read", "sites/testsite/lan/#")},
         "wsadmin": {
             ("read", "sites/testsite/lan/#"),

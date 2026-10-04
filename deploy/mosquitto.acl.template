@@ -6,8 +6,8 @@
 # apply only to anonymous clients, and allow_anonymous is false in
 # deploy/mosquitto.conf, so no such line is written here.
 #
-# This file is a template. deploy/render-mosquitto-acl.sh replaces @SITE_ID@
-# with CMK_SITE_ID at mosquitto container start and writes the result to
+# This file is a template. deploy/render-mosquitto-acl.sh replaces the site-id
+# placeholder with CMK_SITE_ID at mosquitto container start and writes the result to
 # /mosquitto/config/mosquitto.acl. Mosquitto ACL files have no environment
 # expansion and `pattern` only knows %u/%c (mosquitto.org/man/mosquitto-conf-5.html),
 # so rendering is the way to scope grants to one site subtree. One site per
@@ -15,13 +15,6 @@
 
 user poller
 topic readwrite sites/@SITE_ID@/#
-# TEMPORARY: lets the poller tombstone pre-namespace retained topics. An
-# unauthorized publish is silently dropped by Mosquitto, so narrowing these
-# early would orphan the legacy retained data.
-# TODO: remove `lan/#` and `admin/#` once every deployment has run a poller
-# that sweeps the legacy namespace once.
-topic readwrite lan/#
-topic readwrite admin/#
 
 user wsreader
 topic read sites/@SITE_ID@/lan/#

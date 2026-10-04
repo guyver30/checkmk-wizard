@@ -36,10 +36,6 @@ Each check proves one requirement:
   same independent-subscriber design as `check_ws_publish_denied`, and are
   skipped (not failed) when ADMIN_WS_PASSWORD is unset. The usual invocation
   is `set -a; . deploy/.env; set +a; uv run python scripts/smoke_test_broker.py`.
-- `check_wsreader_cannot_read_legacy`, `check_poller_legacy_write` — the
-  rendered per-site ACL: wsreader cannot read the old un-namespaced `lan/#`,
-  while the poller keeps its temporary legacy write grant that the cutover
-  sweep depends on.
 - `check_persistence_across_restart` — a retained message survives a
   broker restart (BRK-02), skipped via `--skip-restart` for callers (e.g.
   the worker container) that must not restart a sibling service.
@@ -388,54 +384,6 @@ def check_wsreader_cannot_read_admin(
     return _report("wsreader_cannot_read_admin", not ok, "wsreader received a sites/<id>/admin/ message (ACL not enforced)")
 
 
-def check_wsreader_cannot_read_legacy(
-    host: str,
-    seed: str,
-    tcp_port: int,
-    ws_port: int,
-    poller_user: str,
-    poller_password: str,
-    ws_user: str,
-    ws_password: str,
-    timeout: float,
-) -> bool:
-    """wsreader subscribed to the old un-namespaced `lan/#` must receive nothing.
-
-    Proves the rendered per-site ACL no longer exposes the legacy namespace to
-    the dashboard login. Only meaningful against the rendered per-site ACL.
-    """
-    ok = _delivered(
-        host, ws_port, "websockets", (ws_user, ws_password),
-        tcp_port, "tcp", (poller_user, poller_password),
-        "lan/#", f"lan/smoketest/legacy-{seed}", "should-never-arrive", timeout,
-    )
-    if ok is None:
-        return _report("wsreader_cannot_read_legacy", False, "connection failed")
-    return _report("wsreader_cannot_read_legacy", not ok, "wsreader received a legacy lan/ message (ACL not narrowed)")
-
-
-def check_poller_legacy_write(
-    host: str,
-    seed: str,
-    tcp_port: int,
-    poller_user: str,
-    poller_password: str,
-    timeout: float,
-) -> bool:
-    """A poller-credential subscriber on `lan/smoketest/#` receives a poller publish there.
-
-    Proves the temporary legacy `readwrite lan/#` grant the cutover sweep
-    depends on: an unauthorized publish is silently dropped by Mosquitto, so a
-    narrowed ACL would orphan the pre-namespace retained topics unnoticed.
-    """
-    ok = _delivered(
-        host, tcp_port, "tcp", (poller_user, poller_password),
-        tcp_port, "tcp", (poller_user, poller_password),
-        "lan/smoketest/#", f"lan/smoketest/legacy-{seed}", "legacy-write", timeout,
-    )
-    return _report("poller_legacy_write", ok, "poller publish on legacy lan/ did not arrive (temporary grant missing)")
-
-
 def _wait_for_retained_payload(
     host: str,
     port: int,
@@ -528,7 +476,7 @@ def check_persistence_across_restart(
     return True
 
 
-def _cleanup(host: str, site_id: str, seed: str, tcp_port: int, user: str, password: str, timeout: float) -> None:
+def _cleanup(host: str, site_id: str, tcp_port: int, user: str, password: str, timeout: float) -> None:
     """Clear the retained smoke-test topics so no ghosts leak into sites/<id>/lan/#.
 
     Run from a `finally` block regardless of check outcome. A cleanup
@@ -543,7 +491,6 @@ def _cleanup(host: str, site_id: str, seed: str, tcp_port: int, user: str, passw
         for topic in (
             _site_topic(site_id, SMOKETEST_SEED_SUFFIX),
             _site_topic(site_id, SMOKETEST_DENY_SUFFIX),
-            f"lan/smoketest/legacy-{seed}",
         ):
             info = client.publish(topic, payload=None, retain=True)
             info.wait_for_publish(timeout=timeout)
@@ -639,24 +586,6 @@ def main() -> int:
             )
         else:
             print("[SKIP] wsadmin checks: ADMIN_WS_PASSWORD not set")
-        results.append(
-            check_wsreader_cannot_read_legacy(
-                args.host,
-                seed,
-                args.tcp_port,
-                args.ws_port,
-                args.poller_user,
-                args.poller_password,
-                args.ws_user,
-                args.ws_password,
-                args.timeout,
-            )
-        )
-        results.append(
-            check_poller_legacy_write(
-                args.host, seed, args.tcp_port, args.poller_user, args.poller_password, args.timeout
-            )
-        )
         if args.skip_restart:
             print("[SKIP] persistence_across_restart (--skip-restart)")
         else:
@@ -674,7 +603,7 @@ def main() -> int:
                 )
             )
     finally:
-        _cleanup(args.host, args.site_id, seed, args.tcp_port, args.poller_user, args.poller_password, args.timeout)
+        _cleanup(args.host, args.site_id, args.tcp_port, args.poller_user, args.poller_password, args.timeout)
 
     if all(results):
         print("[SUMMARY] all checks passed")
