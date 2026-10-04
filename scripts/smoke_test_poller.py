@@ -208,7 +208,7 @@ def check_device_status_retained(host: str, tcp_port: int, user: str, password: 
     Proves Success Criterion 1 (PLR-03, PLR-08).
     """
     try:
-        payloads = _collect_retained(host, tcp_port, user, password, "lan/devices/+/status", timeout)
+        payloads = _collect_retained(host, tcp_port, user, password, mqtt_poller.site_topic("lan/devices/+/status"), timeout)
     except (TimeoutError, OSError) as exc:
         print(f"[FAIL] device_status_retained: {exc}")
         return False
@@ -248,7 +248,7 @@ def check_topology_retained(host: str, tcp_port: int, user: str, password: str, 
     Proves the payload half of PLR-01/PLR-04.
     """
     try:
-        payload = _wait_for_retained_payload(host, tcp_port, user, password, mqtt_poller.TOPIC_TOPOLOGY, timeout)
+        payload = _wait_for_retained_payload(host, tcp_port, user, password, mqtt_poller.site_topic(mqtt_poller.TOPIC_TOPOLOGY), timeout)
     except (TimeoutError, OSError) as exc:
         print(f"[FAIL] topology_retained: {exc}")
         return False
@@ -290,7 +290,7 @@ def check_device_enrichment(host: str, tcp_port: int, user: str, password: str, 
     regression (a folder value smuggled straight from a filesystem path).
     """
     try:
-        payloads = _collect_retained(host, tcp_port, user, password, "lan/devices/+/status", timeout)
+        payloads = _collect_retained(host, tcp_port, user, password, mqtt_poller.site_topic("lan/devices/+/status"), timeout)
     except (TimeoutError, OSError) as exc:
         print(f"[FAIL] device_enrichment: {exc}")
         return False
@@ -357,7 +357,7 @@ def check_poller_liveness(
     Pitfall C's heartbeat requirement (PLR-07).
     """
     try:
-        payload = _wait_for_retained_payload(host, tcp_port, user, password, mqtt_poller.TOPIC_POLLER_STATUS, timeout)
+        payload = _wait_for_retained_payload(host, tcp_port, user, password, mqtt_poller.site_topic(mqtt_poller.TOPIC_POLLER_STATUS), timeout)
     except (TimeoutError, OSError) as exc:
         print(f"[FAIL] poller_liveness: {exc}")
         return False
@@ -409,7 +409,7 @@ def check_topology_quiet(host: str, tcp_port: int, user: str, password: str, qui
     client.on_message = on_message
     try:
         client.connect(host, tcp_port)
-        client.subscribe(mqtt_poller.TOPIC_TOPOLOGY, qos=1)
+        client.subscribe(mqtt_poller.site_topic(mqtt_poller.TOPIC_TOPOLOGY), qos=1)
         client.loop_start()
         time.sleep(quiet_window)
     except (TimeoutError, OSError) as exc:
@@ -444,7 +444,7 @@ def check_ghost_tombstone(
     poller's own next cycle republishes correct topology.
     """
     try:
-        payload = _wait_for_retained_payload(host, tcp_port, user, password, mqtt_poller.TOPIC_TOPOLOGY, timeout)
+        payload = _wait_for_retained_payload(host, tcp_port, user, password, mqtt_poller.site_topic(mqtt_poller.TOPIC_TOPOLOGY), timeout)
     except (TimeoutError, OSError) as exc:
         print(f"[FAIL] ghost_tombstone: {exc}")
         return False
@@ -466,7 +466,7 @@ def check_ghost_tombstone(
     try:
         client.connect(host, tcp_port)
         client.loop_start()
-        info = client.publish(mqtt_poller.TOPIC_TOPOLOGY, ghost_payload, qos=1, retain=True)
+        info = client.publish(mqtt_poller.site_topic(mqtt_poller.TOPIC_TOPOLOGY), ghost_payload, qos=1, retain=True)
         info.wait_for_publish(timeout=timeout)
     except (TimeoutError, OSError) as exc:
         print(f"[FAIL] ghost_tombstone: could not seed ghost node ({exc})")
@@ -494,7 +494,7 @@ def check_ghost_tombstone(
                 host, tcp_port, user, password, mqtt_poller.device_history_topic(GHOST_DEVICE_ID), 2.0
             )
             topology_payload = _wait_for_retained_payload(
-                host, tcp_port, user, password, mqtt_poller.TOPIC_TOPOLOGY, 2.0
+                host, tcp_port, user, password, mqtt_poller.site_topic(mqtt_poller.TOPIC_TOPOLOGY), 2.0
             )
         except (TimeoutError, OSError) as exc:
             print(f"[FAIL] ghost_tombstone: {exc}")
@@ -544,7 +544,7 @@ def check_lwt_offline(
 
     offline_confirmed = False
     try:
-        payload = _wait_for_retained_payload(host, tcp_port, user, password, mqtt_poller.TOPIC_POLLER_STATUS, timeout)
+        payload = _wait_for_retained_payload(host, tcp_port, user, password, mqtt_poller.site_topic(mqtt_poller.TOPIC_POLLER_STATUS), timeout)
     except (TimeoutError, OSError) as exc:
         print(f"[FAIL] lwt_offline: {exc}")
         payload = None
@@ -569,7 +569,7 @@ def check_lwt_offline(
             time.sleep(3.0)
         try:
             payload = _wait_for_retained_payload(
-                host, tcp_port, user, password, mqtt_poller.TOPIC_POLLER_STATUS, timeout
+                host, tcp_port, user, password, mqtt_poller.site_topic(mqtt_poller.TOPIC_POLLER_STATUS), timeout
             )
         except (TimeoutError, OSError) as exc:
             print(f"[FAIL] lwt_offline: {exc}")
@@ -602,6 +602,11 @@ def main() -> int:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", default="localhost")
+    parser.add_argument(
+        "--site-id",
+        default=os.environ.get("CMK_SITE_ID", "dmc"),
+        help="Must match the poller's CMK_SITE_ID (source deploy/.env first).",
+    )
     parser.add_argument("--tcp-port", type=int, default=1883)
     parser.add_argument("--user", default="poller")
     parser.add_argument("--password", default=os.environ.get("MQTT_POLLER_PASSWORD", "poller"))
@@ -626,6 +631,7 @@ def main() -> int:
     parser.add_argument("--start-cmd", default="podman compose start poller")
     parser.add_argument("--compose-dir", default="deploy")
     args = parser.parse_args()
+    mqtt_poller.set_site_id(args.site_id)
 
     quiet_window = args.quiet_window if args.quiet_window is not None else 2 * args.poll_interval + 10
 
