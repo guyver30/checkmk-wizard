@@ -319,4 +319,60 @@ describe("ThreePaneLayout", () => {
       expect(screen.getByRole("button", { name: "Expand incidents" })).toBeInTheDocument();
     });
   });
+
+  describe("service needs pane", () => {
+    const base = { tree: <p>tree</p>, centreTop: <p>top</p>, centreBottom: <p>bottom</p> };
+    const needsSummary = <span>NEEDS SUMMARY</span>;
+
+    function rootGrid() {
+      return screen.getByText("tree").closest("div[style]") as HTMLElement;
+    }
+
+    it("with only needs, creates the right column and renders the pane, summary and collapse button", () => {
+      render(<ThreePaneLayout {...base} needs={<p>needs body</p>} needsSummary={needsSummary} />);
+      expect(screen.getByText("needs body")).toBeInTheDocument();
+      expect(screen.getByText("NEEDS SUMMARY")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Collapse service needs" })).toBeInTheDocument();
+      expect(rootGrid().style.gridTemplateColumns.split(" ")).toHaveLength(5);
+    });
+
+    it("renders needs beside incidents, with and without incidents", () => {
+      const { unmount } = render(
+        <ThreePaneLayout {...base} incidents={<p>inc body</p>} needs={<p>needs body</p>} />,
+      );
+      const pair = screen.getByText("needs body").closest("div.min-\\[1280px\\]\\:flex-row");
+      expect(pair).not.toBeNull();
+      expect(pair).toContainElement(screen.getByText("inc body"));
+      unmount();
+      render(<ThreePaneLayout {...base} needs={<p>needs body</p>} />);
+      expect(screen.getByText("needs body")).toBeInTheDocument();
+      expect(screen.queryByText("inc body")).not.toBeInTheDocument();
+    });
+
+    it("keeps the column wide enough for two panes side by side while needs is set", () => {
+      render(<ThreePaneLayout {...base} needs={<p>needs body</p>} />);
+      expect(rootGrid().style.gridTemplateColumns.split(" ")[4]).toBe("640px");
+    });
+
+    it("collapses independently of incidents and remembers it across a remount", () => {
+      const { unmount } = render(
+        <ThreePaneLayout {...base} incidents={<p>inc body</p>} needs={<p>needs body</p>} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Collapse service needs" }));
+      expect(screen.queryByText("needs body")).not.toBeInTheDocument();
+      expect(screen.getByText("inc body")).toBeInTheDocument();
+      unmount();
+      render(<ThreePaneLayout {...base} incidents={<p>inc body</p>} needs={<p>needs body</p>} />);
+      expect(screen.queryByText("needs body")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Expand service needs" })).toBeInTheDocument();
+    });
+
+    it("stacks above details with a resize separator", () => {
+      render(
+        <ThreePaneLayout {...base} needs={<p>needs body</p>} details={<p>det body</p>} detailsKey="h1" />,
+      );
+      expect(screen.getByRole("separator", { name: /resize incidents/i })).toBeInTheDocument();
+      expect(screen.getByText("det body")).toBeInTheDocument();
+    });
+  });
 });

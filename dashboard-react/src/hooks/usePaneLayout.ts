@@ -34,6 +34,7 @@ interface PersistedLayout {
   detailsCollapsed: boolean;
   incidentsHeight: number;
   incidentsCollapsed: boolean;
+  needsCollapsed: boolean;
 }
 
 interface PaneSizes {
@@ -48,9 +49,11 @@ interface PaneCollapsed {
   events: boolean;
   details: boolean;
   incidents: boolean;
+  needs: boolean;
 }
 
 type PaneKey = keyof PaneSizes;
+type CollapsibleKey = keyof PaneCollapsed;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -87,6 +90,7 @@ function readInitialState(): { sizes: PaneSizes; collapsed: PaneCollapsed } {
       : DEFAULTS.incidentsHeight;
   const incidentsCollapsed =
     typeof persisted.incidentsCollapsed === "boolean" ? persisted.incidentsCollapsed : false;
+  const needsCollapsed = typeof persisted.needsCollapsed === "boolean" ? persisted.needsCollapsed : false;
 
   return {
     sizes: { tree: treeWidth, events: eventsHeight, details: detailsWidth, incidents: incidentsHeight },
@@ -95,6 +99,7 @@ function readInitialState(): { sizes: PaneSizes; collapsed: PaneCollapsed } {
       events: eventsCollapsed,
       details: detailsCollapsed,
       incidents: incidentsCollapsed,
+      needs: needsCollapsed,
     },
   };
 }
@@ -114,6 +119,7 @@ function toRecord(state: LayoutState): PersistedLayout {
     detailsCollapsed: state.collapsed.details,
     incidentsHeight: state.sizes.incidents,
     incidentsCollapsed: state.collapsed.incidents,
+    needsCollapsed: state.collapsed.needs,
   };
 }
 
@@ -129,7 +135,7 @@ export function usePaneLayout() {
     setState((prev) => ({ ...prev, sizes: { ...prev.sizes, [pane]: clamped } }));
   }
 
-  function toggleCollapse(pane: PaneKey) {
+  function toggleCollapse(pane: CollapsibleKey) {
     setState((prev) => {
       const next = { ...prev, collapsed: { ...prev.collapsed, [pane]: !prev.collapsed[pane] } };
       // Collapsing does not discard the stored size -- prev.sizes is carried through
@@ -142,7 +148,7 @@ export function usePaneLayout() {
   // Sets a pane's collapsed flag to false and persists -- a no-op state change if it's already
   // expanded. Used by ThreePaneLayout to re-expand the details pane when a new host opens while
   // it's collapsed (operator decision 3).
-  function expand(pane: PaneKey) {
+  function expand(pane: CollapsibleKey) {
     setState((prev) => {
       if (!prev.collapsed[pane]) {
         return prev;
