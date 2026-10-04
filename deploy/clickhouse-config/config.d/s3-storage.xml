@@ -23,6 +23,31 @@
     says explicitly not to turn it on.
 -->
 <clickhouse>
+    <!-- Filesystem read cache for the s3 disk (14.2 D-01): the failure-prediction
+         forecasts read metrics beyond the 31-day move to MinIO, and without a
+         cache every such read is an S3 round trip. The cache lives inside the
+         already mounted clickhouse_data volume, so it survives a full down/up.
+         Disk `s3` and policy `s3_tiered` keep their names (a renamed volume disk
+         can orphan parts already stored under `s3`), and no `type=cache` wrapper
+         disk is used; the disk just gains cache_name below.
+         Source: oneuptime.com 2026-03-31 filesystem-cache article for the
+         `filesystem_caches` / `cache_name` keys; the cache is listed in
+         system.filesystem_cache_settings (clickhouse.com/docs/reference/
+         system-tables/filesystem_cache_settings).
+         Confidence MEDIUM: prove it live after a full
+         `podman compose down && podman compose up -d` with
+           SELECT cache_name, path, max_size, current_size
+           FROM system.filesystem_cache_settings
+         Fallback: if ClickHouse refuses to start, remove the filesystem_caches
+         element and the cache_name line, do a full down/up (never restart the
+         clickhouse container alone) and report; the type=cache wrapper shape
+         needs a parts check first. -->
+    <filesystem_caches>
+        <s3_cache>
+            <path>/var/lib/clickhouse/filesystem_caches/s3_cache/</path>
+            <max_size>2Gi</max_size>
+        </s3_cache>
+    </filesystem_caches>
     <storage_configuration>
         <disks>
             <s3>
@@ -38,6 +63,7 @@
                      here (skip_access_check verified via ctx7, ClickHouse
                      25.10 release notes). -->
                 <skip_access_check>true</skip_access_check>
+                <cache_name>s3_cache</cache_name>
             </s3>
         </disks>
         <policies>
