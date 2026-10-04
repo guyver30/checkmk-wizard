@@ -424,6 +424,15 @@ async def _create_fresh_site(
 async def _prompt_new_site_name(
     taken: set[str], prompt: str = "New Checkmk site name:", default: str = ""
 ) -> str:
+    # The site name doubles as the dashboard's MQTT namespace. There is no
+    # central registry, so the wizard cannot check uniqueness across sites
+    # that share a broker; it can only warn (real enforcement is a later,
+    # cloud-phase concern).
+    console.print(
+        "[yellow]Note: the site name is also the MQTT namespace (sites/<name>/... "
+        "on the broker) and must be globally unique across every site that "
+        "feeds the same broker.[/yellow]"
+    )
     while True:
         raw_name = await questionary.text(prompt, default=default).ask_async()
         if not _SITE_NAME_RE.match(raw_name):

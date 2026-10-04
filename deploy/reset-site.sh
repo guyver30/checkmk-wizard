@@ -9,7 +9,7 @@
 # checkmk entrypoint creates a new, empty site on the next start when the
 # `checkmk_data` volume is gone, named after CMK_SITE_ID. `mosquitto_data` goes
 # too, because the poller's startup sweep does not clear the global
-# `lan/events/recent` feed (docs/WIZARD-OPERATION.md, "Starting over with a
+# `sites/<site_id>/lan/events/recent` feed (docs/WIZARD-OPERATION.md, "Starting over with a
 # blank site").
 #
 # Usage: deploy/reset-site.sh [--with-history] [--yes] [--site NAME]

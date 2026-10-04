@@ -1,5 +1,10 @@
 # MQTT contract walkthrough and history-over-MQTT proposal
 
+> **Update 2026-10-04 (Phase 14.3):** every topic now lives under `sites/<site_id>/`, where `site_id` is
+> `CMK_SITE_ID`, and the broker ACL is rendered per deployment from `deploy/mosquitto.acl.template`. The
+> worked examples below keep the relative suffixes for readability: read each `lan/...` or `admin/...` topic
+> as `sites/<site_id>/lan/...` or `sites/<site_id>/admin/...`. The formal topic tables use the full form.
+
 Written 2026-10-03 during the Phase 14.2 discussion, for whoever builds the cloud side (broker, ClickHouse,
 analytics container, new dashboard). It has three parts:
 
@@ -28,14 +33,14 @@ a live broker, and timestamps are shortened. The Podman doc stays the reference 
 
 | Topic | When | QoS | Retained |
 |---|---|---|---|
-| `lan/devices/{id}/status` | every cycle, every host | 0 | yes |
-| `lan/devices/{id}/services` | only when the service list changes | 1 | yes |
-| `lan/devices/{id}/history` | only on a state transition of that host | 1 | yes |
-| `lan/devices/{id}/service_history` | only on a per-service state transition | 1 | yes |
-| `lan/events/recent` | only on any host's state change, add or remove | 1 | yes |
-| `lan/incidents/{incident_id}/status` | only when an incident opens or its content changes | 1 | yes |
-| `lan/devices/topology` | only when structure or a label changes | 1 | yes |
-| `lan/poller/status` | birth, every cycle, last will | 1 | yes |
+| `sites/<site_id>/lan/devices/{id}/status` | every cycle, every host | 0 | yes |
+| `sites/<site_id>/lan/devices/{id}/services` | only when the service list changes | 1 | yes |
+| `sites/<site_id>/lan/devices/{id}/history` | only on a state transition of that host | 1 | yes |
+| `sites/<site_id>/lan/devices/{id}/service_history` | only on a per-service state transition | 1 | yes |
+| `sites/<site_id>/lan/events/recent` | only on any host's state change, add or remove | 1 | yes |
+| `sites/<site_id>/lan/incidents/{incident_id}/status` | only when an incident opens or its content changes | 1 | yes |
+| `sites/<site_id>/lan/devices/topology` | only when structure or a label changes | 1 | yes |
+| `sites/<site_id>/lan/poller/status` | birth, every cycle, last will | 1 | yes |
 
 Things to know:
 
@@ -64,7 +69,7 @@ Things to know:
 
 Implications to plan for:
 
-- **ACL.** The browser user `wsreader` can read `lan/#`. The `history/` prefix must sit outside it, so the
+- **ACL.** The browser user `wsreader` can read `sites/<site_id>/lan/#`. The `history/` prefix must sit outside it, so the
   dashboard never receives raw samples. Only the poller writes it, and only the analytics user reads it.
 - **Message size.** With real agent hosts a cycle is thousands of rows, probably hundreds of KB as one JSON
   message. Not measured. Measure with:
@@ -281,7 +286,7 @@ the components that read the store. Verified by reading the code, not by running
 - The dashboard is a pure MQTT consumer in the browser. It uses **mqtt.js over WebSockets** with one
   module-level connection (no second connection even under React StrictMode).
 - **URL:** `ws://<the page's own hostname>:<WS_PORT>`, so it works from any LAN device when nginx and
-  Mosquitto share a host. The browser user is `wsreader` (read `lan/#` only), with the login read from the
+  Mosquitto share a host. The browser user is `wsreader` (read `sites/<site_id>/lan/#` only), with the login read from the
   runtime `/config.json` that nginx serves from `deploy/.env`.
 - **Clean session, no persistence on the client.** Everything the dashboard knows comes from the broker's
   retained messages, replayed when it subscribes. There is no cache-warming request of any kind.
@@ -290,11 +295,13 @@ the components that read the store. Verified by reading the code, not by running
 - **On every (re)connect the incidents slice is cleared first**, then it subscribes, so the retained replay
   rebuilds incidents from scratch. Incidents are change-triggered and tombstoned on close, so a tombstone
   missed while disconnected would otherwise leave a closed incident on screen forever.
-- **Admin mode only (`?admin=1`)** adds a second login (`wsadmin`), subscribes to `admin/ack` and
-  `admin/faked`, and publishes commands on `admin/cmd` (QoS 1, not retained, so a command never replays after
+- **Admin mode only (`?admin=1`)** adds a second login (`wsadmin`), subscribes to `sites/<site_id>/admin/ack` and
+  `sites/<site_id>/admin/faked`, and publishes commands on `sites/<site_id>/admin/cmd` (QoS 1, not retained, so a command never replays after
   a poller restart).
 
 ### Subscriptions
+
+`mqttClient.ts` subscribes to `sites/<checkmkSite>/...`, with `checkmkSite` read from the runtime `/config.json`. It strips the prefix once, in `dashboard-react/src/lib/topics.ts`, so the store sees the relative topics below; a message outside this site's prefix is dropped.
 
 ```
 lan/devices/+/status           lan/devices/+/history
@@ -318,14 +325,14 @@ lan/poller/status              lan/incidents/+/status
 
 | Topic | Store slice | Where it is used |
 |---|---|---|
-| `lan/devices/{id}/status` | `devices` | The **device tree** (grouped by folder or by `device_type`, ordered by severity). The **map**: node colour and label (state, stale override, alias, address). The **header counts** (OK/WARN/CRIT/DOWN/STALE). The **host details pane**: state badge, address, and the CPU, RAM, disk and SMART gauges from the gauge keys. Display names in the event list and editors. |
-| `lan/devices/topology` | `topology` | The **map layout**: nodes, parent links (edges), saved `map_position`, unmanaged-switch marker. The **criticality editor** (criticality, per-service criticality, `depends_on`). |
-| `lan/devices/{id}/services` | `services` | The **host details pane**'s service tables. For an agent host it shows the chosen `Systemd Service` and `Service` entries, `TCP Port` checks, `Check_MK` (agent connected) and `Uptime`. For any other host it shows the full table. Also the editor's per-service criticality list (the same filtered set). |
-| `lan/events/recent` | `events` | The **event history pane** (newest first, filtered to the open host, with a From/To date-time filter). |
-| `lan/incidents/{id}/status` | `incidents` | The **incident pane** (cards ordered by criticality tier, then longest open) and the markers that dim or flag affected hosts in the tree and map. |
-| `lan/devices/{id}/history` | `history` | **Stored, but no component reads it today.** |
-| `lan/devices/{id}/service_history` | `serviceHistory` | **Stored, but no component reads it today.** |
-| `lan/poller/status` | `pollerStatus`, `lastKnownPollerTimestamp` | **Stored, but not displayed.** `isPollerStale()` exists in `lib/staleness.ts` but only tests call it. |
+| `sites/<site_id>/lan/devices/{id}/status` | `devices` | The **device tree** (grouped by folder or by `device_type`, ordered by severity). The **map**: node colour and label (state, stale override, alias, address). The **header counts** (OK/WARN/CRIT/DOWN/STALE). The **host details pane**: state badge, address, and the CPU, RAM, disk and SMART gauges from the gauge keys. Display names in the event list and editors. |
+| `sites/<site_id>/lan/devices/topology` | `topology` | The **map layout**: nodes, parent links (edges), saved `map_position`, unmanaged-switch marker. The **criticality editor** (criticality, per-service criticality, `depends_on`). |
+| `sites/<site_id>/lan/devices/{id}/services` | `services` | The **host details pane**'s service tables. For an agent host it shows the chosen `Systemd Service` and `Service` entries, `TCP Port` checks, `Check_MK` (agent connected) and `Uptime`. For any other host it shows the full table. Also the editor's per-service criticality list (the same filtered set). |
+| `sites/<site_id>/lan/events/recent` | `events` | The **event history pane** (newest first, filtered to the open host, with a From/To date-time filter). |
+| `sites/<site_id>/lan/incidents/{id}/status` | `incidents` | The **incident pane** (cards ordered by criticality tier, then longest open) and the markers that dim or flag affected hosts in the tree and map. |
+| `sites/<site_id>/lan/devices/{id}/history` | `history` | **Stored, but no component reads it today.** |
+| `sites/<site_id>/lan/devices/{id}/service_history` | `serviceHistory` | **Stored, but no component reads it today.** |
+| `sites/<site_id>/lan/poller/status` | `pollerStatus`, `lastKnownPollerTimestamp` | **Stored, but not displayed.** `isPollerStale()` exists in `lib/staleness.ts` but only tests call it. |
 
 The two per-device history topics and the poller heartbeat are published and kept in memory, but the UI
 doesn't show them yet. A new dashboard can ignore them, or start using them.
@@ -383,7 +390,7 @@ the host, service and metric counts are assumptions. Replace them with live numb
 |---|---|---|---|
 | `status` every cycle, per host | about 590 bytes (gzip only halves it) | about 3.4 MB per host, about 100 MB for 30 hosts | Mostly unchanged data, 5760 times a day. |
 | History samples over MQTT (the Part 1 proposal) | about 380 KB per cycle for an assumed 2400 rows (20 agent hosts x 40 services x 3 metrics) | about 2.2 GB raw, about 210 MB gzipped | By far the biggest. The test data was random, so real data likely compresses better. |
-| `lan/events/recent` | up to about 127 KB per republish | small normally, up to about 730 MB if it changes every cycle | A flapping fleet is the worst case. |
+| `sites/<site_id>/lan/events/recent` | up to about 127 KB per republish | small normally, up to about 730 MB if it changes every cycle | A flapping fleet is the worst case. |
 | Per-device `history` and `service_history` | 1.5 to 2.3 KB each, per transition | small | Not read by the UI at all (Part 3). |
 
 Downstream matters too: a cloud dashboard that pulls every retained message on connect would fetch tens of
@@ -416,7 +423,7 @@ MB when hundreds of sites share one broker.
      `value_min`, `value_max`, `value_sum` and `value_count` for exactly this.
    - Send `warn` and `crit` only when they change, since they rarely do.
 4. **Protocol and topology.**
-   - A per-site namespace such as `sites/<site_id>/...` with an ACL per site user, so a dashboard
+   - A per-site namespace `sites/<site_id>/...` (done in Phase 14.3, see `deploy/mosquitto.acl.template`; per-site broker users remain future work), so a dashboard
      subscribes only to the site it is showing. A cloud-side aggregator can publish a small fleet summary.
    - Store-and-forward: a local Mosquitto bridged to the cloud broker should queue messages during a 4G
      outage and send them as a burst afterwards (believed, not verified for Mosquitto bridges).
@@ -431,7 +438,7 @@ Take three levers together:
 - **2:** events as small messages, no whole arrays, recent history read from ClickHouse.
 - **3:** gzip, plus 1-minute aggregation.
 
-Add the **per-site namespace now**, because renaming topics later is painful. With these, the rough
+The **per-site namespace** was added in Phase 14.3 (done), because renaming topics later is painful. With these, the rough
 estimate is a few tens of MB per site per day instead of gigabytes.
 
 Status-by-exception (lever 1, status) is the biggest change to the dashboard, so treat it as a second

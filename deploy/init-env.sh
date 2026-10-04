@@ -74,6 +74,8 @@ else
         echo "Note: a checkmk_data volume already exists; its site keeps its old name"
         echo "unless you remove the volume (deploy/reset-site.sh)."
     fi
+    echo "Note: the site name is also the MQTT namespace (sites/<name>/... on the broker)"
+    echo "and must be globally unique per broker; changing it later moves the namespace."
     while true; do
         read -r -p "Checkmk site name [dmc]: " site
         site="${site:-dmc}"

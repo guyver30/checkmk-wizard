@@ -98,7 +98,7 @@ export DOCKER_HOST="unix:///run/user/1000/podman/podman.sock"
 
 ## 2. Directory Structure
 
-The canonical `compose.yaml`, `mosquitto.conf` and `mosquitto.acl` live under this repo's own `deploy/` directory (see §3). Since quick 260930-jj4, the broker's password file is no longer a tracked file — it is generated at container start from `deploy/.env` (see §3's "First-time credential setup"). Since Phase 9, `deploy/compose.yaml` also bind-mounts `../scripts` for the `poller` service (§6's MQTT topic contract), and that path resolves relative to wherever `compose.yaml` itself sits — so the repo checkout (§8.1's clone command) must exist **before** `podman compose up`, and `podman compose` must be run from the checkout's own `deploy/` directory, not from a copy of `deploy/` placed loose in `checkmk-stack/`:
+The canonical `compose.yaml`, `mosquitto.conf` and `mosquitto.acl.template` live under this repo's own `deploy/` directory (see §3). Since quick 260930-jj4, the broker's password file is no longer a tracked file — it is generated at container start from `deploy/.env` (see §3's "First-time credential setup"). Since Phase 9, `deploy/compose.yaml` also bind-mounts `../scripts` for the `poller` service (§6's MQTT topic contract), and that path resolves relative to wherever `compose.yaml` itself sits — so the repo checkout (§8.1's clone command) must exist **before** `podman compose up`, and `podman compose` must be run from the checkout's own `deploy/` directory, not from a copy of `deploy/` placed loose in `checkmk-stack/`:
 
 ```text
 checkmk-stack/
@@ -107,7 +107,8 @@ checkmk-stack/
         ├── deploy/         # this repo's own deploy/ directory; `podman
         │   ├── compose.yaml           # compose` is run from here (§4),
         │   ├── mosquitto.conf         # not from a separate copy
-        │   └── mosquitto.acl          # (mosquitto.passwd is generated in the
+        │   ├── mosquitto.acl.template # rendered to mosquitto.acl at broker start
+        │   └── render-mosquitto-acl.sh # (mosquitto.passwd is generated in the
         │                              #  container from deploy/.env, not tracked)
         └── dashboard/      # Phase 11 — static live dashboard, bind-mounted
             ├── index.html          # read-only into the `dashboard` service
@@ -136,7 +137,7 @@ cd checkmk-stack
 
 ## 3. Configuration Files
 
-The full 5-service stack (`checkmk`, `mosquitto`, `minio`, `worker`, `poller`) and the hardened Mosquitto configuration are checked into this repo under [`deploy/`](../deploy/) as the single source of truth — see [`deploy/compose.yaml`](../deploy/compose.yaml), [`deploy/mosquitto.conf`](../deploy/mosquitto.conf) and [`deploy/mosquitto.acl`](../deploy/mosquitto.acl). This doc no longer duplicates their contents inline, so the two can't silently drift apart; run `podman compose` from the checkout's own `deploy/` directory (see §2).
+The full 5-service stack (`checkmk`, `mosquitto`, `minio`, `worker`, `poller`) and the hardened Mosquitto configuration are checked into this repo under [`deploy/`](../deploy/) as the single source of truth — see [`deploy/compose.yaml`](../deploy/compose.yaml), [`deploy/mosquitto.conf`](../deploy/mosquitto.conf) and [`deploy/mosquitto.acl.template`](../deploy/mosquitto.acl.template) (rendered per deployment at broker start by [`deploy/render-mosquitto-acl.sh`](../deploy/render-mosquitto-acl.sh), see the MQTT topic contract section). This doc no longer duplicates their contents inline, so the two can't silently drift apart; run `podman compose` from the checkout's own `deploy/` directory (see §2).
 
 A few things worth knowing that aren't obvious just from reading those files:
 
@@ -184,7 +185,7 @@ three as `/config.json`, which the SPA loads once before first render
   credentials. `WS_PASSWORD` is generated into `deploy/.env` by `deploy/init-env.sh` and
   required (quick 260930-jj4 — see §3's "First-time credential setup"); rotate it by editing
   `deploy/.env`, then a full `podman compose down && podman compose up -d`. The grant behind it
-  is read-only (`topic read lan/#` in `deploy/mosquitto.acl`), so the exposure is bounded to
+  is read-only (`topic read sites/<CMK_SITE_ID>/lan/#` in the rendered `deploy/mosquitto.acl.template`), so the exposure is bounded to
   reading the device list, never writing to the broker.
 - `TOPOLOGY_EDITOR_SECRET` — see the next note.
 
@@ -276,7 +277,7 @@ echo 'CMK_SITE_ID=mysite' >> deploy/.env      # or: CMK_SITE_ID=mysite podman co
 podman compose up -d
 ```
 
-The wizard's site-name prompt is then pre-filled with `mysite`. Site names must start with a letter and be 1–16 letters/digits/underscores. The dashboard now follows `CMK_SITE_ID` automatically too (quick 260930-ixs); the one thing not driven by this variable is the `podman compose exec checkmk omd ... dmc ...` commands in this doc — substitute your name.
+The site name is also the dashboard's MQTT namespace (`sites/mysite/...` on the broker) and must be globally unique across every site that feeds the same broker; there is no central registry, so neither the wizard nor `deploy/init-env.sh` can check this, they only warn. The wizard's site-name prompt is then pre-filled with `mysite`. Site names must start with a letter and be 1–16 letters/digits/underscores. The dashboard now follows `CMK_SITE_ID` automatically too (quick 260930-ixs); the one thing not driven by this variable is the `podman compose exec checkmk omd ... dmc ...` commands in this doc — substitute your name.
 
 **Option 2 — rename an existing site.** If the stack already runs under the wrong name, rename from the host (not the wizard). Note that `omd mv` needs the site stopped:
 
@@ -285,7 +286,7 @@ podman compose exec checkmk omd stop dmc
 podman compose exec checkmk omd mv dmc mysite
 ```
 
-Then set `CMK_SITE_ID=mysite` in `deploy/.env` and recreate the containers, including the dashboard (`podman compose up -d --force-recreate checkmk worker poller dashboard`) — or a full `podman compose down && podman compose up -d`. Otherwise the checkmk entrypoint's `omd start "$CMK_SITE_ID"` targets the old name and the `tmpfs` mount stays on the old path. Because it is easy to miss one of these places, on a disposable stack it is usually simpler to run `deploy/reset-site.sh` (§8.5). It wipes the site and recreates it under a new name in one step: it asks for the new name and writes `CMK_SITE_ID` to `deploy/.env` for you. Existing agents registered against the old site keep their old URL/certs and must be re-registered after a rename.
+Then set `CMK_SITE_ID=mysite` in `deploy/.env` and recreate the containers, including the dashboard (`podman compose up -d --force-recreate checkmk worker poller dashboard`) — or a full `podman compose down && podman compose up -d`. Otherwise the checkmk entrypoint's `omd start "$CMK_SITE_ID"` targets the old name and the `tmpfs` mount stays on the old path. Because it is easy to miss one of these places, on a disposable stack it is usually simpler to run `deploy/reset-site.sh` (§8.5). It wipes the site and recreates it under a new name in one step: it asks for the new name and writes `CMK_SITE_ID` to `deploy/.env` for you. Existing agents registered against the old site keep their old URL/certs and must be re-registered after a rename. `omd mv` also moves the MQTT namespace: update `CMK_SITE_ID` in `deploy/.env` and recreate the stack so the ACL is re-rendered, and note that the old `sites/<old>/` retained subtree is left on the broker (the Phase 14.3 sweep only clears the pre-14.3 un-namespaced topics).
 
 ---
 
@@ -315,6 +316,27 @@ Watch the poller's poll cycles as they happen:
 
 ```bash
 podman compose logs -f poller
+```
+
+### Upgrading to the per-site namespace (Phase 14.3)
+
+Every MQTT topic moved under `sites/<site_id>/`, so the poller, broker ACL and dashboard must change together. Procedure:
+
+1. In the admin view (`?admin=1`), run **Restore All** first. This is belt and braces: the poller also seeds `admin/faked` from the legacy retained topic, but clearing fakes up front leaves nothing to carry over.
+2. Pull the new code and rebuild the dashboard image: `podman compose build dashboard`.
+3. Restart the **whole** stack: `podman compose down && podman compose up -d`. Never restart or stop a single container on dmc-server; doing so breaks Checkmk egress and turns every real host DOWN.
+
+What to expect afterwards:
+
+- An old dashboard image shows nothing after the upgrade, because it subscribes to the un-namespaced topics.
+- The first poller start waits the full reconcile timeout once.
+- Topology, events, history and incidents rebuild from Checkmk within the first cycles.
+- The old retained `lan/*` topics and the legacy `admin/faked` are cleared on the first cycle that has a confirmed host list.
+
+Verify the sweep. This prints nothing once the legacy topics are gone:
+
+```bash
+podman exec mosquitto mosquitto_sub -u poller -P "$MQTT_POLLER_PASSWORD" -t 'lan/#' -t 'admin/faked' --retained-only -W 3 -v
 ```
 
 ---
@@ -434,24 +456,36 @@ Default credentials:
 * **MinIO:** `minioadmin` / `minioadmin`
 * **Mosquitto (poller, MQTT 1883):** user `poller`, password generated by `deploy/init-env.sh` into `MQTT_POLLER_PASSWORD` in `deploy/.env`
 * **Mosquitto (wsreader, WebSockets 9002, read-only):** user `wsreader`, password generated by `deploy/init-env.sh` into `WS_PASSWORD` in `deploy/.env`
-* **Mosquitto (wsadmin, WebSockets 9002, admin demo login):** user `wsadmin`, password generated by `deploy/init-env.sh` into `ADMIN_WS_PASSWORD` in `deploy/.env`; ACL: read `lan/#`, `admin/ack`, `admin/faked`, write `admin/cmd` only. Served open on `/admin-config.json` for `?admin=1`, so closed demo network only.
+* **Mosquitto (wsadmin, WebSockets 9002, admin demo login):** user `wsadmin`, password generated by `deploy/init-env.sh` into `ADMIN_WS_PASSWORD` in `deploy/.env`; ACL: read `sites/<site_id>/lan/#`, `sites/<site_id>/admin/ack`, `sites/<site_id>/admin/faked`, write `sites/<site_id>/admin/cmd` only. Served open on `/admin-config.json` for `?admin=1`, so closed demo network only.
 
 `cmkadmin`/`minioadmin` above are disposable dev/local defaults — rotate them before exposing this stack beyond a trusted LAN. The three Mosquitto passwords have no default at all (quick 260930-jj4): `compose up` refuses to start until `deploy/init-env.sh` has generated them (see §3's "First-time credential setup").
 
 ### MQTT topic contract (poller)
 
-The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these topics; everything else is a consumer. Browser clients read them over the WebSockets listener (§1's endpoint table) with the read-only `wsreader` credentials — only the `poller` user can publish (`deploy/mosquitto.acl`).
+The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these topics; everything else is a consumer. Browser clients read them over the WebSockets listener (§1's endpoint table) with the read-only `wsreader` credentials — only the `poller` user can publish.
+
+**Per-site namespace (Phase 14.3).** Every topic below lives under `sites/<site_id>/`, where `site_id` is `CMK_SITE_ID`, the Checkmk site id. The rows keep the full prefixed form; the dashboard strips the prefix once at its MQTT edge (`dashboard-react/src/lib/topics.ts`), so its stores see the relative `lan/...` form.
+
+**Broker ACL.** `deploy/mosquitto.acl` is no longer a tracked file. The `mosquitto` container renders it at start from `deploy/mosquitto.acl.template` by running `deploy/render-mosquitto-acl.sh`, which substitutes a validated `CMK_SITE_ID` for `@SITE_ID@`. Mosquitto ACL files have no environment expansion, so rendering is how the grants get scoped to one site subtree. Per-user grants:
+
+| User | Grants |
+| --- | --- |
+| `poller` | `readwrite sites/<site_id>/#`, plus the temporary `readwrite lan/#` and `readwrite admin/#` |
+| `wsreader` | `read sites/<site_id>/lan/#` |
+| `wsadmin` | `read sites/<site_id>/lan/#`, `read sites/<site_id>/admin/ack`, `read sites/<site_id>/admin/faked`, `write sites/<site_id>/admin/cmd` |
+
+The temporary poller `lan/#` and `admin/#` grants exist only so the poller can tombstone the old un-namespaced retained topics once; Mosquitto silently drops an unauthorized publish, so narrowing them earlier would orphan the legacy retained data. They are to be removed once every deployment has run the sweep.
 
 | Topic | Publish Trigger | QoS | Retain | Payload keys |
 | --- | --- | --- | --- | --- |
-| `lan/devices/{id}/status` | Every poll cycle, for every known device | 0 | true | `id`, `state` (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`), `in_downtime`, `acknowledged`, `device_type`, `folder`, `alias`, `address`, `staleness`, `host_state_raw`, `timestamp`, `cpu_percent`, `cpu_warn`, `cpu_crit`, `ram_percent`, `ram_warn`, `ram_crit`, `disk_percent`, `disk_warn`, `disk_crit`, `disk_other_worst_percent`, `disk_other_worst_warn`, `disk_other_worst_crit`, `disk_other_worst_mount`, `smart_total`, `smart_failing` |
-| `lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle, or a label changes (`map_position`, `unmanaged`, `criticality`, `service_criticality`, `depends_on`) | 1 | true | `devices` (list of `{id, parents, device_type, folder, alias, map_position, unmanaged, criticality, service_criticality, depends_on}`), `timestamp` |
-| `lan/devices/{id}/history` | Only on an actual state transition for that device | 1 | true | Full bounded array (max `HISTORY_MAX_ENTRIES`) of `{timestamp, from, to}` |
-| `lan/devices/{id}/services` | Only when a service's state changes or the service set changes (never on `plugin_output` alone) | 1 | true | JSON array of `{description, state, plugin_output}` — every monitored service except the CPU/RAM/Filesystem/SMART gauge-backing services |
-| `lan/devices/{id}/service_history` | Only on a per-service state transition | 1 | true | Full bounded array (max `SERVICE_HISTORY_MAX_ENTRIES`) of `{timestamp, description, from, to}` |
-| `lan/events/recent` | Only on any device's state transition, or a device add/remove | 1 | true | Full bounded array (max `EVENTS_MAX_ENTRIES`, default 1000, about 160 KB when full) of `{timestamp, device_id, event, from, to}` |
-| `lan/poller/status` | Birth (on connect), heartbeat (every poll cycle), and LWT (on ungraceful disconnect) or graceful stop | 1 | true | `{status, since, last_poll, device_count}` (birth/heartbeat) or `{status: "offline"}` (LWT/graceful stop) |
-| `lan/incidents/{incident_id}/status` | Only when an incident opens, closes, or its root, consequence set, dependents or worst criticality change | 1 | true | `id`, `root`, `root_state`, `inferred`, `confirmed_down`, `not_observable`, `dependents`, `worst_criticality`, `since`, `timestamp` |
+| `sites/<site_id>/lan/devices/{id}/status` | Every poll cycle, for every known device | 0 | true | `id`, `state` (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`), `in_downtime`, `acknowledged`, `device_type`, `folder`, `alias`, `address`, `staleness`, `host_state_raw`, `timestamp`, `cpu_percent`, `cpu_warn`, `cpu_crit`, `ram_percent`, `ram_warn`, `ram_crit`, `disk_percent`, `disk_warn`, `disk_crit`, `disk_other_worst_percent`, `disk_other_worst_warn`, `disk_other_worst_crit`, `disk_other_worst_mount`, `smart_total`, `smart_failing` |
+| `sites/<site_id>/lan/devices/topology` | Only when the id+parents+device_type+folder structure changes vs. the previous cycle, or a label changes (`map_position`, `unmanaged`, `criticality`, `service_criticality`, `depends_on`) | 1 | true | `devices` (list of `{id, parents, device_type, folder, alias, map_position, unmanaged, criticality, service_criticality, depends_on}`), `timestamp` |
+| `sites/<site_id>/lan/devices/{id}/history` | Only on an actual state transition for that device | 1 | true | Full bounded array (max `HISTORY_MAX_ENTRIES`) of `{timestamp, from, to}` |
+| `sites/<site_id>/lan/devices/{id}/services` | Only when a service's state changes or the service set changes (never on `plugin_output` alone) | 1 | true | JSON array of `{description, state, plugin_output}` — every monitored service except the CPU/RAM/Filesystem/SMART gauge-backing services |
+| `sites/<site_id>/lan/devices/{id}/service_history` | Only on a per-service state transition | 1 | true | Full bounded array (max `SERVICE_HISTORY_MAX_ENTRIES`) of `{timestamp, description, from, to}` |
+| `sites/<site_id>/lan/events/recent` | Only on any device's state transition, or a device add/remove | 1 | true | Full bounded array (max `EVENTS_MAX_ENTRIES`, default 1000, about 160 KB when full) of `{timestamp, device_id, event, from, to}` |
+| `sites/<site_id>/lan/poller/status` | Birth (on connect), heartbeat (every poll cycle), and LWT (on ungraceful disconnect) or graceful stop | 1 | true | `{status, since, last_poll, device_count}` (birth/heartbeat) or `{status: "offline"}` (LWT/graceful stop) |
+| `sites/<site_id>/lan/incidents/{incident_id}/status` | Only when an incident opens, closes, or its root, consequence set, dependents or worst criticality change | 1 | true | `id`, `root`, `root_state`, `inferred`, `confirmed_down`, `not_observable`, `dependents`, `worst_criticality`, `since`, `timestamp` |
 
 A removed device is tombstoned by publishing an empty retained payload to its `status`, `history`, `services` and `service_history` topics. On startup the poller also tombstones, the same way, any retained per-device topic whose host is absent from the site; this is gated so that a failed or unconfirmed-empty Livestatus query never clears anything, and it adds no `removed` event.
 
@@ -461,9 +495,9 @@ A removed device is tombstoned by publishing an empty retained payload to its `s
 
 `staleness` (Phase 11, D-17) is Checkmk's own authoritative Livestatus `staleness` value (a float), additive to the payload above. It is `null` when the live site's `hosts` table does not expose the column — a graceful degradation, not an error; a consumer should then fall back to a timestamp-age check against `timestamp` above. `host_state_raw` (Phase 11, D-17) is also additive: one of `UP`/`DOWN`/`UNREACH`, derived from Checkmk's raw host-state integer. **`state` never contains `"UNREACH"`** — it keeps its collapsed `OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN` meaning, folding both DOWN and UNREACHABLE raw states into `"DOWN"`; a consumer that needs to tell them apart must read `host_state_raw` instead. Both fields are additive — a subscriber written before Phase 11 sees a payload it already understands, just without these two keys.
 
-The fifteen gauge keys above (Phase 12, D-12) — `cpu_percent`/`cpu_warn`/`cpu_crit`, `ram_percent`/`ram_warn`/`ram_crit`, `disk_percent`/`disk_warn`/`disk_crit`, `disk_other_worst_percent`/`disk_other_worst_warn`/`disk_other_worst_crit`/`disk_other_worst_mount`, `smart_total`/`smart_failing` — are additive to `status` and follow the same null-when-absent convention as `staleness`: each is `null` when its backing Checkmk service does not exist, never an omitted key. `lan/devices/{id}/services` and `lan/devices/{id}/service_history` are new topics, not additive payloads, so no pre-Phase-12 subscriber is affected by their existence — they are simply absent from a subscriber that has not added the two new subscriptions.
+The fifteen gauge keys above (Phase 12, D-12) — `cpu_percent`/`cpu_warn`/`cpu_crit`, `ram_percent`/`ram_warn`/`ram_crit`, `disk_percent`/`disk_warn`/`disk_crit`, `disk_other_worst_percent`/`disk_other_worst_warn`/`disk_other_worst_crit`/`disk_other_worst_mount`, `smart_total`/`smart_failing` — are additive to `status` and follow the same null-when-absent convention as `staleness`: each is `null` when its backing Checkmk service does not exist, never an omitted key. `sites/<site_id>/lan/devices/{id}/services` and `sites/<site_id>/lan/devices/{id}/service_history` are new topics, not additive payloads, so no pre-Phase-12 subscriber is affected by their existence — they are simply absent from a subscriber that has not added the two new subscriptions.
 
-**`lan/incidents/{incident_id}/status` (Phase 14, PLR-14/PLR-15/PLR-16):** the incident id is `incident-{root host id}`; a closed incident is cleared with an empty retained payload, the same tombstone contract as every other topic above. The poller rebuilds the full incident set from Livestatus every cycle — there is no poller-side incident file — and, after a restart, `reconcile_state()` reads only the retained incident *topic names* (never the payload body) so the first post-restart cycle republishes a still-open incident unchanged or tombstones one that closed while the poller was down. Grouping rules, one sentence each:
+**`sites/<site_id>/lan/incidents/{incident_id}/status` (Phase 14, PLR-14/PLR-15/PLR-16):** the incident id is `incident-{root host id}`; a closed incident is cleared with an empty retained payload, the same tombstone contract as every other topic above. The poller rebuilds the full incident set from Livestatus every cycle — there is no poller-side incident file — and, after a restart, `reconcile_state()` reads only the retained incident *topic names* (never the payload body) so the first post-restart cycle republishes a still-open incident unchanged or tombstones one that closed while the poller was down. Grouping rules, one sentence each:
 
 - A DOWN host whose parent is not an unmanaged switch is a root.
 - UNREACH hosts, and DOWN hosts reachable through a contiguous chain of non-OK hosts, join the topmost root.
@@ -522,7 +556,7 @@ print(f\"MinIO Buckets: {s3.list_buckets()}\")
 
 ### Broker smoke test
 
-[`scripts/smoke_test_broker.py`](../scripts/smoke_test_broker.py) proves the Mosquitto hardening actually holds against a live broker — configuration alone doesn't demonstrate it. Its `--poller-password`/`--ws-password` default from the `MQTT_POLLER_PASSWORD`/`WS_PASSWORD` environment variables, so source `deploy/.env` first. From the repo checkout on the deployment host:
+[`scripts/smoke_test_broker.py`](../scripts/smoke_test_broker.py) proves the Mosquitto hardening actually holds against a live broker — configuration alone doesn't demonstrate it. Its `--poller-password`/`--ws-password` default from the `MQTT_POLLER_PASSWORD`/`WS_PASSWORD` environment variables, and `--site-id` defaults to `CMK_SITE_ID`, so source `deploy/.env` first. From the repo checkout on the deployment host:
 
 ```bash
 set -a; . deploy/.env; set +a
@@ -533,13 +567,16 @@ From inside the `worker` container (which cannot restart its sibling `mosquitto`
 
 ```bash
 uv run python scripts/smoke_test_broker.py --host mosquitto --ws-port 9001 --skip-restart \
-  --poller-password "$MQTT_POLLER_PASSWORD" --ws-password "$WS_PASSWORD"
+  --poller-password "$MQTT_POLLER_PASSWORD" --ws-password "$WS_PASSWORD" \
+  --site-id "$CMK_SITE_ID"
 ```
 
 What each check proves:
 
 - `poller_publish` / `ws_subscribe` — the WebSockets listener is reachable and distinct from 1883
 - `ws_publish_denied` — the `wsreader` ACL is read-only; a write attempt never reaches an independent privileged subscriber
+- `check_wsreader_cannot_read_legacy` — `wsreader` cannot read the old un-namespaced `lan/#` topics
+- `check_poller_legacy_write` — the poller still holds the temporary legacy grant it needs for the one-time sweep
 - `persistence_across_restart` — a retained message survives a broker restart (skipped by `--skip-restart`)
 
 ### Poller smoke test
@@ -547,19 +584,19 @@ What each check proves:
 [`scripts/smoke_test_poller.py`](../scripts/smoke_test_poller.py) proves the live Livestatus column set and four of the five Phase 9 success criteria against a running stack — configuration alone doesn't demonstrate any of this. From the repo checkout on the deployment host:
 
 ```bash
-uv run python scripts/smoke_test_poller.py
+uv run python scripts/smoke_test_poller.py   # --site-id defaults to CMK_SITE_ID
 ```
 
 From inside the `worker` container (which cannot restart or kill its sibling `poller` service, hence `--skip-restart-checks`):
 
 ```bash
-uv run python scripts/smoke_test_poller.py --host mosquitto --livestatus-host checkmk --skip-restart-checks
+uv run python scripts/smoke_test_poller.py --host mosquitto --livestatus-host checkmk --skip-restart-checks --site-id "$CMK_SITE_ID"
 ```
 
 What each check proves:
 
 - `check_livestatus_columns` — the live site's `hosts` table actually exposes the columns the poller queries (resolves RESEARCH.md Open Question 1)
-- `check_device_status_retained` — Success Criterion 1 (PLR-03, PLR-08): a retained `lan/devices/{id}/status` payload matches the fixed contract
+- `check_device_status_retained` — Success Criterion 1 (PLR-03, PLR-08): a retained `sites/<site_id>/lan/devices/{id}/status` payload matches the fixed contract
 - `check_topology_retained` — the payload half of PLR-01/PLR-04
 - `check_device_enrichment` — TAG-03: plan 10-03's `alias`/`folder` enrichment actually reached retained device payloads. An all-empty `folder` result points straight at the `CMK_REST_SECRET` step in §3 — that's the cause when this check fails
 - `check_poller_liveness` — the positive half of Success Criterion 5 (PLR-07): the poller's own heartbeat
@@ -591,10 +628,10 @@ bare `uv run` elsewhere in this section is likewise a command for inside `automa
 
 ```bash
 set -a; . deploy/.env; set +a
-mosquitto_sub -h <host> -p 1883 -u poller -P "$MQTT_POLLER_PASSWORD" -t 'lan/devices/<host>/status' -v -C 1 -W 5
+mosquitto_sub -h <host> -p 1883 -u poller -P "$MQTT_POLLER_PASSWORD" -t 'sites/<site_id>/lan/devices/<host>/status' -v -C 1 -W 5
 ```
 
-Live-verified 2026-09-08 (deleting `192.168.0.215`): a zero-length retained publish is a *clear*, not a delivered empty message, so `mosquitto_sub` without `-C`/`-W` would simply hang with no output. `-C 1 -W 5` makes that observable: the subscribe times out ("Timed out", RC 27) with no message received, which is what confirms the retained status was cleared. Also confirm the host is gone from `lan/devices/topology` and that a `removed` event appears in `lan/events/recent`.
+Live-verified 2026-09-08 (deleting `192.168.0.215`): a zero-length retained publish is a *clear*, not a delivered empty message, so `mosquitto_sub` without `-C`/`-W` would simply hang with no output. `-C 1 -W 5` makes that observable: the subscribe times out ("Timed out", RC 27) with no message received, which is what confirms the retained status was cleared. Also confirm the host is gone from `sites/<site_id>/lan/devices/topology` and that a `removed` event appears in `sites/<site_id>/lan/events/recent`.
 
 ### History read-path smoke test (Phase 14.1)
 
@@ -629,8 +666,8 @@ port 9002 is reachable from the browser's own network, not just from the deploym
 With `TOPOLOGY_EDITOR_SECRET` provisioned (§3) and the stack up, condensed from the full live
 UAT checklist:
 
-1. Confirm the poller's `lan/devices/topology` payload carries `map_position`/`unmanaged` keys
-   on each device node (`mosquitto_sub -u wsreader -P wsreader -t lan/devices/topology -C 1 -W 5`).
+1. Confirm the poller's `sites/<site_id>/lan/devices/topology` payload carries `map_position`/`unmanaged` keys
+   on each device node (`mosquitto_sub -u wsreader -P wsreader -t sites/<site_id>/lan/devices/topology -C 1 -W 5`).
 2. Open the dashboard — the topology map (vis-network) replaces the old placeholder, coloured by
    live state, with parent→child arrows and click-to-detail navigation.
 3. Turn on "Edit topology", draw an edge, drag a node, and press "Apply changes" — confirm it
@@ -651,7 +688,7 @@ With the stack up, verify the root-cause incident engine end to end:
    `present: last_state_change (optional)`. If it instead reports `missing`, every incident's
    `since` will be `null` and the dashboard's duration string will read "duration unknown" —
    not a bug, a documented degradation (see §6's incident topic paragraph).
-2. `mosquitto_sub -u wsreader -P wsreader -t 'lan/incidents/#' -v -C 1 -W 5` shows any currently
+2. `mosquitto_sub -u wsreader -P wsreader -t 'sites/<site_id>/lan/incidents/#' -v -C 1 -W 5` shows any currently
    open incidents (one retained message per open incident); with none open it times out
    ("Timed out", RC 27) with no message received, the same clear-vs-empty distinction as the
    manual tombstone test above.
@@ -721,7 +758,7 @@ Nothing here needs repeating on every run except §8.3 itself — dependencies (
 To run the wizard against a genuinely fresh Checkmk site, remove the Checkmk volume **and** the Mosquitto volume (the second is recommended, see below):
 
 - `checkmk_data` holds the site itself (hosts, folders, rules, tag groups, users, monitoring history). Removing it makes the container's entrypoint create a brand-new `dmc` site on the next start.
-- `mosquitto_data` holds the broker's **retained** messages, which is all the dashboard reads (`lan/devices/{id}/...`, `lan/devices/topology`). On startup the poller reads every retained `lan/devices/{id}/*` topic and clears the ones whose host is not on the site. This happens on its first cycle that has a confirmed host list: either Livestatus returned hosts, or Livestatus returned none and the REST API confirmed zero configured hosts (which needs `CMK_REST_SECRET`). So old hosts disappear from the dashboard without touching the broker volume. The sweep does not rewrite the global `lan/events/recent` feed, though, and after a poller restart the old hosts' `removed` events carry no previous state (`from`/`to` both empty), so the dashboard's history lists them as "unknown → unknown". Remove `mosquitto_data` together with `checkmk_data` so the old site's event history goes with it.
+- `mosquitto_data` holds the broker's **retained** messages, which is all the dashboard reads (`sites/<site_id>/lan/devices/{id}/...`, `sites/<site_id>/lan/devices/topology`). On startup the poller reads every retained `sites/<site_id>/lan/devices/{id}/*` topic and clears the ones whose host is not on the site. This happens on its first cycle that has a confirmed host list: either Livestatus returned hosts, or Livestatus returned none and the REST API confirmed zero configured hosts (which needs `CMK_REST_SECRET`). So old hosts disappear from the dashboard without touching the broker volume. The sweep does not rewrite the global `sites/<site_id>/lan/events/recent` feed, though, and after a poller restart the old hosts' `removed` events carry no previous state (`from`/`to` both empty), so the dashboard's history lists them as "unknown → unknown". Remove `mosquitto_data` together with `checkmk_data` so the old site's event history goes with it.
 
 Run from `deploy/` (compose prefixes volume names with its project name — `deploy_` here; confirm with `podman volume ls` and, if unsure, `podman inspect checkmk --format '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{"\n"}}{{end}}'`):
 
@@ -735,12 +772,12 @@ If you only want to clear the events feed and keep everything else in the broker
 
 ```bash
 set -a; . deploy/.env; set +a
-podman exec mosquitto mosquitto_pub -h localhost -u poller -P "$MQTT_POLLER_PASSWORD" -t lan/events/recent -r -n
+podman exec mosquitto mosquitto_pub -h localhost -u poller -P "$MQTT_POLLER_PASSWORD" -t sites/<site_id>/lan/events/recent -r -n
 ```
 
 If you rebuilt Checkmk **without** a full `podman compose down`, the poller kept running. The sweep runs only at poller startup, so restart the stack afterwards with `podman compose down && podman compose up -d`. Don't use `podman compose restart poller`: restarting a single container can cut Checkmk off from the LAN (see §5.1, "A third signature").
 
-Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's ACL is a bind-mounted file (`mosquitto.acl`); its users are regenerated from `deploy/.env` at every start (quick 260930-jj4) — both survive the volume wipe.
+Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's ACL is rendered at every start from the bind-mounted `mosquitto.acl.template`; its users are regenerated from `deploy/.env` at every start (quick 260930-jj4) — both survive the volume wipe.
 
 Then, on the fresh site:
 
