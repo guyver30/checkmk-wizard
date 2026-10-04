@@ -24,7 +24,7 @@ A single Python-based toolchain takes a bare Checkmk install all the way to a fu
 ### Active
 
 - [ ] A long-running Python poller (in the `worker` container) queries Checkmk Livestatus over TCP on an interval and detects host/topology state changes
-- [ ] Poller publishes to MQTT using a per-device topic contract (every topic below sits under `sites/<site_id>/`, per Phase 14.3): `lan/devices/topology` (retained, republished only on topology change), `lan/devices/{id}/status` (retained, republished every poll cycle), `lan/devices/{id}/history` (retained, bounded transition log), `lan/events/recent` (retained, bounded global transition feed)
+- [ ] Poller publishes to MQTT using a per-device topic contract (every topic below sits under `sites/<site_id>/`, per Phase 14.3): `lan/devices/topology` (retained, republished only on topology change), `lan/devices/{id}/status` (retained, republished every poll cycle), `lan/events/recent` (retained, bounded global transition feed) (per-device `history`/`service_history` removed 2026-10-04, quick 261004-kbt; transition history lives in ClickHouse)
 - [ ] `mosquitto.conf` gains a WebSockets listener so browser-based MQTT clients (`mqtt.js`) can subscribe directly
 - [ ] A new Checkmk host tag group captures device type from a config-driven, site-specific choice list; the wizard's Phase 4 classification flow prompts for it and Phase 5 onboarding sets it per host
 - [ ] Topology links (`parent`) come from Livestatus's `parents` column; a location/group label is derived from the host's Checkmk folder association — no new Checkmk configuration needed for either
