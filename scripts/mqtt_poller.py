@@ -1,6 +1,7 @@
 """Poller for the LAN monitoring dashboard: Livestatus-over-TCP -> per-device
-retained MQTT topics (`lan/devices/{id}/status`, `lan/devices/topology`,
-`lan/devices/{id}/history`, `lan/events/recent`).
+retained MQTT topics (`sites/<site_id>/lan/devices/{id}/status`,
+`sites/<site_id>/lan/devices/topology`, `sites/<site_id>/lan/devices/{id}/history`,
+`sites/<site_id>/lan/events/recent`).
 
 Standalone script, not part of the installable `checkmk_wizard` package
 --------------------------------------------------------------------
@@ -113,14 +114,24 @@ ROLLUP_RETRY_SECONDS = 300
 FOLDERLESS_GROUP_KEY = "(no folder)"
 FLEET_GROUP_KEY = "all"
 
+# Topic suffixes. Every topic the poller uses lives under `sites/<site_id>/`;
+# these constants are the part after that prefix and must only be used through
+# site_topic() (or compared against relative_topic() output).
 TOPIC_TOPOLOGY = "lan/devices/topology"
 TOPIC_EVENTS = "lan/events/recent"
 TOPIC_POLLER_STATUS = "lan/poller/status"
 # Admin command channel topics. Deliberately outside `lan/` so the wsreader's
-# `read lan/#` ACL never matches them (D-09).
+# `read lan/#` ACL never matches them (D-09); still true under the site prefix.
 TOPIC_ADMIN_CMD = "admin/cmd"
 TOPIC_ADMIN_ACK = "admin/ack"
 TOPIC_ADMIN_FAKED = "admin/faked"
+
+# Same rule as wizard._SITE_NAME_RE, deploy/init-env.sh and the dashboard's
+# runtimeConfig.ts SITE_ID_RE. Matched with fullmatch because `$` would accept
+# a trailing newline. The id becomes an MQTT topic level, so `/ + #` and
+# whitespace must never get through.
+_SITE_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,15}")
+_site_prefix: str | None = None
 
 # Phase 14 (D-13/PLR-14): prefix for the incident id `compute_incidents()`
 # below mints (`f"{INCIDENT_ID_PREFIX}{root_id}"`) and topic segment
@@ -696,24 +707,52 @@ def configure_logging(level: str) -> None:
     )
 
 
+def set_site_id(site_id: str) -> None:
+    """Set the `sites/<site_id>/` prefix every poller topic is built under.
+
+    Raises ValueError for anything that is not a valid Checkmk site id, so a
+    bad CMK_SITE_ID fails at startup instead of creating a malformed topic.
+    """
+    global _site_prefix
+    if not _SITE_ID_RE.fullmatch(site_id):
+        raise ValueError(
+            f"CMK_SITE_ID {site_id!r} is not a valid Checkmk site id "
+            "(letter first, then letters/digits/underscore, at most 16 characters)"
+        )
+    _site_prefix = f"sites/{site_id}/"
+
+
+def site_topic(suffix: str) -> str:
+    if _site_prefix is None:
+        raise RuntimeError("set_site_id() was not called")
+    return _site_prefix + suffix
+
+
+def relative_topic(full: str) -> str | None:
+    """Return `full` without this site's prefix, or None if it is not under it."""
+    if _site_prefix is not None and full.startswith(_site_prefix):
+        return full[len(_site_prefix) :]
+    return None
+
+
 def device_status_topic(device_id: str) -> str:
-    return f"lan/devices/{device_id}/status"
+    return site_topic(f"lan/devices/{device_id}/status")
 
 
 def device_history_topic(device_id: str) -> str:
-    return f"lan/devices/{device_id}/history"
+    return site_topic(f"lan/devices/{device_id}/history")
 
 
 def device_services_topic(device_id: str) -> str:
-    return f"lan/devices/{device_id}/services"
+    return site_topic(f"lan/devices/{device_id}/services")
 
 
 def device_service_history_topic(device_id: str) -> str:
-    return f"lan/devices/{device_id}/service_history"
+    return site_topic(f"lan/devices/{device_id}/service_history")
 
 
 def incident_status_topic(incident_id: str) -> str:
-    return f"lan/incidents/{incident_id}/status"
+    return site_topic(f"lan/incidents/{incident_id}/status")
 
 
 def is_publishable_device_id(device_id: str) -> bool:
@@ -1542,7 +1581,7 @@ class AdminContext:
 def publish_admin_faked(client, hosts: dict[str, str], source: str, timestamp: str) -> None:
     _publish_json(
         client,
-        TOPIC_ADMIN_FAKED,
+        site_topic(TOPIC_ADMIN_FAKED),
         {"hosts": hosts, "source": source, "timestamp": timestamp},
         qos=1,
         retain=True,
@@ -1551,7 +1590,7 @@ def publish_admin_faked(client, hosts: dict[str, str], source: str, timestamp: s
 
 def publish_admin_ack(client, ack: dict) -> None:
     # Not retained: a late admin tab must never show a stale result.
-    _publish_json(client, TOPIC_ADMIN_ACK, ack, qos=1, retain=False)
+    _publish_json(client, site_topic(TOPIC_ADMIN_ACK), ack, qos=1, retain=False)
 
 
 def refresh_admin_faked(client, context: AdminContext, config: PollerConfig) -> None:
@@ -3545,7 +3584,7 @@ def build_mqtt_client(
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.username_pw_set(config.mqtt_username, config.mqtt_password)
     client.will_set(
-        TOPIC_POLLER_STATUS,
+        site_topic(TOPIC_POLLER_STATUS),
         payload=json.dumps({"status": "offline"}),
         qos=1,
         retain=True,
@@ -3556,14 +3595,14 @@ def build_mqtt_client(
         publish_poller_status(client, since=utc_now_iso(), last_poll=None, device_count=0)
         if admin_worker is not None:
             # Subscribe on every connect: a clean-session reconnect loses subscriptions.
-            client.subscribe(TOPIC_ADMIN_CMD, qos=1)
+            client.subscribe(site_topic(TOPIC_ADMIN_CMD), qos=1)
 
     client.on_connect = on_connect
     if admin_worker is not None:
         admin_worker.attach_client(client)
 
         def on_message(client, userdata, msg):
-            if msg.topic == TOPIC_ADMIN_CMD:
+            if msg.topic == site_topic(TOPIC_ADMIN_CMD):
                 admin_worker.submit(msg.payload, msg.retain)
 
         client.on_message = on_message
@@ -3628,7 +3667,7 @@ def publish_device_status(
 def publish_topology(client: mqtt.Client, nodes: list[dict], timestamp: str) -> None:
     """Publish the full device topology. QoS 1: only republished when it actually changes."""
     payload = {"devices": nodes, "timestamp": timestamp}
-    _publish_json(client, TOPIC_TOPOLOGY, payload, qos=1, retain=True)
+    _publish_json(client, site_topic(TOPIC_TOPOLOGY), payload, qos=1, retain=True)
 
 
 def publish_history(client: mqtt.Client, device_id: str, entries: list[dict]) -> None:
@@ -3654,7 +3693,7 @@ def publish_service_history(client: mqtt.Client, device_id: str, entries: list[d
 
 def publish_events(client: mqtt.Client, entries: list[dict]) -> None:
     """Publish the full bounded global events feed (already truncated by the caller)."""
-    _publish_json(client, TOPIC_EVENTS, entries, qos=1, retain=True)
+    _publish_json(client, site_topic(TOPIC_EVENTS), entries, qos=1, retain=True)
 
 
 def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
@@ -3727,7 +3766,7 @@ def publish_poller_status(
         "last_poll": last_poll,
         "device_count": device_count,
     }
-    _publish_json(client, TOPIC_POLLER_STATUS, payload, qos=1, retain=True)
+    _publish_json(client, site_topic(TOPIC_POLLER_STATUS), payload, qos=1, retain=True)
 
 
 def shutdown_mqtt_client(client: mqtt.Client) -> None:
@@ -3741,7 +3780,9 @@ def shutdown_mqtt_client(client: mqtt.Client) -> None:
     pair so the retained `lan/poller/status` topic reflects reality
     regardless of how the process is stopped (CR-02).
     """
-    _publish_json(client, TOPIC_POLLER_STATUS, {"status": "offline"}, qos=1, retain=True)
+    _publish_json(
+        client, site_topic(TOPIC_POLLER_STATUS), {"status": "offline"}, qos=1, retain=True
+    )
     client.loop_stop()
     client.disconnect()
 
@@ -4034,8 +4075,13 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     topology_received = threading.Event()
 
     def on_message(client, userdata, msg):
-        parts = msg.topic.split("/")
-        if msg.topic == TOPIC_ADMIN_FAKED:
+        rel = relative_topic(msg.topic)
+        if rel is None:
+            # Not under this site's prefix. (A later change adds the legacy
+            # un-namespaced branch here.)
+            return
+        parts = rel.split("/")
+        if rel == TOPIC_ADMIN_FAKED:
             admin_faked_result.append(msg.payload)
             return
         # A zero-length payload is an already-cleared topic, not a ghost.
@@ -4061,10 +4107,10 @@ def reconcile_state(config: PollerConfig) -> PollerState:
             and is_publishable_device_id(parts[2])
         ):
             retained_incident_ids.add(parts[2])
-        if msg.topic == TOPIC_TOPOLOGY:
+        if rel == TOPIC_TOPOLOGY:
             topology_result.append(msg.payload)
             topology_received.set()
-        elif msg.topic == TOPIC_EVENTS:
+        elif rel == TOPIC_EVENTS:
             events_result.append(msg.payload)
         elif len(parts) == 4 and parts[0] == "lan" and parts[1] == "devices" and parts[3] == "history":
             history_payloads[parts[2]] = msg.payload
@@ -4090,14 +4136,14 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         # This is an assumption about broker ordering that has not been
         # verified live. If it is wrong the failure is safe: a missed id is
         # simply not swept, and a live host is never tombstoned.
-        client.subscribe(TOPIC_EVENTS, qos=1)
-        client.subscribe("lan/devices/+/status", qos=1)
-        client.subscribe("lan/devices/+/history", qos=1)
-        client.subscribe("lan/devices/+/services", qos=1)
-        client.subscribe("lan/devices/+/service_history", qos=1)
-        client.subscribe("lan/incidents/+/status", qos=1)
-        client.subscribe(TOPIC_ADMIN_FAKED, qos=1)
-        client.subscribe(TOPIC_TOPOLOGY, qos=1)
+        client.subscribe(site_topic(TOPIC_EVENTS), qos=1)
+        client.subscribe(site_topic("lan/devices/+/status"), qos=1)
+        client.subscribe(site_topic("lan/devices/+/history"), qos=1)
+        client.subscribe(site_topic("lan/devices/+/services"), qos=1)
+        client.subscribe(site_topic("lan/devices/+/service_history"), qos=1)
+        client.subscribe(site_topic("lan/incidents/+/status"), qos=1)
+        client.subscribe(site_topic(TOPIC_ADMIN_FAKED), qos=1)
+        client.subscribe(site_topic(TOPIC_TOPOLOGY), qos=1)
         client.loop_start()
         topology_received.wait(timeout=config.reconcile_timeout_seconds)
     finally:
@@ -4643,6 +4689,17 @@ def main() -> int:
     )
     args = parser.parse_args()
     config = PollerConfig.from_env()
+    try:
+        set_site_id(config.cmk_site_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "CMK_SITE_ID" not in os.environ:
+        _logger.warning(
+            "CMK_SITE_ID is not set; using the default site id 'dmc', so the MQTT "
+            "namespace is sites/dmc/. This collides with any other unconfigured "
+            "site sharing the broker."
+        )
 
     if args.check_columns:
         configure_logging(config.log_level)
