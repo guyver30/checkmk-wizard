@@ -387,12 +387,29 @@ Plans:
 ### Phase 14.3: Per-site MQTT Namespace (INSERTED)
 
 **Goal:** Every poller, dashboard and admin MQTT topic moves under `sites/<site_id>/` (site_id = the Checkmk site id from `CMK_SITE_ID`, passed to the dashboard via `/config.json`), with per-site ACLs, a one-time startup sweep of the old un-namespaced retained `lan/*` topics, and a wizard site-name warning that the name must be globally unique. Runs BEFORE Phase 14.2 (decided 2026-10-04); 14.2's needs topic becomes `sites/<site_id>/lan/needs/{need_id}/status`.
-**Requirements**: TBD
+**Requirements**: phase-local NS-POLLER, NS-ACL, NS-DASH, NS-MIGRATE, NS-WARN, NS-DOCS (derived from the goal; no REQUIREMENTS.md IDs)
 **Depends on:** Phase 14
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 14.3 to break down)
+
+**Wave 1**
+
+- [ ] 14.3-01-PLAN.md — Poller: validated CMK_SITE_ID, site_topic()/relative_topic(), every publish/subscribe/LWT prefixed, tests + smoke_test_poller
+- [ ] 14.3-02-PLAN.md — Broker: ACL rendered at mosquitto start from mosquitto.acl.template, grant test, smoke_test_broker on the prefixed namespace
+- [ ] 14.3-03-PLAN.md — Dashboard: lib/topics.ts, mqttClient.ts subscribes sites/<checkmkSite>/ and strips the prefix once
+
+**Wave 2** *(blocked on 14.3-01)*
+
+- [ ] 14.3-04-PLAN.md — Poller legacy sweep of un-namespaced lan/* and admin/faked, admin_faked carry-over
+
+**Wave 3** *(blocked on 14.3-01..04)*
+
+- [ ] 14.3-05-PLAN.md — Wizard/init-env uniqueness warning, operator docs, contract docs, project notes, 14.2 forward note
+
+**Wave 4** *(blocked on 14.3-05)*
+
+- [ ] 14.3-06-PLAN.md — Live verification: full down/up, smoke tests, sweep, dashboard + admin mode (non-autonomous)
 
 ### Phase 14.1: Fleet History Store, Availability Rollups and Grafana (INSERTED)
 
