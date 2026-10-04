@@ -31,20 +31,33 @@ Each check proves one requirement:
   subscriber that should never receive the message.
 - `check_wsadmin_publish_admin_cmd`, `check_wsadmin_publish_lan_denied`,
   `check_wsadmin_reads_lan`, `check_wsreader_cannot_read_admin` — the admin
-  broker user's grants (Phase 16 D-06/D-09): wsadmin may publish `admin/cmd`
-  only, may read `lan/#`, and wsreader cannot see admin topics. They use the
+  broker user's grants: wsadmin may publish `sites/<id>/admin/cmd` only, may
+  read `sites/<id>/lan/#`, and wsreader cannot see admin topics. They use the
   same independent-subscriber design as `check_ws_publish_denied`, and are
   skipped (not failed) when ADMIN_WS_PASSWORD is unset. The usual invocation
   is `set -a; . deploy/.env; set +a; uv run python scripts/smoke_test_broker.py`.
+- `check_wsreader_cannot_read_legacy`, `check_poller_legacy_write` — the
+  rendered per-site ACL: wsreader cannot read the old un-namespaced `lan/#`,
+  while the poller keeps its temporary legacy write grant that the cutover
+  sweep depends on.
 - `check_persistence_across_restart` — a retained message survives a
   broker restart (BRK-02), skipped via `--skip-restart` for callers (e.g.
   the worker container) that must not restart a sibling service.
+
+Topics live under `sites/<site-id>/...`; `--site-id` (default $CMK_SITE_ID,
+else `dmc`) must equal the deployment's CMK_SITE_ID, because the broker ACL is
+rendered from it at container start.
+
+On dmc-server pass `--skip-restart`: restarting a single container breaks
+Checkmk egress there. The full-stack procedure is
+`podman compose down && podman compose up -d`.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -54,12 +67,19 @@ import uuid
 
 import paho.mqtt.client as mqtt
 
-SMOKETEST_SEED_TOPIC = "lan/smoketest/seed"
-SMOKETEST_DENY_TOPIC = "lan/smoketest/deny-check"
+SMOKETEST_SEED_SUFFIX = "lan/smoketest/seed"
+SMOKETEST_DENY_SUFFIX = "lan/smoketest/deny-check"
+_SITE_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,15}")
+
+
+def _site_topic(site_id: str, suffix: str) -> str:
+    """The single place the per-site topic prefix is formatted."""
+    return f"sites/{site_id}/{suffix}"
 
 
 def check_poller_publish(
     host: str,
+    site_id: str,
     tcp_port: int,
     user: str,
     password: str,
@@ -92,7 +112,7 @@ def check_poller_publish(
         if reason_codes[0] != 0:
             print(f"[FAIL] poller_publish: CONNACK reason code {reason_codes[0]!r} (auth/config likely wrong)")
             return False
-        info = client.publish(SMOKETEST_SEED_TOPIC, seed, qos=1, retain=True)
+        info = client.publish(_site_topic(site_id, SMOKETEST_SEED_SUFFIX), seed, qos=1, retain=True)
         info.wait_for_publish(timeout=timeout)
         if not info.is_published():
             print(f"[FAIL] poller_publish: publish not confirmed within {timeout}s")
@@ -109,6 +129,7 @@ def check_poller_publish(
 
 def check_ws_subscribe(
     host: str,
+    site_id: str,
     ws_port: int,
     user: str,
     password: str,
@@ -135,7 +156,7 @@ def check_ws_subscribe(
     client.on_message = on_message
     try:
         client.connect(host, ws_port)
-        client.subscribe(f"{SMOKETEST_SEED_TOPIC.rsplit('/', 1)[0]}/#")
+        client.subscribe(_site_topic(site_id, f"{SMOKETEST_SEED_SUFFIX.rsplit('/', 1)[0]}/#"))
         client.loop_start()
         if not received.wait(timeout=timeout):
             print(f"[FAIL] ws_subscribe: no retained message within {timeout}s")
@@ -156,6 +177,7 @@ def check_ws_subscribe(
 
 def check_ws_publish_denied(
     host: str,
+    site_id: str,
     tcp_port: int,
     ws_port: int,
     poller_user: str,
@@ -172,6 +194,7 @@ def check_ws_publish_denied(
     made entirely from a second, independently-connected subscriber
     authenticated as the full-access poller user.
     """
+    deny_topic = _site_topic(site_id, SMOKETEST_DENY_SUFFIX)
     received = threading.Event()
 
     def on_message(client, userdata, msg):
@@ -184,14 +207,14 @@ def check_ws_publish_denied(
     publisher.username_pw_set(ws_user, ws_password)
     try:
         privileged.connect(host, tcp_port)
-        privileged.subscribe(SMOKETEST_DENY_TOPIC)
+        privileged.subscribe(deny_topic)
         privileged.loop_start()
 
         publisher.connect(host, ws_port)
         publisher.loop_start()
         # Return code/PUBACK from this publish is intentionally never
         # checked — MQTT 3.1.1 acknowledges it regardless of ACL outcome.
-        publisher.publish(SMOKETEST_DENY_TOPIC, "should-never-arrive", qos=1, retain=True)
+        publisher.publish(deny_topic, "should-never-arrive", qos=1, retain=True)
         arrived = received.wait(timeout=timeout)
     except (TimeoutError, OSError) as exc:
         print(f"[FAIL] ws_publish_denied: {exc}")
@@ -272,6 +295,7 @@ def _report(name: str, ok: bool | None, fail_detail: str) -> bool:
 
 def check_wsadmin_publish_admin_cmd(
     host: str,
+    site_id: str,
     tcp_port: int,
     ws_port: int,
     poller_user: str,
@@ -281,7 +305,7 @@ def check_wsadmin_publish_admin_cmd(
     seed: str,
     timeout: float,
 ) -> bool:
-    """wsadmin can publish on admin/cmd; the poller-side subscriber receives it.
+    """wsadmin can publish on sites/<id>/admin/cmd; the poller-side subscriber receives it.
 
     A running poller will log and ack "unknown action" for this probe, which
     is harmless.
@@ -290,13 +314,14 @@ def check_wsadmin_publish_admin_cmd(
     ok = _delivered(
         host, tcp_port, "tcp", (poller_user, poller_password),
         ws_port, "websockets", (admin_user, admin_password),
-        "admin/cmd", "admin/cmd", probe, timeout,
+        _site_topic(site_id, "admin/cmd"), _site_topic(site_id, "admin/cmd"), probe, timeout,
     )
-    return _report("wsadmin_publish_admin_cmd", ok, "admin/cmd publish did not arrive (or connection failed)")
+    return _report("wsadmin_publish_admin_cmd", ok, "sites/<id>/admin/cmd publish did not arrive (or connection failed)")
 
 
 def check_wsadmin_publish_lan_denied(
     host: str,
+    site_id: str,
     tcp_port: int,
     ws_port: int,
     poller_user: str,
@@ -306,8 +331,8 @@ def check_wsadmin_publish_lan_denied(
     seed: str,
     timeout: float,
 ) -> bool:
-    """A wsadmin publish under lan/ must never reach the privileged subscriber."""
-    topic = f"lan/smoke/{seed}"
+    """A wsadmin publish under sites/<id>/lan/ must never reach the privileged subscriber."""
+    topic = _site_topic(site_id, f"lan/smoke/{seed}")
     ok = _delivered(
         host, tcp_port, "tcp", (poller_user, poller_password),
         ws_port, "websockets", (admin_user, admin_password),
@@ -315,11 +340,12 @@ def check_wsadmin_publish_lan_denied(
     )
     if ok is None:
         return _report("wsadmin_publish_lan_denied", False, "connection failed")
-    return _report("wsadmin_publish_lan_denied", not ok, "wsadmin publish under lan/ was delivered (ACL not enforced)")
+    return _report("wsadmin_publish_lan_denied", not ok, "wsadmin publish under sites/<id>/lan/ was delivered (ACL not enforced)")
 
 
 def check_wsadmin_reads_lan(
     host: str,
+    site_id: str,
     tcp_port: int,
     ws_port: int,
     poller_user: str,
@@ -329,18 +355,19 @@ def check_wsadmin_reads_lan(
     seed: str,
     timeout: float,
 ) -> bool:
-    """A wsadmin WebSocket subscriber receives what the poller publishes under lan/."""
-    topic = f"lan/smoke/{seed}/admin-read"
+    """A wsadmin WebSocket subscriber receives what the poller publishes under sites/<id>/lan/."""
+    topic = _site_topic(site_id, f"lan/smoke/{seed}/admin-read")
     ok = _delivered(
         host, ws_port, "websockets", (admin_user, admin_password),
         tcp_port, "tcp", (poller_user, poller_password),
-        "lan/smoke/#", topic, "hello", timeout,
+        _site_topic(site_id, "lan/smoke/#"), topic, "hello", timeout,
     )
-    return _report("wsadmin_reads_lan", ok, "wsadmin did not receive a lan/ message")
+    return _report("wsadmin_reads_lan", ok, "wsadmin did not receive a sites/<id>/lan/ message")
 
 
 def check_wsreader_cannot_read_admin(
     host: str,
+    site_id: str,
     tcp_port: int,
     ws_port: int,
     poller_user: str,
@@ -350,15 +377,63 @@ def check_wsreader_cannot_read_admin(
     seed: str,
     timeout: float,
 ) -> bool:
-    """wsreader subscribed to admin/# must receive nothing the poller publishes there."""
+    """wsreader subscribed to sites/<id>/admin/# must receive nothing the poller publishes there."""
     ok = _delivered(
         host, ws_port, "websockets", (ws_user, ws_password),
         tcp_port, "tcp", (poller_user, poller_password),
-        "admin/#", "admin/ack", f'{{"id": "smoke-{seed}"}}', timeout,
+        _site_topic(site_id, "admin/#"), _site_topic(site_id, "admin/ack"), f'{{"id": "smoke-{seed}"}}', timeout,
     )
     if ok is None:
         return _report("wsreader_cannot_read_admin", False, "connection failed")
-    return _report("wsreader_cannot_read_admin", not ok, "wsreader received an admin/ message (ACL not enforced)")
+    return _report("wsreader_cannot_read_admin", not ok, "wsreader received a sites/<id>/admin/ message (ACL not enforced)")
+
+
+def check_wsreader_cannot_read_legacy(
+    host: str,
+    seed: str,
+    tcp_port: int,
+    ws_port: int,
+    poller_user: str,
+    poller_password: str,
+    ws_user: str,
+    ws_password: str,
+    timeout: float,
+) -> bool:
+    """wsreader subscribed to the old un-namespaced `lan/#` must receive nothing.
+
+    Proves the rendered per-site ACL no longer exposes the legacy namespace to
+    the dashboard login. Only meaningful against the rendered per-site ACL.
+    """
+    ok = _delivered(
+        host, ws_port, "websockets", (ws_user, ws_password),
+        tcp_port, "tcp", (poller_user, poller_password),
+        "lan/#", f"lan/smoketest/legacy-{seed}", "should-never-arrive", timeout,
+    )
+    if ok is None:
+        return _report("wsreader_cannot_read_legacy", False, "connection failed")
+    return _report("wsreader_cannot_read_legacy", not ok, "wsreader received a legacy lan/ message (ACL not narrowed)")
+
+
+def check_poller_legacy_write(
+    host: str,
+    seed: str,
+    tcp_port: int,
+    poller_user: str,
+    poller_password: str,
+    timeout: float,
+) -> bool:
+    """A poller-credential subscriber on `lan/smoketest/#` receives a poller publish there.
+
+    Proves the temporary legacy `readwrite lan/#` grant the cutover sweep
+    depends on: an unauthorized publish is silently dropped by Mosquitto, so a
+    narrowed ACL would orphan the pre-namespace retained topics unnoticed.
+    """
+    ok = _delivered(
+        host, tcp_port, "tcp", (poller_user, poller_password),
+        tcp_port, "tcp", (poller_user, poller_password),
+        "lan/smoketest/#", f"lan/smoketest/legacy-{seed}", "legacy-write", timeout,
+    )
+    return _report("poller_legacy_write", ok, "poller publish on legacy lan/ did not arrive (temporary grant missing)")
 
 
 def _wait_for_retained_payload(
@@ -399,6 +474,7 @@ def _wait_for_retained_payload(
 
 def check_persistence_across_restart(
     host: str,
+    site_id: str,
     tcp_port: int,
     user: str,
     password: str,
@@ -434,7 +510,9 @@ def check_persistence_across_restart(
         if attempt:
             time.sleep(2)
         try:
-            payload = _wait_for_retained_payload(host, tcp_port, user, password, SMOKETEST_SEED_TOPIC, timeout)
+            payload = _wait_for_retained_payload(
+                host, tcp_port, user, password, _site_topic(site_id, SMOKETEST_SEED_SUFFIX), timeout
+            )
         except (TimeoutError, OSError) as exc:
             last_error = exc
             continue
@@ -450,8 +528,8 @@ def check_persistence_across_restart(
     return True
 
 
-def _cleanup(host: str, tcp_port: int, user: str, password: str, timeout: float) -> None:
-    """Clear the retained smoke-test topics so no ghosts leak into lan/#.
+def _cleanup(host: str, site_id: str, seed: str, tcp_port: int, user: str, password: str, timeout: float) -> None:
+    """Clear the retained smoke-test topics so no ghosts leak into sites/<id>/lan/#.
 
     Run from a `finally` block regardless of check outcome. A cleanup
     failure is reported as a warning only — it never flips the overall
@@ -462,7 +540,11 @@ def _cleanup(host: str, tcp_port: int, user: str, password: str, timeout: float)
     try:
         client.connect(host, tcp_port)
         client.loop_start()
-        for topic in (SMOKETEST_SEED_TOPIC, SMOKETEST_DENY_TOPIC):
+        for topic in (
+            _site_topic(site_id, SMOKETEST_SEED_SUFFIX),
+            _site_topic(site_id, SMOKETEST_DENY_SUFFIX),
+            f"lan/smoketest/legacy-{seed}",
+        ):
             info = client.publish(topic, payload=None, retain=True)
             info.wait_for_publish(timeout=timeout)
     except (TimeoutError, OSError) as exc:
@@ -481,6 +563,11 @@ def main() -> int:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", default="localhost")
+    parser.add_argument(
+        "--site-id",
+        default=os.environ.get("CMK_SITE_ID", "dmc"),
+        help="must equal the deployment's CMK_SITE_ID (source deploy/.env first)",
+    )
     parser.add_argument("--tcp-port", type=int, default=1883)
     parser.add_argument("--ws-port", type=int, default=9002)
     parser.add_argument("--poller-user", default="poller")
@@ -494,19 +581,23 @@ def main() -> int:
     parser.add_argument("--restart-cmd", default="podman compose restart mosquitto")
     parser.add_argument("--compose-dir", default="deploy")
     args = parser.parse_args()
+    if not _SITE_ID_RE.fullmatch(args.site_id):
+        print(f"[ERROR] invalid --site-id {args.site_id!r}: must match [A-Za-z][A-Za-z0-9_]{{0,15}}")
+        return 2
 
     seed = uuid.uuid4().hex
     results: list[bool] = []
     try:
         results.append(
-            check_poller_publish(args.host, args.tcp_port, args.poller_user, args.poller_password, seed, args.timeout)
+            check_poller_publish(args.host, args.site_id, args.tcp_port, args.poller_user, args.poller_password, seed, args.timeout)
         )
         results.append(
-            check_ws_subscribe(args.host, args.ws_port, args.ws_user, args.ws_password, seed, args.timeout)
+            check_ws_subscribe(args.host, args.site_id, args.ws_port, args.ws_user, args.ws_password, seed, args.timeout)
         )
         results.append(
             check_ws_publish_denied(
                 args.host,
+                args.site_id,
                 args.tcp_port,
                 args.ws_port,
                 args.poller_user,
@@ -519,6 +610,7 @@ def main() -> int:
         if args.admin_ws_password:
             admin_args = (
                 args.host,
+                args.site_id,
                 args.tcp_port,
                 args.ws_port,
                 args.poller_user,
@@ -534,6 +626,7 @@ def main() -> int:
             results.append(
                 check_wsreader_cannot_read_admin(
                     args.host,
+                    args.site_id,
                     args.tcp_port,
                     args.ws_port,
                     args.poller_user,
@@ -546,12 +639,31 @@ def main() -> int:
             )
         else:
             print("[SKIP] wsadmin checks: ADMIN_WS_PASSWORD not set")
+        results.append(
+            check_wsreader_cannot_read_legacy(
+                args.host,
+                seed,
+                args.tcp_port,
+                args.ws_port,
+                args.poller_user,
+                args.poller_password,
+                args.ws_user,
+                args.ws_password,
+                args.timeout,
+            )
+        )
+        results.append(
+            check_poller_legacy_write(
+                args.host, seed, args.tcp_port, args.poller_user, args.poller_password, args.timeout
+            )
+        )
         if args.skip_restart:
             print("[SKIP] persistence_across_restart (--skip-restart)")
         else:
             results.append(
                 check_persistence_across_restart(
                     args.host,
+                    args.site_id,
                     args.tcp_port,
                     args.poller_user,
                     args.poller_password,
@@ -562,7 +674,7 @@ def main() -> int:
                 )
             )
     finally:
-        _cleanup(args.host, args.tcp_port, args.poller_user, args.poller_password, args.timeout)
+        _cleanup(args.host, args.site_id, seed, args.tcp_port, args.poller_user, args.poller_password, args.timeout)
 
     if all(results):
         print("[SUMMARY] all checks passed")
