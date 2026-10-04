@@ -5,8 +5,6 @@ import {
   disconnect,
   BASE_DELAY_MS,
   MAX_DELAY_MS,
-  SUBSCRIBE_TOPICS,
-  ADMIN_SUBSCRIBE_TOPICS,
   publishAdminCommand,
   __resetForTests,
 } from "./mqttClient";
@@ -14,6 +12,7 @@ import { useAdminStore, __resetAdminStoreForTests } from "./adminStore";
 import { __setAdminModeForTests } from "../lib/adminMode";
 import { useAppStore } from "./useAppStore";
 import { __setRuntimeConfigForTests } from "../lib/runtimeConfig";
+import { RELATIVE_SUBSCRIBE_TOPICS, subscribeTopics } from "../lib/topics";
 
 // A hand-written fake mqtt.js client: an on(event, handler) recorder plus subscribe/
 // reconnect/end spies, matching the minimum surface mqttClient.ts touches.
@@ -50,6 +49,7 @@ function createFakeSetTimeout(capturedDelays: number[]): typeof globalThis.setTi
 const INITIAL_STATE = useAppStore.getState();
 
 beforeEach(() => {
+  __setRuntimeConfigForTests({ checkmkSite: "site1" });
   useAppStore.setState(INITIAL_STATE, true);
   __resetForTests();
   __resetAdminStoreForTests();
@@ -64,14 +64,14 @@ afterEach(() => {
   __setRuntimeConfigForTests();
 });
 
-describe("SUBSCRIBE_TOPICS", () => {
+describe("RELATIVE_SUBSCRIBE_TOPICS", () => {
   it("includes the Phase 12 services and service_history wildcard topics", () => {
-    expect(SUBSCRIBE_TOPICS).toContain("lan/devices/+/services");
-    expect(SUBSCRIBE_TOPICS).toContain("lan/devices/+/service_history");
+    expect(RELATIVE_SUBSCRIBE_TOPICS).toContain("lan/devices/+/services");
+    expect(RELATIVE_SUBSCRIBE_TOPICS).toContain("lan/devices/+/service_history");
   });
 
   it("includes the Phase 14 incident wildcard topic", () => {
-    expect(SUBSCRIBE_TOPICS).toContain("lan/incidents/+/status");
+    expect(RELATIVE_SUBSCRIBE_TOPICS).toContain("lan/incidents/+/status");
   });
 });
 
@@ -93,7 +93,7 @@ describe("connect", () => {
     connect({ connectFn });
     fake.emit("connect");
 
-    expect(fake.subscribe).toHaveBeenCalledWith(SUBSCRIBE_TOPICS);
+    expect(fake.subscribe).toHaveBeenCalledWith(subscribeTopics("site1", false));
     expect(useAppStore.getState().connection.phase).toBe("connected");
   });
 
@@ -204,11 +204,29 @@ describe("connect", () => {
 
     connect({ connectFn });
     const payload = new TextEncoder().encode(JSON.stringify({ state: "OK" }));
-    fake.emit("message", "lan/devices/h1/status", payload);
+    fake.emit("message", "sites/site1/lan/devices/h1/status", payload);
 
     expect(handleMessageSpy).toHaveBeenCalledWith("lan/devices/h1/status", payload);
 
     handleMessageSpy.mockRestore();
+  });
+});
+
+describe("site namespace", () => {
+  it("drops legacy-namespace and other-site messages before any store", () => {
+    __setAdminModeForTests(true);
+    const fake = createFakeClient();
+    connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
+    const appSpy = vi.spyOn(useAppStore.getState(), "handleMessage");
+    const adminSpy = vi.spyOn(useAdminStore.getState(), "handleAdminMessage");
+    const body = new TextEncoder().encode("{}");
+    fake.emit("message", "lan/devices/h1/status", body);
+    fake.emit("message", "admin/faked", body);
+    fake.emit("message", "sites/other/lan/devices/h1/status", body);
+    expect(appSpy).not.toHaveBeenCalled();
+    expect(adminSpy).not.toHaveBeenCalled();
+    appSpy.mockRestore();
+    adminSpy.mockRestore();
   });
 });
 
@@ -217,7 +235,7 @@ describe("admin mode", () => {
     const fake = createFakeClient();
     connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
     fake.emit("connect");
-    expect(fake.subscribe).toHaveBeenCalledWith(SUBSCRIBE_TOPICS);
+    expect(fake.subscribe).toHaveBeenCalledWith(subscribeTopics("site1", false));
   });
 
   it("adds admin topics in admin mode", () => {
@@ -225,7 +243,7 @@ describe("admin mode", () => {
     const fake = createFakeClient();
     connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
     fake.emit("connect");
-    expect(fake.subscribe).toHaveBeenCalledWith([...SUBSCRIBE_TOPICS, ...ADMIN_SUBSCRIBE_TOPICS]);
+    expect(fake.subscribe).toHaveBeenCalledWith(subscribeTopics("site1", true));
   });
 
   it("skips admin topics when the admin config failed to load", () => {
@@ -234,7 +252,7 @@ describe("admin mode", () => {
     const fake = createFakeClient();
     connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
     fake.emit("connect");
-    expect(fake.subscribe).toHaveBeenCalledWith(SUBSCRIBE_TOPICS);
+    expect(fake.subscribe).toHaveBeenCalledWith(subscribeTopics("site1", false));
   });
 
   it("routes admin/ messages to the admin store only", () => {
@@ -243,7 +261,7 @@ describe("admin mode", () => {
     connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
     const handleSpy = vi.spyOn(useAppStore.getState(), "handleMessage");
     const body = new TextEncoder().encode(JSON.stringify({ hosts: { a: "DOWN" } }));
-    fake.emit("message", "admin/faked", body);
+    fake.emit("message", "sites/site1/admin/faked", body);
     expect(useAdminStore.getState().faked).toEqual({ a: "DOWN" });
     expect(handleSpy).not.toHaveBeenCalled();
     handleSpy.mockRestore();
@@ -254,7 +272,7 @@ describe("admin mode", () => {
     connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
     const handleSpy = vi.spyOn(useAppStore.getState(), "handleMessage");
     const body = new TextEncoder().encode(JSON.stringify({ status: "online" }));
-    fake.emit("message", "lan/poller/status", body);
+    fake.emit("message", "sites/site1/lan/poller/status", body);
     expect(handleSpy).toHaveBeenCalledWith("lan/poller/status", body);
     handleSpy.mockRestore();
   });
@@ -266,7 +284,7 @@ describe("admin mode", () => {
     const id = publishAdminCommand("down", ["a"]);
     expect(id).not.toBeNull();
     expect(fake.publish).toHaveBeenCalledWith(
-      "admin/cmd",
+      "sites/site1/admin/cmd",
       JSON.stringify({ id, action: "down", hosts: ["a"] }),
       { qos: 1, retain: false },
     );

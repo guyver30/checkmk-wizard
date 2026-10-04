@@ -18,38 +18,27 @@
 // dashboard tab would retry in lockstep after a shared broker restart. `reconnectPeriod: 0`
 // disables the built-in retry entirely; this module drives every retry itself, from the
 // `close` event, with the standard `min(max, base * 2**attempt) * jitter` formula.
+//
+// Every subscribe/publish topic lives under `sites/<checkmkSite>/` (site id from
+// /config.json). The prefix is added and stripped only here (via lib/topics.ts), so the
+// stores and components only ever see relative topics.
 
 import mqtt, { type MqttClient } from "mqtt";
 import { WS_PORT } from "../lib/config";
 import { getRuntimeConfig } from "../lib/runtimeConfig";
 import {
-  ADMIN_TOPIC_ACK,
   ADMIN_TOPIC_CMD,
-  ADMIN_TOPIC_FAKED,
   buildAdminCommand,
   isAdminMode,
   newCommandId,
   type AdminAction,
 } from "../lib/adminMode";
+import { siteTopic, stripSitePrefix, subscribeTopics } from "../lib/topics";
 import { useAdminStore } from "./adminStore";
 import { useAppStore } from "./useAppStore";
 
 export const BASE_DELAY_MS = 1000;
 export const MAX_DELAY_MS = 30000;
-
-export const SUBSCRIBE_TOPICS = [
-  "lan/devices/+/status",
-  "lan/devices/+/history",
-  "lan/devices/+/services",
-  "lan/devices/+/service_history",
-  "lan/devices/topology",
-  "lan/events/recent",
-  "lan/poller/status",
-  "lan/incidents/+/status", // Phase 14 -- retained delivery on SUBACK gives every open incident
-];
-
-// Subscribed only on an admin page (?admin=1) whose wsadmin login loaded.
-export const ADMIN_SUBSCRIBE_TOPICS = [ADMIN_TOPIC_ACK, ADMIN_TOPIC_FAKED];
 
 export interface ConnectDeps {
   connectFn?: typeof mqtt.connect;
@@ -90,7 +79,7 @@ export function connect(deps: ConnectDeps = {}): void {
   // dashboard works unchanged from any LAN device -- nginx and mosquitto are published
   // from the same host.
   const url = `ws://${location.hostname}:${WS_PORT}`;
-  const { wsUsername, wsPassword } = getRuntimeConfig();
+  const { wsUsername, wsPassword, checkmkSite } = getRuntimeConfig();
 
   client = connectFn(url, {
     username: wsUsername,
@@ -110,7 +99,7 @@ export function connect(deps: ConnectDeps = {}): void {
     // drops any that closed while disconnected (14-REVIEW CR-02).
     useAppStore.getState().resetIncidents();
     const withAdmin = isAdminMode() && !useAdminStore.getState().configError;
-    client?.subscribe(withAdmin ? [...SUBSCRIBE_TOPICS, ...ADMIN_SUBSCRIBE_TOPICS] : SUBSCRIBE_TOPICS);
+    client?.subscribe(subscribeTopics(checkmkSite, withAdmin));
     useAppStore.getState().setConnection({ phase: "connected" });
   });
 
@@ -128,11 +117,17 @@ export function connect(deps: ConnectDeps = {}): void {
   });
 
   client.on("message", (topic, payload) => {
-    if (topic.startsWith("admin/")) {
-      useAdminStore.getState().handleAdminMessage(topic, payload);
+    // Drop anything not under this site's prefix (stray legacy or other-site deliveries);
+    // defence in depth on top of the broker ACL. Stores only ever see the relative topic.
+    const rel = stripSitePrefix(checkmkSite, topic);
+    if (rel === null) {
       return;
     }
-    useAppStore.getState().handleMessage(topic, payload);
+    if (rel.startsWith("admin/")) {
+      useAdminStore.getState().handleAdminMessage(rel, payload);
+      return;
+    }
+    useAppStore.getState().handleMessage(rel, payload);
   });
 }
 
@@ -144,7 +139,10 @@ export function publishAdminCommand(action: AdminAction, hosts: string[]): strin
     return null;
   }
   const cmd = buildAdminCommand(action, hosts, newCommandId());
-  client.publish(ADMIN_TOPIC_CMD, JSON.stringify(cmd), { qos: 1, retain: false });
+  client.publish(siteTopic(getRuntimeConfig().checkmkSite, ADMIN_TOPIC_CMD), JSON.stringify(cmd), {
+    qos: 1,
+    retain: false,
+  });
   useAdminStore
     .getState()
     .setPending({ id: cmd.id, action, hosts: cmd.hosts, sentAtMs: Date.now() });
