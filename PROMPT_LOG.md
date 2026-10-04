@@ -394,3 +394,20 @@
 - **2026-10-04 13:05** — add the per-site namespace now (site_id = the Checkmk site id, must be unique per provisioned site); then discuss 14.2
 - **2026-10-04 13:10** — agree with the per-site namespace defaults, go straight to plan
 - **2026-10-04 13:20** — 1 (insert after 14 as 14.3, run before 14.2)
+- **2026-10-04 13:47** — /bm:execute-phase 14.3
+- **2026-10-04 14:00** — I see task 1 and task 2 in the 14.3-06 plan (plus pasted deploy-host outputs; dashboard checks 1,2,3 ok)
+- **2026-10-04 14:40** — history and service_history not published anymore in mqtt; dig deeper (too complicated/over-engineered)
+- **2026-10-04 14:37** — mark 14.3 complete; quick task to remove history and service_history MQTT topics (ClickHouse is the source); keep it simple, lean, easy to troubleshoot
+- **2026-10-04 15:38** — pasted poller log after redeploy (Cleared 6 legacy retained topics); history/service_history mosquitto_sub timed out (empty)
+- **2026-10-04 15:49** — dmc-server is the only deployment; do the quick task to remove legacy lan/# and admin/# grants
+- **2026-10-04 16:00** — pasted dmc-server results after 261004-lyz deploy: poller ACL single grant, smoke_test_broker all passed
+- **2026-10-04 16:00** — do the quick fix for the omd test
+- **2026-10-04 16:01** — /bm:discuss-phase 14.2
+- **2026-10-04 16:22** — accepts 14.2 defaults; add disk-use forecast line chart (history, today line, trend to warn/crit dates)
+- **2026-10-04 16:22** — forget kiosk mode, removed before
+- **2026-10-04 16:25** — chart for every trend metric (cpu, disk, others), anytime, not just active needs
+- **2026-10-04 16:30** — trend line only when regression shows a clear trend; random values with no clear trend get no line
+- **2026-10-04 16:31** — /bm:plan-phase 14.2
+- **2026-10-04 19:45** — /bm:execute-phase 14.2
+- **2026-10-04 20:10** — pasted plan 14.2-01 dmc-server query output (CH 26.9.4.3, no SMART series, /ch-api params ok)
+- **2026-10-04 20:53** — /bm:pause-work

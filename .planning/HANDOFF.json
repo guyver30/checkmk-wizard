@@ -1,41 +1,36 @@
 {
   "version": "1.0",
-  "timestamp": "2026-10-03T12:53:31.618Z",
+  "timestamp": "2026-10-04T12:53:19.352Z",
   "phase": "14.2",
-  "phase_name": "Fleet Failure Prediction and Incident Narration",
+  "phase_name": "fleet-failure-prediction-and-incident-narration",
   "phase_dir": ".planning/phases/14.2-fleet-failure-prediction-and-incident-narration",
-  "plan": 0,
-  "task": 0,
-  "total_tasks": 0,
+  "plan": 19,
+  "task": 2,
+  "total_tasks": 3,
   "status": "paused",
   "completed_tasks": [
-    {"id": 1, "name": "Phase 14.1 live verification closed (plan 08 summary, roadmap ticked)", "status": "done", "commit": "93465d3"},
-    {"id": 2, "name": "poller_writer CREATE TEMPORARY TABLE grant in 02-users.sh + docs (quick 261003-le3)", "status": "done", "commit": "990684e"},
-    {"id": 3, "name": "Agent host state from dashboard-visible services only (quick 261003-lnr)", "status": "done", "commit": "b37bce9"},
-    {"id": 4, "name": "Admin-mode presenter cheat sheet", "status": "done", "commit": "2d76a4f"},
-    {"id": 5, "name": "discuss-phase 14.2 area 1: History inputs for analytics", "status": "done", "commit": "n/a (checkpoint)"},
-    {"id": 6, "name": "discuss-phase 14.2 area 2: Forecast scope and output", "status": "in_progress", "progress": "tiers, bands, confidence, cadence and topic shape agreed; dashboard placement suggested, awaiting user confirmation"}
+    {"id": "14.2-01..18", "name": "Plans 01-18 (waves 1-5) executed, merged, tested, tracked", "status": "done", "commit": "4c02c6d"},
+    {"id": "14.2-19/1", "name": "Local gates green (pytest 1076, vitest 756, typecheck, lint, build; 8 pre-existing ruff errors in wizard.py/test_site.py/test_wizard.py)", "status": "done", "commit": "4c02c6d"}
   ],
   "remaining_tasks": [
-    {"id": 7, "name": "Confirm needs placement in dashboard (Needs pane beside incidents, tier markers, details section)", "status": "not_started"},
-    {"id": 8, "name": "discuss-phase 14.2 area 3: Service needs and triage storage (D-35: where triage state lives, how the dashboard writes it with no backend)", "status": "not_started"},
-    {"id": 9, "name": "discuss-phase 14.2 area 4: Narration approach and surfaces (template vs self-hosted model, triggers, facts allowed, where shown)", "status": "not_started"},
-    {"id": 10, "name": "Write 14.2-CONTEXT.md and DISCUSSION-LOG.md, delete checkpoint, commit, then /bm:plan-phase 14.2", "status": "not_started"}
+    {"id": "14.2-19/2", "name": "User pushes and deploys on dmc-server (full down/up), applies migration, pastes outputs of steps 3-9", "status": "not_started"},
+    {"id": "14.2-19/3", "name": "User checks dashboard features live and replies approved", "status": "not_started"},
+    {"id": "14.2-19", "name": "Write 14.2-19-SUMMARY.md with pasted outputs, then verify phase, code review gate, regression gate, roadmap complete", "status": "not_started"}
   ],
-  "blockers": [],
+  "blockers": [
+    {"description": "origin/main is 53 commits behind local main; nothing pushed", "type": "human_action", "workaround": "User runs git push (not pushed by Claude: outward-facing)"},
+    {"description": "Plan 19 live deploy and dashboard check are only possible on dmc-server", "type": "human_action", "workaround": "None; dev machine is not the deploy host"}
+  ],
   "human_actions_pending": [
-    {"action": "Optional: verify on the live site how often Checkmk's last_check advances (are 3 of 4 15s samples repeats?) and count rows per cycle in history.metrics", "context": "Estimates in docs/MQTT-CONTRACT-WALKTHROUGH.md Part 4 are assumptions", "blocking": false},
-    {"action": "Deploy host: rebuild dashboard image, full down/up (already done for double-click and host-state fixes); rm -rf .venv fix 261002-nlp and Phase 16 WR-02/WR-04 still unverified live", "context": "non-blocking", "blocking": false}
+    {"action": "git push, then on dmc-server: git pull (expect 4c02c6d), init-env.sh, podman compose build dashboard, full down/up, ClickHouse migration, live checks steps 3-9, paste outputs", "context": "Plan 19 Task 2 command block was given in chat", "blocking": true},
+    {"action": "Open http://dmc-server:8090/ and verify Needs pane, trends chart, tier markers, triage in edit mode, optional incident narration demo; reply approved or list issues", "context": "Plan 19 Task 3", "blocking": true}
   ],
   "decisions": [
-    {"decision": "Own cloud tenancy counts as inside the network (restates Phase 14 D-30)", "rationale": "Broker, S3, ClickHouse, new dashboard and Grafana move to the cloud; nothing may go to third-party model providers or SaaS the operator does not control", "phase": "14.2"},
-    {"decision": "Analytics container subscribes to MQTT and writes history.events/history.incidents; in 14.2 it reads today's lan/events/recent and lan/incidents/+/status and dedupes; no poller change", "rationale": "Cloud split; per-event messages belong to a later transport phase", "phase": "14.2"},
-    {"decision": "Daily availability rollup job moves from the poller to the analytics container in 14.2", "rationale": "Poller will have no ClickHouse or S3 access after the cloud split", "phase": "14.2"},
-    {"decision": "Add a filesystem read cache on the ClickHouse S3 disk (config only)", "rationale": "Forecasts read more than 31 days of history from MinIO", "phase": "14.2"},
-    {"decision": "Cloud-ready transport work is a SEPARATE phase (per-site namespace, per-event messages, last_check sample dedup, gzip + 1-min aggregation, status-by-exception); 60 s gauge freshness is fine; dashboard reads events/history from ClickHouse over HTTP", "rationale": "Metered 4G links and hundreds of sites", "phase": "new"},
-    {"decision": "Service-need tier derives from criticality by fixed mapping (critical->immediate, high->urgent, medium/low->standard); bands immediate <3 days or already critical, urgent 3-20, standard >20, horizon 90 days; confidence low <14d, medium 14-60d, high >60d with good fit; evaluate every 15 min; publish lan/needs/{need_id}/status retained QoS 1", "rationale": "User answers 2026-10-03", "phase": "14.2"}
+    {"decision": "WEAR_METRICS left empty; SMART/NVMe allow-list empty with startup warning", "rationale": "Live catalog from plan 01 had no SMART/NVMe series", "phase": "14.2"},
+    {"decision": "FALLBACK_LEVELS util = (85, 95)", "rationale": "Chosen by plan 07 executor; Checkmk gives CPU utilization no levels. User not yet asked to confirm", "phase": "14.2"},
+    {"decision": "Analytics service owns the availability rollup; poller no longer does", "rationale": "D-04; POLL_INTERVAL_SECONDS=15 set on analytics compose service", "phase": "14.2"}
   ],
-  "uncommitted_files": ["docs/host_service_menu.png", "docs/hosts_down.png", "docs/hosts_down2.png", "docs/hosts_up.png", "docs/incident1.png", "docs/Retrieving-Checkmk-Event-History.md", ".planning/phases/16-dashboard-admin-mode-fake-host-up-down-for-live-demos-admin-/16-PATTERNS.md"],
-  "next_action": "Re-run /bm:discuss-phase 14.2 and choose Resume at the checkpoint prompt; first ask the user to confirm the Needs pane placement, then discuss area 3 (triage storage) and area 4 (narration)",
-  "context_notes": "Discussion in default (single-question) mode. The user prefers to clarify in prose when structured questions do not fit (two AskUserQuestion calls were rejected for that); give a recommendation with defaults they can accept. docs/MQTT-CONTRACT-WALKTHROUGH.md (4 parts) is the shared reference for the cloud team. On dmc-server NEVER restart or stop a single container; use full podman compose down && up -d."
+  "uncommitted_files": ["PROMPT_LOG.md"],
+  "next_action": "Wait for the user's pasted dmc-server outputs (steps 3-9) and dashboard verdict; record them in 14.2-19-SUMMARY.md, mark plan 19 complete, then run the phase tail (code review gate, regression gate, verifier, roadmap update).",
+  "context_notes": "Executed via /bm:execute-phase 14.2 with worktree-isolated bm-executor subagents (sonnet). 18/19 plans merged to main and tracked; no worktrees remain from this run (two older worktrees agent-a92e77c4b478e134b and agent-aa97e9f8996a1910d predate it and were left alone). 14.2-01 summary is recorded from the user's pasted output. After a node_modules gap, `npm ci` in dashboard-react was run to install d3-scale."
 }
