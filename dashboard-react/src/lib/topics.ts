@@ -16,6 +16,9 @@ export const RELATIVE_SUBSCRIBE_TOPICS = [
   "lan/events/recent",
   "lan/poller/status",
   "lan/incidents/+/status", // Phase 14 -- retained delivery on SUBACK gives every open incident
+  "lan/needs/+/status", // Phase 14.2 -- retained failure-prediction needs
+  "lan/forecasts/+", // Phase 14.2 -- retained per-host trend forecasts
+  "lan/incidents/+/narration", // Phase 14.2 -- retained incident narration
 ];
 
 // Subscribed only on an admin page (?admin=1) whose wsadmin login loaded.

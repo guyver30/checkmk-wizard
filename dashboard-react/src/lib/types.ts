@@ -106,6 +106,93 @@ export interface IncidentPayload {
   [key: string]: unknown;
 }
 
+/**
+ * Needs / forecast / narration payloads published by the analytics service. These mirror
+ * the Python payload builders by hand -- two languages, kept in step by hand, no shared
+ * source (same convention as incidents.ts). forecast.ts's parsers are the runtime guard.
+ */
+export type NeedTier = "immediate" | "urgent" | "standard";
+
+export type NeedSource = "failure" | "trend" | "sustained";
+
+export type ForecastConfidence = "low" | "medium" | "high";
+
+export interface NeedTriage {
+  action: "downgrade" | "upgrade" | "cancel";
+  tier: NeedTier;
+  set_at: string;
+  computed_tier_at_set: NeedTier;
+  note: string;
+  by: string;
+}
+
+/** One need on `lan/needs/{need_id}/status` (retained; zero-length payload is a tombstone). */
+export interface NeedPayload {
+  id: string;
+  source: NeedSource;
+  host: string;
+  service: string;
+  metric: string;
+  unit: string;
+  tier: NeedTier;
+  computed_tier: NeedTier;
+  days_to_warn: number | null;
+  days_to_crit: number | null;
+  warn_date: string | null;
+  crit_date: string | null;
+  confidence: ForecastConfidence | null;
+  history_days: number | null;
+  value: number | null;
+  warn: number | null;
+  crit: number | null;
+  sustained_fraction: number | null;
+  window_hours: number | null;
+  since: string;
+  narration: string;
+  triage: NeedTriage | null;
+  generated_at: string;
+}
+
+/** One metric fit inside a forecast. Timestamps are epoch SECONDS. */
+export interface FitPayload {
+  service: string;
+  metric: string;
+  unit: string;
+  status: "trending" | "stable" | "no_clear_trend";
+  slope_per_day: number | null;
+  value_at_end: number | null;
+  fit_start_ts: number | null;
+  fit_end_ts: number | null;
+  r2: number | null;
+  history_days: number;
+  confidence: ForecastConfidence | null;
+  last_value: number | null;
+  warn: number | null;
+  crit: number | null;
+  warn_ts: number | null;
+  crit_ts: number | null;
+  warn_date: string | null;
+  crit_date: string | null;
+  days_to_warn: number | null;
+  days_to_crit: number | null;
+}
+
+/** One host's forecast on `lan/forecasts/{host}` (retained, republished each cycle). */
+export interface ForecastPayload {
+  host: string;
+  generated_at: string;
+  fits: FitPayload[];
+}
+
+/** One incident narration on `lan/incidents/{incident_id}/narration` (retained). */
+export interface NarrationPayload {
+  id: string;
+  headline: string;
+  sentences: string[];
+  tier: NeedTier | null;
+  generated_at: string;
+}
+
 export interface TopologyPayload {
   // Kept as unknown[] on purpose (untrusted JSON) -- topologyLayout.ts's buildMapModel()
   // is the runtime guard that validates/defaults each entry's TopologyNode shape.

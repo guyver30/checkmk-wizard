@@ -30,16 +30,30 @@ describe("stripSitePrefix", () => {
 });
 
 describe("subscribeTopics", () => {
-  it("prefixes the 6 lan topics in order outside admin mode", () => {
+  it("lists the old topics plus the three analytics topics", () => {
+    expect(RELATIVE_SUBSCRIBE_TOPICS).toEqual([
+      "lan/devices/+/status",
+      "lan/devices/+/services",
+      "lan/devices/topology",
+      "lan/events/recent",
+      "lan/poller/status",
+      "lan/incidents/+/status",
+      "lan/needs/+/status",
+      "lan/forecasts/+",
+      "lan/incidents/+/narration",
+    ]);
+  });
+
+  it("prefixes the 9 lan topics in order outside admin mode", () => {
     const topics = subscribeTopics("dmc", false);
-    expect(topics).toHaveLength(6);
+    expect(topics).toHaveLength(9);
     expect(topics).toEqual(RELATIVE_SUBSCRIBE_TOPICS.map((t) => `sites/dmc/${t}`));
   });
 
   it("appends the admin ack and faked topics in admin mode", () => {
     const topics = subscribeTopics("dmc", true);
     expect(topics.slice(-2)).toEqual(["sites/dmc/admin/ack", "sites/dmc/admin/faked"]);
-    expect(topics).toHaveLength(8);
+    expect(topics).toHaveLength(11);
   });
 
   it("never subscribes across sites", () => {
