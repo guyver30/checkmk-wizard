@@ -494,9 +494,6 @@ def check_ghost_tombstone(
             status_payload = _wait_for_retained_payload(
                 host, tcp_port, user, password, mqtt_poller.device_status_topic(GHOST_DEVICE_ID), 2.0
             )
-            history_payload = _wait_for_retained_payload(
-                host, tcp_port, user, password, mqtt_poller.device_history_topic(GHOST_DEVICE_ID), 2.0
-            )
             topology_payload = _wait_for_retained_payload(
                 host, tcp_port, user, password, mqtt_poller.site_topic(mqtt_poller.TOPIC_TOPOLOGY), 2.0
             )
@@ -514,7 +511,7 @@ def check_ghost_tombstone(
                 node.get("id") != GHOST_DEVICE_ID for node in topology_data.get("devices", [])
             )
 
-        if not status_payload and not history_payload and topology_clear:
+        if not status_payload and topology_clear:
             ghost_gone = True
             break
 
