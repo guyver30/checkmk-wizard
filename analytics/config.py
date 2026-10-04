@@ -23,6 +23,7 @@ _logger = logging.getLogger("analytics.config")
 
 DEFAULT_MQTT_PORT = 1883
 DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS = 5.0
+DEFAULT_POLL_INTERVAL_SECONDS = 15
 DEFAULT_ROLLUP_TZ = "Asia/Singapore"
 DEFAULT_ROLLUP_BACKFILL_DAYS = 28
 DEFAULT_ROLLUP_DELAY_MINUTES = 5
@@ -148,6 +149,9 @@ class AnalyticsConfig:
     rollup_tz: str = DEFAULT_ROLLUP_TZ
     rollup_backfill_days: int = DEFAULT_ROLLUP_BACKFILL_DAYS
     rollup_delay_minutes: int = DEFAULT_ROLLUP_DELAY_MINUTES
+    # Seconds of wall-clock time each history.host_state sample represents; the
+    # poller writes one per poll, and the availability rollup scales counts by it.
+    poll_interval_seconds: int = DEFAULT_POLL_INTERVAL_SECONDS
     eval_interval_seconds: int = DEFAULT_EVAL_INTERVAL_SECONDS
     tier_immediate_days: float = DEFAULT_TIER_IMMEDIATE_DAYS
     tier_urgent_days: float = DEFAULT_TIER_URGENT_DAYS
@@ -183,6 +187,7 @@ class AnalyticsConfig:
             f"rollup_tz={self.rollup_tz!r}, "
             f"rollup_backfill_days={self.rollup_backfill_days!r}, "
             f"rollup_delay_minutes={self.rollup_delay_minutes!r}, "
+            f"poll_interval_seconds={self.poll_interval_seconds!r}, "
             f"eval_interval_seconds={self.eval_interval_seconds!r}, "
             f"tier_immediate_days={self.tier_immediate_days!r}, "
             f"tier_urgent_days={self.tier_urgent_days!r}, "
@@ -218,6 +223,7 @@ class AnalyticsConfig:
             rollup_tz=os.environ.get("ROLLUP_TZ", DEFAULT_ROLLUP_TZ),
             rollup_backfill_days=_env_int("ROLLUP_BACKFILL_DAYS", DEFAULT_ROLLUP_BACKFILL_DAYS),
             rollup_delay_minutes=_env_int("ROLLUP_DELAY_MINUTES", DEFAULT_ROLLUP_DELAY_MINUTES),
+            poll_interval_seconds=_env_int("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS),
             eval_interval_seconds=_env_int("EVAL_INTERVAL_SECONDS", DEFAULT_EVAL_INTERVAL_SECONDS),
             tier_immediate_days=_env_float("TIER_IMMEDIATE_DAYS", DEFAULT_TIER_IMMEDIATE_DAYS),
             tier_urgent_days=_env_float("TIER_URGENT_DAYS", DEFAULT_TIER_URGENT_DAYS),
