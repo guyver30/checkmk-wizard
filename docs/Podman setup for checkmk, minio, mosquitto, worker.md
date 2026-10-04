@@ -286,7 +286,7 @@ podman compose exec checkmk omd stop dmc
 podman compose exec checkmk omd mv dmc mysite
 ```
 
-Then set `CMK_SITE_ID=mysite` in `deploy/.env` and recreate the containers, including the dashboard (`podman compose up -d --force-recreate checkmk worker poller dashboard`) — or a full `podman compose down && podman compose up -d`. Otherwise the checkmk entrypoint's `omd start "$CMK_SITE_ID"` targets the old name and the `tmpfs` mount stays on the old path. Because it is easy to miss one of these places, on a disposable stack it is usually simpler to run `deploy/reset-site.sh` (§8.5). It wipes the site and recreates it under a new name in one step: it asks for the new name and writes `CMK_SITE_ID` to `deploy/.env` for you. Existing agents registered against the old site keep their old URL/certs and must be re-registered after a rename. `omd mv` also moves the MQTT namespace: update `CMK_SITE_ID` in `deploy/.env` and recreate the stack so the ACL is re-rendered, and note that the old `sites/<old>/` retained subtree is left on the broker (the Phase 14.3 sweep only clears the pre-14.3 un-namespaced topics).
+Then set `CMK_SITE_ID=mysite` in `deploy/.env` and recreate the containers, including the dashboard (`podman compose up -d --force-recreate checkmk worker poller dashboard`) — or a full `podman compose down && podman compose up -d`. Otherwise the checkmk entrypoint's `omd start "$CMK_SITE_ID"` targets the old name and the `tmpfs` mount stays on the old path. Because it is easy to miss one of these places, on a disposable stack it is usually simpler to run `deploy/reset-site.sh` (§8.5). It wipes the site and recreates it under a new name in one step: it asks for the new name and writes `CMK_SITE_ID` to `deploy/.env` for you. Existing agents registered against the old site keep their old URL/certs and must be re-registered after a rename. `omd mv` also moves the MQTT namespace: update `CMK_SITE_ID` in `deploy/.env` and recreate the stack so the ACL is re-rendered, and note that the old `sites/<old>/` retained subtree is left on the broker (nothing clears it automatically).
 
 ---
 
@@ -320,9 +320,13 @@ podman compose logs -f poller
 
 ### Upgrading to the per-site namespace (Phase 14.3)
 
-Every MQTT topic moved under `sites/<site_id>/`, so the poller, broker ACL and dashboard must change together. Procedure:
+Every MQTT topic moved under `sites/<site_id>/`, so the poller, broker ACL and dashboard must change together.
 
-1. In the admin view (`?admin=1`), run **Restore All** first. This is belt and braces: the poller also seeds `admin/faked` from the legacy retained topic, but clearing fakes up front leaves nothing to carry over.
+The poller's one-time cleanup of the pre-14.3 topics and its temporary broker grants (`readwrite lan/#`, `readwrite admin/#`) were removed on 2026-10-04 (quick 261004-lyz), after they had run on the only deployment. A stack still on pre-14.3 topics keeps its old retained `lan/*` and `admin/faked` data and must either upgrade through a commit before 261004-lyz first, or clear that data by hand: list the topics with `mosquitto_sub -u poller -P "$MQTT_POLLER_PASSWORD" -t 'lan/#' -t 'admin/faked' --retained-only -W 3 -v`, then publish an empty retained payload to each with `mosquitto_pub -r -n -t <topic>` as a user that is granted that topic (temporarily add `topic readwrite lan/#` and `topic readwrite admin/#` to the poller block of `deploy/mosquitto.acl.template`), or clear the mosquitto volume.
+
+Procedure:
+
+1. In the admin view (`?admin=1`), run **Restore All** first. Fakes held in the old un-namespaced `admin/faked` topic do not carry over, so clearing them up front is the only way to avoid a stale fake.
 2. Pull the new code and rebuild the dashboard image: `podman compose build dashboard`.
 3. Restart the **whole** stack: `podman compose down && podman compose up -d`. Never restart or stop a single container on dmc-server; doing so breaks Checkmk egress and turns every real host DOWN.
 
@@ -331,13 +335,6 @@ What to expect afterwards:
 - An old dashboard image shows nothing after the upgrade, because it subscribes to the un-namespaced topics.
 - The first poller start waits the full reconcile timeout once.
 - Topology, events, history and incidents rebuild from Checkmk within the first cycles.
-- The old retained `lan/*` topics and the legacy `admin/faked` are cleared on the first cycle that has a confirmed host list.
-
-Verify the sweep. This prints nothing once the legacy topics are gone:
-
-```bash
-podman exec mosquitto mosquitto_sub -u poller -P "$MQTT_POLLER_PASSWORD" -t 'lan/#' -t 'admin/faked' --retained-only -W 3 -v
-```
 
 ---
 
@@ -470,11 +467,9 @@ The `poller` service (`scripts/mqtt_poller.py`) is the only publisher on these t
 
 | User | Grants |
 | --- | --- |
-| `poller` | `readwrite sites/<site_id>/#`, plus the temporary `readwrite lan/#` and `readwrite admin/#` |
+| `poller` | `readwrite sites/<site_id>/#` |
 | `wsreader` | `read sites/<site_id>/lan/#` |
 | `wsadmin` | `read sites/<site_id>/lan/#`, `read sites/<site_id>/admin/ack`, `read sites/<site_id>/admin/faked`, `write sites/<site_id>/admin/cmd` |
-
-The temporary poller `lan/#` and `admin/#` grants exist only so the poller can tombstone the old un-namespaced retained topics once; Mosquitto silently drops an unauthorized publish, so narrowing them earlier would orphan the legacy retained data. They are to be removed once every deployment has run the sweep.
 
 | Topic | Publish Trigger | QoS | Retain | Payload keys |
 | --- | --- | --- | --- | --- |
@@ -573,8 +568,6 @@ What each check proves:
 
 - `poller_publish` / `ws_subscribe` — the WebSockets listener is reachable and distinct from 1883
 - `ws_publish_denied` — the `wsreader` ACL is read-only; a write attempt never reaches an independent privileged subscriber
-- `check_wsreader_cannot_read_legacy` — `wsreader` cannot read the old un-namespaced `lan/#` topics
-- `check_poller_legacy_write` — the poller still holds the temporary legacy grant it needs for the one-time sweep
 - `persistence_across_restart` — a retained message survives a broker restart (skipped by `--skip-restart`)
 
 ### Poller smoke test

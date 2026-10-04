@@ -3653,20 +3653,14 @@ def publish_events(client: mqtt.Client, entries: list[dict]) -> None:
 
 
 def publish_raw_tombstone(client: mqtt.Client, full_topic: str) -> None:
-    """Clear one retained topic given its full, already-final topic string.
+    """Clear one of this site's retired history/service_history retained topics.
 
-    Phase 14.3 cutover: used to remove pre-namespace `lan/*` and
-    `admin/faked` retained topics. It does not reuse `publish_tombstone`
-    because that builds site-prefixed per-device topics. Relies on the
-    temporary poller legacy ACL grants in deploy/mosquitto.acl.template
-    (Mosquitto silently drops an unauthorized publish). Refuses anything under
-    `sites/` so the sweep can never clear the live namespace, except this
-    site's retired per-device `history`/`service_history` topics.
-
-    2026-10-04 (quick 261004-kbt): the poller no longer publishes per-device
-    history/service_history (ClickHouse holds transition history); already-
-    retained ones are cleared once via legacy_retained_topics. Remove the
-    allowance together with that sweep after one release.
+    Takes the full, already-final topic string (quick 261004-kbt: the poller no
+    longer publishes per-device history/service_history, ClickHouse holds
+    transition history; already-retained ones are cleared once). Refuses every
+    other topic so the sweep can never clear live data. The pre-14.3
+    un-namespaced use of this function, and the poller's `lan/#` and `admin/#`
+    ACL grants it relied on, were removed 2026-10-04 (quick 261004-lyz).
     """
     rel = relative_topic(full_topic)
     rel_parts = rel.split("/") if rel is not None else []
@@ -3675,8 +3669,8 @@ def publish_raw_tombstone(client: mqtt.Client, full_topic: str) -> None:
         and rel_parts[:2] == ["lan", "devices"]
         and rel_parts[3] in ("history", "service_history")
     )
-    if full_topic.startswith("sites/") and not retired_history:
-        _logger.warning("Refusing to tombstone namespaced topic %s", full_topic)
+    if not retired_history:
+        _logger.warning("Refusing to tombstone topic %s", full_topic)
         return
     try:
         info = client.publish(full_topic, payload=None, retain=True, qos=1)
@@ -3805,11 +3799,12 @@ class PollerState:
     # 2026-10-02 (Phase 16 D-10 fallback seed): faked hosts restored from the retained
     # `admin/faked` topic; only used when the site lacks `active_checks_enabled`.
     admin_faked: dict[str, str] = field(default_factory=dict)
-    # 2026-10-04 (Phase 14.3): full pre-namespace topic strings (`lan/...` and
-    # `admin/faked`) that had a non-empty retained message at startup.
-    # `run_cycle` clears them once behind `allow_stale_sweep`; remove together
-    # with the temporary poller legacy ACL grants.
-    legacy_retained_topics: set[str] = field(default_factory=set)
+    # 2026-10-04 (quick 261004-kbt): full topic strings of this site's retained
+    # non-empty per-device history/service_history topics, cleared once by
+    # `run_cycle` behind `allow_stale_sweep`. The pre-14.3 un-namespaced sweep
+    # that shared this set was removed 2026-10-04 (quick 261004-lyz) after it
+    # ran on the only deployment.
+    retired_history_topics: set[str] = field(default_factory=set)
     # Phase 14 (PLR-14): incident id -> last-published `incident_signature()`
     # (or `None` for an id seeded by `reconcile_state` from a retained topic
     # whose payload was never parsed -- a seeded `None` always differs from
@@ -4009,7 +4004,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     also collected into `retained_ids`, so `run_cycle` can clear topics of
     hosts the site no longer has. Retained non-empty `history`/
     `service_history` topics (no longer published) are collected by full
-    topic into `legacy_retained_topics` and cleared once by the same sweep.
+    topic into `retired_history_topics` and cleared once by the same sweep.
 
     Per-device status is deliberately NOT reconciled at all: it is
     republished fresh from live Livestatus every cycle (`run_cycle`), so
@@ -4042,25 +4037,13 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     retained_ids: set[str] = set()
     retained_incident_ids: set[str] = set()
     admin_faked_result: list[bytes] = []
-    legacy_topics: set[str] = set()
-    legacy_admin_faked: list[bytes] = []
+    retired_history_topics: set[str] = set()
     topology_received = threading.Event()
 
     def on_message(client, userdata, msg):
         rel = relative_topic(msg.topic)
         if rel is None:
-            # Not under this site's prefix: record retained non-empty
-            # pre-namespace topics so run_cycle can clear them once.
-            # TOPIC_ADMIN_FAKED is the relative suffix "admin/faked", which
-            # is also the legacy full topic.
-            if (
-                getattr(msg, "retain", False)
-                and msg.payload
-                and (msg.topic == TOPIC_ADMIN_FAKED or msg.topic.startswith("lan/"))
-            ):
-                legacy_topics.add(msg.topic)
-                if msg.topic == TOPIC_ADMIN_FAKED:
-                    legacy_admin_faked.append(msg.payload)
+            # Not under this site's prefix: ignored.
             return
         parts = rel.split("/")
         if rel == TOPIC_ADMIN_FAKED:
@@ -4081,7 +4064,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
             retained_ids.add(parts[2])
         # 2026-10-04 (quick 261004-kbt): the poller no longer publishes per-device
         # history/service_history (ClickHouse holds transition history); already-
-        # retained ones are cleared once via legacy_retained_topics. Remove this and
+        # retained ones are cleared once via retired_history_topics. Remove this and
         # the two subscriptions together after one release.
         if (
             len(parts) == 4
@@ -4091,7 +4074,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
             and getattr(msg, "retain", False)
             and msg.payload
         ):
-            legacy_topics.add(msg.topic)
+            retired_history_topics.add(msg.topic)
         if (
             len(parts) == 4
             and parts[0] == "lan"
@@ -4131,11 +4114,6 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         client.subscribe(site_topic("lan/devices/+/service_history"), qos=1)
         client.subscribe(site_topic("lan/incidents/+/status"), qos=1)
         client.subscribe(site_topic(TOPIC_ADMIN_FAKED), qos=1)
-        # Legacy un-namespaced topics (Phase 14.3 cutover). Exact
-        # `admin/faked`, never `admin/#`: that would also receive the live
-        # `admin/cmd` command topic.
-        client.subscribe("lan/#", qos=1)
-        client.subscribe(TOPIC_ADMIN_FAKED, qos=1)
         client.subscribe(site_topic(TOPIC_TOPOLOGY), qos=1)
         client.loop_start()
         topology_received.wait(timeout=config.reconcile_timeout_seconds)
@@ -4146,15 +4124,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
     previous_nodes = parse_topology_payload(topology_result[0] if topology_result else b"")
     events = parse_events_payload(events_result[0] if events_result else b"")
 
-    # New-namespace admin/faked wins; the legacy retained payload only seeds
-    # fake states injected before the upgrade.
-    if admin_faked_result:
-        admin_faked_payload = admin_faked_result[0]
-    elif legacy_admin_faked:
-        admin_faked_payload = legacy_admin_faked[0]
-        _logger.info("Seeded admin_faked from the legacy un-namespaced admin/faked topic")
-    else:
-        admin_faked_payload = b""
+    admin_faked_payload = admin_faked_result[0] if admin_faked_result else b""
 
     return PollerState(
         previous_nodes=previous_nodes,
@@ -4164,7 +4134,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         retained_ids=retained_ids,
         previous_incidents={incident_id: None for incident_id in retained_incident_ids},
         admin_faked=parse_admin_faked_payload(admin_faked_payload),
-        legacy_retained_topics=legacy_topics,
+        retired_history_topics=retired_history_topics,
     )
 
 
@@ -4205,8 +4175,8 @@ def run_cycle(
     tombstoned once, and `retained_ids` is then emptied. The caller sets it
     only when the host list is confirmed (see the gate in `run_forever`);
     when false, `retained_ids` is left intact for a later cycle. The same
-    gate clears `state.legacy_retained_topics` (pre-14.3 un-namespaced
-    retained topics) once, with no live-id subtraction.
+    gate clears `state.retired_history_topics` (this site's retired
+    history/service_history retained topics) once, with no live-id subtraction.
 
     Phase 14 (PLR-14/PLR-16): `compute_incidents(snapshots)` is re-derived
     from scratch every cycle -- no incident state persists between cycles
@@ -4282,17 +4252,16 @@ def run_cycle(
             _logger.info("Cleared stale retained topics for absent host %s", device_id)
         # The sweep runs once per process; `previous_nodes` tracks from here.
         state.retained_ids = set()
-        # Phase 14.3: the whole un-namespaced legacy tree is stale by
-        # definition; clear it once, emitting no events. Also holds this
-        # site's retired per-device history/service_history topics.
-        if state.legacy_retained_topics:
-            for legacy_topic in sorted(state.legacy_retained_topics):
-                publish_raw_tombstone(client, legacy_topic)
+        # 2026-10-04 (quick 261004-kbt): clear this site's retired
+        # history/service_history retained topics once, emitting no events.
+        if state.retired_history_topics:
+            for retired_topic in sorted(state.retired_history_topics):
+                publish_raw_tombstone(client, retired_topic)
             _logger.info(
-                "Cleared %d legacy retained topics",
-                len(state.legacy_retained_topics),
+                "Cleared %d retired history/service_history retained topics",
+                len(state.retired_history_topics),
             )
-        state.legacy_retained_topics = set()
+        state.retired_history_topics = set()
 
     for device_id in added_ids:
         events_this_cycle.append(
