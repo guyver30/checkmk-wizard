@@ -1,0 +1,38 @@
+# Per-user topic ACL template for the Mosquitto broker.
+# Source: mosquitto.org/documentation/plugins/acl-file/
+#
+# Default-deny: an authenticated user with no matching "user" block below
+# gets NO access at all. A bare "topic" line outside a "user" block would
+# apply only to anonymous clients, and allow_anonymous is false in
+# deploy/mosquitto.conf, so no such line is written here.
+#
+# This file is a template. deploy/render-mosquitto-acl.sh replaces @SITE_ID@
+# with CMK_SITE_ID at mosquitto container start and writes the result to
+# /mosquitto/config/mosquitto.acl. Mosquitto ACL files have no environment
+# expansion and `pattern` only knows %u/%c (mosquitto.org/man/mosquitto-conf-5.html),
+# so rendering is the way to scope grants to one site subtree. One site per
+# deployment; per-site users are a later concern for a shared cloud broker.
+
+user poller
+topic readwrite sites/@SITE_ID@/#
+# TEMPORARY: lets the poller tombstone pre-namespace retained topics. An
+# unauthorized publish is silently dropped by Mosquitto, so narrowing these
+# early would orphan the legacy retained data.
+# TODO: remove `lan/#` and `admin/#` once every deployment has run a poller
+# that sweeps the legacy namespace once.
+topic readwrite lan/#
+topic readwrite admin/#
+
+user wsreader
+topic read sites/@SITE_ID@/lan/#
+
+# Admin dashboard login (`?admin=1`). Its only write grant is the admin command
+# topic. Admin topics sit outside `sites/<id>/lan/`, so wsreader never sees
+# them. `read sites/<id>/lan/#` is granted so the admin page can show the normal
+# dashboard on one connection (user-confirmed 2026-10-02); wsadmin still cannot
+# write anywhere under `lan/`.
+user wsadmin
+topic read sites/@SITE_ID@/lan/#
+topic read sites/@SITE_ID@/admin/ack
+topic read sites/@SITE_ID@/admin/faked
+topic write sites/@SITE_ID@/admin/cmd
