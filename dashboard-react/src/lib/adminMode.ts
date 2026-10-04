@@ -1,5 +1,6 @@
 // Admin mode (`?admin=1`, D-07): the fourth lib module allowed to do network I/O (only
-// loadAdminConfig), alongside runtimeConfig.ts, checkmkWrite.ts and mqttClient.ts. It never
+// loadAdminConfig), alongside runtimeConfig.ts, checkmkWrite.ts and mqttClient.ts (the fifth
+// is historyClient.ts, which reads /ch-api/). It never
 // imports a store; main.tsx bridges the loadAdminConfig result into the admin store.
 
 import type { DevicePayload } from "./types";
