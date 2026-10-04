@@ -4816,3 +4816,36 @@ async def test_phase1_records_cmkadmin_password_for_revert(monkeypatch):
     await wizard_module._create_fresh_site("mysite", "cmk.example")
 
     assert state.cmkadmin_password == "newpw"
+
+
+@pytest.mark.asyncio
+async def test_prompt_new_site_name_warns_about_mqtt_namespace(monkeypatch, capsys):
+    answers = iter(["dmc"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    assert await _prompt_new_site_name(set()) == "dmc"
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "MQTT namespace" in out
+    assert "globally unique" in out
+
+
+@pytest.mark.asyncio
+async def test_prompt_new_site_name_warning_printed_once_across_reprompts(
+    monkeypatch, capsys
+):
+    answers = iter(["1bad name", "dmc"])
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        return next(answers)
+
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+
+    assert await _prompt_new_site_name(set()) == "dmc"
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert out.count("globally unique") == 1
