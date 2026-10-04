@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
+status: executing
 stopped_at: Phase 16 context gathered
-last_updated: "2026-10-04T05:30:53.590Z"
-last_activity: 2026-10-02
+last_updated: "2026-10-04T05:47:29.538Z"
+last_activity: 2026-10-04 -- Phase 14.3 execution started
 progress:
   total_phases: 14
   completed_phases: 11
-  total_plans: 77
+  total_plans: 83
   completed_plans: 77
   percent: 79
 ---
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-05)
 
 **Core value:** A single Python-based toolchain takes a bare Checkmk install all the way to a fully onboarded, monitored network — and now also to a live, at-a-glance visual picture of that network's topology and health, without needing to duplicate Checkmk's own UI.
-**Current focus:** Milestone complete
+**Current focus:** Phase 14.3 — per-site-mqtt-namespace
 
 ## Current Position
 
-Phase: 16
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-10-02
+Phase: 14.3 (per-site-mqtt-namespace) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 14.3
+Last activity: 2026-10-04 -- Phase 14.3 execution started
 
 Progress: [██████████] 99%
 

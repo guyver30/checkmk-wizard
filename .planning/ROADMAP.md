@@ -389,15 +389,15 @@ Plans:
 **Goal:** Every poller, dashboard and admin MQTT topic moves under `sites/<site_id>/` (site_id = the Checkmk site id from `CMK_SITE_ID`, passed to the dashboard via `/config.json`), with per-site ACLs, a one-time startup sweep of the old un-namespaced retained `lan/*` topics, and a wizard site-name warning that the name must be globally unique. Runs BEFORE Phase 14.2 (decided 2026-10-04); 14.2's needs topic becomes `sites/<site_id>/lan/needs/{need_id}/status`.
 **Requirements**: phase-local NS-POLLER, NS-ACL, NS-DASH, NS-MIGRATE, NS-WARN, NS-DOCS (derived from the goal; no REQUIREMENTS.md IDs)
 **Depends on:** Phase 14
-**Plans:** 6 plans
+**Plans:** 3/6 plans executed
 
 Plans:
 
 **Wave 1**
 
-- [ ] 14.3-01-PLAN.md — Poller: validated CMK_SITE_ID, site_topic()/relative_topic(), every publish/subscribe/LWT prefixed, tests + smoke_test_poller
-- [ ] 14.3-02-PLAN.md — Broker: ACL rendered at mosquitto start from mosquitto.acl.template, grant test, smoke_test_broker on the prefixed namespace
-- [ ] 14.3-03-PLAN.md — Dashboard: lib/topics.ts, mqttClient.ts subscribes sites/<checkmkSite>/ and strips the prefix once
+- [x] 14.3-01-PLAN.md — Poller: validated CMK_SITE_ID, site_topic()/relative_topic(), every publish/subscribe/LWT prefixed, tests + smoke_test_poller
+- [x] 14.3-02-PLAN.md — Broker: ACL rendered at mosquitto start from mosquitto.acl.template, grant test, smoke_test_broker on the prefixed namespace
+- [x] 14.3-03-PLAN.md — Dashboard: lib/topics.ts, mqttClient.ts subscribes sites/<checkmkSite>/ and strips the prefix once
 
 **Wave 2** *(blocked on 14.3-01)*
 
