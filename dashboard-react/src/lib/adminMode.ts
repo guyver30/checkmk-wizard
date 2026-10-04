@@ -5,6 +5,8 @@
 import type { DevicePayload } from "./types";
 import { applyAdminCredentials } from "./runtimeConfig";
 
+// These are RELATIVE topics; mqttClient.ts prefixes them with `sites/<checkmkSite>/` on the
+// wire and strips the prefix from incoming messages.
 export const ADMIN_TOPIC_CMD = "admin/cmd";
 export const ADMIN_TOPIC_ACK = "admin/ack";
 export const ADMIN_TOPIC_FAKED = "admin/faked";

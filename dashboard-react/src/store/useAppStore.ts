@@ -126,6 +126,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // Routes one MQTT message into the store. Parses the topic by splitting on "/" and
     // matching segment positions rather than a single regex over the whole string, because
     // the device id segment (parts[2]) is arbitrary text sourced from Checkmk host names.
+    // `topic` is RELATIVE: mqttClient.ts strips `sites/<checkmkSite>/` before calling.
     const parts = topic.split("/");
 
     if (parts[1] === "incidents" && parts[3] === "status") {
