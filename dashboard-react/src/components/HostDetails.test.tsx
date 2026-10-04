@@ -197,10 +197,6 @@ describe("HostDetails", () => {
           { description: "PING", state: "OK", plugin_output: "should not be shown either" },
         ]),
       );
-      useAppStore.getState().handleMessage(
-        "lan/devices/web1/history",
-        encode([{ from: "OK", to: "CRIT", timestamp: "2026-09-25T10:00:00Z" }]),
-      );
     });
     renderAt("web1");
     expect(screen.getByText("Connected")).toBeInTheDocument();
@@ -251,10 +247,6 @@ describe("HostDetails", () => {
   it("shows no history section; history lives in the event history pane (260928 follow-up)", () => {
     act(() => {
       useAppStore.getState().handleMessage("lan/devices/web1/status", encode({ id: "web1", state: "OK" }));
-      useAppStore.getState().handleMessage(
-        "lan/devices/web1/history",
-        encode([{ timestamp: "2026-09-23T09:00:00Z", from: "WARN", to: "CRIT" }]),
-      );
     });
     renderAt("web1");
     expect(screen.queryByText("History")).not.toBeInTheDocument();

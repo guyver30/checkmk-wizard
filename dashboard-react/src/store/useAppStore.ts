@@ -2,7 +2,7 @@
 //
 // Every topic published by scripts/mqtt_poller.py is already a complete
 // snapshot, never a delta: publish_device_status() republishes a device's
-// full status dict every cycle, publish_history()/publish_events() are
+// full status dict every cycle, publish_events() is
 // handed the already-truncated bounded array in full, publish_topology()
 // sends the whole device list, and publish_poller_status() sends the whole
 // liveness object. Because the *contract* guarantees a full snapshot on
@@ -32,11 +32,9 @@ import { create } from "zustand";
 import type {
   DevicePayload,
   EventEntry,
-  HistoryEntry,
   IncidentPayload,
   PollerStatusPayload,
   ServiceEntry,
-  ServiceHistoryEntry,
   TopologyPayload,
 } from "../lib/types";
 
@@ -49,9 +47,7 @@ export interface ConnectionState {
 
 export interface AppState {
   devices: Record<string, DevicePayload>;
-  history: Record<string, HistoryEntry[]>;
   services: Record<string, ServiceEntry[]>;
-  serviceHistory: Record<string, ServiceHistoryEntry[]>;
   events: EventEntry[];
   // Phase 14 / D-13: open incidents, keyed by incident id, kept in step with the poller's
   // retained `lan/incidents/{id}/status` topics -- a pure MQTT consumer for this feature.
@@ -100,9 +96,7 @@ function parsePayload(payloadBuffer: Uint8Array | null | undefined): ParseResult
 
 export const useAppStore = create<AppState>()((set, get) => ({
   devices: {},
-  history: {},
   services: {},
-  serviceHistory: {},
   events: [],
   incidents: {},
   topology: null,
@@ -157,42 +151,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
       if (parsed.value === null) {
         // Zero-length retained payload is MQTT's own tombstone semantic
-        // (scripts/mqtt_poller.py::publish_tombstone) -- remove the device and every
-        // per-device slice, so a device removed from Checkmk leaves nothing orphaned
-        // behind even if its status tombstone arrives before the services/service_history
-        // ones.
+        // (scripts/mqtt_poller.py::publish_tombstone) -- remove the device and its
+        // services, so a device removed from Checkmk leaves nothing orphaned behind even
+        // if its status tombstone arrives before the services one.
         const devices = { ...get().devices };
-        const history = { ...get().history };
         const services = { ...get().services };
-        const serviceHistory = { ...get().serviceHistory };
         delete devices[id];
-        delete history[id];
         delete services[id];
-        delete serviceHistory[id];
-        set({ devices, history, services, serviceHistory });
+        set({ devices, services });
         return;
       }
       if (!isPlainObject(parsed.value)) {
         return; // wrong shape -- malformed, drop
       }
       set({ devices: { ...get().devices, [id]: parsed.value as DevicePayload } });
-      return;
-    }
-
-    if (parts[1] === "devices" && parts[3] === "history") {
-      const id = parts[2];
-      const parsed = parsePayload(payload);
-      if (!parsed.ok) {
-        return;
-      }
-      if (parsed.value === null) {
-        set({ history: { ...get().history, [id]: [] } });
-        return;
-      }
-      if (!Array.isArray(parsed.value)) {
-        return;
-      }
-      set({ history: { ...get().history, [id]: parsed.value as HistoryEntry[] } });
       return;
     }
 
@@ -210,25 +182,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       set({ services: { ...get().services, [id]: parsed.value as ServiceEntry[] } });
-      return;
-    }
-
-    if (parts[1] === "devices" && parts[3] === "service_history") {
-      const id = parts[2];
-      const parsed = parsePayload(payload);
-      if (!parsed.ok) {
-        return;
-      }
-      if (parsed.value === null) {
-        set({ serviceHistory: { ...get().serviceHistory, [id]: [] } });
-        return;
-      }
-      if (!Array.isArray(parsed.value)) {
-        return;
-      }
-      set({
-        serviceHistory: { ...get().serviceHistory, [id]: parsed.value as ServiceHistoryEntry[] },
-      });
       return;
     }
 

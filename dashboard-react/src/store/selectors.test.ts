@@ -8,9 +8,7 @@ const NOW = Date.parse("2026-09-21T12:00:00Z");
 function stateWithDevices(devices: Record<string, DevicePayload>): AppState {
   return {
     devices,
-    history: {},
     services: {},
-    serviceHistory: {},
     events: [],
     incidents: {},
     topology: null,

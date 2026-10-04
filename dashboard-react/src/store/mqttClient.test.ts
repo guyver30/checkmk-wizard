@@ -65,9 +65,10 @@ afterEach(() => {
 });
 
 describe("RELATIVE_SUBSCRIBE_TOPICS", () => {
-  it("includes the Phase 12 services and service_history wildcard topics", () => {
+  it("includes the services wildcard topic but not the retired history topics", () => {
     expect(RELATIVE_SUBSCRIBE_TOPICS).toContain("lan/devices/+/services");
-    expect(RELATIVE_SUBSCRIBE_TOPICS).toContain("lan/devices/+/service_history");
+    expect(RELATIVE_SUBSCRIBE_TOPICS).not.toContain("lan/devices/+/history");
+    expect(RELATIVE_SUBSCRIBE_TOPICS).not.toContain("lan/devices/+/service_history");
   });
 
   it("includes the Phase 14 incident wildcard topic", () => {

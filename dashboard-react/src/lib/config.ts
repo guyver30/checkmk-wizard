@@ -20,9 +20,8 @@
 // behind them is read-only (`topic read lan/#` in deploy/mosquitto.acl), which bounds the
 // exposure to reading the device list, never writing anything back to the broker.
 //
-// POLL_INTERVAL_SECONDS and HISTORY_MAX_ENTRIES mirror DEFAULT_POLL_INTERVAL_SECONDS and
-// DEFAULT_HISTORY_MAX_ENTRIES in scripts/mqtt_poller.py and must be kept in step with it
-// if the poller's own environment configuration changes.
+// POLL_INTERVAL_SECONDS mirrors DEFAULT_POLL_INTERVAL_SECONDS in scripts/mqtt_poller.py and
+// must be kept in step with it if the poller's own environment configuration changes.
 //
 // CHECKMK_REST_ORIGIN is a same-origin path prefix, not a URL. A browser page served from
 // the dashboard's own origin cannot call Checkmk's REST API on a different origin (Checkmk's
@@ -49,6 +48,5 @@ export const DEFAULT_WS_USERNAME = "wsreader";
 export const DEFAULT_WS_PASSWORD = "wsreader";
 export const POLL_INTERVAL_SECONDS = 15;
 export const STALENESS_FACTOR = 3;
-export const HISTORY_MAX_ENTRIES = 20;
 
 export const CHECKMK_REST_ORIGIN = "/checkmk-api";
