@@ -3497,7 +3497,7 @@ def test_run_cycle_state_changes_publish_no_history_topics_but_keep_events_and_s
     )
 
     topics = [c.args[0] for c in client.publish.call_args_list]
-    assert not [t for t in topics if t.endswith("/history") or t.endswith("/service_history")]
+    assert not [t for t in topics if t.endswith(("/history", "/service_history"))]
     events = json.loads(_published(client, poller.site_topic(poller.TOPIC_EVENTS))[0].args[1])
     assert events[-1]["event"] == "state_change"
     assert len(_published(client, "sites/testsite/lan/devices/a/services")) == 1

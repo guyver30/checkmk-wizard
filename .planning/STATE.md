@@ -5,7 +5,7 @@ milestone_name: milestone
 status: ready_to_plan
 stopped_at: Phase 14.3 complete (6/6) — ready to discuss Phase 15
 last_updated: 2026-10-04T06:37:57.280Z
-last_activity: 2026-10-04 -- Completed quick task 261004-kbt: remove history and service_history MQTT topics
+last_activity: 2026-10-04 -- Completed quick task 261004-lyz: remove legacy poller ACL grants and sweep
 progress:
   total_phases: 14
   completed_phases: 11
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 Phase: 15
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-10-04 - Completed quick task 261004-kbt: remove history and service_history MQTT topics
+Last activity: 2026-10-04 - Completed quick task 261004-lyz: remove legacy poller ACL grants and sweep
 
 Progress: [██████████] 99%
 
@@ -138,6 +138,7 @@ None.
 | 261003-le3 | poller_writer gains CREATE TEMPORARY TABLE (initdb + one-off doc) so the Parquet rollup writes; found live in 14.1-08 | 2026-10-03 | 990684e | [261003-le3-poller-writer-create-temporary-table-gra](./quick/261003-le3-poller-writer-create-temporary-table-gra/) |
 | 261003-lnr | Agent host overall state = worst dashboard-visible service (hidden checks like Systemd Timesyncd Time no longer turn the host CRIT) | 2026-10-03 | b37bce9 | [261003-lnr-host-overall-state-from-visible-services](./quick/261003-lnr-host-overall-state-from-visible-services/) |
 | 261004-kbt | Remove per-device `history` and `service_history` MQTT topics; transition history comes from ClickHouse | 2026-10-04 | 3444f15 | [261004-kbt-remove-history-and-service-history-mqtt-](./quick/261004-kbt-remove-history-and-service-history-mqtt-/) |
+| 261004-lyz | Remove legacy pre-14.3 poller ACL grants (lan/#, admin/#), legacy sweep and admin_faked seed | 2026-10-04 | 454cb53 | [261004-lyz-remove-legacy-lan-and-admin-poller-grant](./quick/261004-lyz-remove-legacy-lan-and-admin-poller-grant/) |
 | fast | Admin-mode presenter cheat sheet in docs/Incident demo with fake check results.md | 2026-10-03 | 2d76a4f | - |
 
 ## Deferred Items
