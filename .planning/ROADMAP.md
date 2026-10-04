@@ -463,7 +463,7 @@ Plans:
 
 **Requirements**: none mapped; coverage target is every 14.2-CONTEXT.md decision (D-01..D-31, D-19a)
 
-**Plans:** 17/19 plans executed
+**Plans:** 18/19 plans executed
 
 Plans:
 
@@ -498,7 +498,7 @@ Plans:
 
 **Wave 5**
 
-- [ ] 14.2-18-PLAN.md — Docs: MQTT contract, Podman/deploy docs, CLAUDE.md/PROJECT.md constraint amendment
+- [x] 14.2-18-PLAN.md — Docs: MQTT contract, Podman/deploy docs, CLAUDE.md/PROJECT.md constraint amendment
 
 **Wave 6**
 
