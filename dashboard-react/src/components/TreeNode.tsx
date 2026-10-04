@@ -18,6 +18,7 @@ import { useAdminStore } from "../store/adminStore";
 import { useMapFocusStore } from "../store/mapFocusStore";
 import { useAppStore } from "../store/useAppStore";
 import { StateBadgeForState } from "./StateBadge";
+import { TierMarker } from "./TierMarker";
 
 const INDENT_PX = 16;
 const ROW_START_PX = 12;
@@ -227,6 +228,12 @@ export function TreeNode({
                   </Badge>
                 ) : (
                   <StateBadgeForState state={displayState} />
+                )}
+                {device.needTier && (
+                  <TierMarker
+                    tier={device.needTier}
+                    narration={device.needNarration ?? undefined}
+                  />
                 )}
                 {admin && faked[device.id] && (
                   <span className="ml-1">

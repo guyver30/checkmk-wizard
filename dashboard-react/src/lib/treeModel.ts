@@ -12,7 +12,8 @@ import { buildGroupIndex, rollUpGroup, sortedGroupKeys, SEVERITY_RANK } from "./
 import { displayAddress, displayName, effectiveState, isTagGroupMissing } from "./display";
 import { isDeviceStale } from "./staleness";
 import type { IncidentLookup } from "./incidents";
-import type { DevicePayload, GroupingMode } from "./types";
+import type { TierLookup } from "./needDisplay";
+import type { DevicePayload, GroupingMode, NeedTier } from "./types";
 
 export interface TreeDeviceNode {
   kind: "device";
@@ -27,6 +28,8 @@ export interface TreeDeviceNode {
   incidentId: string | null;
   incidentRole: "root" | "consequence" | null;
   inferredRoot: boolean;
+  needTier: NeedTier | null;
+  needNarration: string | null;
 }
 
 export interface TreeGroupNode {
@@ -47,6 +50,8 @@ export interface BuildTreeOptions {
   // orderBySeverity. Callers (IndexRoute, plan 14-04) pass the current incident lookup on
   // every render; buildTree never subscribes to incident state itself.
   incidentLookup?: IncidentLookup;
+  // Worst service-need tier per host (plain parameter, same rule as incidentLookup).
+  tierLookup?: TierLookup;
 }
 
 export function buildTree(
@@ -60,7 +65,7 @@ export function buildTree(
   // there is nowhere in this module for a stale order to be kept.
   options: BuildTreeOptions = {},
 ): TreeGroupNode[] {
-  const { orderBySeverity = false, incidentLookup } = options;
+  const { orderBySeverity = false, incidentLookup, tierLookup } = options;
 
   // grouping.ts's primitives take a Map (its vanilla signature, unchanged); the store holds a
   // plain Record for Zustand selector equality. This conversion is the one intentional
@@ -91,6 +96,8 @@ export function buildTree(
           incidentId: membership?.incidentId ?? null,
           incidentRole: membership?.role ?? null,
           inferredRoot: membership !== undefined && membership.role === "root" && membership.inferred,
+          needTier: tierLookup?.[id]?.tier ?? null,
+          needNarration: tierLookup?.[id]?.narration ?? null,
         };
       })
       .sort((a, b) => a.label.localeCompare(b.label));

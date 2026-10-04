@@ -498,6 +498,66 @@ describe("TopologyMap grid and edge hint", () => {
   });
 });
 
+describe("TopologyMap tier markers (D-26)", () => {
+  function markerCtx() {
+    return {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      arc: vi.fn(),
+      fill: vi.fn(),
+      stroke: vi.fn(),
+      fillStyle: "",
+      strokeStyle: "",
+      lineWidth: 0,
+    };
+  }
+  const topologyDevices = [
+    { id: "h1", parents: [] },
+    { id: "h2", parents: [] },
+  ];
+  const statuses = { h1: device({ id: "h1" }), h2: device({ id: "h2" }) };
+
+  it("registers an afterDrawing handler that draws a filled dot for an immediate host", () => {
+    renderMap({
+      topologyDevices,
+      statuses,
+      tierLookup: { h1: { tier: "immediate", narration: "n" } },
+    });
+    const ctx = markerCtx();
+    act(() => {
+      instances[0].emit("afterDrawing", ctx);
+    });
+    expect(ctx.arc).toHaveBeenCalledTimes(1);
+    expect(ctx.fill).toHaveBeenCalledTimes(1);
+    expect(ctx.stroke).not.toHaveBeenCalled();
+  });
+
+  it("draws a ring for an urgent host and nothing for hosts not in the lookup", () => {
+    renderMap({
+      topologyDevices,
+      statuses,
+      tierLookup: { h2: { tier: "urgent", narration: "n" } },
+    });
+    const ctx = markerCtx();
+    act(() => {
+      instances[0].emit("afterDrawing", ctx);
+    });
+    expect(ctx.arc).toHaveBeenCalledTimes(1);
+    expect(ctx.stroke).toHaveBeenCalledTimes(1);
+    expect(ctx.fill).not.toHaveBeenCalled();
+  });
+
+  it("draws nothing without a tierLookup", () => {
+    renderMap({ topologyDevices, statuses });
+    const ctx = markerCtx();
+    act(() => {
+      instances[0].emit("afterDrawing", ctx);
+    });
+    expect(ctx.arc).not.toHaveBeenCalled();
+  });
+});
+
 describe("TopologyMap incidentLookup (DASH-15)", () => {
   it("gives a consequence node's DataSet entry opacity 0.4 and the dimmed title", () => {
     const topologyDevices = [
