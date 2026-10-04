@@ -223,7 +223,11 @@ def check_device_status_retained(host: str, tcp_port: int, user: str, password: 
             data = json.loads(payload)
         except (json.JSONDecodeError, ValueError, TypeError):
             continue
-        if not isinstance(data, dict) or set(data) != _DEVICE_STATUS_KEYS:
+        # Subset, not equality: the poller adds status keys additively over
+        # time (address, staleness, host_state_raw, gauges), so an exact match
+        # against the Phase 9 key set rejected every live payload (found
+        # 2026-10-04 in the Phase 14.3 live run).
+        if not isinstance(data, dict) or not _DEVICE_STATUS_KEYS <= set(data):
             continue
         if data.get("state") not in _VALID_STATES:
             continue
