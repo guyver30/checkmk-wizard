@@ -5,8 +5,8 @@
 // (deploy/dashboard-nginx.conf's `location = /config.json`), not baked into the JS bundle.
 // Under vite dev/preview (and vitest) there is no /config.json, so every field falls back to
 // its own default individually -- see parseRuntimeConfig(). The third lib/store module
-// allowed to do network I/O, alongside checkmkWrite.ts and mqttClient.ts (adminMode.ts and
-// historyClient.ts later became the fourth and fifth).
+// allowed to do network I/O, alongside checkmkWrite.ts and mqttClient.ts (adminMode.ts,
+// historyClient.ts and triageMode.ts later became the fourth, fifth and sixth).
 
 import { DEFAULT_CHECKMK_SITE, DEFAULT_WS_PASSWORD, DEFAULT_WS_USERNAME } from "./config";
 
