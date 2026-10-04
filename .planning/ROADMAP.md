@@ -463,7 +463,7 @@ Plans:
 
 **Requirements**: none mapped; coverage target is every 14.2-CONTEXT.md decision (D-01..D-31, D-19a)
 
-**Plans:** 15/19 plans executed
+**Plans:** 17/19 plans executed
 
 Plans:
 
@@ -493,8 +493,8 @@ Plans:
 
 **Wave 4**
 
-- [ ] 14.2-16-PLAN.md — Analytics service: MQTT wiring, restore/reconcile, 15-min cycle, entry point
-- [ ] 14.2-17-PLAN.md — Remove the rollup from the poller and its compose env
+- [x] 14.2-16-PLAN.md — Analytics service: MQTT wiring, restore/reconcile, 15-min cycle, entry point
+- [x] 14.2-17-PLAN.md — Remove the rollup from the poller and its compose env
 
 **Wave 5**
 
