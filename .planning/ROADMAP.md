@@ -463,7 +463,7 @@ Plans:
 
 **Requirements**: none mapped; coverage target is every 14.2-CONTEXT.md decision (D-01..D-31, D-19a)
 
-**Plans:** 10/19 plans executed
+**Plans:** 15/19 plans executed
 
 Plans:
 
@@ -485,11 +485,11 @@ Plans:
 
 **Wave 3**
 
-- [ ] 14.2-11-PLAN.md — Availability rollup copied into analytics with its tests
-- [ ] 14.2-12-PLAN.md — Event/incident recorders and triage command engine
-- [ ] 14.2-13-PLAN.md — Triage UI (edit mode) and View chart on need rows
-- [ ] 14.2-14-PLAN.md — Host details: Service needs section and Trends list
-- [ ] 14.2-15-PLAN.md — Narrated incident cards and tier markers on tree and map
+- [x] 14.2-11-PLAN.md — Availability rollup copied into analytics with its tests
+- [x] 14.2-12-PLAN.md — Event/incident recorders and triage command engine
+- [x] 14.2-13-PLAN.md — Triage UI (edit mode) and View chart on need rows
+- [x] 14.2-14-PLAN.md — Host details: Service needs section and Trends list
+- [x] 14.2-15-PLAN.md — Narrated incident cards and tier markers on tree and map
 
 **Wave 4**
 
