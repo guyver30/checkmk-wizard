@@ -76,7 +76,7 @@ Known limitation (code review WR-06, kept open by decision 2026-10-02): the fake
 Livestatus (host check disabled and `PING` disabled or absent), so a host someone disabled by hand for another
 reason looks faked and gets the keepalive results too, which can hide a real outage on it. Fine on a pure
 demo site. On a site with real hosts, do not disable a host's checks by hand while admin mode is deployed.
-The fix would be a poller-owned faked set persisted in the retained `admin/faked` message
+The fix would be a poller-owned faked set persisted in the retained `sites/<site_id>/admin/faked` message
 (`.planning/phases/16-*/16-REVIEW-FIX.md`).
 
 Cascade rules:
@@ -181,7 +181,7 @@ re-enabled host check UP. They are not counted as faked because their host check
 
 `/admin-config.json` serves the `wsadmin` login to anyone who can reach the dashboard (D-07). That
 is acceptable only on the closed demo network; a CIDR restriction is deferred. The broker limits
-that login to writing `admin/cmd`; it cannot write anywhere under `lan/`.
+that login to writing `sites/<site_id>/admin/cmd`; it cannot write anywhere under `sites/<site_id>/lan/`.
 
 ## Why "Fake check results" isn't used, and the cmk helper instead
 
@@ -410,7 +410,7 @@ show the faked value until Checkmk's next real check runs.
 Confirm no incidents remain open:
 
 ```bash
-mosquitto_sub -u wsreader -P wsreader -t 'lan/incidents/#' -v -C 1 -W 5
+mosquitto_sub -u wsreader -P wsreader -t 'sites/<site_id>/lan/incidents/#' -v -C 1 -W 5
 ```
 
 Expect a timeout ("Timed out", RC 27) with no message received — the same clear-vs-empty

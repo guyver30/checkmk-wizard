@@ -116,7 +116,7 @@ missing. So to start over, remove that volume together with the broker's
 `mosquitto_data` holds the retained MQTT messages, and the dashboard reads
 nothing else. On startup the poller already clears retained per-device topics
 for hosts that are no longer on the site. It does **not** clear the global
-`lan/events/recent` feed, though, so without a broker wipe the dashboard's
+`sites/<site_id>/lan/events/recent` feed, though, so without a broker wipe the dashboard's
 history keeps the old site's events, shown as "unknown → unknown".
 
 `deploy/reset-site.sh` does all of this. It first checks that `deploy/.env` is
@@ -153,7 +153,7 @@ podman compose up -d
   only at startup, and restarting a single container once cut Checkmk off
   from the LAN.
 - Leave `deploy_mosquitto_log` and `deploy_minio_data` alone. The broker's
-  ACL is a bind-mounted file (`mosquitto.acl`); its users are regenerated
+  ACL is rendered at every start from the bind-mounted `mosquitto.acl.template`; its users are regenerated
   from `deploy/.env` at every start (quick 260930-jj4) — both survive the wipe.
 - Agents on target hosts are still registered to the deleted site. Run
   `cmk-agent-ctl delete-all` on each of them before re-onboarding (the same
@@ -170,7 +170,7 @@ variable in its own environment:
 
 ```bash
 set -a; . deploy/.env; set +a
-podman exec mosquitto mosquitto_pub -h localhost -u poller -P "$MQTT_POLLER_PASSWORD" -t lan/events/recent -r -n
+podman exec mosquitto mosquitto_pub -h localhost -u poller -P "$MQTT_POLLER_PASSWORD" -t sites/<site_id>/lan/events/recent -r -n
 ```
 
 Then, on the fresh site: make sure `deploy/.env` has `CMK_REST_SECRET` set,
@@ -197,6 +197,10 @@ data the same way: stop it, remove its data volume, then start it again.
    - **`omd` found (host-native — the wizard runs on the Checkmk host
      itself, or wherever `omd` is on `PATH`):** the full site
      creation/selection/deletion flow below runs unchanged.
+   - **Site-name uniqueness:** every site-name prompt prints a warning that the
+     name also becomes the MQTT namespace (`sites/<name>/...` on the broker)
+     and must be globally unique across every site feeding the same broker.
+     There is no central registry, so the wizard cannot check it.
    - **`omd` not found (container mode — the wizard runs in a separate
      container from Checkmk, e.g. the `worker` service):** site
      creation/deletion are `omd`-only operations and aren't possible from
