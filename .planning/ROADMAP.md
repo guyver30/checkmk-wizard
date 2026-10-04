@@ -389,7 +389,7 @@ Plans:
 **Goal:** Every poller, dashboard and admin MQTT topic moves under `sites/<site_id>/` (site_id = the Checkmk site id from `CMK_SITE_ID`, passed to the dashboard via `/config.json`), with per-site ACLs, a one-time startup sweep of the old un-namespaced retained `lan/*` topics, and a wizard site-name warning that the name must be globally unique. Runs BEFORE Phase 14.2 (decided 2026-10-04); 14.2's needs topic becomes `sites/<site_id>/lan/needs/{need_id}/status`.
 **Requirements**: phase-local NS-POLLER, NS-ACL, NS-DASH, NS-MIGRATE, NS-WARN, NS-DOCS (derived from the goal; no REQUIREMENTS.md IDs)
 **Depends on:** Phase 14
-**Plans:** 3/6 plans executed
+**Plans:** 4/6 plans executed
 
 Plans:
 
@@ -401,7 +401,7 @@ Plans:
 
 **Wave 2** *(blocked on 14.3-01)*
 
-- [ ] 14.3-04-PLAN.md — Poller legacy sweep of un-namespaced lan/* and admin/faked, admin_faked carry-over
+- [x] 14.3-04-PLAN.md — Poller legacy sweep of un-namespaced lan/* and admin/faked, admin_faked carry-over
 
 **Wave 3** *(blocked on 14.3-01..04)*
 
