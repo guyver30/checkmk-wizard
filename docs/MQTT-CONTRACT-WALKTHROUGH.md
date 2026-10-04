@@ -5,6 +5,11 @@
 > worked examples below keep the relative suffixes for readability: read each `lan/...` or `admin/...` topic
 > as `sites/<site_id>/lan/...` or `sites/<site_id>/admin/...`. The formal topic tables use the full form.
 
+> **Update 2026-10-04 (Phase 14.2):** the analytics container now exists and publishes three more topics
+> (needs, forecasts, incident narration) and consumes one (the triage command). They are documented in
+> [Phase 14.2 analytics topics](#phase-142-analytics-topics) at the end of this file. The `history/#`
+> proposal in Part 1 is superseded for 14.2 (see the note there).
+
 Written 2026-10-03 during the Phase 14.2 discussion, for whoever builds the cloud side (broker, ClickHouse,
 analytics container, new dashboard). It has three parts:
 
@@ -60,6 +65,14 @@ Things to know:
 
 ### The proposal: publish history over MQTT, write to ClickHouse from the cloud
 
+> **Superseded for Phase 14.2 (D-02/D-03).** 14.2 does not add `history/samples`, `history/events` or
+> `history/incidents`. The analytics container instead reads the existing `lan/events/recent` and
+> `lan/incidents/+/status` topics (interim ingestion, see the Decisions at the end) and writes
+> `history.events`, `history.incidents` and `history.need_triage` itself. The poller still writes
+> `history.host_state`, `history.service_state` and `history.metrics` straight to ClickHouse. The
+> transport redesign described below is a later phase; read the rest of this section as that later
+> proposal.
+
 - Replace `write_history()`'s HTTP insert with a **publish** of the same rows, for example one message per
   cycle on `history/samples` (QoS 1, not retained). `build_history_rows()` itself does not change.
 - Publish discrete messages for events and incident open/close on `history/events` and `history/incidents`
@@ -89,8 +102,8 @@ Implications to plan for:
 
 The daily availability rollup runs in the poller. It reads ClickHouse and writes JSON and Parquet to MinIO.
 Once the poller has no ClickHouse access, the rollup job **moves to the analytics container**: same code,
-running next to ClickHouse and S3. Open question for Phase 14.2: move it in 14.2, or leave it in the poller
-until the cloud migration.
+running next to ClickHouse and S3. Resolved in Phase 14.2 (D-04): the rollup moved in 14.2, and the poller
+no longer has any rollup or S3 code.
 
 ### Other cloud-split items noted for later (not Phase 14.2)
 
@@ -455,4 +468,126 @@ step.
   `SELECT count() FROM history.metrics WHERE ts = (SELECT max(ts) FROM history.metrics)`.
 - Whether Checkmk really checks once a minute: add `last_check` to the services query and count how often
   it changes between 15 s polls for a typical service.
+
+---
+
+## Phase 14.2 analytics topics
+
+The `analytics` container (`python -m analytics`, source in `analytics/`) added three published topics and
+one consumed command topic. Every topic is shown with its full `sites/<site_id>/` prefix; the dashboard strips
+the prefix once at its MQTT edge. Payload keys come from the implementation (`Need.to_payload` in
+`analytics/rules.py`, `Fit.to_payload` in `analytics/fit.py`, `_publish_forecasts` and `_publish_narration`
+in `analytics/service.py`, `parse_triage_command` in `analytics/triage.py`). The example values are
+illustrative: they were not captured from a live broker. Every analytics publish is compact JSON, QoS 1.
+
+| Topic | Writer | When published | QoS | Retained | Cleared by |
+|---|---|---|---|---|---|
+| `sites/<site_id>/lan/needs/{need_id}/status` | analytics | when a need appears or changes, after a triage command, and each evaluation cycle (default every 900 s) | 1 | yes | tombstone |
+| `sites/<site_id>/lan/forecasts/{host}` | analytics | every evaluation cycle, for each host that has at least one fit | 1 | yes | tombstone |
+| `sites/<site_id>/lan/incidents/{incident_id}/narration` | analytics | when an incident's narration text or tier changes | 1 | yes | tombstone |
+| `sites/<site_id>/needs/triage/cmd` | dashboard, as `wstriage` | on an operator triage action | 1 | no | n/a |
+
+`needs/triage/cmd` sits outside `lan/`, so the read-only `wsreader` login never receives it.
+
+### Needs: `lan/needs/{need_id}/status`
+
+`need_id` is the source initial and 12 hex characters, `f-` (failure), `t-` (trend) or `s-` (sustained), the
+hex being the start of a SHA-1 over `source|host|service|metric`, so an id is stable across restarts. Tiers are
+`immediate`, `urgent` and `standard`. Example, a trend need:
+
+```json
+{"id":"t-3fa91c07be21","source":"trend","host":"linux1","service":"Filesystem /","metric":"fs_used_percent",
+ "unit":"%","tier":"urgent","computed_tier":"urgent","days_to_warn":4.2,"days_to_crit":11.8,
+ "warn_date":"2026-10-08","crit_date":"2026-10-16","confidence":"medium","history_days":31.5,
+ "value":88.4,"warn":80.0,"crit":90.0,"sustained_fraction":null,"window_hours":null,
+ "since":"2026-10-03T21:15:00Z","narration":"linux1 Filesystem / ...","triage":null,
+ "generated_at":"2026-10-04T08:15:00Z"}
+```
+
+A failure need leaves the trend fields null; a sustained need fills `sustained_fraction` and `window_hours`.
+`tier` is the effective tier (an operator override applied); `computed_tier` is what the rules produced.
+After a triage action `triage` is `{"action","tier","set_at","computed_tier_at_set","note","by"}`, otherwise
+`null` (a `cancel` also sets it, with `tier` equal to `computed_tier`).
+
+**Tombstone rule (D-14, D-23):** a need is tombstoned (an empty retained payload) only after it has been absent
+for 2 consecutive evaluation cycles (`RESOLVE_AFTER_CLEAN_CYCLES`), so a one-cycle flicker neither removes it
+nor wipes its triage. An override is dropped, and audited as `auto_reset`, when the computed tier becomes worse
+than it was at triage time. While ClickHouse is unreachable the previous cycle's trend and sustained needs are
+carried over, so an outage is not read as those needs resolving.
+
+### Forecasts: `lan/forecasts/{host}`
+
+One topic per host, carrying every fit for that host:
+
+```json
+{"host":"linux1","generated_at":"2026-10-04T08:15:00Z","fits":[
+  {"status":"trending","history_days":31.5,"slope_per_day":0.42,"value_at_end":88.4,
+   "fit_start_ts":1759000000.0,"fit_end_ts":1759560000.0,"r2":0.93,"confidence":"medium",
+   "last_value":88.5,"warn":80.0,"crit":90.0,"warn_ts":null,"crit_ts":1760600000.0,
+   "warn_date":null,"crit_date":"2026-10-16","days_to_warn":null,"days_to_crit":11.8,
+   "service":"Filesystem /","metric":"fs_used_percent","unit":"%"}]}
+```
+
+`status` is `trending`, `stable` or `no_clear_trend`; the slope, anchor and date fields are null unless the fit
+passed its quality gate. Timestamps are Unix seconds (UTC) and `*_date` fields are `YYYY-MM-DD`.
+
+**The dashboard never refits (D-15).** The chart's dashed line is drawn from the published anchor:
+
+```
+y(t) = value_at_end + slope_per_day * (t - fit_end_ts) / 86400
+```
+
+and a level is crossed at `fit_end_ts + (level - value_at_end) / slope_per_day * 86400`, which reproduces
+the published dates. A host that no longer has any fit is tombstoned on the next cycle. A host id that is
+unsafe as a topic segment (contains `+`, `#`, `/` or a control character) is skipped with a warning. Known
+limitation: a forecast topic orphaned by a restart (the host vanished while analytics was down) is not
+tombstoned.
+
+### Incident narration: `lan/incidents/{incident_id}/narration`
+
+Published beside the poller's `lan/incidents/{incident_id}/status`. Analytics reads that topic and never
+writes it (D-29). Example:
+
+```json
+{"id":"incident-sw1","headline":"sw1 (critical criticality) is the inferred common cause since 12:05.",
+ "sentences":["..."],"tier":"immediate","generated_at":"2026-10-04T12:05:30Z"}
+```
+
+`tier` comes from the incident's `worst_criticality` (`critical` is `immediate`, `high` is `urgent`, `medium`
+and `low` are `standard`). The narration carries no elapsed duration, because it would go stale between
+publishes; the dashboard renders the live elapsed time itself. It is republished only when the headline,
+sentences or tier change (once after every analytics restart, as the signatures are not seeded from the
+retained copies). It is tombstoned when the incident's `status` topic is tombstoned (the incident closed), and
+at startup any retained narration whose incident is no longer retained is cleared.
+
+### Triage command: `needs/triage/cmd`
+
+Published by the browser, not retained, QoS 1:
+
+```json
+{"id":"cmd-1759563000-a1","need_id":"t-3fa91c07be21","action":"downgrade","note":"planned","by":"jo"}
+```
+
+`action` is `downgrade` (one step below the *computed* tier, so a QoS 1 redelivery produces the same result),
+`upgrade` (to `immediate`) or `cancel` (back to the computed tier). `note` is capped at 200 characters, `by` at
+64 and the message at 4096 bytes. Analytics ignores retained deliveries, commands failing the strict shape
+check, and commands naming a need that does not currently exist; every accepted command is audited in
+`history.need_triage`.
+
+It is **not acknowledged**: there is no ack topic. The confirmation is the need being republished on its own
+`status` topic with `triage` set to the new `{"action",...}` object (a `cancel` sets `triage.action` to
+`cancel` and `tier` back to `computed_tier`). The `triage` object is dropped only by the auto-reset rule above.
+
+### ACL for the new logins
+
+From `deploy/mosquitto.acl.template`:
+
+| User | Grants |
+|---|---|
+| `analytics` | `read sites/<site_id>/lan/#`, `read sites/<site_id>/needs/triage/cmd`, `write sites/<site_id>/lan/needs/#`, `write sites/<site_id>/lan/forecasts/#`, `write sites/<site_id>/lan/incidents/+/narration` |
+| `wstriage` | `write sites/<site_id>/needs/triage/cmd` only; no read |
+
+`analytics` has no write on `lan/incidents/+/status`, which stays the poller's. `wstriage` is served openly on
+`/triage-config.json` (like `wsadmin` on `/admin-config.json`), so it is for a closed network only. Its reach
+is bounded: analytics validates every command, and a command can only change a need's tier.
 
