@@ -124,6 +124,31 @@ describe("connect", () => {
     expect(useAppStore.getState().incidents).toEqual({});
   });
 
+  it("drops needs, forecasts and narrations on every connect before the retained replay", () => {
+    const fake = createFakeClient();
+    const connectFn = vi.fn(() => fake as unknown as MqttClient);
+    connect({ connectFn });
+    fake.emit("connect");
+    const enc = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
+    const state = useAppStore.getState();
+    state.handleMessage(
+      "lan/needs/n1/status",
+      enc({ id: "n1", source: "trend", host: "h", tier: "urgent" }),
+    );
+    state.handleMessage("lan/forecasts/h", enc({ host: "h", generated_at: "t", fits: [] }));
+    state.handleMessage(
+      "lan/incidents/incident-h/narration",
+      enc({ headline: "H", sentences: [] }),
+    );
+    expect(Object.keys(useAppStore.getState().needs)).toEqual(["n1"]);
+
+    fake.emit("connect");
+
+    expect(useAppStore.getState().needs).toEqual({});
+    expect(useAppStore.getState().forecasts).toEqual({});
+    expect(useAppStore.getState().narrations).toEqual({});
+  });
+
   it("schedules a reconnect with jittered exponential backoff on close", () => {
     const fake = createFakeClient();
     const connectFn = vi.fn(() => fake as unknown as MqttClient);

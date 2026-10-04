@@ -32,11 +32,15 @@ import { create } from "zustand";
 import type {
   DevicePayload,
   EventEntry,
+  ForecastPayload,
   IncidentPayload,
+  NarrationPayload,
+  NeedPayload,
   PollerStatusPayload,
   ServiceEntry,
   TopologyPayload,
 } from "../lib/types";
+import { parseForecast, parseNarration, parseNeed } from "../lib/forecast";
 
 export type ConnectionPhase = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -52,6 +56,11 @@ export interface AppState {
   // Phase 14 / D-13: open incidents, keyed by incident id, kept in step with the poller's
   // retained `lan/incidents/{id}/status` topics -- a pure MQTT consumer for this feature.
   incidents: Record<string, IncidentPayload>;
+  // Phase 14.2: failure-prediction needs (keyed by need id), per-host forecasts (keyed by
+  // host) and incident narrations (keyed by incident id), from retained analytics topics.
+  needs: Record<string, NeedPayload>;
+  forecasts: Record<string, ForecastPayload>;
+  narrations: Record<string, NarrationPayload>;
   topology: TopologyPayload | null;
   pollerStatus: PollerStatusPayload | null;
   // Bug fixed 2026-09-16 (ported from state-store.js): the poller's MQTT will
@@ -68,6 +77,7 @@ export interface AppState {
   handleMessage: (topic: string, payload: Uint8Array) => void;
   setConnection: (status: ConnectionState) => void;
   resetIncidents: () => void;
+  resetAnalytics: () => void;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -99,6 +109,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   services: {},
   events: [],
   incidents: {},
+  needs: {},
+  forecasts: {},
+  narrations: {},
   topology: null,
   pollerStatus: null,
   lastKnownPollerTimestamp: null,
@@ -114,6 +127,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // slice from scratch (14-REVIEW CR-02, 2026-09-28).
   resetIncidents: () => {
     set({ incidents: {} });
+  },
+
+  // Needs, forecasts and narrations are retained and tombstoned on resolve, so a tombstone
+  // missed while disconnected would leave a resolved need on screen forever. Same reasoning
+  // as resetIncidents: cleared on every (re)connect, the retained replay rebuilds them.
+  resetAnalytics: () => {
+    set({ needs: {}, forecasts: {}, narrations: {} });
   },
 
   handleMessage: (topic, payload) => {
@@ -140,6 +160,66 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return; // wrong shape -- malformed, drop
       }
       set({ incidents: { ...get().incidents, [id]: parsed.value as IncidentPayload } });
+      return;
+    }
+
+    if (parts[1] === "needs" && parts[3] === "status") {
+      const id = parts[2];
+      const parsed = parsePayload(payload);
+      if (!parsed.ok) {
+        return; // malformed -- keep last-known-good
+      }
+      if (parsed.value === null) {
+        const needs = { ...get().needs };
+        delete needs[id];
+        set({ needs });
+        return;
+      }
+      const need = parseNeed(parsed.value);
+      if (!need) {
+        return; // wrong shape -- keep last-known-good
+      }
+      set({ needs: { ...get().needs, [id]: need } });
+      return;
+    }
+
+    if (parts[1] === "forecasts" && parts.length === 3) {
+      const host = parts[2];
+      const parsed = parsePayload(payload);
+      if (!parsed.ok) {
+        return;
+      }
+      if (parsed.value === null) {
+        const forecasts = { ...get().forecasts };
+        delete forecasts[host];
+        set({ forecasts });
+        return;
+      }
+      const forecast = parseForecast(parsed.value);
+      if (!forecast) {
+        return;
+      }
+      set({ forecasts: { ...get().forecasts, [host]: forecast } });
+      return;
+    }
+
+    if (parts[1] === "incidents" && parts[3] === "narration") {
+      const id = parts[2];
+      const parsed = parsePayload(payload);
+      if (!parsed.ok) {
+        return;
+      }
+      if (parsed.value === null) {
+        const narrations = { ...get().narrations };
+        delete narrations[id];
+        set({ narrations });
+        return;
+      }
+      const narration = parseNarration(parsed.value);
+      if (!narration) {
+        return;
+      }
+      set({ narrations: { ...get().narrations, [id]: narration } });
       return;
     }
 

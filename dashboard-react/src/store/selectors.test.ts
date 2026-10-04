@@ -11,6 +11,9 @@ function stateWithDevices(devices: Record<string, DevicePayload>): AppState {
     services: {},
     events: [],
     incidents: {},
+    needs: {},
+    forecasts: {},
+    narrations: {},
     topology: null,
     pollerStatus: null,
     lastKnownPollerTimestamp: null,
@@ -18,6 +21,7 @@ function stateWithDevices(devices: Record<string, DevicePayload>): AppState {
     handleMessage: () => {},
     setConnection: () => {},
     resetIncidents: () => {},
+    resetAnalytics: () => {},
   };
 }
 
