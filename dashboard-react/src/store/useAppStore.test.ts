@@ -248,6 +248,88 @@ describe("handleMessage - incidents", () => {
   });
 });
 
+const NEED = {
+  id: "n-abc",
+  source: "trend",
+  host: "linux1",
+  tier: "urgent",
+  generated_at: "2026-10-04T11:55:00Z",
+};
+
+describe("handleMessage - needs", () => {
+  it("stores a valid need keyed by the topic id", () => {
+    useAppStore.getState().handleMessage("lan/needs/n-abc/status", encode(NEED));
+    expect(useAppStore.getState().needs["n-abc"]?.host).toBe("linux1");
+    expect(useAppStore.getState().needs["n-abc"]?.tier).toBe("urgent");
+  });
+
+  it("deletes the need on a zero-length payload (tombstone)", () => {
+    useAppStore.getState().handleMessage("lan/needs/n-abc/status", encode(NEED));
+    useAppStore.getState().handleMessage("lan/needs/n-abc/status", EMPTY_PAYLOAD);
+    expect(useAppStore.getState().needs).not.toHaveProperty("n-abc");
+  });
+
+  it("keeps the previous value on malformed JSON or an invalid need", () => {
+    useAppStore.getState().handleMessage("lan/needs/n-abc/status", encode(NEED));
+    useAppStore.getState().handleMessage("lan/needs/n-abc/status", new TextEncoder().encode("{nope"));
+    useAppStore.getState().handleMessage("lan/needs/n-abc/status", encode({ id: "n-abc", tier: "bogus" }));
+    expect(useAppStore.getState().needs["n-abc"]?.tier).toBe("urgent");
+  });
+});
+
+describe("handleMessage - forecasts", () => {
+  it("stores a forecast by host and deletes it on tombstone", () => {
+    useAppStore
+      .getState()
+      .handleMessage("lan/forecasts/linux1", encode({ host: "linux1", generated_at: "t", fits: [] }));
+    expect(useAppStore.getState().forecasts.linux1?.host).toBe("linux1");
+
+    useAppStore.getState().handleMessage("lan/forecasts/linux1", EMPTY_PAYLOAD);
+    expect(useAppStore.getState().forecasts).not.toHaveProperty("linux1");
+  });
+
+  it("keeps the previous forecast when the payload is malformed", () => {
+    useAppStore
+      .getState()
+      .handleMessage("lan/forecasts/linux1", encode({ host: "linux1", generated_at: "t", fits: [] }));
+    useAppStore.getState().handleMessage("lan/forecasts/linux1", encode({ host: "linux1" }));
+    expect(useAppStore.getState().forecasts.linux1?.generated_at).toBe("t");
+  });
+});
+
+describe("handleMessage - narrations", () => {
+  const narration = { id: "incident-sw1", headline: "H", sentences: ["a"], tier: null, generated_at: "t" };
+
+  it("stores a narration without creating or altering an incident entry", () => {
+    const before = useAppStore.getState().incidents;
+    useAppStore.getState().handleMessage("lan/incidents/incident-sw1/narration", encode(narration));
+    expect(useAppStore.getState().narrations["incident-sw1"]?.headline).toBe("H");
+    expect(useAppStore.getState().incidents).toBe(before);
+    expect(useAppStore.getState().incidents).not.toHaveProperty("incident-sw1");
+  });
+
+  it("deletes the narration on tombstone", () => {
+    useAppStore.getState().handleMessage("lan/incidents/incident-sw1/narration", encode(narration));
+    useAppStore.getState().handleMessage("lan/incidents/incident-sw1/narration", EMPTY_PAYLOAD);
+    expect(useAppStore.getState().narrations).not.toHaveProperty("incident-sw1");
+  });
+});
+
+describe("resetAnalytics", () => {
+  it("empties needs, forecasts and narrations but leaves incidents", () => {
+    const s = useAppStore.getState();
+    s.handleMessage("lan/needs/n-abc/status", encode(NEED));
+    s.handleMessage("lan/forecasts/linux1", encode({ host: "linux1", generated_at: "t", fits: [] }));
+    s.handleMessage("lan/incidents/incident-a/status", encode({ id: "incident-a", root: "a" }));
+    s.resetAnalytics();
+    const after = useAppStore.getState();
+    expect(after.needs).toEqual({});
+    expect(after.forecasts).toEqual({});
+    expect(after.narrations).toEqual({});
+    expect(Object.keys(after.incidents)).toEqual(["incident-a"]);
+  });
+});
+
 describe("handleMessage - unknown topic", () => {
   it("is a no-op and does not throw", () => {
     const before = useAppStore.getState();

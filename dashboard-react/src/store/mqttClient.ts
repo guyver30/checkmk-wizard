@@ -98,6 +98,10 @@ export function connect(deps: ConnectDeps = {}): void {
     // Don't-Hand-Roll table). Incidents are cleared first so the replay rebuilds them and
     // drops any that closed while disconnected (14-REVIEW CR-02).
     useAppStore.getState().resetIncidents();
+    // The retained replay after SUBACK rebuilds needs/forecasts/narrations; a tombstone
+    // published while disconnected is never redelivered, so clearing is the only way to
+    // drop resolved needs (same CR-02 reasoning as incidents).
+    useAppStore.getState().resetAnalytics();
     const withAdmin = isAdminMode() && !useAdminStore.getState().configError;
     client?.subscribe(subscribeTopics(checkmkSite, withAdmin));
     useAppStore.getState().setConnection({ phase: "connected" });
