@@ -463,13 +463,13 @@ Plans:
 
 **Requirements**: none mapped; coverage target is every 14.2-CONTEXT.md decision (D-01..D-31, D-19a)
 
-**Plans:** 5/19 plans executed
+**Plans:** 6/19 plans executed
 
 Plans:
 
 **Wave 1**
 
-- [ ] 14.2-01-PLAN.md — Live facts on dmc-server: metric catalog, levels, row volume, /ch-api/ typed params, ClickHouse version (non-autonomous, user runs read-only queries)
+- [x] 14.2-01-PLAN.md — Live facts on dmc-server: metric catalog, levels, row volume, /ch-api/ typed params, ClickHouse version (non-autonomous, user runs read-only queries)
 - [x] 14.2-02-PLAN.md — ClickHouse: s3 filesystem cache, events/incidents/need_triage tables, analytics_writer, idempotent migration
 - [x] 14.2-03-PLAN.md — Broker logins analytics/wstriage + exact ACL test, compose analytics service, /triage-config.json, secrets, smoke checks
 - [x] 14.2-04-PLAN.md — TDD analytics/fit.py: sharp-drop cut, r2 gate, crossings, confidence
