@@ -23,20 +23,20 @@ PARAMS = rules.RuleParams(
 
 
 def make_fit(**overrides) -> Fit:
-    base = dict(
-        status="trending",
-        history_days=30.0,
-        slope_per_day=1.0,
-        value_at_end=80.0,
-        confidence="medium",
-        last_value=80.0,
-        warn=85.0,
-        crit=90.0,
-        crit_date="2026-10-14",
-        warn_date="2026-10-09",
-        days_to_warn=5.0,
-        days_to_crit=10.0,
-    )
+    base = {
+        "status": "trending",
+        "history_days": 30.0,
+        "slope_per_day": 1.0,
+        "value_at_end": 80.0,
+        "confidence": "medium",
+        "last_value": 80.0,
+        "warn": 85.0,
+        "crit": 90.0,
+        "crit_date": "2026-10-14",
+        "warn_date": "2026-10-09",
+        "days_to_warn": 5.0,
+        "days_to_crit": 10.0,
+    }
     base.update(overrides)
     return Fit(**base)
 
