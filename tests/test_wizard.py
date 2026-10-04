@@ -3135,6 +3135,10 @@ async def test_resolve_agent_registration_server_falls_back_to_manual_entry_when
     # falls through to the free-text prompt, e.g. for a NAT/firewalled
     # address none of this machine's own interfaces would show.
     monkeypatch.setattr("checkmk_wizard.wizard._local_ipv4_addresses", lambda: ["192.168.1.10"])
+    # Host mode explicitly: without this the test depended on whether `omd`
+    # is installed where it runs, and took the container-mode branch (and
+    # failed) on a host without it (found 2026-10-04 on dmc-server).
+    monkeypatch.setattr("checkmk_wizard.wizard.site.omd_installed", lambda: True)
 
     answers = iter([_MANUAL_REGISTRATION_ADDRESS, "cmk.example.com"])
 
