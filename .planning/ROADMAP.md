@@ -463,18 +463,18 @@ Plans:
 
 **Requirements**: none mapped; coverage target is every 14.2-CONTEXT.md decision (D-01..D-31, D-19a)
 
-**Plans:** 19 plans
+**Plans:** 5/19 plans executed
 
 Plans:
 
 **Wave 1**
 
 - [ ] 14.2-01-PLAN.md — Live facts on dmc-server: metric catalog, levels, row volume, /ch-api/ typed params, ClickHouse version (non-autonomous, user runs read-only queries)
-- [ ] 14.2-02-PLAN.md — ClickHouse: s3 filesystem cache, events/incidents/need_triage tables, analytics_writer, idempotent migration
-- [ ] 14.2-03-PLAN.md — Broker logins analytics/wstriage + exact ACL test, compose analytics service, /triage-config.json, secrets, smoke checks
-- [ ] 14.2-04-PLAN.md — TDD analytics/fit.py: sharp-drop cut, r2 gate, crossings, confidence
-- [ ] 14.2-05-PLAN.md — TDD analytics/narrate.py: field-gated incident/need narration
-- [ ] 14.2-06-PLAN.md — Dashboard data layer: payload types, parsers, subscriptions, store slices
+- [x] 14.2-02-PLAN.md — ClickHouse: s3 filesystem cache, events/incidents/need_triage tables, analytics_writer, idempotent migration
+- [x] 14.2-03-PLAN.md — Broker logins analytics/wstriage + exact ACL test, compose analytics service, /triage-config.json, secrets, smoke checks
+- [x] 14.2-04-PLAN.md — TDD analytics/fit.py: sharp-drop cut, r2 gate, crossings, confidence
+- [x] 14.2-05-PLAN.md — TDD analytics/narrate.py: field-gated incident/need narration
+- [x] 14.2-06-PLAN.md — Dashboard data layer: payload types, parsers, subscriptions, store slices
 
 **Wave 2**
 
