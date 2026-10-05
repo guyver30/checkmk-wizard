@@ -227,11 +227,25 @@ def test_failure_need_ignores_up_host():
 
 
 @pytest.mark.parametrize("key", ["root", "confirmed_down", "not_observable"])
-def test_no_failure_need_for_host_in_open_incident(key):
+@pytest.mark.parametrize(
+    "criticality,tier", [("critical", "immediate"), ("high", "urgent"), ("medium", "standard"), ("low", "standard")]
+)
+def test_failure_need_for_down_host_in_open_incident(key, criticality, tier):
+    # D-27 reversed for host-DOWN needs on 2026-10-05 (quick 261005-dox): the DOWN host must
+    # show in Needs next to its incident. Service needs stay suppressed (next test).
     incident = {"root": "other", "confirmed_down": [], "not_observable": []}
     incident[key] = "sw1" if key == "root" else ["sw1"]
     assert rules.covered_hosts({"incident-x": incident}) >= {"sw1"}
-    assert rules.failure_needs(_down(), {}, {"sw1": {"criticality": "critical"}}, {"incident-x": incident}, NOW, TZ) == []
+    needs = rules.failure_needs(_down(), {}, {"sw1": {"criticality": criticality}}, {"incident-x": incident}, NOW, TZ)
+    assert len(needs) == 1
+    assert needs[0].service == "" and needs[0].tier == tier
+
+
+def test_covered_down_host_with_crit_service_yields_only_host_need():
+    incident = {"root": "sw1", "confirmed_down": [], "not_observable": []}
+    services = {"sw1": [{"description": "TCP Port 443", "state": "CRIT"}]}
+    needs = rules.failure_needs(_down(), services, {}, {"i": incident}, NOW, TZ)
+    assert [n.service for n in needs] == [""]
 
 
 def test_no_service_failure_need_for_covered_host():
@@ -443,3 +457,37 @@ def test_carry_triage_cancel_kept_and_tier_stays_computed():
 def test_carry_triage_without_previous():
     new, audit = rules.carry_triage(None, make_need())
     assert audit is None and new.triage is None
+
+
+def test_tracker_failure_only_ticks_never_tombstone_trend_need():
+    tracker = rules.NeedTracker(PARAMS)
+    need = make_need(source="trend")
+    tracker.update([need], NOW)
+    for i in range(5):
+        publish, tomb = tracker.update([], NOW + timedelta(seconds=15 * i), evaluated_sources={"failure"})
+        assert tomb == []
+        assert [n.id for n in publish] == [need.id]
+    assert tracker.get(need.id) is not None
+
+
+def test_tracker_failure_need_tombstoned_on_second_absent_failure_tick():
+    tracker = rules.NeedTracker(PARAMS)
+    need = make_need(source="failure")
+    tracker.update([need], NOW)
+    _, tomb = tracker.update([], NOW, evaluated_sources={"failure"})
+    assert tomb == []
+    _, tomb = tracker.update([], NOW, evaluated_sources={"failure"})
+    assert tomb == [need.id]
+
+
+def test_tracker_missed_count_unchanged_by_unevaluated_ticks():
+    tracker = rules.NeedTracker(PARAMS)
+    need = make_need(source="trend")
+    tracker.update([need], NOW)
+    _, tomb = tracker.update([], NOW)  # full evaluation: missed = 1
+    assert tomb == []
+    for _ in range(3):
+        _, tomb = tracker.update([], NOW, evaluated_sources={"failure"})
+        assert tomb == []
+    _, tomb = tracker.update([], NOW)
+    assert tomb == [need.id]

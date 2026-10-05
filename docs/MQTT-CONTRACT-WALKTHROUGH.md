@@ -482,7 +482,7 @@ illustrative: they were not captured from a live broker. Every analytics publish
 
 | Topic | Writer | When published | QoS | Retained | Cleared by |
 |---|---|---|---|---|---|
-| `sites/<site_id>/lan/needs/{need_id}/status` | analytics | when a need appears or changes, after a triage command, and each evaluation cycle (default every 900 s) | 1 | yes | tombstone |
+| `sites/<site_id>/lan/needs/{need_id}/status` | analytics | when a need appears or changes (failure needs are checked every `POLL_INTERVAL_SECONDS`, 15 s), after a triage command, and each slow evaluation cycle (default every 900 s) | 1 | yes | tombstone |
 | `sites/<site_id>/lan/forecasts/{host}` | analytics | every evaluation cycle, for each host that has at least one fit | 1 | yes | tombstone |
 | `sites/<site_id>/lan/incidents/{incident_id}/narration` | analytics | when an incident's narration text or tier changes | 1 | yes | tombstone |
 | `sites/<site_id>/needs/triage/cmd` | dashboard, as `wstriage` | on an operator triage action | 1 | no | n/a |

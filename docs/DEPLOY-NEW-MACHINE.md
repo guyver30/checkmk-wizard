@@ -87,8 +87,8 @@ block and do a full `podman compose down && podman compose up -d`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `POLL_INTERVAL_SECONDS` | `15` (set in compose) | Must equal the poller's; the availability rollup scales sample counts by it. |
-| `EVAL_INTERVAL_SECONDS` | `900` (set in compose) | How often forecasts and needs are re-evaluated. |
+| `POLL_INTERVAL_SECONDS` | `15` (set in compose) | Must equal the poller's; the availability rollup scales sample counts by it. Also the analytics failure-need tick: host-DOWN and service failure needs are evaluated at this cadence. |
+| `EVAL_INTERVAL_SECONDS` | `900` (set in compose) | How often forecasts and trend/sustained needs are re-evaluated (failure needs follow `POLL_INTERVAL_SECONDS`, 15 s). |
 | `TIER_IMMEDIATE_DAYS` | `3.0` | Days to critical below which a trend need is `immediate`. |
 | `TIER_URGENT_DAYS` | `20.0` | Days to critical up to which a trend need is `urgent` (above it, `standard`). |
 | `NEED_HORIZON_DAYS` | `90.0` | A trend crossing further out than this is not a need. |

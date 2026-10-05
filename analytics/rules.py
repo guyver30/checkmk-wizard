@@ -20,8 +20,10 @@ host or service name ever lands in a topic (D-14). A need is tombstoned only
 after it has been absent for `RESOLVE_AFTER_CLEAN_CYCLES` consecutive cycles,
 so a one-cycle flicker neither tombstones nor wipes triage. A triage override
 is dropped when the computed tier becomes worse than it was at triage time and
-the drop is reported for an `auto_reset` audit row (D-22, D-23). No failure need
-is raised for a host covered by an open incident (D-27). Every need carries its
+the drop is reported for an `auto_reset` audit row (D-22, D-23). Service and TCP
+port failure needs are suppressed for a host covered by an open incident (D-27);
+the host-DOWN need is still raised (D-27 amended 2026-10-05, demo requirement: a
+DOWN host shows in Needs next to its incident). Every need carries its
 one-line narration (D-31).
 
 Standard library only.
@@ -244,7 +246,11 @@ def sustained_need(
 
 
 def covered_hosts(open_incidents: dict[str, dict]) -> set[str]:
-    """Hosts named by an open incident as root, confirmed down or not observable (D-27)."""
+    """Hosts named by an open incident as root, confirmed down or not observable.
+
+    Their service failure needs are suppressed (D-27); the host-DOWN need is not
+    (D-27 amended 2026-10-05).
+    """
     covered: set[str] = set()
     if not isinstance(open_incidents, dict):
         return covered
@@ -280,13 +286,17 @@ def failure_needs(
     covered = covered_hosts(open_incidents)
     hosts = set(statuses) | set(services) if isinstance(statuses, dict) and isinstance(services, dict) else set()
     for host in sorted(hosts, key=str):
-        if not isinstance(host, str) or host in covered:
+        if not isinstance(host, str):
             continue
         node = topology_nodes.get(host) if isinstance(topology_nodes, dict) else None
         node = node if isinstance(node, dict) else {}
         status = statuses.get(host)
         if isinstance(status, dict) and status.get("host_state_raw") == "DOWN":
             needs.append(_make("failure", host, "", "", "", tier_from_criticality(node.get("criticality")), now, tz))
+        if host in covered:
+            # D-27 still applies to service needs; only the host-DOWN need above is
+            # raised for covered hosts (reversal of 2026-10-05, quick 261005-dox).
+            continue
         rows = services.get(host)
         for row in rows if isinstance(rows, list) else []:
             if not isinstance(row, dict) or row.get("state") != "CRIT":
@@ -323,7 +333,12 @@ def carry_triage(prev: Need | None, new: Need) -> tuple[Need, dict | None]:
 
 
 class NeedTracker:
-    """Open needs (since, triage) plus one absent-cycle counter each; nothing else."""
+    """Open needs (since, triage) plus one absent-cycle counter each; nothing else.
+
+    The counter advances only when the need's source was evaluated (`evaluated_sources`),
+    so failure needs clear after `RESOLVE_AFTER_CLEAN_CYCLES` absent fast ticks while
+    trend and sustained needs still need that many absent successful slow cycles.
+    """
 
     def __init__(self, params: RuleParams) -> None:
         self.params = params
@@ -346,7 +361,13 @@ class NeedTracker:
         tier = need.computed_tier if triage.get("action") == "cancel" else triage.get("tier", need.computed_tier)
         self._open[need_id] = (replace(need, triage=triage, tier=tier), entry[1])
 
-    def update(self, candidates: list[Need], now: datetime) -> tuple[list[Need], list[str]]:
+    def update(
+        self,
+        candidates: list[Need],
+        now: datetime,
+        evaluated_sources: frozenset[str] | set[str] | None = None,
+    ) -> tuple[list[Need], list[str]]:
+        """None means every source was evaluated; otherwise absent needs of other sources are kept unchanged."""
         self.auto_resets = []
         publish: list[Need] = []
         seen: set[str] = set()
@@ -364,6 +385,9 @@ class NeedTracker:
         tombstones: list[str] = []
         for nid, (need, missed) in list(self._open.items()):
             if nid in seen:
+                continue
+            if evaluated_sources is not None and need.source not in evaluated_sources:
+                publish.append(need)
                 continue
             missed += 1
             if missed >= self.params.resolve_after_clean_cycles:

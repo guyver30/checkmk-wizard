@@ -437,7 +437,7 @@ def test_run_forever_runs_cycles_and_ticks_rollups_until_stopped(svc):
 
     stop = FakeStop()
 
-    def run_cycle(now):
+    def run_cycle(now, slow=True):
         calls["cycles"] += 1
         if calls["cycles"] == 2:
             stop.stopped = True
@@ -454,3 +454,101 @@ def test_main_rejects_invalid_site_id(monkeypatch, capsys):
     monkeypatch.setenv("CMK_SITE_ID", "1bad")
     assert main() == 2
     assert "error:" in capsys.readouterr().err
+
+
+def _down_host(svc, host="h1", criticality="critical"):
+    svc.on_message(None, None, msg(f"lan/devices/{host}/status", {"host_state_raw": "DOWN"}))
+    svc.on_message(None, None, msg("lan/devices/topology", {"devices": [{"id": host, "criticality": criticality}]}))
+
+
+def _tombstoned_need_topics(client):
+    return [p[0] for p in client.published if p[1] is None and p[0].startswith(P + "lan/needs/")]
+
+
+def test_fast_tick_publishes_failure_need_without_touching_history(svc):
+    def boom(*args, **kwargs):
+        raise AssertionError("fast tick must not query ClickHouse")
+
+    svc.history.fetch_fit_buckets = boom
+    svc.history.fetch_levels = boom
+    svc.history.fetch_recent_hourly = boom
+    _down_host(svc)
+    svc.run_cycle(NOW, slow=False)
+    (need,) = published_json(svc.client, "lan/needs/").values()
+    assert need["source"] == "failure" and need["tier"] == "immediate"
+    assert published_json(svc.client, "lan/forecasts/") == {}
+
+
+def test_fast_ticks_keep_slow_needs_open(cycle_svc):
+    cycle_svc.run_cycle(NOW)
+    (trend_id,) = [n["id"] for n in published_json(cycle_svc.client, "lan/needs/").values()]
+    cycle_svc.history.buckets = {}
+    cycle_svc.client.published.clear()
+    for _ in range(5):
+        cycle_svc.run_cycle(NOW, slow=False)
+    assert _tombstoned_need_topics(cycle_svc.client) == []
+    assert cycle_svc.tracker.get(trend_id) is not None
+    # Unchanged needs are not republished on fast ticks.
+    assert published_json(cycle_svc.client, "lan/needs/") == {}
+
+
+def test_failure_need_clears_after_two_fast_ticks(svc):
+    _down_host(svc)
+    svc.run_cycle(NOW, slow=False)
+    svc.on_message(None, None, msg("lan/devices/h1/status", {"host_state_raw": "UP"}))
+    svc.client.published.clear()
+    svc.run_cycle(NOW, slow=False)
+    assert _tombstoned_need_topics(svc.client) == []
+    svc.run_cycle(NOW, slow=False)
+    assert len(_tombstoned_need_topics(svc.client)) == 1
+
+
+def test_covered_down_host_gets_need_and_triage_is_audited(svc):
+    svc.on_message(None, None, msg("lan/incidents/i1/status", INCIDENT))
+    _down_host(svc, host="core", criticality="high")
+    svc.run_cycle(NOW, slow=False)
+    (need,) = published_json(svc.client, "lan/needs/").values()
+    assert need["host"] == "core" and need["tier"] == "urgent"
+    svc.client.published.clear()
+    svc.on_message(None, None, msg("needs/triage/cmd", triage_cmd(need["id"])))
+    table, rows = svc.history.inserts[-1]
+    assert table == "history.need_triage" and rows[0]["action"] == "downgrade"
+    (republished,) = published_json(svc.client, "lan/needs/").values()
+    assert republished["tier"] == "standard" and republished["triage"]["action"] == "downgrade"
+
+
+def test_run_forever_schedule_one_slow_then_fast_ticks(svc):
+    calls = []
+    clock_value = [0.0]
+
+    class FakeStop:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, timeout=None):
+            clock_value[0] += timeout
+
+    class FakeRollup:
+        class RollupScheduler:
+            def __init__(self, delay_minutes):
+                pass
+
+        @staticmethod
+        def maybe_run_rollups(*args):
+            calls.append("rollup")
+
+    stop = FakeStop()
+
+    def run_cycle(now, slow=True):
+        calls.append("slow" if slow else "fast")
+        if len([c for c in calls if c != "rollup"]) == 61:
+            stop.stopped = True
+
+    svc.rollup_mod = FakeRollup
+    svc.run_cycle = run_cycle
+    svc.run_forever(stop, clock=lambda: clock_value[0])
+    cycles = [c for c in calls if c != "rollup"]
+    assert cycles[0] == "slow" and set(cycles[1:60]) == {"fast"} and cycles[60] == "slow"
+    assert calls.count("rollup") >= 61
