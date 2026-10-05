@@ -323,7 +323,7 @@ export function AdminActionBar({
   return (
     <>
       <div
-        className="flex items-center gap-2 border-t bg-bg-subtle p-4"
+        className="flex flex-wrap items-center gap-2 rounded-md border bg-bg-subtle p-3"
         data-testid="admin-action-bar"
       >
         <div className="flex flex-col">

@@ -384,6 +384,16 @@ export function IndexRoute() {
                 adminMode ? "Unavailable in admin mode" : undefined
               }
             />
+            {/* Admin actions sit beside the "Edit topology" row, not at the page bottom
+                (2026-10-05): the operator works on the map and should not have to look
+                away from it to act on the selection. */}
+            {adminMode && (
+              <AdminActionBar
+                devices={devices}
+                topologyDevices={topologyDevices}
+                visibleHostIds={visibleHostIds}
+              />
+            )}
             {editMode && editingAvailable && (
               <CriticalityEditor
                 hostIds={hostIds}
@@ -459,11 +469,6 @@ export function IndexRoute() {
         <div className="flex h-full min-h-0 flex-col">
           <AdminBanner />
           <div className="min-h-0 flex-1">{layout}</div>
-          <AdminActionBar
-            devices={devices}
-            topologyDevices={topologyDevices}
-            visibleHostIds={visibleHostIds}
-          />
         </div>
       ) : (
         layout
