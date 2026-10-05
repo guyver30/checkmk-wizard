@@ -410,7 +410,7 @@ export function AdminActionBar({
             role="dialog"
             aria-modal="true"
             aria-labelledby="admin-dialog-title"
-            className="w-full max-w-md rounded-md bg-bg-primary p-6 shadow-lg"
+            className="w-full max-w-md rounded-md bg-bg-surface p-6 shadow-lg"
             onClick={(event) => event.stopPropagation()}
             onKeyDown={trapTab}
           >
