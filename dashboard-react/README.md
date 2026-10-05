@@ -318,6 +318,23 @@ immediate, ring urgent, none for standard; the worst need's narration is the too
 small dot at the node's top-right on the map, drawn in vis-network's `afterDrawing` hook. Both
 read a `tierLookup` built by `buildTierLookup` from the visible needs.
 
+**Reading the small orange dot (tier marker).** The dot at the top-right of a host's map icon
+(and after the state badge on its tree row) says the host has an open service need that is
+*urgent* or *immediate*. It is separate from the state colour: a green host can carry one, for
+example a disk trending towards full.
+
+| Marker | Tier | Typical cause |
+|---|---|---|
+| Filled orange dot | Immediate | Critical host DOWN, a metric already critical, or under 3 days to the critical level |
+| Orange ring | Urgent | High-criticality host DOWN, or 3 to 20 days to the critical level |
+| none | Standard | Medium/low criticality, or more than 20 days out; listed in the Needs tab only |
+
+A host with several needs shows its worst tier. In the tree, hovering the marker shows the need's
+one-line description; the need itself, with its Triage button, is in the Needs tab. Both tiers use
+the same warning orange; the fill versus ring tells them apart. Host-DOWN needs are raised next to
+the incident (D-27 reversed for host-DOWN on 2026-10-05) and evaluated every 15 s, so the marker
+appears about 15 to 30 s after a host goes down and clears about 30 s after it recovers.
+
 In the Incidents tab of the pane at the top of the right-hand column (above the host details
 pane), `IncidentList` (DASH-14) shows one card per open root-cause incident. The pane is
 collapsible: collapsing it keeps the header (combined count and severity badge) visible, and when every
@@ -401,7 +418,8 @@ that fakes host UP/DOWN/UNREACHABLE states for live demos. Step-by-step usage is
 Modules: `src/lib/adminMode.ts` (detection, login loading, command/ack/faked parsing, folder and
 cascade-preview helpers), `src/store/adminStore.ts` (selection, faked map, pending command, last
 result), `publishAdminCommand` in `src/store/mqttClient.ts`, and `src/components/AdminBar.tsx`
-(banner, action bar, confirm dialog). Tree and map selection live in `Tree.tsx`/`TreeNode.tsx` and
+(banner, action bar, confirm dialog). The action bar sits under the "Edit topology" row at the top of the
+map column (moved from the page bottom on 2026-10-05). Tree and map selection live in `Tree.tsx`/`TreeNode.tsx` and
 `TopologyMap.tsx`.
 
 MQTT contract (the poller turns commands into Livestatus external commands):
