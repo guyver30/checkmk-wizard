@@ -142,16 +142,16 @@ set. The keepalive then re-injects its result every 30 s until you Restore it.
 | UNREACH, check disabled | Faked UNREACH (by Set UNREACHABLE, or by a parent's Set DOWN cascade) |
 | FAKED badge in the tree, FAKED caption on the map | In the faked set |
 
-### What the small orange dot means (for the audience)
+### What the small coloured dot means (for the audience)
 
-When you fake a host DOWN, a small orange marker appears at the top-right of its icon on the map
+When you fake a host DOWN, a small coloured dot appears at the top-right of its icon on the map
 and next to it in the tree, and a row appears in the **Needs** tab of the "Incidents & needs"
-pane. The marker is the host's *service need tier*, derived from its criticality: a filled dot is
-**Immediate** (critical host), a ring is **Urgent** (high), and medium or low criticality shows no
-marker (the need is still listed in the Needs tab as Standard). It appears within about 30 s and
-clears about 30 s after you restore the host. To show all three tiers, fake DOWN three hosts that
-have different criticality. **Triage** on a need row (downgrade, upgrade to immediate, cancel) works in
-admin mode too. Full legend: `dashboard-react/README.md`, section 5c.
+pane. The dot is the host's *service need tier*, derived from its criticality: **red** is
+Immediate (critical host), **orange** is Urgent (high), **yellow** is Standard (medium or low). It
+appears within about 30 s and clears about 30 s after you restore the host. To show all three
+colours, fake DOWN three hosts with different criticality. **Triage** on a need row (downgrade,
+upgrade to immediate, cancel) works in admin mode too. Full legend: `dashboard-react/README.md`,
+section 5c.
 
 ### Scenario A, B and C with admin mode
 

@@ -49,6 +49,7 @@ import {
 } from "../lib/topologyLayout";
 import type { IncidentLookup } from "../lib/incidents";
 import type { TierLookup } from "../lib/needDisplay";
+import type { NeedTier } from "../lib/types";
 import type { DevicePayload } from "../lib/types";
 
 export interface EditFailure {
@@ -194,12 +195,22 @@ function drawGrid(ctx: CanvasRenderingContext2D, network: Network, container: HT
 
 // Fallback for canvas drawing when the CSS variable cannot be resolved (canvas cannot use
 // var(...) directly, so the token is read once per frame from the container's computed style).
-const TIER_MARKER_FALLBACK_COLOR = "#f59e0b";
+const TIER_MARKER_FALLBACK_COLORS: Record<NeedTier, string> = {
+  immediate: "#dc2626",
+  urgent: "#f59e0b",
+  standard: "#facc15",
+};
+// CSS variable per tier; standard has no design-system token and always uses its fixed yellow.
+const TIER_MARKER_VARS: Record<NeedTier, string | null> = {
+  immediate: "--color-alert-default",
+  urgent: "--color-warning-default",
+  standard: null,
+};
 const TIER_MARKER_RADIUS = 4;
 // Offset from the node centre to its top-right, in canvas units (node size is 16).
 const TIER_MARKER_OFFSET = 12;
 
-// Draws the service-need tier marker (filled dot immediate, ring urgent) at each node's
+// Draws the service-need tier marker (filled dot: red immediate, orange urgent, yellow standard) at each node's
 // top-right, in network coordinates (called from afterDrawing, so it pans and zooms with the
 // map). It sits on top of the node and never changes the node's own colour or border.
 function drawTierMarkers(
@@ -208,22 +219,24 @@ function drawTierMarkers(
   container: HTMLElement,
   tierLookup: TierLookup,
 ): void {
-  const ids = Object.keys(tierLookup).filter((id) => tierLookup[id].tier !== "standard");
+  const ids = Object.keys(tierLookup);
   if (ids.length === 0) {
     return;
   }
   const positions = network.getPositions(ids);
-  const resolved = getComputedStyle(container).getPropertyValue("--color-warning-default").trim();
-  const color = resolved || TIER_MARKER_FALLBACK_COLOR;
+  const style = getComputedStyle(container);
+  const colorFor = (tier: NeedTier): string => {
+    const variable = TIER_MARKER_VARS[tier];
+    const resolved = variable ? style.getPropertyValue(variable).trim() : "";
+    return resolved || TIER_MARKER_FALLBACK_COLORS[tier];
+  };
   ctx.save();
-  ctx.fillStyle = color;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
   for (const id of ids) {
     const position = positions[id];
     if (!position) {
       continue;
     }
+    ctx.fillStyle = colorFor(tierLookup[id].tier);
     ctx.beginPath();
     ctx.arc(
       position.x + TIER_MARKER_OFFSET,
@@ -232,11 +245,7 @@ function drawTierMarkers(
       0,
       2 * Math.PI,
     );
-    if (tierLookup[id].tier === "immediate") {
-      ctx.fill();
-    } else {
-      ctx.stroke();
-    }
+    ctx.fill();
   }
   ctx.restore();
 }

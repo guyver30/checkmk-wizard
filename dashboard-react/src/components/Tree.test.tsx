@@ -615,8 +615,10 @@ describe("Tree tier markers (D-26)", () => {
     expect(screen.queryByLabelText("Urgent service need")).toBeNull();
   });
 
-  it("shows no marker for a standard tier or an unlisted host", () => {
+  it("shows a standard marker for a standard tier and none for an unlisted host", () => {
     renderWithTiers({ nd1: { tier: "standard", narration: "x" } });
-    expect(screen.queryByLabelText(/service need/)).toBeNull();
+    expect(screen.getAllByLabelText("Standard service need")).toHaveLength(1);
+    expect(screen.queryByLabelText("Urgent service need")).toBeNull();
+    expect(screen.queryByLabelText("Immediate service need")).toBeNull();
   });
 });

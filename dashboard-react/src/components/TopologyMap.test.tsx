@@ -533,7 +533,9 @@ describe("TopologyMap tier markers (D-26)", () => {
     expect(ctx.stroke).not.toHaveBeenCalled();
   });
 
-  it("draws a ring for an urgent host and nothing for hosts not in the lookup", () => {
+  // 2026-10-05: every tier is a filled dot now (red immediate, orange urgent, yellow standard);
+  // the ring and the "no marker for standard" rule are gone.
+  it("draws a filled dot per host in the lookup, in the tier colour, and nothing for others", () => {
     renderMap({
       topologyDevices,
       statuses,
@@ -544,8 +546,29 @@ describe("TopologyMap tier markers (D-26)", () => {
       instances[0].emit("afterDrawing", ctx);
     });
     expect(ctx.arc).toHaveBeenCalledTimes(1);
-    expect(ctx.stroke).toHaveBeenCalledTimes(1);
-    expect(ctx.fill).not.toHaveBeenCalled();
+    expect(ctx.fill).toHaveBeenCalledTimes(1);
+    expect(ctx.stroke).not.toHaveBeenCalled();
+    expect(ctx.fillStyle).toBe("#f59e0b");
+  });
+
+  it("uses red for immediate and yellow for standard", () => {
+    renderMap({
+      topologyDevices,
+      statuses,
+      tierLookup: {
+        h1: { tier: "immediate", narration: "n" },
+        h2: { tier: "standard", narration: "n" },
+      },
+    });
+    const colors: string[] = [];
+    const ctx = markerCtx();
+    ctx.fill = vi.fn(() => {
+      colors.push(ctx.fillStyle);
+    });
+    act(() => {
+      instances[0].emit("afterDrawing", ctx);
+    });
+    expect(colors).toEqual(["#dc2626", "#facc15"]);
   });
 
   it("draws nothing without a tierLookup", () => {

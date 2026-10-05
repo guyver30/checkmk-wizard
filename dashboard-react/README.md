@@ -318,22 +318,26 @@ immediate, ring urgent, none for standard; the worst need's narration is the too
 small dot at the node's top-right on the map, drawn in vis-network's `afterDrawing` hook. Both
 read a `tierLookup` built by `buildTierLookup` from the visible needs.
 
-**Reading the small orange dot (tier marker).** The dot at the top-right of a host's map icon
-(and after the state badge on its tree row) says the host has an open service need that is
-*urgent* or *immediate*. It is separate from the state colour: a green host can carry one, for
-example a disk trending towards full.
+**Reading the small coloured dot (tier marker).** The dot at the top-right of a host's map icon
+(and after the state badge on its tree row) says the host has an open service need, coloured by
+tier (red / orange / yellow since 2026-10-05; before that only urgent and immediate showed, as
+a ring and a dot in one orange). It is separate from the state colour: a green host can carry one,
+for example a disk trending towards full.
 
 | Marker | Tier | Typical cause |
 |---|---|---|
-| Filled orange dot | Immediate | Critical host DOWN, a metric already critical, or under 3 days to the critical level |
-| Orange ring | Urgent | High-criticality host DOWN, or 3 to 20 days to the critical level |
-| none | Standard | Medium/low criticality, or more than 20 days out; listed in the Needs tab only |
+| Red dot | Immediate | Critical host DOWN, a metric already critical, or under 3 days to the critical level |
+| Orange dot | Urgent | High-criticality host DOWN, or 3 to 20 days to the critical level |
+| Yellow dot | Standard | Medium/low criticality host DOWN, or 20 to 90 days to the critical level |
 
-A host with several needs shows its worst tier. In the tree, hovering the marker shows the need's
-one-line description; the need itself, with its Triage button, is in the Needs tab. Both tiers use
-the same warning orange; the fill versus ring tells them apart. Host-DOWN needs are raised next to
-the incident (D-27 reversed for host-DOWN on 2026-10-05) and evaluated every 15 s, so the marker
-appears about 15 to 30 s after a host goes down and clears about 30 s after it recovers.
+A host with several needs shows its worst tier. Colour is never the only signal: each dot has an
+`aria-label` ("Immediate service need" and so on), and in the tree hovering shows the need's
+one-line description; the need itself, with its Triage button, is in the Needs tab. The design
+system has no yellow token, so standard uses the fixed hex `#facc15` (tree `bg-[#facc15]`, map
+`TIER_MARKER_FALLBACK_COLORS`); red and orange use the `alert` and `warning` tokens. The tier badges in the Needs tab
+keep their own look. Host-DOWN needs are raised next to the incident (D-27 reversed for host-DOWN
+on 2026-10-05) and evaluated every 15 s, so the marker appears about 15 to 30 s after a host goes
+down and clears about 30 s after it recovers.
 
 In the Incidents tab of the pane at the top of the right-hand column (above the host details
 pane), `IncidentList` (DASH-14) shows one card per open root-cause incident. The pane is
