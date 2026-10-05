@@ -17,7 +17,7 @@ describe("usePaneLayout", () => {
   it("returns the default sizes, both uncollapsed, on first mount with empty storage", () => {
     const { result } = renderHook(() => usePaneLayout());
     expect(result.current.sizes).toEqual({ tree: 320, events: 260, details: 420, incidents: 280 });
-    expect(result.current.collapsed).toEqual({ tree: false, events: false, details: false, incidents: false, needs: false });
+    expect(result.current.collapsed).toEqual({ tree: false, events: false, details: false, incidents: false });
   });
 
   it("returns the persisted sizes on mount with a valid persisted record", () => {
@@ -52,7 +52,7 @@ describe("usePaneLayout", () => {
     );
     const { result } = renderHook(() => usePaneLayout());
     expect(result.current.sizes).toEqual({ tree: 500, events: 280, details: 420, incidents: 280 });
-    expect(result.current.collapsed).toEqual({ tree: true, events: false, details: false, incidents: false, needs: false });
+    expect(result.current.collapsed).toEqual({ tree: true, events: false, details: false, incidents: false });
   });
 
   it("clamps a persisted incidentsHeight, falls back a non-boolean incidentsCollapsed, keeps older fields", () => {
@@ -71,13 +71,6 @@ describe("usePaneLayout", () => {
     act(() => result.current.toggleCollapse("incidents"));
     expect(result.current.collapsed.incidents).toBe(true);
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").incidentsCollapsed).toBe(true);
-  });
-
-  it("toggleCollapse('needs') flips the flag and persists needsCollapsed in the same record", () => {
-    const { result } = renderHook(() => usePaneLayout());
-    act(() => result.current.toggleCollapse("needs"));
-    expect(result.current.collapsed.needs).toBe(true);
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").needsCollapsed).toBe(true);
   });
 
   it("clamps a persisted size outside [min, max] into range rather than honouring it", () => {
@@ -129,7 +122,7 @@ describe("usePaneLayout", () => {
     expect(result.current.sizes.events).toBe(350);
   });
 
-  it("toggleCollapse persists all nine fields, including the details pane's current state", () => {
+  it("toggleCollapse persists all eight fields, including the details pane's current state", () => {
     const { result } = renderHook(() => usePaneLayout());
     act(() => {
       result.current.setSize("details", 500);
@@ -147,11 +140,10 @@ describe("usePaneLayout", () => {
       detailsCollapsed: false,
       incidentsHeight: 280,
       incidentsCollapsed: false,
-      needsCollapsed: false,
     });
   });
 
-  it("commit persists all nine fields", () => {
+  it("commit persists all eight fields", () => {
     const { result } = renderHook(() => usePaneLayout());
     act(() => {
       result.current.setSize("details", 500);
@@ -169,7 +161,6 @@ describe("usePaneLayout", () => {
       detailsCollapsed: false,
       incidentsHeight: 280,
       incidentsCollapsed: false,
-      needsCollapsed: false,
     });
   });
 

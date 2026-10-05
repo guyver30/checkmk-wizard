@@ -1,4 +1,4 @@
-// Edit-mode triage for one Service need (D-21, D-22, D-24): a "Triage" menu with Downgrade,
+// Triage (available in every dashboard mode) for one Service need (D-21, D-22, D-24): a "Triage" menu with Downgrade,
 // Upgrade to immediate and Cancel need. Cancel asks for confirmation with an optional reason.
 //
 // No ack topic exists: the visible effect of a command is the republished need. The UI

@@ -34,7 +34,6 @@ interface PersistedLayout {
   detailsCollapsed: boolean;
   incidentsHeight: number;
   incidentsCollapsed: boolean;
-  needsCollapsed: boolean;
 }
 
 interface PaneSizes {
@@ -49,7 +48,6 @@ interface PaneCollapsed {
   events: boolean;
   details: boolean;
   incidents: boolean;
-  needs: boolean;
 }
 
 type PaneKey = keyof PaneSizes;
@@ -90,7 +88,6 @@ function readInitialState(): { sizes: PaneSizes; collapsed: PaneCollapsed } {
       : DEFAULTS.incidentsHeight;
   const incidentsCollapsed =
     typeof persisted.incidentsCollapsed === "boolean" ? persisted.incidentsCollapsed : false;
-  const needsCollapsed = typeof persisted.needsCollapsed === "boolean" ? persisted.needsCollapsed : false;
 
   return {
     sizes: { tree: treeWidth, events: eventsHeight, details: detailsWidth, incidents: incidentsHeight },
@@ -99,7 +96,6 @@ function readInitialState(): { sizes: PaneSizes; collapsed: PaneCollapsed } {
       events: eventsCollapsed,
       details: detailsCollapsed,
       incidents: incidentsCollapsed,
-      needs: needsCollapsed,
     },
   };
 }
@@ -119,7 +115,6 @@ function toRecord(state: LayoutState): PersistedLayout {
     detailsCollapsed: state.collapsed.details,
     incidentsHeight: state.sizes.incidents,
     incidentsCollapsed: state.collapsed.incidents,
-    needsCollapsed: state.collapsed.needs,
   };
 }
 
