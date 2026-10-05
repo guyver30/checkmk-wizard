@@ -1,12 +1,13 @@
 // The Service needs pane: the analytics service's predicted and observed service needs, in
 // the order given (the caller sorts with selectVisibleNeeds -- this component never re-sorts).
-// It stays mounted in topology edit mode, where triage lives.
+// It is the Needs tab of AlertsPane, and triage is available here in every dashboard mode
+// (2026-10-05 amendment to 14.2 D-24).
 
 import { useState } from "react";
 import { Badge, SegmentedControl, Tooltip } from "kone-design-system";
-import { NEED_TIERS, isStaleGeneratedAt } from "../lib/forecast";
+import { isStaleGeneratedAt } from "../lib/forecast";
 import type { NeedPayload, NeedTier } from "../lib/types";
-import { TIER_BADGE, formatClock } from "../lib/needDisplay";
+import { formatClock } from "../lib/needDisplay";
 import { NeedRow } from "./NeedRow";
 
 export interface NeedsPaneProps {
@@ -15,7 +16,6 @@ export interface NeedsPaneProps {
   nameFor: (id: string) => string;
   nowMs: number;
   highlightedHost: string | null;
-  editMode: boolean;
   updatedAtMs: number | null;
   reconnecting: boolean;
 }
@@ -28,36 +28,6 @@ const FILTER_OPTIONS = [
   { value: "urgent", label: "Urgent" },
   { value: "standard", label: "Standard" },
 ];
-
-// NEED_TIERS is ordered worst first.
-function worstTier(needs: NeedPayload[]): NeedTier | null {
-  return NEED_TIERS.find((tier) => needs.some((need) => need.tier === tier)) ?? null;
-}
-
-// The pane header's at-a-glance summary, kept visible while the pane is collapsed: the count
-// and the worst tier present.
-export function NeedsSummary({ needs }: { needs: NeedPayload[] }) {
-  const worst = worstTier(needs);
-  if (worst === null) {
-    return <span className="text-xs text-fg-tertiary">0</span>;
-  }
-  const tier = TIER_BADGE[worst];
-  return (
-    <span
-      data-testid="needs-severity"
-      data-tier={worst}
-      className="flex items-center gap-1"
-      aria-label={`${needs.length} service ${needs.length === 1 ? "need" : "needs"}, worst ${tier.label.toLowerCase()}`}
-    >
-      <Badge color="neutral" variant="soft">
-        {needs.length}
-      </Badge>
-      <Badge color={tier.color} variant={tier.variant}>
-        {tier.label}
-      </Badge>
-    </span>
-  );
-}
 
 function FreshnessText({
   updatedAtMs,
@@ -99,7 +69,6 @@ export function NeedsPane({
   nameFor,
   nowMs,
   highlightedHost,
-  editMode,
   updatedAtMs,
   reconnecting,
 }: NeedsPaneProps) {
@@ -142,7 +111,6 @@ export function NeedsPane({
               nowMs={nowMs}
               highlighted={highlightedHost === need.host}
               dimmed={reconnecting}
-              editMode={editMode}
             />
           ))}
         </ul>

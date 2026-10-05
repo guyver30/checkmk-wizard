@@ -1,9 +1,12 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
-import { NeedsPane, NeedsSummary } from "./NeedsPane";
+import { NeedsPane } from "./NeedsPane";
+import { publishTriage } from "../store/triageClient";
 import { hostHref } from "../lib/searchLinks";
 import type { NeedPayload } from "../lib/types";
+
+vi.mock("../store/triageClient", () => ({ publishTriage: vi.fn(async () => true) }));
 
 const NOW_MS = Date.parse("2026-10-04T12:00:00Z");
 
@@ -41,7 +44,6 @@ function renderPane(props: Partial<React.ComponentProps<typeof NeedsPane>> = {})
     nameFor: (id) => id,
     nowMs: NOW_MS,
     highlightedHost: null,
-    editMode: false,
     updatedAtMs: NOW_MS,
     reconnecting: false,
   };
@@ -219,13 +221,20 @@ describe("NeedsPane", () => {
   });
 });
 
-describe("NeedsPane edit mode and chart entry", () => {
-  it("shows the Triage menu only in edit mode", () => {
-    const { unmount } = renderPane({ needs: [need({ id: "n1" })], editMode: false });
-    expect(screen.queryByRole("button", { name: "Triage" })).toBeNull();
-    unmount();
-    renderPane({ needs: [need({ id: "n1" })], editMode: true });
-    expect(screen.getByRole("button", { name: "Triage" })).toBeInTheDocument();
+describe("NeedsPane triage and chart entry", () => {
+  it("shows the Triage menu on every row without edit mode", () => {
+    renderPane({ needs: [need({ id: "n1" }), need({ id: "n2", source: "failure" })] });
+    expect(screen.getAllByRole("button", { name: "Triage" })).toHaveLength(2);
+  });
+
+  it("publishes a downgrade command from the Triage menu", async () => {
+    renderPane({ needs: [need({ id: "n1" })] });
+    fireEvent.click(screen.getByRole("button", { name: "Triage" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Downgrade" }));
+    });
+    expect(publishTriage).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(publishTriage).mock.calls[0][0]).toMatchObject({ need_id: "n1", action: "downgrade" });
   });
 
   it("shows View chart only for trend needs and opens the forecast dialog", () => {
@@ -242,23 +251,5 @@ describe("NeedsPane edit mode and chart entry", () => {
     fireEvent.click(buttons[0]);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     vi.unstubAllGlobals();
-  });
-});
-
-describe("NeedsSummary", () => {
-  it("shows the count and the worst tier", () => {
-    render(
-      <NeedsSummary needs={[need({ id: "a", tier: "standard" }), need({ id: "b", tier: "immediate" })]} />,
-    );
-    const summary = screen.getByTestId("needs-severity");
-    expect(summary).toHaveAttribute("data-tier", "immediate");
-    expect(summary).toHaveTextContent("2");
-    expect(summary).toHaveTextContent("Immediate");
-  });
-
-  it("shows a quiet 0 when empty", () => {
-    render(<NeedsSummary needs={[]} />);
-    expect(screen.getByText("0")).toBeInTheDocument();
-    expect(screen.queryByTestId("needs-severity")).toBeNull();
   });
 });

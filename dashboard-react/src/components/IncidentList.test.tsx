@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
-import { IncidentList, IncidentsSummary } from "./IncidentList";
+import { IncidentList } from "./IncidentList";
 import type { Incident } from "../lib/incidents";
 import type { DevicePayload } from "../lib/types";
 
@@ -210,30 +210,6 @@ describe("IncidentList", () => {
     renderList({ incidents: [inc] });
     fireEvent.click(screen.getByRole("button", { name: "View devices" }));
     expect(document.body.textContent).not.toMatch(/not operating/i);
-  });
-});
-
-describe("IncidentsSummary", () => {
-  it("renders a quiet 'No open incidents' and no badge when empty", () => {
-    render(<IncidentsSummary incidents={[]} />);
-    expect(screen.getByText("No open incidents")).toBeInTheDocument();
-    expect(screen.queryByTestId("incidents-severity")).not.toBeInTheDocument();
-  });
-
-  it("renders the count badge with the worst severity", () => {
-    const warning = incident({ id: "w", root: "w", rootState: "UNREACH" });
-    const danger = incident({ id: "d", root: "d", confirmedDown: ["x"] });
-    render(<IncidentsSummary incidents={[warning, danger, warning]} />);
-    const wrapper = screen.getByTestId("incidents-severity");
-    expect(wrapper).toHaveAttribute("data-severity", "danger");
-    expect(wrapper).toHaveAttribute("aria-label", "3 open incidents");
-    expect(wrapper).toHaveTextContent("3");
-  });
-
-  it("is a warning when only warnings are open", () => {
-    const warning = incident({ id: "w", root: "w", rootState: "UNREACH" });
-    render(<IncidentsSummary incidents={[warning]} />);
-    expect(screen.getByTestId("incidents-severity")).toHaveAttribute("data-severity", "warning");
   });
 });
 

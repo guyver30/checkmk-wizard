@@ -18,8 +18,6 @@ export interface NeedRowProps {
   nowMs: number;
   highlighted: boolean;
   dimmed: boolean;
-  // Topology edit mode: shows the Triage menu; never rendered in view mode.
-  editMode: boolean;
 }
 
 const CONFIDENCE_VARIANT: Record<ForecastConfidence, "outline" | "soft" | "solid"> = {
@@ -111,7 +109,7 @@ function triageCaption(need: NeedPayload): string | null {
   return `${verb} from ${need.computed_tier}${by}${when}`;
 }
 
-export function NeedRow({ need, hostLabel, nowMs, highlighted, dimmed, editMode }: NeedRowProps) {
+export function NeedRow({ need, hostLabel, nowMs, highlighted, dimmed }: NeedRowProps) {
   const { search } = useLocation();
   const [chartOpen, setChartOpen] = useState(false);
   const tier = TIER_BADGE[need.tier];
@@ -161,16 +159,14 @@ export function NeedRow({ need, hostLabel, nowMs, highlighted, dimmed, editMode 
       ) : (
         link
       )}
-      {(need.source === "trend" || editMode) && (
-        <div className="flex items-center justify-end gap-2 px-2 pb-1">
-          {need.source === "trend" && (
-            <Button variant="tertiary" size="sm" onClick={() => setChartOpen(true)}>
-              View chart
-            </Button>
-          )}
-          {editMode && <TriageMenu need={need} hostLabel={hostLabel} />}
-        </div>
-      )}
+      <div className="flex items-center justify-end gap-2 px-2 pb-1">
+        {need.source === "trend" && (
+          <Button variant="tertiary" size="sm" onClick={() => setChartOpen(true)}>
+            View chart
+          </Button>
+        )}
+        <TriageMenu need={need} hostLabel={hostLabel} />
+      </div>
       {chartOpen && (
         <ForecastDialog
           host={need.host}

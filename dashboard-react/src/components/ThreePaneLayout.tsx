@@ -7,15 +7,11 @@ export interface ThreePaneLayoutProps {
   centreTop: ReactNode;
   // Omitted (e.g. in topology edit mode) to give centreTop the whole column height.
   centreBottom?: ReactNode;
-  // The right column stacks `incidents` (top) above `details` (bottom). Both are optional and
-  // both are omitted in topology edit mode. `incidentsSummary` (count + severity badge) stays
-  // visible in the incidents pane header even while that pane is collapsed.
-  incidents?: ReactNode;
-  incidentsSummary?: ReactNode;
-  // The Service needs pane sits beside `incidents` (side by side from 1280px, stacked below it
-  // under that), and, unlike incidents, may stay set in topology edit mode.
-  needs?: ReactNode;
-  needsSummary?: ReactNode;
+  // The right column stacks `alerts` (the tabbed "Incidents & needs" pane, top) above `details`
+  // (bottom). `details` is optional and omitted in topology edit mode. `alertsSummary` (combined
+  // count + severity badge) stays visible in the alerts pane header even while it is collapsed.
+  alerts?: ReactNode;
+  alertsSummary?: ReactNode;
   details?: ReactNode;
   detailsKey?: string | null;
   onCloseDetails?: () => void;
@@ -23,9 +19,6 @@ export interface ThreePaneLayoutProps {
 
 // Width/height a collapsed pane's rail occupies -- just enough for its restore button.
 const COLLAPSED_RAIL_PX = 40;
-
-// Narrowest right column that still fits the incidents and needs panes side by side.
-const NEEDS_COLUMN_MIN_PX = 640;
 
 // Which edge of the layout a pane sits on. It decides which way the collapse/expand chevron
 // points: towards the edge the pane collapses into, and back out again.
@@ -144,7 +137,7 @@ function CollapsiblePane({
 /**
  * The three-pane shell: a full-height tree pane on the left, and a centre column split into
  * centreTop (flexible) and centreBottom (the event history, sized by eventsHeight), and an
- * optional right column stacking the Incidents pane above the Host details pane. Per D-31,
+ * optional right column stacking the Incidents & needs pane above the Host details pane. Per D-31,
  * this wraps its pane contents as props rather than nesting layout structure inside them, so
  * later plans fill slots without ever restructuring this grid.
  */
@@ -152,10 +145,8 @@ export function ThreePaneLayout({
   tree,
   centreTop,
   centreBottom,
-  incidents,
-  incidentsSummary,
-  needs,
-  needsSummary,
+  alerts,
+  alertsSummary,
   details,
   detailsKey,
   onCloseDetails,
@@ -165,22 +156,15 @@ export function ThreePaneLayout({
   const treeColumnWidth = collapsed.tree ? COLLAPSED_RAIL_PX : sizes.tree;
   const eventsRowHeight = collapsed.events ? COLLAPSED_RAIL_PX : sizes.events;
 
-  // Right column: incidents (top) above host details (bottom). The column shrinks to a rail only
+  // Right column: alerts (top) above host details (bottom). The column shrinks to a rail only
   // when every pane in it is collapsed; otherwise a collapsed pane becomes a header bar so the
-  // incidents count badge and the restore chevrons stay visible without wasting column width.
-  // The incidents and needs panes share the column's top cell (the "alerts" cell), side by side
-  // from 1280px and stacked below that. Side by side they need more width than incidents alone
-  // does, so the column never renders narrower than NEEDS_COLUMN_MIN_PX while needs is set.
-  const rightColumn = Boolean(incidents || needs || details);
-  const incidentsOpen = Boolean(incidents) && !collapsed.incidents;
-  const needsOpen = Boolean(needs) && !collapsed.needs;
-  const alertsOpen = incidentsOpen || needsOpen;
-  const hasAlerts = Boolean(incidents || needs);
+  // alerts summary and the restore chevrons stay visible without wasting column width.
+  const rightColumn = Boolean(alerts || details);
+  const alertsOpen = Boolean(alerts) && !collapsed.incidents;
   const detailsOpen = Boolean(details) && !collapsed.details;
   const columnRailed = !alertsOpen && !detailsOpen;
-  const openColumnWidth = needs ? Math.max(sizes.details, NEEDS_COLUMN_MIN_PX) : sizes.details;
-  const detailsColumnWidth = columnRailed ? COLLAPSED_RAIL_PX : openColumnWidth;
-  const stacked = hasAlerts && Boolean(details);
+  const detailsColumnWidth = columnRailed ? COLLAPSED_RAIL_PX : sizes.details;
+  const stacked = Boolean(alerts) && Boolean(details);
   let rightRows = "1fr";
   if (stacked && !columnRailed) {
     if (alertsOpen && detailsOpen) {
@@ -190,9 +174,6 @@ export function ThreePaneLayout({
     }
   }
   const alertsSide: PaneSide = stacked ? "top" : "right";
-  // A collapsed pane drops to its header bar; the open sibling takes the rest of the cell.
-  const alertCellClass = (open: boolean) =>
-    ["grid min-h-0 min-w-0", open ? "flex-1" : "flex-none"].join(" ");
 
   // Re-expand rule (operator decision 3): a NEW host opening (detailsKey changes to a truthy,
   // different value) re-expands a collapsed pane -- the operator just asked to see a host, so a
@@ -290,31 +271,17 @@ export function ThreePaneLayout({
 
           {columnRailed ? (
             <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg-surface">
-              {incidents && (
+              {alerts && (
                 <div className="shrink-0">
                   <CollapsiblePane
-                    title="Incidents"
+                    title="Incidents & needs"
                     side="right"
                     collapsed
                     collapsedAs="rail"
-                    headerExtra={incidentsSummary}
+                    headerExtra={alertsSummary}
                     onToggleCollapse={() => toggleCollapse("incidents")}
                   >
-                    {incidents}
-                  </CollapsiblePane>
-                </div>
-              )}
-              {needs && (
-                <div className="shrink-0">
-                  <CollapsiblePane
-                    title="Service needs"
-                    side="right"
-                    collapsed
-                    collapsedAs="rail"
-                    headerExtra={needsSummary}
-                    onToggleCollapse={() => toggleCollapse("needs")}
-                  >
-                    {needs}
+                    {alerts}
                   </CollapsiblePane>
                 </div>
               )}
@@ -335,37 +302,17 @@ export function ThreePaneLayout({
             </div>
           ) : (
             <div className="grid h-full min-h-0 min-w-0" style={{ gridTemplateRows: rightRows }}>
-              {hasAlerts && (
-                <div className="flex h-full min-h-0 min-w-0 flex-col min-[1280px]:flex-row">
-                  {incidents && (
-                    <div className={alertCellClass(incidentsOpen)}>
-                      <CollapsiblePane
-                        title="Incidents"
-                        side={alertsSide}
-                        collapsed={collapsed.incidents}
-                        collapsedAs="bar"
-                        headerExtra={incidentsSummary}
-                        onToggleCollapse={() => toggleCollapse("incidents")}
-                      >
-                        {incidents}
-                      </CollapsiblePane>
-                    </div>
-                  )}
-                  {needs && (
-                    <div className={alertCellClass(needsOpen)}>
-                      <CollapsiblePane
-                        title="Service needs"
-                        side={alertsSide}
-                        collapsed={collapsed.needs}
-                        collapsedAs="bar"
-                        headerExtra={needsSummary}
-                        onToggleCollapse={() => toggleCollapse("needs")}
-                      >
-                        {needs}
-                      </CollapsiblePane>
-                    </div>
-                  )}
-                </div>
+              {alerts && (
+                <CollapsiblePane
+                  title="Incidents & needs"
+                  side={alertsSide}
+                  collapsed={collapsed.incidents}
+                  collapsedAs="bar"
+                  headerExtra={alertsSummary}
+                  onToggleCollapse={() => toggleCollapse("incidents")}
+                >
+                  {alerts}
+                </CollapsiblePane>
               )}
 
               {alertsOpen && detailsOpen && (

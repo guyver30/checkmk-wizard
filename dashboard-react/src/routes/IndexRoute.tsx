@@ -13,8 +13,9 @@ import { CriticalityEditor } from "../components/CriticalityEditor";
 import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
 import { HostDetails } from "../components/HostDetails";
-import { IncidentList, IncidentsSummary } from "../components/IncidentList";
-import { NeedsPane, NeedsSummary } from "../components/NeedsPane";
+import { AlertsPane, AlertsSummary } from "../components/AlertsPane";
+import { IncidentList } from "../components/IncidentList";
+import { NeedsPane } from "../components/NeedsPane";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { TopologyMap, type EditFailure } from "../components/TopologyMap";
 import { TopologyToolbar } from "../components/TopologyToolbar";
@@ -363,7 +364,7 @@ export function IndexRoute() {
         // 2026-09-28; the incident cards live in the right column's Incidents pane, above host
         // details). Pointer/wheel/key activity anywhere in the toolbar+map wrapper below
         // postpones the edit-mode idle timeout. Topology edit mode gives the map the full centre
-        // area: no incidents pane, event history or host details pane; the device tree stays
+        // area: no event history or host details pane (the alerts pane stays, Needs tab only); the device tree stays
         // (260928).
         <div className="flex h-full flex-col gap-2 p-3">
           <div
@@ -412,33 +413,39 @@ export function IndexRoute() {
         </div>
       }
       centreBottom={editMode ? undefined : <EventHistory hostId={hostId} />}
-      incidents={
-        editMode ? undefined : (
-          <IncidentList
-            incidents={incidents}
-            devices={devices}
-            nowMs={nowMs}
-            highlightedId={highlightedIncidentId}
-            narrations={narrationRecord}
-          />
-        )
-      }
-      incidentsSummary={<IncidentsSummary incidents={incidents} />}
-      // D-24 / research Pitfall 7: triage lives only in topology edit mode, so the Needs pane is
-      // the one right-column pane that is NOT hidden in edit mode (incidents and host details
-      // are). It is passed unconditionally.
-      needs={
-        <NeedsPane
-          needs={visibleNeeds}
-          nameFor={nameFor}
-          nowMs={nowMs}
-          highlightedHost={hostId ?? selectedHost}
+      // The right column's alerts pane is passed in every mode (2026-10-05 amendment to 14.2
+      // D-24/D-25): triage lives in its Needs tab, and ?admin=1 cannot enter edit mode, so a
+      // demo must be able to triage outside it. In edit mode AlertsPane disables the Incidents
+      // tab and forces Needs, then restores the previous tab on exit; event history and host
+      // details are still hidden in edit mode.
+      alerts={
+        <AlertsPane
+          incidentsPanel={
+            <IncidentList
+              incidents={incidents}
+              devices={devices}
+              nowMs={nowMs}
+              highlightedId={highlightedIncidentId}
+              narrations={narrationRecord}
+            />
+          }
+          needsPanel={
+            <NeedsPane
+              needs={visibleNeeds}
+              nameFor={nameFor}
+              nowMs={nowMs}
+              highlightedHost={hostId ?? selectedHost}
+              updatedAtMs={needsUpdatedAtMs}
+              reconnecting={reconnecting}
+            />
+          }
+          incidentCount={incidents.length}
+          needCount={visibleNeeds.length}
           editMode={editMode}
-          updatedAtMs={needsUpdatedAtMs}
-          reconnecting={reconnecting}
+          focusIncidentId={highlightedIncidentId}
         />
       }
-      needsSummary={<NeedsSummary needs={visibleNeeds} />}
+      alertsSummary={<AlertsSummary incidents={incidents} needs={visibleNeeds} />}
       details={hostId && !editMode ? <HostDetails id={hostId} /> : undefined}
       detailsKey={hostId}
       onCloseDetails={onCloseDetails}

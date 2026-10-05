@@ -145,9 +145,10 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
     optional `navExtra` slot for this; after changing `design-system/`, rebuild and pack it, then
     run `npm install ../design-system/kone-design-system-0.1.0.tgz` in `dashboard-react/` so its
     lockfile records the new tarball's integrity hash, or the image build's `npm ci` fails.
-  - In topology edit mode the map fills the centre area: the Incidents pane, event history and
-    host details pane are hidden until edit mode is turned off. The device tree stays, and so
-    does the Service needs pane (triage lives only in edit mode).
+  - In topology edit mode the map fills the centre area: event history and the host details pane
+    are hidden until edit mode is turned off. The device tree stays, and so does the Incidents &
+    needs pane, with its Incidents tab disabled and Needs forced (the previous tab returns when
+    edit mode ends).
 - A saved position (`map_position`, a Checkmk host label written by edit mode) is applied only
   the first time a node appears on the map; positions are never re-applied to a node a viewer
   has since dragged locally, and the map never moves a node out from under someone looking at
@@ -246,15 +247,26 @@ The file name **is** the device type — the `tag_device_type` value from `devic
 
 ## 5c. Incidents
 
-**Service needs pane.** Beside the Incidents pane (side by side from 1280px viewport width,
-stacked below it under that) sits `NeedsPane`: the analytics service's predicted and observed
-service needs from the store's `needs` slice, sorted by `selectVisibleNeeds` (tier, days to
-critical, host; cancelled needs hidden). Each row shows the tier badge, host, date, what,
-source and, for trend needs, a confidence badge with the history span; clicking a row selects
-the host. The header has a tier filter and "Updated hh:mm", which becomes "Stale, last update
+**Incidents & needs pane.** The right column's top pane is one collapsible pane, "Incidents &
+needs", with two tabs: Incidents and Needs. Each tab label carries its own count; the pane header
+shows the combined count in one badge coloured by the worst severity (a danger incident, then a
+warning incident or immediate need, then urgent, then standard needs; quiet "No open incidents or
+needs" when empty) and stays visible while the pane is collapsed. The selected tab and the
+collapsed state persist across a reload (`dashboard-react.alertsTab.v1`, `usePaneLayout`). Opening
+an `?incident=` link switches to the Incidents tab. In topology edit mode the Incidents tab is
+disabled and Needs is forced; the previous tab returns afterwards.
+
+The Needs tab is `NeedsPane`: the analytics service's predicted and observed service needs from
+the store's `needs` slice, sorted by `selectVisibleNeeds` (tier, days to critical, host;
+cancelled needs hidden). Each row shows the tier badge, host, date, what, source and, for trend
+needs, a confidence badge with the history span; clicking a row selects the host. Every row has a
+Triage menu (Downgrade, Upgrade to immediate, Cancel need) in every mode: normal view, `?admin=1`
+and edit mode. The header has a tier filter and "Updated hh:mm", which becomes "Stale, last update
 hh:mm" after 45 minutes and "Reconnecting" (rows dimmed) while the broker connection is down.
-The pane is collapsible like the Incidents pane and, unlike it, stays visible in topology edit
-mode. While it is present the right column is at least 640px wide.
+
+Deploying this change needs a rebuild of the image, `podman compose build dashboard`, then a full
+`podman compose down && podman compose up -d` on the deploy host; restarting a single container
+breaks Checkmk egress.
 
 **Narration and tier markers.** When the analytics service has published a narration for an
 incident (`narrations` slice), its card shows the headline and sentences in place of the
@@ -265,15 +277,13 @@ immediate, ring urgent, none for standard; the worst need's narration is the too
 small dot at the node's top-right on the map, drawn in vis-network's `afterDrawing` hook. Both
 read a `tierLookup` built by `buildTierLookup` from the visible needs.
 
-In the Incidents pane at the top of the right-hand column (above the host details pane),
-`IncidentList` (DASH-14) shows one card per open root-cause incident. The pane header always
-reads "Incidents" plus a count badge coloured by the worst open incident (danger when any card
-is danger, otherwise warning), or a quiet "No open incidents" when none are open. The pane is
-collapsible: collapsing it keeps the header (count and severity badge) visible, and when every
+In the Incidents tab of the pane at the top of the right-hand column (above the host details
+pane), `IncidentList` (DASH-14) shows one card per open root-cause incident. The pane is
+collapsible: collapsing it keeps the header (combined count and severity badge) visible, and when every
 pane in the right column is collapsed the column becomes a 40px rail that still shows the badge
 and the expand chevrons. The pane's height and collapsed state persist across a reload
 (`usePaneLayout`). The map and event history take the whole centre column; topology edit mode
-hides the pane. Cards are sourced from the poller's `sites/<site_id>/lan/incidents/{incident_id}/status` topics (see the deployment doc's
+leaves only the Needs tab usable. Cards are sourced from the poller's `sites/<site_id>/lan/incidents/{incident_id}/status` topics (see the deployment doc's
 MQTT topic contract). It never re-sorts its input — ordering is `selectOpenIncidents`'s job
 (D-12): worst criticality tier first, then longest-open within a tier (a null `since` sorts
 last within its tier), ties broken by incident id.
