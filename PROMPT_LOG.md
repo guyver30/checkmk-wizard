@@ -411,3 +411,16 @@
 - **2026-10-04 19:45** — /bm:execute-phase 14.2
 - **2026-10-04 20:10** — pasted plan 14.2-01 dmc-server query output (CH 26.9.4.3, no SMART series, /ch-api params ok)
 - **2026-10-04 20:53** — /bm:pause-work
+
+## 2026-10-05 08:37
+- /bm:resume-work (session-start checkpoint resume, phase 14.2 plan 19)
+
+## 2026-10-05 09:24 (plan 19 live deploy session, prompts since resume)
+- Asked to explain step 2 (ClickHouse migration, live checks 3-9)
+- Pasted compose up output; disputed that init-env.sh launches compose (it hung in a foreground podman compose up; cause not found)
+- Pasted podman ps/stats: ClickHouse MEMORY_LIMIT_EXCEEDED on 1.9 GB VM; VM memory increased
+- Steps 3 and 4 done; step 5-9 outputs pasted (broker smoke 11/11, history proxy smoke 12/12, forecast topic present, events=1)
+
+## 2026-10-05 12:00 (continued)
+- Many UI follow-ups (needs tab, triage everywhere, drawing layer, admin bar, tier colours, dialog bg), phase 14.2 code review
+- /bm:pause-work

@@ -1,36 +1,43 @@
 {
   "version": "1.0",
-  "timestamp": "2026-10-04T12:53:19.352Z",
+  "timestamp": "2026-10-05T03:59:39.327Z",
   "phase": "14.2",
   "phase_name": "fleet-failure-prediction-and-incident-narration",
   "phase_dir": ".planning/phases/14.2-fleet-failure-prediction-and-incident-narration",
   "plan": 19,
-  "task": 2,
+  "task": 3,
   "total_tasks": 3,
   "status": "paused",
   "completed_tasks": [
-    {"id": "14.2-01..18", "name": "Plans 01-18 (waves 1-5) executed, merged, tested, tracked", "status": "done", "commit": "4c02c6d"},
-    {"id": "14.2-19/1", "name": "Local gates green (pytest 1076, vitest 756, typecheck, lint, build; 8 pre-existing ruff errors in wizard.py/test_site.py/test_wizard.py)", "status": "done", "commit": "4c02c6d"}
+    {"id": "14.2-01..18", "name": "Plans 01-18 executed, merged, tracked", "status": "done", "commit": "4c02c6d"},
+    {"id": "14.2-19", "name": "Live deploy on dmc-server, migration, steps 3-9, nginx dav curls, dashboard approved by operator ('all good now'); 14.2-19-SUMMARY.md written", "status": "done", "commit": "5e27b37"},
+    {"id": "261005-dox", "name": "Quick: failure needs on a 15 s tick, host-DOWN need despite incident (D-27 reversed for host-DOWN), source-scoped anti-flap", "status": "done", "commit": "41fffac"},
+    {"id": "261005-e7b", "name": "Quick: Needs merged into Incidents pane as tabs, triage in every mode incl. ?admin=1 (D-24 reversed)", "status": "done", "commit": "e61944a"},
+    {"id": "261005-eln", "name": "Quick: topology map drawing layer saved as /map-drawing.json on map_drawing_data volume via nginx dav", "status": "done", "commit": "75f91c9"},
+    {"id": "fast", "name": "Admin action bar beside Edit topology; dialog bg-bg-surface fix; tier marker dots red/orange/yellow; tier marker docs", "status": "done", "commit": "d6bd7cd"},
+    {"id": "14.2-review", "name": "Phase code review: 0 critical, 8 warnings, 7 info; 14.2-REVIEW.md committed", "status": "done", "commit": "757c211"}
   ],
   "remaining_tasks": [
-    {"id": "14.2-19/2", "name": "User pushes and deploys on dmc-server (full down/up), applies migration, pastes outputs of steps 3-9", "status": "not_started"},
-    {"id": "14.2-19/3", "name": "User checks dashboard features live and replies approved", "status": "not_started"},
-    {"id": "14.2-19", "name": "Write 14.2-19-SUMMARY.md with pasted outputs, then verify phase, code review gate, regression gate, roadmap complete", "status": "not_started"}
+    {"id": "review-decision", "name": "Operator decides which review findings to fix. Recommended bundle: WR-01..05, WR-07, IN-02 as one quick task; defer WR-06 and WR-08", "status": "not_started"},
+    {"id": "fix-bundle", "name": "Quick task for the chosen review fixes (analytics/service.py, rules.py, triage.py, recorder.py, mosquitto.conf, smoke_test_broker.py, mapDrawingStore.ts, triageClient.ts) with tests", "status": "not_started"},
+    {"id": "verifier", "name": "Run bm-verifier for phase 14.2 (goal-backward), then /bm:verify-work if wanted", "status": "not_started"},
+    {"id": "roadmap", "name": "Mark phase 14.2 complete in ROADMAP.md and STATE.md (progress, current focus), only after verifier passes", "status": "not_started"}
   ],
-  "blockers": [
-    {"description": "origin/main is 53 commits behind local main; nothing pushed", "type": "human_action", "workaround": "User runs git push (not pushed by Claude: outward-facing)"},
-    {"description": "Plan 19 live deploy and dashboard check are only possible on dmc-server", "type": "human_action", "workaround": "None; dev machine is not the deploy host"}
-  ],
+  "blockers": [],
   "human_actions_pending": [
-    {"action": "git push, then on dmc-server: git pull (expect 4c02c6d), init-env.sh, podman compose build dashboard, full down/up, ClickHouse migration, live checks steps 3-9, paste outputs", "context": "Plan 19 Task 2 command block was given in chat", "blocking": true},
-    {"action": "Open http://dmc-server:8090/ and verify Needs pane, trends chart, tier markers, triage in edit mode, optional incident narration demo; reply approved or list issues", "context": "Plan 19 Task 3", "blocking": true}
+    {"action": "Answer the review-fix question (fix bundle yes/no/different set)", "context": "Decides whether a quick task runs before the verifier", "blocking": true},
+    {"action": "git push (2 commits ahead of origin/main) when ready; later redeploy dashboard/analytics on dmc-server if the review-fix task changes them: podman compose build dashboard analytics-if-image, then full podman compose down && up -d", "context": "Claude does not push (outward-facing)", "blocking": false}
   ],
   "decisions": [
-    {"decision": "WEAR_METRICS left empty; SMART/NVMe allow-list empty with startup warning", "rationale": "Live catalog from plan 01 had no SMART/NVMe series", "phase": "14.2"},
-    {"decision": "FALLBACK_LEVELS util = (85, 95)", "rationale": "Chosen by plan 07 executor; Checkmk gives CPU utilization no levels. User not yet asked to confirm", "phase": "14.2"},
-    {"decision": "Analytics service owns the availability rollup; poller no longer does", "rationale": "D-04; POLL_INTERVAL_SECONDS=15 set on analytics compose service", "phase": "14.2"}
+    {"decision": "D-27 reversed for host-DOWN needs only: DOWN host with an open incident also gets its host-level need", "rationale": "Management demo wants DOWN host visible in Needs with tier from criticality", "phase": "14.2"},
+    {"decision": "D-24 reversed: triage visible in normal view and ?admin=1, not only edit mode", "rationale": "Admin mode disables edit mode, so the demo could not triage", "phase": "14.2"},
+    {"decision": "Failure needs evaluated every 15 s; ClickHouse forecasts/trend/sustained stay on 900 s", "rationale": "15-minute latency unusable for live demos", "phase": "14.2"},
+    {"decision": "Drawing layer stored as a file via nginx dav on a named volume, not MQTT", "rationale": "Operator choice; shared, survives down/up, no new backend app", "phase": "14.2"},
+    {"decision": "Tier marker dots: red immediate, orange urgent, yellow standard (#facc15, no design token); standard now shown", "rationale": "Operator request", "phase": "14.2"},
+    {"decision": "Deploy VM needs >= 3-4 GB RAM (ClickHouse MEMORY_LIMIT_EXCEEDED at 1.9 GB)", "rationale": "Observed live 2026-10-05; cause of the non-resident ~560 MiB tracked memory not identified", "phase": "14.2"},
+    {"decision": "WEAR_METRICS empty; FALLBACK_LEVELS util (85,95) from plan 07 not confirmed by operator", "rationale": "No SMART/NVMe series in live catalog", "phase": "14.2"}
   ],
   "uncommitted_files": ["PROMPT_LOG.md"],
-  "next_action": "Wait for the user's pasted dmc-server outputs (steps 3-9) and dashboard verdict; record them in 14.2-19-SUMMARY.md, mark plan 19 complete, then run the phase tail (code review gate, regression gate, verifier, roadmap update).",
-  "context_notes": "Executed via /bm:execute-phase 14.2 with worktree-isolated bm-executor subagents (sonnet). 18/19 plans merged to main and tracked; no worktrees remain from this run (two older worktrees agent-a92e77c4b478e134b and agent-aa97e9f8996a1910d predate it and were left alone). 14.2-01 summary is recorded from the user's pasted output. After a node_modules gap, `npm ci` in dashboard-react was run to install d3-scale."
+  "next_action": "Ask the operator which review findings to fix (recommended: WR-01..05, WR-07, IN-02 as one /bm:quick task; defer WR-06, WR-08). After that task: run bm-verifier on phase 14.2, then mark 14.2 complete in ROADMAP.md/STATE.md.",
+  "context_notes": "Plan 19 is complete and approved live. The dashboard changes were redeployed by the operator and confirmed working (transparent dialog fix confirmed after hard refresh). Review report is 14.2-REVIEW.md. Follow-up quick tasks 261005-dox/e7b/eln are all merged on main. Operator note: a foreground 'podman compose up' was started from init-env.sh output on dmc-server; Ctrl-C in that terminal would stop the stack. Dev machine is not the deploy host. Single-container restarts break Checkmk egress; always full down/up."
 }
