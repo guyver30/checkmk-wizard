@@ -541,6 +541,11 @@ services:
       # first triage action in edit mode (D-21, D-24).
       - TRIAGE_WS_USERNAME=${TRIAGE_WS_USERNAME:-wstriage}
       - TRIAGE_WS_PASSWORD=${TRIAGE_WS_PASSWORD:?run deploy/init-env.sh}
+    volumes:
+      # Topology map drawing (quick 261005-eln): dashboard only. nginx writes
+      # /map-drawing.json here (location = /map-drawing.json in
+      # deploy/dashboard-nginx.conf); survives down/up and reset-site.sh.
+      - map_drawing_data:/var/lib/map-drawing:z
     ports:
       - "8090:80"       # dashboard UI — host 8090 is clear of 8080/8000/6556
                           # checkmk, 1883 mqtt, 9000/9001 minio and 9002
@@ -555,6 +560,7 @@ volumes:
   minio_data:
   clickhouse_data:
   grafana_data:
+  map_drawing_data:
 
 networks:
   cmk_net:

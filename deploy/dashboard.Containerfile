@@ -37,3 +37,12 @@ FROM docker.io/library/nginx:alpine
 # variables pass through untouched — they are never environment variables.
 COPY deploy/dashboard-nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /src/dashboard-react/dist /usr/share/nginx/html
+
+# Topology map drawing (quick 261005-eln): the nginx worker (uid 101, `nginx`) must be
+# able to write /var/lib/map-drawing, where compose mounts the map_drawing_data volume.
+# The directory is created here with that owner (a fresh named volume is copied up from
+# it), and the entrypoint script below re-asserts ownership on every start so a volume
+# created earlier or by another owner is fixed too. Rootless podman maps uid 101 to a
+# subuid on the host; the in-container owner is what matters.
+RUN install -d -o nginx -g nginx -m 0755 /var/lib/map-drawing
+COPY --chmod=0755 deploy/dashboard-entrypoint/30-map-drawing-perms.sh /docker-entrypoint.d/30-map-drawing-perms.sh

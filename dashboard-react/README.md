@@ -212,6 +212,47 @@ line above the list. A click on empty map canvas, or on empty space in the devic
 (anything that isn't a row, link or control), deselects it: `?host=` is cleared, the pane closes
 and the event history shows every host again. Collapsing the pane keeps the host selected.
 
+### Drawing layer
+
+A small drawing layer (rectangle, ellipse, line, text) lets an operator sketch things such as a
+lift shaft, floor lines and floor labels on the topology map, then drag hosts onto them. It is
+groundwork for the location work that follows: there is one shared drawing, with no floors,
+towers or layers yet. Host positions are unaffected and still persist through Checkmk's
+`map_position` label.
+
+- **Tools** (edit mode only, in the toolbar at the map's top-right): Hosts, Select, Rectangle,
+  Ellipse, Line, Text, plus a stroke and fill palette, Delete, Save and Revert. Drag on empty
+  canvas to create a rectangle, ellipse or line; Text drops a "Label" you then edit in the
+  toolbar's text box (and font size). Select picks a shape by clicking it and moves it by
+  dragging; a selected rectangle or ellipse is resized by its corner handles, a line by dragging
+  either endpoint. Delete or Backspace (outside a text field) removes the selected shape.
+- **Hosts tool = nothing changes.** With the Hosts tool (the default, and the only state outside
+  edit mode) the drawing is inert: node click, node drag, grid snap and `map_position` writes
+  behave exactly as before. Even with a drawing tool active a press on a host node always goes to
+  the host; only empty canvas and shapes belong to the drawing. Switch back to Hosts before using
+  the vis-network "Add Edge" toolbar. The Select tool leaves a press on empty canvas to the map,
+  so you can still pan.
+- **Snapping and stacking:** shapes snap to 25 px (half the host grid). They are painted in
+  vis-network's `beforeDrawing` hook right after the grid, so they sit behind edges and hosts and
+  pan and zoom with the map. Outside edit mode the drawing renders read-only.
+- **Save, Revert, unsaved changes:** nothing is stored until Save, which replaces the whole
+  drawing (last write wins, no merge). Edit mode shows an "Unsaved drawing changes" indicator
+  while the draft differs from the saved drawing; Revert restores the last loaded or saved one.
+  The draft is kept in memory only: leaving edit mode (toggle or the idle timeout) keeps it and
+  keeps drawing it, and reloading or closing the tab asks first while it is unsaved.
+- **Storage:** the drawing is one JSON file, `/map-drawing.json`, on the dashboard container's
+  `map_drawing_data` volume, read with GET and written with PUT through a single nginx location
+  using the stock WebDAV module (`application/json` only, 256 KB cap; the client refuses to save
+  above 200 KB). There is no auth beyond the dashboard's own, as for the admin and triage logins
+  on this closed network. The file is untrusted on load: unknown shape types are dropped,
+  numbers clamped, text capped at 200 characters and colours limited to the palette, and text is
+  painted with canvas `fillText`, never as HTML. A 404 means an empty drawing; any other load
+  failure shows a dismissible message and the map stays usable.
+- **Not under the Vite dev server:** `npm run dev` has no `/map-drawing.json` location, so load
+  shows the message and Save fails there. Exercise it against the built image. To pick up the
+  feature on a deployed stack, rebuild with `podman compose build dashboard`, then do a full
+  `podman compose down && podman compose up -d`.
+
 ## 5a. Event history
 
 The centre-bottom pane lists state-change events newest-first. Each row shows the event's

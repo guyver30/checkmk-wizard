@@ -112,6 +112,7 @@ if ! config_err="$(podman compose config --services 2>&1 >/dev/null)"; then
     exit 1
 fi
 
+# map_drawing_data (the topology map drawing) is deliberately not removed by a site reset.
 volumes=("${project}_checkmk_data" "${project}_mosquitto_data")
 if $with_history; then
     volumes+=("${project}_clickhouse_data")

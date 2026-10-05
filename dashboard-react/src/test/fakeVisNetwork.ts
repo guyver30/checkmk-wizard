@@ -86,6 +86,20 @@ export class FakeNetwork {
     return this.scale;
   }
 
+  // TopologyMap's drawing layer asks which node (if any) is under the pointer before taking a
+  // pointerdown; tests set `nodeAtResult` to simulate a host under the cursor.
+  nodeAtResult: string | undefined = undefined;
+
+  getNodeAt(_pos: { x: number; y: number }): string | undefined {
+    return this.nodeAtResult;
+  }
+
+  redrawCount = 0;
+
+  redraw(): void {
+    this.redrawCount += 1;
+  }
+
   // Zoom controls (TopologyMap's +/−/fit buttons): record the calls so tests can assert on them.
   scale = 1;
   moveToCalls: Record<string, unknown>[] = [];
