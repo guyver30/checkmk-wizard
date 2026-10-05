@@ -197,6 +197,8 @@ podman compose build dashboard
 podman compose up -d
 ```
 
+The dashboard also owns a `map_drawing_data` volume (the topology map's shared drawing layer, written through nginx's `/map-drawing.json` location). It is created on the first `up`; there is nothing to configure. `deploy/reset-site.sh` keeps it. Back it up with `podman volume export deploy_map_drawing_data -o map-drawing-backup.tar` (the name is prefixed by the compose project; check `podman volume ls`). To clear the drawing, remove that volume while the stack is down.
+
 MinIO comes from `cgr.dev/chainguard/minio`, pinned by digest, because `minio/minio` is gone from
 Docker Hub and `quay.io/minio/minio` no longer allows anonymous pulls (§3 "Note on the MinIO
 image").
@@ -420,3 +422,5 @@ cd ~/checkmk-stack/app/checkmk-wizard/deploy
 podman compose build dashboard && podman compose down && podman compose up -d
 podman compose exec worker bash -c "cd /app/checkmk-wizard && uv sync"
 ```
+
+The map drawing layer needs the rebuilt dashboard image (new nginx location and volume), so run `podman compose build dashboard` and then a full `podman compose down && podman compose up -d`, not a single-container restart (that has cut Checkmk's egress before).
