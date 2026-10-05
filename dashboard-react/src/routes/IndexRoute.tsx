@@ -407,6 +407,7 @@ export function IndexRoute() {
                 incidentLookup={incidentLookup}
                 tierLookup={tierLookup}
                 onSelectHost={setSelectedHost}
+                onActivity={touch}
               />
             </div>
           </div>

@@ -14,7 +14,7 @@
 // Takes its device list as a prop rather than reading the store directly, so a future
 // tag-filter pass can narrow the input list without changing this file.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { DataSet } from "vis-data/peer";
 import { Network } from "vis-network/peer";
@@ -24,6 +24,19 @@ import { nodeVisual, type NodeEmphasis } from "../lib/mapIcons";
 import { isAdminMode } from "../lib/adminMode";
 import { useAdminStore } from "../store/adminStore";
 import { useMapFocusStore } from "../store/mapFocusStore";
+import { useMapDrawingStore } from "../store/mapDrawingStore";
+import {
+  drawShapes,
+  hitTest,
+  moveShape,
+  newShapeId,
+  resizeShape,
+  snapShapeValue,
+  type Handle,
+  type Point,
+  type Shape,
+} from "../lib/mapDrawing";
+import { MapDrawingToolbar } from "./MapDrawingToolbar";
 import { createUnmanagedSwitch, isValidHostName, setMapPosition, updateParents } from "../lib/checkmkWrite";
 import { hostHref, incidentHref, withSearchParam } from "../lib/searchLinks";
 import {
@@ -54,6 +67,9 @@ export interface TopologyMapProps {
   // Worst service-need tier per host; drawn as a small dot at the node's top-right.
   tierLookup?: TierLookup;
   onSelectHost?: (id: string) => void;
+  // Called for every drawing-layer interaction, so the edit-mode idle timer sees it (the
+  // drawing layer stops propagation for the pointer events it takes).
+  onActivity?: () => void;
 }
 
 // Shared by addEdge/editEdge/deleteEdge -- all three write via updateParents, so all three fail
@@ -297,6 +313,7 @@ export function TopologyMap({
   incidentLookup,
   tierLookup,
   onSelectHost,
+  onActivity,
 }: TopologyMapProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -320,7 +337,11 @@ export function TopologyMap({
   const onEditSavedRef = useRef(onEditSaved);
   const onEditFailedRef = useRef(onEditFailed);
   const onSelectHostRef = useRef(onSelectHost);
+  const onActivityRef = useRef(onActivity);
   const searchRef = useRef(location.search);
+  useEffect(() => {
+    onActivityRef.current = onActivity;
+  }, [onActivity]);
   useEffect(() => {
     onEditSavedRef.current = onEditSaved;
   }, [onEditSaved]);
@@ -544,7 +565,17 @@ export function TopologyMap({
 
     // D-01: registered unconditionally (not gated on editMode) so the grid is always visible,
     // in both read-only and edit mode.
-    network.on("beforeDrawing", (ctx: CanvasRenderingContext2D) => drawGrid(ctx, network, container));
+    //
+    // The drawing layer is painted right after the grid. beforeDrawing runs before
+    // vis-network draws edges and nodes, so shapes always sit behind hosts, and they share
+    // the grid's coordinate space (pan and zoom for free). The store is read through
+    // getState() because this handler is registered once. The selection handles only show
+    // while edit mode is on; outside it the drawing is read-only.
+    network.on("beforeDrawing", (ctx: CanvasRenderingContext2D) => {
+      drawGrid(ctx, network, container);
+      const drawing = useMapDrawingStore.getState();
+      drawShapes(ctx, drawing.draft, editModeRef.current ? drawing.selectedId : null, network.getScale());
+    });
 
     network.on("afterDrawing", (ctx: CanvasRenderingContext2D) =>
       drawTierMarkers(ctx, network, container, tierLookupRef.current),
@@ -778,6 +809,211 @@ export function TopologyMap({
     network.focus(focusRequest.id, { scale: network.getScale(), animation: ZOOM_ANIMATION });
   }, [focusRequest]);
 
+  // ---- Drawing layer (quick 261005-eln) ---------------------------------------------------
+  // The shapes live in useMapDrawingStore and are painted from the beforeDrawing handler in
+  // the mount effect; this section only loads them, redraws on change, and turns pointer
+  // input into shape edits. Nothing here ever calls a checkmkWrite function: host
+  // positions keep persisting through map_position exactly as before.
+  const drawingDraft = useMapDrawingStore((s) => s.draft);
+  const drawingSelectedId = useMapDrawingStore((s) => s.selectedId);
+  const drawingDirty = useMapDrawingStore((s) => s.dirty);
+  const drawingLoadError = useMapDrawingStore((s) => s.loadError);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    void useMapDrawingStore.getState().load();
+  }, []);
+
+  useEffect(() => {
+    networkRef.current?.redraw();
+  }, [drawingDraft, drawingSelectedId, editMode, hasNodes]);
+
+  // Leaving edit mode (toggle or idle timeout) drops the tool and selection but KEEPS the
+  // draft: edit mode never asks before turning off, so the unsaved work must survive it.
+  useEffect(() => {
+    if (!editMode) {
+      const drawing = useMapDrawingStore.getState();
+      drawing.setTool("none");
+      drawing.select(null);
+    }
+  }, [editMode]);
+
+  // A reload or tab close would silently discard an unsaved draft (it is never persisted).
+  useEffect(() => {
+    if (!drawingDirty) {
+      return;
+    }
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [drawingDirty]);
+
+  // Delete / Backspace removes the selected shape unless the user is typing somewhere.
+  useEffect(() => {
+    if (!editMode) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target && (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable)) {
+        return;
+      }
+      const { selectedId, removeShape } = useMapDrawingStore.getState();
+      if (selectedId) {
+        event.preventDefault();
+        removeShape(selectedId);
+        onActivityRef.current?.();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editMode]);
+
+  useEffect(() => () => dragCleanupRef.current?.(), []);
+
+  function canvasPoint(clientX: number, clientY: number): { dom: Point; canvas: Point } | null {
+    const network = networkRef.current;
+    const container = containerRef.current;
+    if (!network || !container) {
+      return null;
+    }
+    const box = container.getBoundingClientRect();
+    const dom = { x: clientX - box.left, y: clientY - box.top };
+    return { dom, canvas: network.DOMtoCanvas(dom) };
+  }
+
+  // Tracks a drag with window listeners (the pointer may leave the canvas). `onMove`
+  // receives the canvas point; `onEnd` runs once on release.
+  function trackDrag(onMove: (point: Point) => void, onEnd: () => void) {
+    dragCleanupRef.current?.();
+    const move = (event: PointerEvent) => {
+      const p = canvasPoint(event.clientX, event.clientY);
+      if (p) {
+        onMove(p.canvas);
+        onActivityRef.current?.();
+      }
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      dragCleanupRef.current = null;
+    };
+    const up = () => {
+      cleanup();
+      onEnd();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    dragCleanupRef.current = cleanup;
+  }
+
+  // Capture-phase pointerdown on the canvas host. It only takes the event when edit mode is on,
+  // a drawing tool is active (not "none"), and no host node is under the pointer -- so
+  // vis-network keeps every host click, node drag and grid snap, and the "Hosts" tool leaves
+  // the map exactly as it was. Events it takes are stopped and default-prevented so
+  // vis-network neither pans nor treats them as a click. The Select tool leaves a miss on
+  // empty canvas to vis-network (so the map can still be panned) after clearing the selection.
+  function onDrawingPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    const network = networkRef.current;
+    const drawing = useMapDrawingStore.getState();
+    if (!network || !editModeRef.current || drawing.tool === "none" || event.button !== 0) {
+      return;
+    }
+    const p = canvasPoint(event.clientX, event.clientY);
+    if (!p || network.getNodeAt(p.dom) !== undefined) {
+      return;
+    }
+    const point = p.canvas;
+    const take = () => {
+      event.stopPropagation();
+      event.preventDefault();
+      onActivityRef.current?.();
+    };
+    const find = (id: string) => useMapDrawingStore.getState().draft.find((s) => s.id === id);
+    const apply = (id: string, next: Shape) => {
+      const current = find(id);
+      if (current && JSON.stringify(current) !== JSON.stringify(next)) {
+        useMapDrawingStore.getState().updateShape(id, next);
+      }
+    };
+    const stroke = drawing.stroke;
+    const fill = drawing.fill;
+    const sx = snapShapeValue(point.x);
+    const sy = snapShapeValue(point.y);
+
+    if (drawing.tool === "rect" || drawing.tool === "ellipse") {
+      take();
+      const start: Shape = { id: newShapeId(), type: drawing.tool, x: sx, y: sy, w: 0, h: 0, stroke, fill, strokeWidth: 2 };
+      drawing.addShape(start);
+      drawing.select(start.id);
+      trackDrag(
+        (to) => apply(start.id, resizeShape(start, "se", to)),
+        () => {
+          const made = find(start.id);
+          if (made && (made.type === "rect" || made.type === "ellipse") && (made.w < 1 || made.h < 1)) {
+            useMapDrawingStore.getState().removeShape(start.id);
+          }
+        },
+      );
+      return;
+    }
+    if (drawing.tool === "line") {
+      take();
+      const start: Shape = { id: newShapeId(), type: "line", x1: sx, y1: sy, x2: sx, y2: sy, stroke, strokeWidth: 2 };
+      drawing.addShape(start);
+      drawing.select(start.id);
+      trackDrag(
+        (to) => apply(start.id, resizeShape(start, "p2", to)),
+        () => {
+          const made = find(start.id);
+          if (made?.type === "line" && made.x1 === made.x2 && made.y1 === made.y2) {
+            useMapDrawingStore.getState().removeShape(start.id);
+          }
+        },
+      );
+      return;
+    }
+    if (drawing.tool === "text") {
+      take();
+      const label: Shape = { id: newShapeId(), type: "text", x: sx, y: sy, text: "Label", stroke, fontSize: 16 };
+      drawing.addShape(label);
+      drawing.select(label.id);
+      drawing.setTool("select");
+      return;
+    }
+    // Select tool.
+    const hit = hitTest(drawing.draft, point, 6 / network.getScale(), drawing.selectedId);
+    if (!hit) {
+      drawing.select(null);
+      return;
+    }
+    take();
+    drawing.select(hit.id);
+    const original = find(hit.id);
+    if (!original) {
+      return;
+    }
+    const handle: Handle = hit.handle;
+    trackDrag(
+      (to) =>
+        apply(
+          hit.id,
+          handle === "body"
+            ? moveShape(original, to.x - point.x, to.y - point.y)
+            : resizeShape(original, handle, to),
+        ),
+      () => undefined,
+    );
+  }
+
   const zoomBy = (factor: number) => {
     const network = networkRef.current;
     if (!network) {
@@ -845,7 +1081,29 @@ export function TopologyMap({
           <ZoomIcon kind="fit" />
         </button>
       </div>
-      <div ref={containerRef} className="h-full w-full bg-white" />
+      {editMode && <MapDrawingToolbar onActivity={() => onActivityRef.current?.()} />}
+      {drawingLoadError && (
+        <div
+          role="status"
+          className="absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded bg-bg-subtle px-2 py-1 text-xs text-fg-secondary"
+        >
+          <span>Drawing unavailable: {drawingLoadError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss drawing message"
+            onClick={() => useMapDrawingStore.getState().clearErrors()}
+            className="text-fg-tertiary hover:text-fg-primary"
+          >
+            ×
+          </button>
+        </div>
+      )}
+      <div
+        ref={containerRef}
+        data-testid="topology-map-canvas"
+        onPointerDownCapture={onDrawingPointerDown}
+        className="h-full w-full bg-white"
+      />
     </div>
   );
 }
