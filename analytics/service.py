@@ -244,6 +244,8 @@ class AnalyticsService:
         self.open_incidents: dict[str, dict] = {}
         # Last published narration content per incident (publish only on change).
         self._narration_sigs: dict[str, tuple] = {}
+        # Last published need payload minus generated_at (fast ticks publish only on change).
+        self._need_sigs: dict[str, dict] = {}
         # Trend/sustained needs from the last good cycle, re-fed when ClickHouse is down.
         self._slow_candidates: dict[str, Need] = {}
         self._forecast_hosts: set[str] = set()
@@ -442,7 +444,14 @@ class AnalyticsService:
 
     def publish_need(self, need: Need, now: datetime) -> None:
         stamped = replace(need, generated_at=iso_utc(now))
-        publish_retained_json(self.client, need_status_topic(need.id), stamped.to_payload())
+        payload = stamped.to_payload()
+        publish_retained_json(self.client, need_status_topic(need.id), payload)
+        self._need_sigs[need.id] = {k: v for k, v in payload.items() if k != "generated_at"}
+
+    def _need_changed(self, need: Need) -> bool:
+        payload = replace(need, generated_at="").to_payload()
+        payload.pop("generated_at", None)
+        return self._need_sigs.get(need.id) != payload
 
     def _on_triage(self, payload: bytes, retained: bool) -> None:
         if retained:
@@ -601,38 +610,54 @@ class AnalyticsService:
             publish_tombstone(self.client, forecast_topic(host))
         self._forecast_hosts = published
 
-    def run_cycle(self, now: datetime) -> None:
-        """One evaluation: forecasts, trend/sustained/failure needs, publish and tombstone."""
+    def run_cycle(self, now: datetime, slow: bool = True) -> None:
+        """One evaluation: failure needs always; ClickHouse work only on a slow cycle.
+
+        A fast tick (slow=False) evaluates failure needs from the in-memory MQTT
+        snapshot, carries trend/sustained needs over unchanged, never touches
+        ClickHouse and publishes only needs whose payload changed. A slow cycle
+        also fetches history, publishes forecasts and re-evaluates trend/sustained
+        needs, and republishes every open need (refreshing generated_at).
+        """
         self._warned = False
         statuses, services, nodes, incidents = self._snapshot_inputs()
         candidates = failure_needs(statuses, services, nodes, incidents, now, self.tz)
-        fetched = self._fetch()
-        if fetched is not None:
-            fits_by_host, slow = self._evaluate_series(fetched, now)
-            self._publish_forecasts(fits_by_host, now)
-            self._slow_candidates = {n.id: n for n in slow}
-        # With ClickHouse down, last cycle's trend/sustained needs are carried over
-        # so an outage is not mistaken for those needs resolving.
+        evaluated: set[str] | None = {"failure"}
+        if slow:
+            fetched = self._fetch()
+            if fetched is not None:
+                fits_by_host, slow_needs = self._evaluate_series(fetched, now)
+                self._publish_forecasts(fits_by_host, now)
+                self._slow_candidates = {n.id: n for n in slow_needs}
+                evaluated = None
+        # Between slow cycles, and with ClickHouse down, the last good cycle's
+        # trend/sustained needs are carried over so neither a fast tick nor an
+        # outage is mistaken for those needs resolving.
         candidates.extend(self._slow_candidates.values())
         with self.lock:
-            publish, tombstones = self.tracker.update(candidates, now)
+            publish, tombstones = self.tracker.update(candidates, now, evaluated_sources=evaluated)
             resets = list(self.tracker.auto_resets)
         for need, audit in resets:
             row = audit_row(need, "auto_reset", audit["tier_before"], audit["tier_after"], now)
             self._insert("history.need_triage", [row])
         for need in publish:
-            self.publish_need(need, now)
+            if slow or self._need_changed(need):
+                self.publish_need(need, now)
         for need_id in tombstones:
             self._slow_candidates.pop(need_id, None)
+            self._need_sigs.pop(need_id, None)
             publish_tombstone(self.client, need_status_topic(need_id))
 
     # --- main loop --------------------------------------------------------
 
     def run_forever(self, stop_event: threading.Event, clock=time.monotonic) -> None:
-        """Run cycles every EVAL_INTERVAL_SECONDS until stopped.
+        """Run a fast failure-need tick and a slow ClickHouse cycle until stopped.
 
-        Cycles run on this one thread, so they cannot overlap: a slow cycle
-        pushes the next one back (skip, not queue). The rollup scheduler is
+        Failure needs come from the in-memory MQTT snapshot, so they are evaluated
+        every POLL_INTERVAL_SECONDS; the ClickHouse fetch, forecasts and
+        trend/sustained needs stay on EVAL_INTERVAL_SECONDS (demo latency, quick
+        261005-dox). Cycles run on this one thread, so they cannot overlap: a late
+        cycle pushes the next back (skip, not queue). The rollup scheduler is
         ticked every loop pass and decides for itself whether a run is due.
         """
         try:
@@ -641,16 +666,20 @@ class AnalyticsService:
             rollup_tz = zoneinfo.ZoneInfo("UTC")
         scheduler = self.rollup_mod.RollupScheduler(delay_minutes=self.config.rollup_delay_minutes)
         s3_holder: dict = {}
-        interval = self.config.eval_interval_seconds
-        next_run = clock()
+        slow_interval = self.config.eval_interval_seconds
+        fast_interval = self.config.poll_interval_seconds
+        next_slow = next_fast = clock()
         while not stop_event.is_set():
             started = clock()
-            if started >= next_run:
+            if started >= next_slow or started >= next_fast:
+                is_slow = started >= next_slow
                 try:
-                    self.run_cycle(self._now())
+                    self.run_cycle(self._now(), slow=is_slow)
                 except Exception:
                     _logger.exception("Evaluation cycle failed")
-                next_run = max(started + interval, clock())
+                if is_slow:
+                    next_slow = max(started + slow_interval, clock())
+                next_fast = max(started + fast_interval, clock())
             self.rollup_mod.maybe_run_rollups(
                 self.config,
                 scheduler,
@@ -659,7 +688,7 @@ class AnalyticsService:
                 self._now().astimezone(rollup_tz),
                 clock(),
             )
-            stop_event.wait(max(0.0, min(TICK_SECONDS, next_run - clock())))
+            stop_event.wait(max(0.0, min(TICK_SECONDS, min(next_fast, next_slow) - clock())))
 
 
 def _log_series_matches(config: AnalyticsConfig, history_mod=_history) -> None:
@@ -714,9 +743,9 @@ def main() -> int:
     service.start()
     _logger.info("Analytics service running (%r)", config)
     try:
-        # Failure needs share the D-13 15-minute cadence (EVAL_INTERVAL_SECONDS can be
-        # lowered by env). Incidents themselves still appear instantly from the poller,
-        # and most DOWN hosts are incident-covered (D-27), so the cadence costs little.
+        # Failure needs run every POLL_INTERVAL_SECONDS from the in-memory MQTT snapshot
+        # (no ClickHouse); forecasts, trend and sustained needs run every
+        # EVAL_INTERVAL_SECONDS. D-13 and D-27 amended 2026-10-05.
         service.run_forever(stop_event)
     finally:
         service.stop()
