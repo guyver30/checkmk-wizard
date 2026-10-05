@@ -133,6 +133,7 @@ None.
 | 261002-c2m | poller: republish service list when a service's first plugin output arrives (signature tracks empty vs non-empty output) | 2026-10-02 | 31a472e | fast (no plan) |
 | 261002-rta | demo: random rta (0.2-3.0 ms) in injected OK ping output per host | 2026-10-02 | dbdc040 | fast (no plan) |
 | 261002-ciu | dashboard: incidents moved to a collapsible right-column pane above host details (header with count + worst-severity badge, persisted collapse); map/history reclaim the centre | 2026-10-02 | 336e7a0 | Needs Review | [261002-ciu-incidents-pane-on-the-right-collapsible-](./quick/261002-ciu-incidents-pane-on-the-right-collapsible-/) |
+| 261005-dox | Analytics: failure needs evaluated every 15 s (ClickHouse cycle stays 900 s), host-DOWN need raised despite an open incident (D-27 reversed for host-DOWN only), source-scoped anti-flap; not yet deployed or verified live | 2026-10-05 | f969135 | [261005-dox-analytics-demo-latency-failure-needs-eve](./quick/261005-dox-analytics-demo-latency-failure-needs-eve/) |
 | fast | Switch MinIO image to cgr.dev/chainguard/minio pinned by digest (Docker Hub and quay.io both unpullable) | 2026-09-30 | c77c3fd | - |
 | fast | Add docs/DEPLOY-NEW-MACHINE.md new-machine deploy checklist, linked from README | 2026-09-30 | 62d64e0 | - |
 | 261003-le3 | poller_writer gains CREATE TEMPORARY TABLE (initdb + one-off doc) so the Parquet rollup writes; found live in 14.1-08 | 2026-10-03 | 990684e | [261003-le3-poller-writer-create-temporary-table-gra](./quick/261003-le3-poller-writer-create-temporary-table-gra/) |
