@@ -54,6 +54,7 @@ vi.mock("../components/TopologyMap", () => ({
 const INITIAL_STATE = useAppStore.getState();
 
 beforeEach(() => {
+  localStorage.clear();
   useAppStore.setState(INITIAL_STATE, true);
   vi.mocked(checkmkWrite.probeEditingAvailable).mockReset().mockResolvedValue(true);
 });
@@ -89,6 +90,62 @@ describe("IndexRoute", () => {
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
   });
 
+});
+
+function seedNeed() {
+  useAppStore.setState({
+    needs: {
+      n1: {
+        id: "n1",
+        source: "trend",
+        host: "srv-a",
+        service: "Filesystem /",
+        metric: "fs_used_percent",
+        unit: "%",
+        tier: "urgent",
+        computed_tier: "urgent",
+        days_to_warn: null,
+        days_to_crit: 30,
+        warn_date: null,
+        crit_date: "2026-11-03T00:00:00Z",
+        confidence: "high",
+        history_days: 21,
+        value: null,
+        warn: null,
+        crit: null,
+        sustained_fraction: null,
+        window_hours: null,
+        since: "",
+        narration: "",
+        triage: null,
+        generated_at: new Date().toISOString(),
+      },
+    },
+  });
+}
+
+describe("IndexRoute triage visibility", () => {
+  afterEach(() => {
+    __setAdminModeForTests(false);
+  });
+
+  it("shows the Triage button on the Needs tab in normal view", () => {
+    seedNeed();
+    renderIndex();
+    fireEvent.click(screen.getByRole("tab", { name: /^Needs/ }));
+    expect(screen.getByRole("button", { name: "Triage" })).toBeInTheDocument();
+  });
+
+  it("shows the Triage button on the Needs tab in admin mode", async () => {
+    seedNeed();
+    __setAdminModeForTests(true);
+    renderIndex();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: /^Needs/ }));
+    expect(screen.getByRole("button", { name: "Triage" })).toBeInTheDocument();
+  });
 });
 
 describe("IndexRoute admin mode", () => {
@@ -175,7 +232,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     expect(screen.queryByRole("region", { name: "Criticality & dependencies" })).not.toBeInTheDocument();
   });
 
-  it("edit mode gives the map the full centre: no incident list, event history or details pane; tree stays", async () => {
+  it("edit mode gives the map the full centre: no event history or details pane, alerts pane limited to Needs; tree stays", async () => {
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValue(0);
     renderIndexAt("/?host=h1");
     await flush(); // let the mount-time editingAvailable probe resolve before toggling
@@ -185,8 +242,10 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
     await flush();
 
-    expect(screen.queryByText("No open incidents")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /collapse incidents/i })).not.toBeInTheDocument();
+    // The alerts pane stays, with Incidents disabled and the Service needs region forced.
+    expect(screen.getByRole("button", { name: /collapse incidents & needs/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^Incidents/ })).toBeDisabled();
+    expect(screen.getByRole("region", { name: "Service needs" })).toBeInTheDocument();
     expect(screen.queryByRole("log", { name: /recent events/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /collapse host details/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /collapse device tree/i })).toBeInTheDocument();
@@ -198,18 +257,23 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
   });
 
-  it("the Service needs pane stays visible in edit mode while the incidents pane is hidden", async () => {
+  it("in edit mode the alerts pane stays with Incidents disabled and Needs forced, then restores the previous tab", async () => {
     vi.mocked(checkmkWrite.countPendingChanges).mockResolvedValue(0);
     renderIndex();
     await flush();
-    expect(screen.getByRole("region", { name: "Service needs" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /collapse incidents/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^Incidents/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("region", { name: "Service needs" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
     await flush();
-
+    expect(screen.getByRole("tab", { name: /^Incidents/ })).toBeDisabled();
     expect(screen.getByRole("region", { name: "Service needs" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /collapse incidents/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Edit topology" }));
+    await flush();
+    expect(screen.getByRole("tab", { name: /^Incidents/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Every device the poller can reach is reporting normally.")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Service needs" })).not.toBeInTheDocument();
   });
 
   it("lists needs from the store and hides cancelled ones", async () => {
@@ -255,6 +319,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
     });
     renderIndex();
     await flush();
+    fireEvent.click(screen.getByRole("tab", { name: /^Needs/ }));
     const region = screen.getByRole("region", { name: "Service needs" });
     expect(within(region).getByText("srv-keep")).toBeInTheDocument();
     expect(within(region).queryByText("srv-gone")).not.toBeInTheDocument();
@@ -446,7 +511,7 @@ describe("IndexRoute incidents (DASH-14/DASH-15)", () => {
     const map = screen.getByTestId("topology-map");
     const position = incidentRegion.compareDocumentPosition(map);
     expect(position & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Collapse incidents" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse incidents & needs" })).toBeInTheDocument();
 
     const tree = screen.getByRole("tree", { name: "Device tree" });
     within(tree)
@@ -467,8 +532,14 @@ describe("IndexRoute incidents (DASH-14/DASH-15)", () => {
 
   it("with no incidents open, 'No open incidents' renders and the map still renders", () => {
     renderIndex();
-    expect(screen.getByText("No open incidents")).toBeInTheDocument();
+    expect(screen.getByText("No open incidents or needs")).toBeInTheDocument();
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
+  });
+
+  it("opening ?incident= switches to the Incidents tab even when Needs was the stored tab", () => {
+    localStorage.setItem("dashboard-react.alertsTab.v1", JSON.stringify("needs"));
+    renderIndexAt("/?incident=incident-h1");
+    expect(screen.getByRole("tab", { name: /^Incidents/ })).toHaveAttribute("aria-selected", "true");
   });
 
   it("rendered at /?incident=incident-h1, that incident's card carries the highlight ring class", () => {

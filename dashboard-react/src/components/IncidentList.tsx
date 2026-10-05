@@ -3,9 +3,8 @@
 // re-sorts them.
 
 import { useEffect, useRef } from "react";
-import { Badge } from "kone-design-system";
 import { displayNameWithAddress } from "../lib/display";
-import { worstIncidentStatus, type Incident } from "../lib/incidents";
+import type { Incident } from "../lib/incidents";
 import type { DevicePayload, NarrationPayload } from "../lib/types";
 import { IncidentCard } from "./IncidentCard";
 
@@ -15,26 +14,6 @@ export interface IncidentListProps {
   nowMs: number;
   highlightedId?: string | null;
   narrations?: Record<string, NarrationPayload>;
-}
-
-// The Incidents pane header's at-a-glance summary: a count badge coloured by the worst open
-// incident (the same danger/warning vocabulary the cards use), or a quiet line when none are open.
-export function IncidentsSummary({ incidents }: { incidents: Incident[] }) {
-  const worst = worstIncidentStatus(incidents);
-  if (worst === null) {
-    return <span className="truncate text-xs text-fg-tertiary">No open incidents</span>;
-  }
-  return (
-    <span
-      data-testid="incidents-severity"
-      data-severity={worst}
-      aria-label={`${incidents.length} open ${incidents.length === 1 ? "incident" : "incidents"}`}
-    >
-      <Badge color={worst} variant="solid">
-        {incidents.length}
-      </Badge>
-    </span>
-  );
 }
 
 export function IncidentList({ incidents, devices, nowMs, highlightedId, narrations }: IncidentListProps) {
