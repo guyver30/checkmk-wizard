@@ -207,9 +207,29 @@ the wizard prints the manual `lq` commands instead of failing. The
 post-activation state table shows `PENDING` for hosts the core has never
 checked.
 
+### Main menu and --manage
+
+After Phase 1 the wizard asks "What do you want to do?". "Onboard new hosts"
+(the default; Enter) is the full flow. "Manage existing hosts only" skips
+folders, scan and onboarding and goes to the device type/alias screen, then
+the monitored-services step (both default to Yes here), Phase 6 for changed
+service hosts, and Phase 7. Skip the menu with:
+
+```bash
+uv run checkmk-wizard --manage
+deploy/run-wizard.sh --manage   # container mode
+```
+
+`--manage` cannot be combined with `--demo` (argparse error). The wizard
+cannot change hostname, IP address, folder, monitoring method, SNMP community
+or expected-open ports of an existing host; use the Checkmk GUI (Setup >
+Hosts). Details in
+[docs/WIZARD-OPERATION.md](docs/WIZARD-OPERATION.md#main-menu-after-phase-1-added-2026-10-08).
+
 ### Leaving early (Esc)
 
-Press Esc (or Ctrl+C) at any prompt in Phases 1-4 (and the optional "Manage
+Press Esc (or Ctrl+C) at the main menu, at any prompt in Phases 1-4 or in the
+manage-only flow (and the optional "Manage
 monitored services on existing hosts" step that follows Phase 4) to abort. The wizard lists the
 site's pending (not yet activated) changes, marks other users' changes, and
 asks whether to apply them, revert them (discards ALL pending changes on the

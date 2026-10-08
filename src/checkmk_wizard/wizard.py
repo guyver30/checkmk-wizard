@@ -1367,6 +1367,7 @@ async def _retag_existing_hosts(
     *,
     exclude_names: set[str],
     promoting: list[OnboardedHost] | None = None,
+    default_yes: bool = False,
 ) -> None:
     """Bulk device-type screen (TAG-04), the single place device types are
     assigned in Phase 4 (2026-09-25): hosts being promoted in this run
@@ -1375,7 +1376,12 @@ async def _retag_existing_hosts(
 
     Bulk retag of already-onboarded hosts (TAG-04). Locked to run inside
     Phase 4, not a startup menu or a command-line switch (D-01) — both were
-    offered to the operator and explicitly rejected.
+    offered to the operator and explicitly rejected. Amended 2026-10-08
+    (quick 261008-f5e): the operator approved a main menu and `--manage`;
+    the screen still runs inside Phase 4 and is also reached from "Manage
+    existing hosts only", which passes `default_yes=True` so the first
+    question defaults to Yes (the operator chose to manage hosts); the
+    onboarding flow keeps the default No.
 
     Every onboarded host is offered, whatever it is tagged as (D-12), and
     one folder at a time is edited in a full-screen list (D-13). "Discard
@@ -1430,7 +1436,7 @@ async def _retag_existing_hosts(
         proceed = await questionary.confirm(
             f"{len(candidates)} host(s) can be given a device type (hosts being promoted "
             "are marked (new)). Do that now?",
-            default=bool(promoting),
+            default=bool(promoting) or default_yes,
         ).ask_async()
         if not proceed:
             console.print("[dim]Leaving device types as they are — nothing was written.[/dim]")
@@ -2777,13 +2783,15 @@ async def _apply_host_service_change(client: CheckmkClient, plan: ServiceEditPla
 
 
 async def manage_existing_host_services(
-    client: CheckmkClient, *, exclude_names: set[str]
+    client: CheckmkClient, *, exclude_names: set[str], default_yes: bool = False
 ) -> list[OnboardedHost]:
     """Optional step: add or remove monitored systemd services on hosts that
     are already onboarded, by editing each host's "Systemd single services
     discovery" rule.
 
-    Runs after Phase 4 inside the abortable range: it only edits Checkmk
+    Runs after Phase 4 (and, since 2026-10-08, quick 261008-f5e, also in the
+    manage-only flow, which passes `default_yes=True` so the opt-in
+    confirm defaults to Yes) inside the abortable range: it only edits Checkmk
     rules (nothing on remote hosts), so Esc stays enabled and the abort
     handler can apply or revert its pending edits. The returned hosts go to
     Phase 6 only (activate, `fix_all` discovery, verification of added
@@ -2796,7 +2804,7 @@ async def manage_existing_host_services(
     console.rule("[bold]Manage monitored services on existing hosts (optional)")
     if not await questionary.confirm(
         "Change which services are monitored on hosts that are already onboarded (Linux/systemd)?",
-        default=False,
+        default=default_yes,
     ).ask_async():
         return []
     try:
@@ -3950,7 +3958,70 @@ async def _handle_abort(client: CheckmkClient, connection: CheckmkConnection) ->
     )
 
 
-async def run(*, demo: bool = False) -> None:
+async def _manage_existing_hosts(
+    client: CheckmkClient, connection: CheckmkConnection
+) -> list[OnboardedHost] | None:
+    """Manage-only flow: the Phase 4 bulk device-type/alias screen, then the
+    monitored-services step, on hosts that already exist.
+
+    Returns the hosts needing Phase 6 rediscovery, or None when there is
+    nothing to manage (no hosts, or the host list could not be read) and the
+    caller should stop. Both opt-in questions default to Yes here because
+    the operator explicitly chose to manage existing hosts.
+
+    Does not touch hostname, IP address, folder, monitoring method, SNMP
+    community or expected-open ports: those are set at promotion and are
+    changed in the Checkmk GUI. WizardAborted is not caught; `run()` routes
+    it to `_handle_abort`.
+    """
+    console.rule("[bold]Manage existing hosts")
+    try:
+        hosts = await client.list_hosts()
+    except CheckmkAPIError as exc:
+        console.print(f"[yellow]could not list hosts: {exc}[/yellow]")
+        return None
+    if not hosts:
+        console.print(
+            f"Site {connection.site} has no hosts yet — run the wizard again and choose "
+            '"Onboard new hosts".'
+        )
+        return None
+    # Same gate phase4 uses: no tag group, no retag (CR-03 class).
+    tag_group_available = await _ensure_device_type_tag_group(client)
+    if tag_group_available:
+        await _retag_existing_hosts(
+            client, connection, exclude_names=set(), promoting=[], default_yes=True
+        )
+    return await manage_existing_host_services(client, exclude_names=set(), default_yes=True)
+
+
+async def _prompt_main_menu() -> str:
+    """Ask what the operator wants to do after Phase 1 ("onboard" or "manage").
+
+    Added 2026-10-08 (quick 261008-f5e): the bulk device-type screen (inside
+    Phase 4) and the services step were hard to find. Enter keeps the
+    original flow; there is deliberately no "both" option because option 1
+    already offers retagging and service changes.
+    """
+    answer = await questionary.select(
+        "What do you want to do?",
+        choices=[
+            questionary.Choice(
+                "Onboard new hosts — folders, network scan, promotion, onboarding "
+                "(also offers retagging and service changes for existing hosts)",
+                value="onboard",
+            ),
+            questionary.Choice(
+                "Manage existing hosts only — device type/alias and monitored services, no scan",
+                value="manage",
+            ),
+        ],
+        default="onboard",
+    ).ask_async()
+    return "manage" if answer == "manage" else "onboard"
+
+
+async def run(*, demo: bool = False, manage: bool = False) -> None:
     _ABORT_STATE.esc_enabled = True
     _ABORT_STATE.cmkadmin_password = None
     try:
@@ -3962,18 +4033,39 @@ async def run(*, demo: bool = False) -> None:
     async with CheckmkClient(connection) as client:
         try:
             await _provision_topology_editor(client, connection)
-            folder_subnets, tag_group_available = await phase2_folders(client)
-            scan_results = await phase3_discovery(client, folder_subnets, demo=demo)
-            onboarded = await phase4_classification(
-                scan_results, client, connection, tag_group_available=tag_group_available, demo=demo
-            )
-            service_hosts = await manage_existing_host_services(
-                client,
-                exclude_names={h.hostname for h in onboarded} | {h.ip for h in onboarded},
-            )
+            # Demo hosts do not exist yet, so there is nothing to manage.
+            mode = "manage" if manage else "onboard" if demo else await _prompt_main_menu()
+            if mode == "manage":
+                manage_service_hosts = await _manage_existing_hosts(client, connection)
+            else:
+                folder_subnets, tag_group_available = await phase2_folders(client)
+                scan_results = await phase3_discovery(client, folder_subnets, demo=demo)
+                onboarded = await phase4_classification(
+                    scan_results,
+                    client,
+                    connection,
+                    tag_group_available=tag_group_available,
+                    demo=demo,
+                )
+                service_hosts = await manage_existing_host_services(
+                    client,
+                    exclude_names={h.hostname for h in onboarded} | {h.ip for h in onboarded},
+                )
         except WizardAborted:
             await _handle_abort(client, connection)
             console.rule("[bold yellow]Aborted")
+            return
+        if mode == "manage":
+            if manage_service_hosts is None:
+                console.rule("[bold green]Done")
+                return
+            if manage_service_hosts:
+                await phase6_discovery(client, connection, manage_service_hosts)
+            # No new hosts: phase7 still activates pending retag/service edits,
+            # prints the full-site state table and writes the snapshot. demo is
+            # always False here so real hosts never get the always-up rule.
+            await phase7_activation(client, connection, [], demo=False)
+            console.rule("[bold green]Done")
             return
         await phase5_onboarding(
             client, connection, onboarded, scan_results, tag_group_available=tag_group_available
@@ -3992,11 +4084,22 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="create N fake hosts in a subnet without scanning, and fake them UP after activation",
     )
+    parser.add_argument(
+        "--manage",
+        action="store_true",
+        help="skip the main menu and go straight to managing existing hosts "
+        "(device type/alias, monitored services); no scan or onboarding",
+    )
     args = parser.parse_args(argv)
+    if args.demo and args.manage:
+        parser.error(
+            "--demo and --manage cannot be combined: demo mode creates new fake hosts, "
+            "--manage only edits existing ones"
+        )
     # Installed at the entry point only; tests monkeypatch Question.ask_async themselves.
     questionary.Question.ask_async = _abortable_ask_async
     try:
-        asyncio.run(run(demo=args.demo))
+        asyncio.run(run(demo=args.demo, manage=args.manage))
     except KeyboardInterrupt:
         console.print(
             "[yellow]Interrupted — from Phase 5 on, changes already made on remote hosts are "

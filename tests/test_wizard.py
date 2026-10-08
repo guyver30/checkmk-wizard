@@ -4656,13 +4656,25 @@ def test_main_demo_flag_passes_demo_to_run(monkeypatch):
 
     seen = []
 
-    async def fake_run(*, demo=False):
-        seen.append(demo)
+    async def fake_run(*, demo=False, manage=False):
+        seen.append((demo, manage))
 
     monkeypatch.setattr(wiz, "run", fake_run)
     wiz.main(["--demo"])
     wiz.main([])
-    assert seen == [True, False]
+    wiz.main(["--manage"])
+    assert seen == [(True, False), (False, False), (False, True)]
+
+
+def test_main_demo_and_manage_together_is_an_argparse_error(monkeypatch, capsys):
+    from checkmk_wizard import wizard as wiz
+
+    monkeypatch.setattr(wiz, "run", AsyncMock())
+    with pytest.raises(SystemExit) as exc:
+        wiz.main(["--demo", "--manage"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "--demo" in err and "--manage" in err
 
 
 def test_demo_host_ips_skips_excluded_and_validates_capacity():
@@ -5030,6 +5042,7 @@ def _abort_run_setup(monkeypatch, pending, answers, *, esc_state=None):
     monkeypatch.setattr(wizard_module, "_ABORT_STATE", esc_state or _AbortState())
     monkeypatch.setattr(wizard_module, "phase1_site_bringup", AsyncMock(return_value=CONN))
     monkeypatch.setattr(wizard_module, "_provision_topology_editor", AsyncMock())
+    monkeypatch.setattr(wizard_module, "_prompt_main_menu", AsyncMock(return_value="onboard"))
     monkeypatch.setattr(wizard_module, "phase2_folders", AsyncMock(side_effect=WizardAborted))
     phase3 = AsyncMock()
     monkeypatch.setattr(wizard_module, "phase3_discovery", phase3)
@@ -5526,6 +5539,7 @@ async def test_run_feeds_service_hosts_to_phase6_only(monkeypatch):
     extra = OnboardedHost("10.0.0.5", "web1", "/servers", "linux", expected_services=["nginx"])
     monkeypatch.setattr(wizard_module, "phase1_site_bringup", AsyncMock(return_value=CONN))
     monkeypatch.setattr(wizard_module, "_provision_topology_editor", AsyncMock())
+    monkeypatch.setattr(wizard_module, "_prompt_main_menu", AsyncMock(return_value="onboard"))
     monkeypatch.setattr(wizard_module, "phase2_folders", AsyncMock(return_value=({}, True)))
     monkeypatch.setattr(wizard_module, "phase3_discovery", AsyncMock(return_value=[]))
     monkeypatch.setattr(wizard_module, "phase4_classification", AsyncMock(return_value=onboarded))
@@ -5542,3 +5556,210 @@ async def test_run_feeds_service_hosts_to_phase6_only(monkeypatch):
     assert p6.await_args.args[2] == onboarded + [extra]
     assert p5.await_args.args[2] == onboarded
     assert p7.await_args.args[2] == onboarded
+
+
+# ── main menu and manage-only flow (quick 261008-f5e) ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_prompt_main_menu_choices_and_default(monkeypatch):
+    seen = {}
+
+    class _Q:
+        def __init__(self, answer):
+            self._a = answer
+
+        async def ask_async(self):
+            return self._a
+
+    def fake_select(message, **kwargs):
+        seen["message"] = message
+        seen["kwargs"] = kwargs
+        return _Q(seen["answer"])
+
+    monkeypatch.setattr(questionary, "select", fake_select)
+    seen["answer"] = "manage"
+    assert await wizard_module._prompt_main_menu() == "manage"
+    assert seen["message"] == "What do you want to do?"
+    assert seen["kwargs"]["default"] == "onboard"
+    assert [c.value for c in seen["kwargs"]["choices"]] == ["onboard", "manage"]
+    for answer in ("onboard", "", None):
+        seen["answer"] = answer
+        assert await wizard_module._prompt_main_menu() == "onboard"
+
+
+def _menu_run_setup(monkeypatch, *, menu="manage", hosts=None, tag_group=True, services=None):
+    """Wire run() for the menu tests; returns the spies by name."""
+    monkeypatch.setattr(wizard_module, "_ABORT_STATE", _AbortState())
+    spies = {
+        "menu": AsyncMock(return_value=menu),
+        "tag_group": AsyncMock(return_value=tag_group),
+        "retag": AsyncMock(),
+        "services": AsyncMock(return_value=[] if services is None else services),
+        "p2": AsyncMock(return_value=({}, True)),
+        "p3": AsyncMock(return_value=[]),
+        "p4": AsyncMock(return_value=[]),
+        "p5": AsyncMock(),
+        "p6": AsyncMock(),
+        "p7": AsyncMock(),
+        "abort": AsyncMock(),
+    }
+    for attr, key in (
+        ("_prompt_main_menu", "menu"),
+        ("_ensure_device_type_tag_group", "tag_group"),
+        ("_retag_existing_hosts", "retag"),
+        ("manage_existing_host_services", "services"),
+        ("phase2_folders", "p2"),
+        ("phase3_discovery", "p3"),
+        ("phase4_classification", "p4"),
+        ("phase5_onboarding", "p5"),
+        ("phase6_discovery", "p6"),
+        ("phase7_activation", "p7"),
+        ("_handle_abort", "abort"),
+    ):
+        monkeypatch.setattr(wizard_module, attr, spies[key])
+    monkeypatch.setattr(wizard_module, "phase1_site_bringup", AsyncMock(return_value=CONN))
+    monkeypatch.setattr(wizard_module, "_provision_topology_editor", AsyncMock())
+    monkeypatch.setattr(
+        CheckmkClient,
+        "list_hosts",
+        AsyncMock(return_value=[{"id": "web1", "extensions": {}}] if hosts is None else hosts),
+    )
+    return spies
+
+
+@pytest.mark.asyncio
+async def test_run_menu_manage_skips_onboarding_phases(monkeypatch):
+    extra = OnboardedHost("10.0.0.5", "web1", "/servers", "linux")
+    s = _menu_run_setup(monkeypatch, services=[extra])
+
+    await wizard_module.run()
+
+    for key in ("p2", "p3", "p4", "p5"):
+        s[key].assert_not_awaited()
+    s["tag_group"].assert_awaited_once()
+    kw = s["retag"].await_args.kwargs
+    assert kw["exclude_names"] == set() and kw["promoting"] == [] and kw["default_yes"] is True
+    skw = s["services"].await_args.kwargs
+    assert skw["exclude_names"] == set() and skw["default_yes"] is True
+    assert s["p6"].await_args.args[2] == [extra]
+    assert s["p7"].await_args.args[2] == []
+    assert s["p7"].await_args.kwargs["demo"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_menu_manage_without_tag_group_skips_retag_only(monkeypatch):
+    s = _menu_run_setup(monkeypatch, tag_group=False)
+    await wizard_module.run()
+    s["retag"].assert_not_awaited()
+    s["services"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_menu_manage_without_service_hosts_skips_phase6(monkeypatch):
+    s = _menu_run_setup(monkeypatch, services=[])
+    await wizard_module.run()
+    s["p6"].assert_not_awaited()
+    assert s["p7"].await_args.args[2] == []
+
+
+@pytest.mark.asyncio
+async def test_run_menu_manage_with_no_hosts_stops_cleanly(monkeypatch, capsys):
+    s = _menu_run_setup(monkeypatch, hosts=[])
+    monkeypatch.setattr(CheckmkClient, "list_hosts", AsyncMock(return_value=[]))
+    await wizard_module.run()
+    for key in ("retag", "services", "p6", "p7"):
+        s[key].assert_not_awaited()
+    assert "has no hosts yet" in _flat(capsys.readouterr().out)
+
+
+@pytest.mark.asyncio
+async def test_run_manage_flag_skips_menu(monkeypatch):
+    s = _menu_run_setup(monkeypatch)
+    await wizard_module.run(manage=True)
+    s["menu"].assert_not_awaited()
+    s["retag"].assert_awaited_once()
+    s["p2"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_demo_flag_skips_menu_and_onboards(monkeypatch):
+    s = _menu_run_setup(monkeypatch, menu="manage")
+    await wizard_module.run(demo=True)
+    s["menu"].assert_not_awaited()
+    s["p2"].assert_awaited_once()
+    s["retag"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_menu_onboard_runs_existing_flow(monkeypatch):
+    s = _menu_run_setup(monkeypatch, menu="onboard")
+    await wizard_module.run()
+    s["menu"].assert_awaited_once()
+    for key in ("p2", "p3", "p4", "services", "p5", "p6", "p7"):
+        s[key].assert_awaited_once()
+    s["retag"].assert_not_awaited()
+    assert s["services"].await_args.kwargs.get("default_yes") is None
+
+
+@pytest.mark.asyncio
+async def test_run_abort_at_menu_goes_to_handle_abort(monkeypatch, capsys):
+    s = _menu_run_setup(monkeypatch)
+    s["menu"].side_effect = WizardAborted
+    await wizard_module.run()
+    s["abort"].assert_awaited_once()
+    s["p6"].assert_not_awaited()
+    s["p7"].assert_not_awaited()
+    assert "Aborted" in _flat(capsys.readouterr().out)
+
+
+@pytest.mark.asyncio
+async def test_run_abort_in_manage_retag_goes_to_handle_abort(monkeypatch, capsys):
+    s = _menu_run_setup(monkeypatch)
+    s["retag"].side_effect = WizardAborted
+    await wizard_module.run()
+    s["abort"].assert_awaited_once()
+    s["p6"].assert_not_awaited()
+    s["p7"].assert_not_awaited()
+    assert "Aborted" in _flat(capsys.readouterr().out)
+
+
+def _capture_confirm(monkeypatch, answer=False):
+    defaults = []
+
+    class _Q:
+        async def ask_async(self):
+            return answer
+
+    def fake_confirm(message, **kwargs):
+        defaults.append(kwargs.get("default"))
+        return _Q()
+
+    monkeypatch.setattr(questionary, "confirm", fake_confirm)
+    return defaults
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs, expected", [({}, False), ({"default_yes": True}, True)])
+async def test_retag_first_confirm_default(monkeypatch, kwargs, expected):
+    monkeypatch.setattr(
+        CheckmkClient,
+        "list_hosts",
+        AsyncMock(return_value=[{"id": "web1", "extensions": {"folder": "/servers", "attributes": {}}}]),
+    )
+    defaults = _capture_confirm(monkeypatch)
+    await wizard_module._retag_existing_hosts(
+        object.__new__(CheckmkClient), CONN, exclude_names=set(), promoting=[], **kwargs
+    )
+    assert defaults == [expected]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs, expected", [({}, False), ({"default_yes": True}, True)])
+async def test_services_step_optin_default(monkeypatch, kwargs, expected):
+    defaults = _capture_confirm(monkeypatch)
+    result = await wizard_module.manage_existing_host_services(
+        object.__new__(CheckmkClient), exclude_names=set(), **kwargs
+    )
+    assert result == []
+    assert defaults == [expected]
