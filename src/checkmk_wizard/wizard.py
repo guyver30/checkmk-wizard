@@ -5,6 +5,7 @@ Configurator (see docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md).
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import html
 import ipaddress
@@ -2293,6 +2294,86 @@ async def _create_service_discovery_rules(
         console.print(f"  [yellow]could not configure service monitoring for {host.hostname}: {exc}[/yellow]")
 
 
+_SYSTEMD_SERVICE_STATES_RULESET = "checkgroup_parameters:systemd_units_services"
+_SYSTEMD_SERVICE_STATES_VALUE = {
+    "states": {"active": 0, "inactive": 2, "failed": 2},
+    "states_default": 2,
+}
+
+
+def _is_global_systemd_inactive_crit_rule(rule: dict[str, Any]) -> bool:
+    """Whether an existing rule is a main-folder, host-unscoped rule that
+    already maps `inactive` to CRIT."""
+    ext = rule.get("extensions") or {}
+    if ext.get("folder") != "/":
+        return False
+    if (ext.get("conditions") or {}).get("host_name"):
+        return False
+    try:
+        # literal_eval only, never eval: value_raw comes from the server.
+        value = ast.literal_eval(ext.get("value_raw") or "")
+    except (ValueError, SyntaxError):
+        return False
+    if not isinstance(value, dict) or not isinstance(value.get("states"), dict):
+        return False
+    return value["states"].get("inactive") == 2
+
+
+async def _ensure_systemd_inactive_crit_rule(
+    client: CheckmkClient, host: OnboardedHost, service_names: list[str]
+) -> None:
+    """Make sure one global "Systemd single service" rule maps a stopped
+    (inactive) unit to CRIT.
+
+    Checkmk's default for this ruleset is active OK / inactive OK / failed
+    CRIT, so a monitored service that is stopped shows "inactive" but stays
+    OK and never alerts. One rule in the main folder with no host condition
+    fixes this for every current and future host; hosts without systemd unit
+    services are unaffected, and a more specific folder/host rule still wins
+    per key (same global-scope reasoning as `_create_threshold_rules`).
+
+    Idempotent: existing rules of the ruleset are listed first and nothing is
+    created if a matching global rule exists. If the list call fails nothing
+    is created either (a duplicate cannot be ruled out). Best-effort: any
+    `CheckmkAPIError` becomes a yellow warning naming the UI fallback.
+
+    Encoding: `value_raw` is sent as plain JSON (`json.dumps`). Every value
+    is an int in nested dicts, so JSON and Python-literal syntax mean the
+    same thing; the repr() requirement described in `_create_threshold_rules`
+    applies only to Levels()/CascadingDropdown valuespecs that distinguish
+    tuple from list. `create_rule` documents plain JSON as live-verified.
+    The idempotency check parses existing rules with `ast.literal_eval`
+    because Checkmk echoes `value_raw` in Python-repr form (literal_eval also
+    accepts the JSON form of an int-only dict).
+
+    Ruleset id and the `states` / `states_default` keys come from the Checkmk
+    docs (https://checkmk.com/integrations/systemd_units_services) and
+    cmk/gui/plugins/wato/check_parameters/systemd_services.py; the older
+    `systemd_services` ruleset is deprecated and not used. NOT yet
+    live-verified on 2.4.0p35: create the rule in the GUI, GET it, and
+    compare `extensions.value_raw` with the value sent here.
+    """
+    if host.os_family != "linux" or not service_names:
+        return
+    try:
+        existing = await client.list_rules(_SYSTEMD_SERVICE_STATES_RULESET)
+        if any(_is_global_systemd_inactive_crit_rule(r) for r in existing):
+            console.print("  [dim]systemd inactive = CRIT rule already present[/dim]")
+            return
+        await client.create_rule(
+            ruleset=_SYSTEMD_SERVICE_STATES_RULESET,
+            folder="/",
+            value_raw=json.dumps(_SYSTEMD_SERVICE_STATES_VALUE),
+        )
+        console.print("  [green]systemd inactive = CRIT rule created[/green]")
+    except CheckmkAPIError as exc:
+        console.print(
+            f"  [yellow]could not ensure the systemd inactive = CRIT rule: {exc}. "
+            'Add it by hand: Setup > Services > Service monitoring rules > '
+            '"Systemd single service", inactive = CRIT.[/yellow]'
+        )
+
+
 def _looks_loopback(host: str) -> bool:
     """Whether `host` can only ever mean "this machine itself" — the
     literal string `localhost`, or an IP address in the loopback range.
@@ -2685,6 +2766,7 @@ async def _onboard_hosts(
             h.hostname, h.ip, h.os_family, ssh_creds if h.os_family == "linux" else None
         )
         await _create_service_discovery_rules(client, h, h.expected_services)
+        await _ensure_systemd_inactive_crit_rule(client, h, h.expected_services)
 
         if h.os_family == "windows":
             console.print("  [cyan]Windows target — manual path (by design):[/cyan]")

@@ -1342,6 +1342,33 @@ placement as the TCP-port rules, for the same reasons.
      name matches exactly, never as an accidental prefix of a different
      service. Best-effort: a failure here is caught and printed, never
      blocking the rest of onboarding.
+   - **`_ensure_systemd_inactive_crit_rule()`:** creates one *global* rule
+     (folder `/`, no host condition) on
+     `checkgroup_parameters:systemd_units_services` ("Systemd single
+     service") with `states` active 0 / inactive 2 / failed 2 and
+     `states_default` 2. Why: Checkmk's default keeps `inactive` at OK, so
+     a stopped monitored service showed "inactive" but never alerted, and
+     neither the dashboard nor analytics saw it. Only runs for a Linux
+     host that has expected services. Idempotent: it first lists the
+     ruleset's rules (`CheckmkClient.list_rules()`, i.e. `GET
+     /domain-types/rule/collections/all?ruleset_name=...`) and creates
+     nothing if a main-folder, host-unscoped rule with `inactive` = CRIT
+     already exists (so re-runs and further Linux hosts add no duplicate);
+     if the list call fails it creates nothing. Best-effort: any REST
+     failure prints a yellow warning naming the UI fallback and onboarding
+     continues. `value_raw` is sent as plain JSON (every value is an int in
+     nested dicts, so no tuple/list ambiguity); existing rules are parsed
+     with `ast.literal_eval` because Checkmk echoes `value_raw` in Python
+     repr form. The endpoint shape was checked against the Checkmk 2.4.0
+     source, and the ruleset id against the Checkmk docs; this rule is not
+     yet live-verified on 2.4.0p35.
+
+     **Existing sites:** a site onboarded before this change lacks the
+     rule. Either add it once by hand (Setup > Services > Service
+     monitoring rules > "Systemd single service", create a rule in the
+     main folder, set "inactive" to CRIT, keep "failed" and "other" at
+     CRIT, then Activate changes), or re-run the wizard's Phase 5
+     onboarding for any Linux host with expected services.
 4. **If `os_family == "windows"`:** prints
    `windows_firewall_instructions()` and `windows_register_command()`
    (`remote.py:194-198, 293-301`) as copy-paste text, using
@@ -1589,7 +1616,8 @@ first (rejected with the exact error above), then with the `repr()` form
 (accepted, and the value read back byte-for-byte identical from the API)
 — then deleting both test rules. Every other ruleset this wizard writes
 to (`active_checks:tcp`, `active_checks:icmp`,
-`discovery_systemd_units_services`, `inventory_services_rules`) uses
+`discovery_systemd_units_services`, `inventory_services_rules`,
+`checkgroup_parameters:systemd_units_services`) uses
 plain `Dictionary`/`ListOfStrings`/`Tuple`-of-primitives valuespecs,
 which accept ordinary JSON lists/dicts fine — this quirk is specific to
 `Alternative`/`CascadingDropdown`-based ones.
