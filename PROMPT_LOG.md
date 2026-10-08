@@ -424,3 +424,6 @@
 ## 2026-10-05 12:00 (continued)
 - Many UI follow-ups (needs tab, triage everywhere, drawing layer, admin bar, tier colours, dialog bg), phase 14.2 code review
 - /bm:pause-work
+
+## 2026-10-08 07:58
+/bm:resume-work
