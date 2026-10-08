@@ -2596,6 +2596,284 @@ async def _ensure_systemd_inactive_crit_rule(
         )
 
 
+_SYSTEMD_DISCOVERY_RULESET = "discovery_systemd_units_services"
+
+
+@dataclass
+class ServiceEditPlan:
+    """One host's pending change to its monitored systemd services."""
+
+    hostname: str
+    folder: str
+    ip: str
+    rules: list[dict[str, Any]]  # rules owned by this host (see _host_service_rules)
+    current: list[str]  # editable names monitored today
+    custom: list[str]  # hand-written rule entries, preserved verbatim
+    selected: list[str]  # editable names the operator wants monitored
+
+    @property
+    def added(self) -> list[str]:
+        return sorted(set(self.selected) - set(self.current))
+
+    @property
+    def removed(self) -> list[str]:
+        return sorted(set(self.current) - set(self.selected))
+
+
+def _service_candidate_hosts(
+    hosts: list[dict[str, Any]], exclude_names: set[str]
+) -> list[tuple[str, str, str]]:
+    """(name, folder, ip) of existing hosts that run the Checkmk agent.
+
+    Only an explicit `tag_agent` of `cmk-agent` / `all-agents` counts: Phase 5
+    sets it on every agent host, while Phase 2 folders and Phase 3
+    placeholders set `no-agent`, and an absent value usually means an
+    inherited folder `no-agent`. The SSH address is `ipaddress`, falling back
+    to the host name. `.get(...)` chains skip malformed entries.
+    """
+    out: list[tuple[str, str, str]] = []
+    for h in hosts:
+        name = h.get("id")
+        ext = h.get("extensions") or {}
+        attrs = ext.get("attributes") or {}
+        if not name or name in exclude_names:
+            continue
+        if attrs.get("tag_agent") not in ("cmk-agent", "all-agents"):
+            continue
+        out.append((name, ext.get("folder") or "/", attrs.get("ipaddress") or name))
+    return out
+
+
+def _host_service_rules(rules: list[dict[str, Any]], hostname: str, folder: str) -> list[dict[str, Any]]:
+    """Rules that belong to exactly this host: same folder and a host_name
+    condition matching only `[hostname]`. Multi-host or other-folder rules
+    are never touched."""
+    owned = []
+    for rule in rules:
+        ext = rule.get("extensions") or {}
+        cond = (ext.get("conditions") or {}).get("host_name") or {}
+        if ext.get("folder") == folder and cond.get("match_on") == [hostname]:
+            owned.append(rule)
+    return owned
+
+
+def _parse_systemd_rule_names(value_raw: str) -> tuple[list[str], list[str]] | None:
+    """Split a `discovery_systemd_units_services` value into (editable names,
+    custom entries), or None when it cannot be read.
+
+    An entry is editable ("ours") when it is `~^<re.escape(name)>$` and the
+    inner text round-trips; anything else (hand-written regex, bare exact
+    name) is custom and preserved verbatim. `ast.literal_eval` only, never
+    eval: value_raw comes from the server.
+    """
+    try:
+        value = ast.literal_eval(value_raw or "")
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get("names"), list):
+        return None
+    names: list[str] = []
+    custom: list[str] = []
+    for entry in value["names"]:
+        if not isinstance(entry, str):
+            return None
+        if entry.startswith("~^") and entry.endswith("$") and len(entry) >= 4:
+            inner = entry[2:-1]
+            unescaped = re.sub(r"\\(.)", r"\1", inner)
+            if re.escape(unescaped) == inner:
+                names.append(unescaped)
+                continue
+        custom.append(entry)
+    return names, custom
+
+
+def _systemd_rule_value_raw(names: list[str], custom: list[str]) -> str:
+    """Same encoding as `_create_service_discovery_rules`, with preserved
+    custom entries appended."""
+    entries = [f"~^{re.escape(n.removesuffix('.service'))}$" for n in names]
+    return json.dumps({"names": entries + list(custom)})
+
+
+async def _prompt_host_services(
+    hostname: str, ip: str, current: list[str], ssh_creds: remote.SSHCredentials | None
+) -> list[str]:
+    """The operator's chosen set of monitored services for one host.
+
+    With SSH: a checkbox over running services plus currently monitored ones
+    (pre-ticked; a monitored one that is not running is labelled so it can be
+    unticked). Without SSH, or when the scan fails: free text pre-filled with
+    the current names (blank = monitor none).
+    """
+    if ssh_creds is not None:
+        running = await remote.list_running_systemd_services(ip, ssh_creds)
+        if running is not None and (running or current):
+            choices = [
+                questionary.Choice(
+                    name if name in running else f"{name} (monitored, not running)",
+                    value=name,
+                    checked=name in current,
+                )
+                for name in sorted(set(running) | set(current))
+            ]
+            return await questionary.checkbox(
+                f"Which services on {hostname} should be actively monitored?", choices=choices
+            ).ask_async()
+    raw = (
+        await questionary.text(
+            f"Service names to actively monitor on {hostname} "
+            "(comma-separated systemd unit names, blank to monitor none):",
+            default=", ".join(current),
+        ).ask_async()
+    ).strip()
+    return [s.strip().removesuffix(".service") for s in raw.split(",") if s.strip()]
+
+
+async def _apply_host_service_change(client: CheckmkClient, plan: ServiceEditPlan) -> bool:
+    """Write one host's change. Best-effort: a CheckmkAPIError becomes a
+    yellow warning and returns False.
+
+    Delete every owned rule when nothing remains; otherwise update the first
+    owned rule in place (fresh GET for ETag/conditions/properties, PUT with
+    the rule's own conditions resent so it cannot widen to the whole site),
+    delete further duplicates, or create a rule when none exists. No ETag on
+    the GET response -> `If-Match: *` (unverified; show_rule declares no etag).
+    """
+    host = OnboardedHost(plan.ip, plan.hostname, plan.folder, "linux")
+    try:
+        if not plan.selected and not plan.custom:
+            for rule in plan.rules:
+                await client.delete_rule(rule["id"])
+        elif plan.rules:
+            first, *duplicates = plan.rules
+            resp = await client.get_rule(first["id"])
+            ext = (resp.json() or {}).get("extensions") or first.get("extensions") or {}
+            await client.update_rule(
+                first["id"],
+                value_raw=_systemd_rule_value_raw(plan.selected, plan.custom),
+                conditions=ext.get("conditions") or {},
+                properties=ext.get("properties") or {},
+                etag=resp.headers.get("ETag", "*"),
+            )
+            for rule in duplicates:
+                await client.delete_rule(rule["id"])
+        else:
+            await client.create_rule(
+                ruleset=_SYSTEMD_DISCOVERY_RULESET,
+                folder=plan.folder,
+                value_raw=_systemd_rule_value_raw(plan.selected, []),
+                conditions={"host_name": {"match_on": [plan.hostname], "operator": "one_of"}},
+            )
+    except CheckmkAPIError as exc:
+        console.print(
+            f"  [yellow]could not change monitored services for {plan.hostname}: {exc}. "
+            'Edit it by hand: Setup > Services > Service discovery rules > '
+            '"Systemd single services discovery".[/yellow]'
+        )
+        return False
+    console.print(f"  [green]monitored services updated[/green] for {plan.hostname}")
+    if plan.selected:
+        await _ensure_systemd_inactive_crit_rule(client, host, plan.selected)
+    return True
+
+
+async def manage_existing_host_services(
+    client: CheckmkClient, *, exclude_names: set[str]
+) -> list[OnboardedHost]:
+    """Optional step: add or remove monitored systemd services on hosts that
+    are already onboarded, by editing each host's "Systemd single services
+    discovery" rule.
+
+    Runs after Phase 4 inside the abortable range: it only edits Checkmk
+    rules (nothing on remote hosts), so Esc stays enabled and the abort
+    handler can apply or revert its pending edits. The returned hosts go to
+    Phase 6 only (activate, `fix_all` discovery, verification of added
+    services); not Phase 5 (they must not be re-created) and not Phase 7
+    (demo mode would put the always-up host-check rule on them).
+
+    Linux/systemd only: an existing host record carries no OS signal and
+    the wizard never connects to Windows, so Windows is out of scope.
+    """
+    console.rule("[bold]Manage monitored services on existing hosts (optional)")
+    if not await questionary.confirm(
+        "Change which services are monitored on hosts that are already onboarded (Linux/systemd)?",
+        default=False,
+    ).ask_async():
+        return []
+    try:
+        hosts = await client.list_hosts()
+    except CheckmkAPIError as exc:
+        console.print(f"  [yellow]could not list hosts: {exc}[/yellow]")
+        return []
+    candidates = _service_candidate_hosts(hosts, exclude_names)
+    if not candidates:
+        console.print("[dim]No existing agent hosts found.[/dim]")
+        return []
+    by_name = {name: (folder, ip) for name, folder, ip in candidates}
+    picked = await questionary.checkbox(
+        "Which hosts do you want to change?",
+        choices=[
+            questionary.Choice(f"{name} [{folder}] ({ip})", value=name) for name, folder, ip in candidates
+        ],
+    ).ask_async()
+    if not picked:
+        return []
+    try:
+        all_rules = await client.list_rules(_SYSTEMD_DISCOVERY_RULESET)
+    except CheckmkAPIError as exc:
+        # Without the rule list, duplicates cannot be ruled out.
+        console.print(f"  [yellow]could not list existing service rules: {exc}[/yellow]")
+        return []
+    ssh_creds = await _establish_ssh_access(by_name[picked[0]][1])
+
+    plans: list[ServiceEditPlan] = []
+    for name in picked:
+        folder, ip = by_name[name]
+        owned = _host_service_rules(all_rules, name, folder)
+        current: list[str] = []
+        custom: list[str] = []
+        unreadable = False
+        for rule in owned:
+            parsed = _parse_systemd_rule_names((rule.get("extensions") or {}).get("value_raw") or "")
+            if parsed is None:
+                unreadable = True
+                break
+            for n in parsed[0]:
+                if n not in current:
+                    current.append(n)
+            for c in parsed[1]:
+                if c not in custom:
+                    custom.append(c)
+        if unreadable:
+            console.print(f"  [yellow]skipping {name}: could not read its existing service rule[/yellow]")
+            continue
+        if custom:
+            console.print(f"  [dim]{name}: kept unchanged: {', '.join(custom)}[/dim]")
+        selected = await _prompt_host_services(name, ip, current, ssh_creds)
+        plan = ServiceEditPlan(name, folder, ip, owned, current, custom, selected)
+        if plan.added or plan.removed:
+            plans.append(plan)
+
+    if not plans:
+        console.print("[dim]No changes.[/dim]")
+        return []
+    table = Table(title="Service changes")
+    for col in ("Host", "Folder", "Add", "Remove"):
+        table.add_column(col)
+    for p in plans:
+        table.add_row(p.hostname, p.folder, ", ".join(p.added) or "-", ", ".join(p.removed) or "-")
+    console.print(table)
+    if not await questionary.confirm("Apply these service changes?", default=False).ask_async():
+        console.print("[dim]Nothing was written.[/dim]")
+        return []
+    changed: list[OnboardedHost] = []
+    for p in plans:
+        if await _apply_host_service_change(client, p):
+            changed.append(
+                OnboardedHost(p.ip, p.hostname, p.folder, "linux", expected_services=p.added)
+            )
+    return changed
+
+
 def _looks_loopback(host: str) -> bool:
     """Whether `host` can only ever mean "this machine itself" — the
     literal string `localhost`, or an IP address in the loopback range.
@@ -3689,6 +3967,10 @@ async def run(*, demo: bool = False) -> None:
             onboarded = await phase4_classification(
                 scan_results, client, connection, tag_group_available=tag_group_available, demo=demo
             )
+            service_hosts = await manage_existing_host_services(
+                client,
+                exclude_names={h.hostname for h in onboarded} | {h.ip for h in onboarded},
+            )
         except WizardAborted:
             await _handle_abort(client, connection)
             console.rule("[bold yellow]Aborted")
@@ -3696,7 +3978,9 @@ async def run(*, demo: bool = False) -> None:
         await phase5_onboarding(
             client, connection, onboarded, scan_results, tag_group_available=tag_group_available
         )
-        await phase6_discovery(client, connection, onboarded)
+        # service_hosts only need rediscovery; phase7 must not get them (the
+        # demo always-up host-check rule would fake them UP).
+        await phase6_discovery(client, connection, onboarded + service_hosts)
         await phase7_activation(client, connection, onboarded, demo=demo)
     console.rule("[bold green]Done")
 
