@@ -1,43 +1,32 @@
 {
   "version": "1.0",
-  "timestamp": "2026-10-05T03:59:39.327Z",
+  "timestamp": "2026-10-08T09:11:11.314Z",
   "phase": "14.2",
   "phase_name": "fleet-failure-prediction-and-incident-narration",
   "phase_dir": ".planning/phases/14.2-fleet-failure-prediction-and-incident-narration",
-  "plan": 19,
-  "task": 3,
-  "total_tasks": 3,
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
   "status": "paused",
   "completed_tasks": [
-    {"id": "14.2-01..18", "name": "Plans 01-18 executed, merged, tracked", "status": "done", "commit": "4c02c6d"},
-    {"id": "14.2-19", "name": "Live deploy on dmc-server, migration, steps 3-9, nginx dav curls, dashboard approved by operator ('all good now'); 14.2-19-SUMMARY.md written", "status": "done", "commit": "5e27b37"},
-    {"id": "261005-dox", "name": "Quick: failure needs on a 15 s tick, host-DOWN need despite incident (D-27 reversed for host-DOWN), source-scoped anti-flap", "status": "done", "commit": "41fffac"},
-    {"id": "261005-e7b", "name": "Quick: Needs merged into Incidents pane as tabs, triage in every mode incl. ?admin=1 (D-24 reversed)", "status": "done", "commit": "e61944a"},
-    {"id": "261005-eln", "name": "Quick: topology map drawing layer saved as /map-drawing.json on map_drawing_data volume via nginx dav", "status": "done", "commit": "75f91c9"},
-    {"id": "fast", "name": "Admin action bar beside Edit topology; dialog bg-bg-surface fix; tier marker dots red/orange/yellow; tier marker docs", "status": "done", "commit": "d6bd7cd"},
-    {"id": "14.2-review", "name": "Phase code review: 0 critical, 8 warnings, 7 info; 14.2-REVIEW.md committed", "status": "done", "commit": "757c211"}
+    {"id": 1, "name": "Quick tasks 261008-b5a, cnd, cto, d0w, d9k, dw0, ejn, f5e, kr3 merged", "status": "done", "commit": "48eb5e4"},
+    {"id": 2, "name": "HistoryChart distinct series colours (brand/purple/success)", "status": "done", "progress": "staged, uncommitted; 910 tests + tsc pass"}
   ],
   "remaining_tasks": [
-    {"id": "review-decision", "name": "Operator decides which review findings to fix. Recommended bundle: WR-01..05, WR-07, IN-02 as one quick task; defer WR-06 and WR-08", "status": "not_started"},
-    {"id": "fix-bundle", "name": "Quick task for the chosen review fixes (analytics/service.py, rules.py, triage.py, recorder.py, mosquitto.conf, smoke_test_broker.py, mapDrawingStore.ts, triageClient.ts) with tests", "status": "not_started"},
-    {"id": "verifier", "name": "Run bm-verifier for phase 14.2 (goal-backward), then /bm:verify-work if wanted", "status": "not_started"},
-    {"id": "roadmap", "name": "Mark phase 14.2 complete in ROADMAP.md and STATE.md (progress, current focus), only after verifier passes", "status": "not_started"}
+    {"id": 3, "name": "Close Phase 14.2 in ROADMAP.md and STATE.md (user has not answered)", "status": "not_started"},
+    {"id": 4, "name": "Optional: investigate no warn/crit on 1-minute load line in Checkmk", "status": "not_started"},
+    {"id": 5, "name": "Optional: redraw ACS.svg and NetworkDevice.svg as filled icons", "status": "not_started"}
   ],
   "blockers": [],
   "human_actions_pending": [
-    {"action": "Answer the review-fix question (fix bundle yes/no/different set)", "context": "Decides whether a quick task runs before the verifier", "blocking": true},
-    {"action": "git push (2 commits ahead of origin/main) when ready; later redeploy dashboard/analytics on dmc-server if the review-fix task changes them: podman compose build dashboard analytics-if-image, then full podman compose down && up -d", "context": "Claude does not push (outward-facing)", "blocking": false}
+    {"action": "Test folder auto-monitoring live (found hosts monitored, type other, whether Checkmk activates by itself)", "context": "only feature untested live", "blocking": false},
+    {"action": "Rebuild dashboard and full podman compose down && up -d to see new colours", "context": "dev machine is not the deploy host", "blocking": false}
   ],
   "decisions": [
-    {"decision": "D-27 reversed for host-DOWN needs only: DOWN host with an open incident also gets its host-level need", "rationale": "Management demo wants DOWN host visible in Needs with tier from criticality", "phase": "14.2"},
-    {"decision": "D-24 reversed: triage visible in normal view and ?admin=1, not only edit mode", "rationale": "Admin mode disables edit mode, so the demo could not triage", "phase": "14.2"},
-    {"decision": "Failure needs evaluated every 15 s; ClickHouse forecasts/trend/sustained stay on 900 s", "rationale": "15-minute latency unusable for live demos", "phase": "14.2"},
-    {"decision": "Drawing layer stored as a file via nginx dav on a named volume, not MQTT", "rationale": "Operator choice; shared, survives down/up, no new backend app", "phase": "14.2"},
-    {"decision": "Tier marker dots: red immediate, orange urgent, yellow standard (#facc15, no design token); standard now shown", "rationale": "Operator request", "phase": "14.2"},
-    {"decision": "Deploy VM needs >= 3-4 GB RAM (ClickHouse MEMORY_LIMIT_EXCEEDED at 1.9 GB)", "rationale": "Observed live 2026-10-05; cause of the non-resident ~560 MiB tracked memory not identified", "phase": "14.2"},
-    {"decision": "WEAR_METRICS empty; FALLBACK_LEVELS util (85,95) from plan 07 not confirmed by operator", "rationale": "No SMART/NVMe series in live catalog", "phase": "14.2"}
+    {"decision": "Keep CPU load rule default 1.5 / 3.0 per core", "rationale": "user confirmed dashboard is correct", "phase": "14.2"},
+    {"decision": "CPU utilization and load charts are history + levels only, no forecast", "rationale": "user request", "phase": "14.2"}
   ],
-  "uncommitted_files": ["PROMPT_LOG.md"],
-  "next_action": "Ask the operator which review findings to fix (recommended: WR-01..05, WR-07, IN-02 as one /bm:quick task; defer WR-06, WR-08). After that task: run bm-verifier on phase 14.2, then mark 14.2 complete in ROADMAP.md/STATE.md.",
-  "context_notes": "Plan 19 is complete and approved live. The dashboard changes were redeployed by the operator and confirmed working (transparent dialog fix confirmed after hard refresh). Review report is 14.2-REVIEW.md. Follow-up quick tasks 261005-dox/e7b/eln are all merged on main. Operator note: a foreground 'podman compose up' was started from init-env.sh output on dmc-server; Ctrl-C in that terminal would stop the stack. Dev machine is not the deploy host. Single-container restarts break Checkmk egress; always full down/up."
+  "uncommitted_files": ["dashboard-react/src/components/HistoryChart.tsx", "PROMPT_LOG.md"],
+  "next_action": "Commit the HistoryChart colour change if user wants; ask whether to close Phase 14.2.",
+  "context_notes": "CPU load WARN (urgent) and CRIT (immediate) verified live; history charts verified fine by user. Only folder auto-monitoring remains untested."
 }
