@@ -57,3 +57,33 @@ export function otherMountsLabel(percent: number | null | undefined): string | n
   }
   return `Other mounts: ${Math.round(percent)}% used`;
 }
+
+// Quick 261008-d0w: the Load gauge's ring fill is load1 relative to the critical level, clamped
+// to 0-100. null when there is no reading; 0 when crit is unusable (no scale to compare against).
+export function loadGaugePercent(
+  value: number | null | undefined,
+  crit: number | null | undefined,
+): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  if (typeof crit !== "number" || !Number.isFinite(crit) || crit <= 0) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, (value / crit) * 100));
+}
+
+// "1/5/15 min: 0.12 / 0.30 / 0.25"; null when the 1-minute average is missing, "-" for a
+// missing 5/15-minute value.
+export function loadAveragesLabel(
+  load1: number | null | undefined,
+  load5: number | null | undefined,
+  load15: number | null | undefined,
+): string | null {
+  if (typeof load1 !== "number" || !Number.isFinite(load1)) {
+    return null;
+  }
+  const fmt = (v: number | null | undefined) =>
+    typeof v === "number" && Number.isFinite(v) ? v.toFixed(2) : "-";
+  return `1/5/15 min: ${fmt(load1)} / ${fmt(load5)} / ${fmt(load15)}`;
+}

@@ -2767,10 +2767,12 @@ async def test_phase5_configures_default_thresholds_when_confirmed(monkeypatch):
     # Checkmk `Levels()`/`CascadingDropdown` valuespec distinguishes its
     # alternatives by the value's Python type, and a JSON array
     # deserializes to a `list`, which none of them match.
+    # Default CPU load levels are 1.5 / 2.0 per core (quick 261008-d0w).
+    assert _DEFAULT_CPU_LOAD_LEVELS == (1.5, 2.0)
     assert ast.literal_eval(by_ruleset["checkgroup_parameters:cpu_load"]["value_raw"]) == {
-        "levels1": _DEFAULT_CPU_LOAD_LEVELS,
-        "levels5": _DEFAULT_CPU_LOAD_LEVELS,
-        "levels15": _DEFAULT_CPU_LOAD_LEVELS,
+        "levels1": (1.5, 2.0),
+        "levels5": (1.5, 2.0),
+        "levels15": (1.5, 2.0),
     }
     assert ast.literal_eval(by_ruleset["checkgroup_parameters:cpu_utilization_os"]["value_raw"]) == {
         "util": _DEFAULT_CPU_UTILIZATION_LEVELS

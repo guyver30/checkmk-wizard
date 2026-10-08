@@ -262,10 +262,65 @@ def test_failure_need_for_crit_chosen_service(description):
     assert needs[0].tier == "immediate"
 
 
-@pytest.mark.parametrize("description", ["Systemd Service Summary", "CPU load"])
-def test_no_failure_need_for_unchosen_service(description):
-    services = {"h": [{"description": description, "state": "CRIT"}]}
+@pytest.mark.parametrize("state", ["WARN", "CRIT"])
+@pytest.mark.parametrize("description", ["Systemd Service Summary", "Systemd Timesyncd Time"])
+def test_no_failure_need_for_unchosen_service(description, state):
+    services = {"h": [{"description": description, "state": state}]}
     assert rules.failure_needs({"h": {"host_state_raw": "UP"}}, services, {}, {}, NOW, TZ) == []
+
+
+def test_no_failure_need_for_chosen_service_warn():
+    services = {"h": [{"description": "Systemd Service nginx", "state": "WARN"}]}
+    assert rules.failure_needs({"h": {"host_state_raw": "UP"}}, services, {}, {}, NOW, TZ) == []
+
+
+def _cpu_load_needs(state, node=None, incidents=None):
+    services = {"h": [{"description": "CPU load", "state": state}]}
+    topo = {"h": node} if node is not None else {}
+    return rules.failure_needs({"h": {"host_state_raw": "UP"}}, services, topo, incidents or {}, NOW, TZ)
+
+
+@pytest.mark.parametrize(
+    "state,tier", [("WARN", "urgent"), ("CRIT", "immediate")]
+)
+@pytest.mark.parametrize(
+    "node",
+    [
+        {"criticality": "low"},
+        {"criticality": "critical"},
+        {"criticality": "low", "service_criticality": {"CPU load": "critical"}},
+        {"criticality": "critical", "service_criticality": {"CPU load": "low"}},
+    ],
+)
+def test_cpu_load_need_has_fixed_tier(state, tier, node):
+    # Regression (quick 261008-d0w): CPU load WARN produced no notification/need.
+    (need,) = _cpu_load_needs(state, node)
+    assert need.service == "CPU load"
+    assert need.tier == tier
+    assert need.narration
+
+
+def test_cpu_load_ok_raises_no_need():
+    assert _cpu_load_needs("OK") == []
+
+
+def test_cpu_load_need_suppressed_for_covered_host():
+    # D-27 applies to the CPU load need like any other service need.
+    incident = {"root": "h", "confirmed_down": [], "not_observable": []}
+    assert _cpu_load_needs("WARN", incidents={"i": incident}) == []
+
+
+def test_cpu_load_warn_then_crit_keeps_id_and_raises_tier():
+    # Regression (quick 261008-d0w): CPU load WARN produced no notification/need.
+    (warn,) = _cpu_load_needs("WARN")
+    (crit,) = _cpu_load_needs("CRIT")
+    assert warn.id == crit.id
+    tracker = rules.NeedTracker(PARAMS)
+    publish, _ = tracker.update([warn], NOW)
+    assert publish[0].computed_tier == "urgent"
+    publish, _ = tracker.update([crit], NOW + timedelta(minutes=15))
+    assert [n.id for n in publish] == [warn.id]
+    assert publish[0].computed_tier == "immediate"
 
 
 def test_no_failure_need_for_ok_service():
@@ -296,6 +351,7 @@ def test_service_regexes_match_poller():
         spec.loader.exec_module(poller)
     assert rules._CHOSEN_SERVICE_RE.pattern == poller._CHOSEN_SERVICE_RE.pattern
     assert rules._TCP_PORT_SERVICE_RE.pattern == poller._TCP_PORT_SERVICE_RE.pattern
+    assert rules._CPU_LOAD_SERVICE == poller.GAUGE_CPU_LOAD_SERVICE
 
 
 # --- payload -------------------------------------------------------------------------------

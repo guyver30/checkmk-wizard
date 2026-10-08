@@ -7,6 +7,10 @@
 // "TCP Port <N> (expected open)" (wizard.py `_create_expected_open_port_rules`). They were
 // NOT live-verified against a running site; if a site names them differently only these
 // constants need to change.
+//
+// "CPU load" is deliberately not listed: the host details show it as the Load gauge. The poller
+// still counts it towards an agent host's state as a gauge-backed service
+// (scripts/mqtt_poller.py `_VISIBLE_AGENT_SERVICES_EXACT`, quick 261008-d0w); keep the two in step.
 
 import type { ServiceEntry } from "./types";
 

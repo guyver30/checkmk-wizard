@@ -53,6 +53,7 @@ describe("classifyAgentServices", () => {
 });
 
 describe("displayedServices", () => {
+  // "CPU load" is excluded on purpose: the host details show it as the Load gauge, not a row.
   it("returns only chosen services and TCP ports for an agent host", () => {
     const shown = displayedServices([
       svc("Check_MK Agent"),

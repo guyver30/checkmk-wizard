@@ -178,6 +178,8 @@ badge and the SMART badge stacked below the label with `gap-1` (4px). Missing ga
 are simply omitted from the row (flex naturally re-centers the remainder); if all three are
 missing, the whole card is replaced by the "No agent metrics available" message.
 
+Amended 2026-10-08 (quick 261008-d0w): a fourth gauge "Load" sits directly after CPU. Same column markup; ring fill is load1 relative to the critical level, ring colour from `cpu_load_warn`/`cpu_load_crit` (D-04), centre text the 1-minute load with two decimals (no % sign), caption "Load", and a `text-xs text-fg-tertiary` line "1/5/15 min: a / b / c" below. Hidden when `cpu_load1` is null (D-03). It also counts towards the row's "any gauge" test. Original text: up to three gauge columns (CPU, RAM, Disk).
+
 **Suggested gauge size:** `size={96} strokeWidth={8}` — large enough to read as a headline
 metric (matching the DMC-server.png reference's visual weight) without overwhelming the
 13-16px body-text scale the rest of the dashboard uses.

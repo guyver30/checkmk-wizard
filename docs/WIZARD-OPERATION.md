@@ -1589,13 +1589,21 @@ unaffected:
 
 | Check | Ruleset | Suggested default |
 |---|---|---|
-| CPU load (1/5/15 min, per core) | `checkgroup_parameters:cpu_load` | 5.0 / 10.0 |
+| CPU load (1/5/15 min, per core) | `checkgroup_parameters:cpu_load` | 1.5 / 2.0 |
 | CPU utilization (per check interval, ~1 min) | `checkgroup_parameters:cpu_utilization_os` | 80% / 90% |
 | Memory (RAM) used, Linux | `checkgroup_parameters:memory_linux` | 80% / 90% |
 | Filesystem used | `checkgroup_parameters:filesystem` | 80% / 90% |
 
 `memory_linux` only covers Linux hosts — Windows memory reporting uses a
 different ruleset this wizard doesn't set.
+
+**Existing sites.** The 1.5 / 2.0 CPU load default only affects new wizard
+runs. To apply it on a running site, edit the existing rule once in
+Checkmk: Setup > Services > Service monitoring rules > "CPU load (not
+utilization)" (ruleset `cpu_load`), open the root-folder rule the wizard
+created, set the 1/5/15-minute levels to 1.5 / 2.0 per core, and activate
+changes. Do not re-run the threshold step: it would add a second rule
+that does not take effect (the older rule keeps winning).
 
 **`value_raw` here is Python-literal syntax, not JSON** — the one place
 in this codebase that isn't, and the reason is a real, live-verified

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gaugeColor, otherMountsLabel, smartBadge } from "./gauges";
+import { gaugeColor, loadAveragesLabel, loadGaugePercent, otherMountsLabel, smartBadge } from "./gauges";
 
 describe("gaugeColor", () => {
   it("returns success just below warn", () => {
@@ -64,5 +64,32 @@ describe("otherMountsLabel", () => {
 
   it("rounds to a whole percent", () => {
     expect(otherMountsLabel(91.4)).toBe("Other mounts: 91% used");
+  });
+});
+
+describe("loadGaugePercent", () => {
+  it("scales load1 against crit and clamps to 0-100", () => {
+    expect(loadGaugePercent(2.0, 4.0)).toBe(50);
+    expect(loadGaugePercent(5, 4)).toBe(100);
+    expect(loadGaugePercent(-1, 4)).toBe(0);
+  });
+
+  it("is 0 when crit is unusable and null when there is no reading", () => {
+    expect(loadGaugePercent(1, null)).toBe(0);
+    expect(loadGaugePercent(1, 0)).toBe(0);
+    expect(loadGaugePercent(null, 4)).toBeNull();
+    expect(loadGaugePercent(Number.NaN, 4)).toBeNull();
+  });
+});
+
+describe("loadAveragesLabel", () => {
+  it("formats the three averages with two decimals", () => {
+    expect(loadAveragesLabel(0.12, 0.3, 0.25)).toBe("1/5/15 min: 0.12 / 0.30 / 0.25");
+  });
+
+  it("uses a dash for a missing 5/15 value and is null without load1", () => {
+    expect(loadAveragesLabel(1, null, undefined)).toBe("1/5/15 min: 1.00 / - / -");
+    expect(loadAveragesLabel(null, 1, 1)).toBeNull();
+    expect(loadAveragesLabel(Number.NaN, 1, 1)).toBeNull();
   });
 });

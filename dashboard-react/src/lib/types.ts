@@ -30,6 +30,13 @@ export interface DevicePayload {
   cpu_percent?: number | null;
   cpu_warn?: number | null;
   cpu_crit?: number | null;
+  // CPU load averages from the poller's "CPU load" service perf data: absolute load (not per
+  // core); warn/crit are the per-core rule levels already scaled by the core count (quick 261008-d0w).
+  cpu_load1?: number | null;
+  cpu_load5?: number | null;
+  cpu_load15?: number | null;
+  cpu_load_warn?: number | null;
+  cpu_load_crit?: number | null;
   ram_percent?: number | null;
   ram_warn?: number | null;
   ram_crit?: number | null;
