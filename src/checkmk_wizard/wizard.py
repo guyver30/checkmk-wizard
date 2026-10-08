@@ -1513,9 +1513,123 @@ async def _retag_existing_hosts(
         console.print("[yellow]Retag succeeded but is not yet live — activation failed.[/yellow]")
 
 
+async def _prompt_folder_subnet(name: str) -> str | None:
+    """Ask for the subnet Phase 3 should scan into folder `name` (blank = none),
+    re-prompting until it parses as a network."""
+    while True:
+        raw_cidr = (
+            await questionary.text(
+                f"Subnet/CIDR to scan for folder '{name}' (blank to skip scanning it):",
+                default="",
+            ).ask_async()
+        ).strip()
+        if not raw_cidr:
+            return None
+        try:
+            ipaddress.ip_network(raw_cidr, strict=False)
+        except ValueError as exc:
+            console.print(f"[red]Invalid CIDR ({exc}) — try again.[/red]")
+        else:
+            return raw_cidr
+
+
+async def _put_network_scan(client: CheckmkClient, name: str, etag: str, attributes: dict[str, Any]) -> None:
+    # Only ever `{"network_scan": ...}`: update_attributes changes just the
+    # attributes it names, so an existing folder's tag_agent, tag_snmp_ds
+    # and everything else stay untouched.
+    await client.update_folder_attributes(name, attributes, etag)
+
+
+async def _configure_existing_folder(client: CheckmkClient, name: str, cidr: str | None) -> None:
+    """Best-effort network-scan handling for a folder that already exists.
+
+    Never raises (every CheckmkAPIError becomes a yellow warning). Writes
+    only the `network_scan` attribute, under the folder's ETag:
+    - subnet given, folder has no scan: configure it;
+    - subnet given, folder has a scan: show it and ask keep/replace;
+    - a kept scan whose criticality is "offline" (found hosts stay
+      unmonitored): offer, default yes, to switch it to "prod" keeping
+      addresses, interval, time window and every other scan field.
+
+    The folder GET shape (`extensions.attributes.network_scan`) follows the
+    Checkmk folder object convention and is NOT live-verified on this
+    machine; neither is round-tripping that shape into the PUT below.
+    """
+    try:
+        resp = await client.get_folder(name)
+        etag = resp.headers.get("ETag")
+        if not etag:
+            console.print(f"  [yellow]no ETag for /{name} — leaving its network scan alone[/yellow]")
+            return
+        try:
+            raw_scan = ((resp.json().get("extensions") or {}).get("attributes") or {}).get("network_scan")
+        except ValueError:
+            console.print(f"  [yellow]could not read /{name} — leaving its network scan alone[/yellow]")
+            return
+        current = raw_scan if isinstance(raw_scan, dict) else None
+
+        if cidr:
+            scan_attrs = _network_scan_attributes(cidr)
+            if scan_attrs is None:
+                console.print(f"  [yellow]skipping network scan setup for /{name} — {cidr} isn't IPv4[/yellow]")
+            elif current is None:
+                await _put_network_scan(client, name, etag, scan_attrs)
+                console.print(
+                    f"  [green]network scan configured[/green] on /{name} — Checkmk will keep "
+                    f"re-scanning {cidr} (~daily) for new hosts, monitored as device type 'other' "
+                    "(ping only); re-run the wizard to promote or retag them"
+                )
+                return
+            else:
+                console.print(f"  /{name} already has a network scan: {_network_scan_summary(current)}")
+                choice = await questionary.select(
+                    f"Network scan for /{name}:",
+                    choices=[
+                        questionary.Choice("Keep the existing scan", value="keep"),
+                        questionary.Choice(f"Replace it with {cidr}", value="replace"),
+                    ],
+                    default="keep",
+                ).ask_async()
+                if choice == "replace":
+                    await _put_network_scan(client, name, etag, scan_attrs)
+                    console.print(f"  [green]network scan replaced[/green] on /{name} — now {cidr}")
+                    return
+
+        if current is not None and current.get("tag_criticality") == "offline":
+            console.print(
+                f"  /{name}: scan criticality is 'offline', so hosts it finds stay unmonitored. "
+                "Switching to 'prod' makes them monitored as device type 'other'; addresses, "
+                "interval and time window stay."
+            )
+            if await questionary.confirm(f"Change /{name}'s scan criticality offline -> prod?", default=True).ask_async():
+                try:
+                    await _put_network_scan(
+                        client, name, etag, {"network_scan": {**current, "tag_criticality": _SCAN_CRITICALITY_MONITORED}}
+                    )
+                except CheckmkAPIError as exc:
+                    console.print(
+                        f"  [yellow]could not change criticality on /{name}: {exc}[/yellow]\n"
+                        "  Do it by hand: Checkmk GUI > folder properties > Network scan > "
+                        "Set criticality = Productive system."
+                    )
+                else:
+                    console.print(f"  [green]criticality set to prod[/green] on /{name}")
+    except CheckmkAPIError as exc:
+        console.print(f"  [yellow]could not configure network scan on /{name}: {exc}[/yellow]")
+
+
 async def phase2_folders(client: CheckmkClient) -> tuple[dict[str, str | None], bool]:
-    """Optionally create folders, each with its own subnet to scan in
-    Phase 3. Returns ({folder_name: cidr_or_None}, device_type_tag_group_available).
+    """Optionally use existing folders and/or create new ones, each with its
+    own subnet to scan in Phase 3. Returns
+    ({"/folder_name": cidr_or_None}, device_type_tag_group_available).
+
+    The site's existing top-level folders are listed first (best-effort: on
+    failure this behaves as if there were none). If any exist the operator
+    picks: use some of them (checkbox), add new ones, both, or skip folders.
+    Typing a new name that already exists, or a create that loses a race
+    ("already exists"), reuses the folder instead of failing. For a reused
+    folder only its `network_scan` attribute is ever written (see
+    `_configure_existing_folder`).
 
     An empty folder dict (no folders, or every folder's subnet left blank)
     tells Phase 3 to fall back to a single flat scan into the root folder.
@@ -1525,25 +1639,67 @@ async def phase2_folders(client: CheckmkClient) -> tuple[dict[str, str | None], 
     """
     console.rule("[bold]Phase 2 — Folder Structure (optional)")
     # Provisioning the device_type tag group must happen here, before the
-    # `use_folders` confirm below: that confirm early-returns when the
-    # operator declines folders, so anything placed after it would be
-    # skipped on the most common path. It must also run before Phase 3
-    # stages any placeholder host from the network scan — otherwise this
-    # run's own newly-scanned hosts would be counted as "pre-existing",
-    # making D-08's backfill count meaningless.
+    # folder prompts below: they early-return when the operator declines
+    # folders, so anything placed after would be skipped on the most
+    # common path. It must also run before Phase 3 stages any placeholder
+    # host from the network scan — otherwise this run's own newly-scanned
+    # hosts would be counted as "pre-existing", making D-08's backfill
+    # count meaningless.
     tag_group_available = await _ensure_device_type_tag_group(client)
-    use_folders = await questionary.confirm("Set up folders (one per location/group)?", default=False).ask_async()
-    if not use_folders:
-        console.print("Skipping — Phase 3 will scan a single subnet into the root folder.")
-        return {}, tag_group_available
 
-    console.print(
-        "Add folders one at a time. Each folder can have its own subnet for Phase 3 "
-        "to scan directly into it — leave the subnet blank to create the folder "
-        "without scanning it now."
-    )
+    try:
+        existing = _top_level_folder_names(await client.list_folders())
+    except CheckmkAPIError as exc:
+        console.print(f"[yellow]could not list existing folders ({exc}) — continuing as if there were none[/yellow]")
+        existing = []
+
+    skip_message = "Skipping — Phase 3 will scan a single subnet into the root folder."
+    use_existing = False
+    add_new = True
+    if existing:
+        console.print("Existing folders: " + ", ".join(f"/{n}" for n in existing))
+        mode = await questionary.select(
+            "Folders: what to do?",
+            choices=[
+                questionary.Choice("Use some existing folders", value="existing"),
+                questionary.Choice("Use some existing folders and add new ones", value="existing+new"),
+                questionary.Choice("Only add new folders", value="new"),
+                questionary.Choice("Skip folders", value="skip"),
+            ],
+            default="existing",
+        ).ask_async()
+        if mode == "skip":
+            console.print(skip_message)
+            return {}, tag_group_available
+        use_existing = mode in ("existing", "existing+new")
+        add_new = mode in ("existing+new", "new")
+    else:
+        use_folders = await questionary.confirm("Set up folders (one per location/group)?", default=False).ask_async()
+        if not use_folders:
+            console.print(skip_message)
+            return {}, tag_group_available
+
     folder_subnets: dict[str, str | None] = {}
-    while True:
+
+    async def use_existing_folder(name: str, cidr: str | None) -> None:
+        await _configure_existing_folder(client, name, cidr)
+        folder_subnets[f"/{name}"] = cidr
+
+    if use_existing:
+        chosen = await questionary.checkbox(
+            "Which existing folders should the wizard use?",
+            choices=[questionary.Choice(f"/{n}", value=n) for n in existing],
+        ).ask_async()
+        for name in chosen or []:
+            await use_existing_folder(name, await _prompt_folder_subnet(name))
+
+    if add_new:
+        console.print(
+            "Add folders one at a time. Each folder can have its own subnet for Phase 3 "
+            "to scan directly into it — leave the subnet blank to create the folder "
+            "without scanning it now."
+        )
+    while add_new:
         name = (await questionary.text("Folder name (blank to finish adding folders):").ask_async()).strip()
         name = name.lstrip("/")
         if not name:
@@ -1555,23 +1711,18 @@ async def phase2_folders(client: CheckmkClient) -> tuple[dict[str, str | None], 
             )
             continue
 
-        cidr: str | None = None
-        while True:
-            raw_cidr = (
-                await questionary.text(
-                    f"Subnet/CIDR to scan for folder '{name}' (blank to skip scanning it):",
-                    default="",
-                ).ask_async()
-            ).strip()
-            if not raw_cidr:
-                break
-            try:
-                ipaddress.ip_network(raw_cidr, strict=False)
-            except ValueError as exc:
-                console.print(f"[red]Invalid CIDR ({exc}) — try again.[/red]")
-            else:
-                cidr = raw_cidr
-                break
+        # 2026-10-08: re-running Phase 2 on a site that already had the folder
+        # used to print a red "failed" (the create POST was rejected) and
+        # could neither reuse the folder nor re-scan it. Known names are now
+        # reused without a POST.
+        if f"/{name}" in folder_subnets:
+            console.print(f"  [dim]/{name} is already set up in this run[/dim]")
+            continue
+        cidr = await _prompt_folder_subnet(name)
+        if name in existing:
+            console.print(f"  [dim]/{name} already exists — using the existing folder[/dim]")
+            await use_existing_folder(name, cidr)
+            continue
 
         folder_created = False
         try:
@@ -1591,6 +1742,13 @@ async def phase2_folders(client: CheckmkClient) -> tuple[dict[str, str | None], 
             console.print(f"  [green]created[/green] /{name}")
             folder_created = True
         except CheckmkAPIError as exc:
+            # Create race: the folder appeared between the listing and the
+            # POST. Checkmk's exact duplicate-folder response is not
+            # live-verified, hence the loose "exist" match on 400/409.
+            if exc.status_code in (400, 409) and "exist" in str(exc.body).lower():
+                console.print(f"  [dim]/{name} already exists — using the existing folder[/dim]")
+                await use_existing_folder(name, cidr)
+                continue
             console.print(f"  [red]failed[/red] /{name}: {exc}")
 
         # Configured as a separate PUT (not baked into the create_folder
