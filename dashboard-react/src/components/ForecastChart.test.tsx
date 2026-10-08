@@ -168,4 +168,95 @@ describe("ForecastChart", () => {
     fireEvent.keyDown(svg, { key: "Escape" });
     expect(screen.queryByTestId("crosshair")).toBeNull();
   });
+
+  describe("zoom and pan", () => {
+    const zoomed = () => screen.getByRole("img").getAttribute("data-zoomed");
+    const zoomIn = () => fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+
+    it("has a zoom toolbar with zoom out and reset disabled at full view", () => {
+      renderChart(fit());
+      expect(screen.getByRole("toolbar", { name: "Chart zoom" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Reset zoom" })).toBeDisabled();
+      expect(zoomed()).toBe("false");
+      zoomIn();
+      expect(zoomed()).toBe("true");
+      expect(screen.getByRole("button", { name: "Zoom out" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Reset zoom" })).toBeEnabled();
+    });
+
+    it("hides markers outside the window and restores them on reset", () => {
+      renderChart(fit());
+      zoomIn();
+      zoomIn();
+      expect(screen.queryByTestId("crit-marker")).toBeNull();
+      expect(screen.queryByTestId("warn-marker")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Reset zoom" }));
+      expect(screen.getByTestId("crit-marker")).toBeInTheDocument();
+      expect(screen.getByTestId("warn-marker")).toBeInTheDocument();
+      expect(zoomed()).toBe("false");
+    });
+
+    it("zooms with the wheel and prevents the default scroll", () => {
+      renderChart(fit());
+      const svg = screen.getByRole("img");
+      const notPrevented = fireEvent.wheel(svg, { deltaY: -100 });
+      expect(notPrevented).toBe(false);
+      expect(zoomed()).toBe("true");
+    });
+
+    it("zooming out with the wheel at full view stays at full", () => {
+      renderChart(fit());
+      fireEvent.wheel(screen.getByRole("img"), { deltaY: 100 });
+      expect(zoomed()).toBe("false");
+    });
+
+    it("resets on double click", () => {
+      renderChart(fit());
+      zoomIn();
+      fireEvent.doubleClick(screen.getByRole("img"));
+      expect(zoomed()).toBe("false");
+    });
+
+    it("supports + - 0 keys", () => {
+      renderChart(fit());
+      const svg = screen.getByRole("img");
+      fireEvent.keyDown(svg, { key: "+" });
+      expect(zoomed()).toBe("true");
+      fireEvent.keyDown(svg, { key: "-" });
+      expect(zoomed()).toBe("false");
+      fireEvent.keyDown(svg, { key: "=" });
+      fireEvent.keyDown(svg, { key: "0" });
+      expect(zoomed()).toBe("false");
+    });
+
+    it("Shift+Arrow pans without creating a crosshair", () => {
+      renderChart(fit());
+      const svg = screen.getByRole("img");
+      fireEvent.keyDown(svg, { key: "+" });
+      fireEvent.keyDown(svg, { key: "+" });
+      const before = svg.getAttribute("data-zoom-start");
+      fireEvent.keyDown(svg, { key: "ArrowLeft", shiftKey: true });
+      expect(svg.getAttribute("data-zoom-start")).not.toBe(before);
+      expect(screen.queryByTestId("crosshair")).toBeNull();
+    });
+
+    it("clips plotted layers with a clipPath", () => {
+      const { container } = renderChart(fit());
+      const group = container.querySelector("g[clip-path]");
+      expect(group).not.toBeNull();
+      const id = /url\(#(.+)\)/.exec(group?.getAttribute("clip-path") ?? "")?.[1];
+      expect(id).toBeTruthy();
+      expect(container.querySelector(`clipPath[id="${id}"]`)).not.toBeNull();
+    });
+
+    it("resets the zoom when the range changes", () => {
+      const props = { points: history(14), fit: fit(), unit: "%", nowMs: NOW, label: "x" };
+      const { rerender } = render(<ForecastChart {...props} rangeDays={14} />);
+      zoomIn();
+      expect(zoomed()).toBe("true");
+      rerender(<ForecastChart {...props} rangeDays={7} />);
+      expect(zoomed()).toBe("false");
+    });
+  });
 });

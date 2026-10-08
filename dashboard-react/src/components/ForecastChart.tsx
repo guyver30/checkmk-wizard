@@ -5,9 +5,32 @@
 // The browser never refits (D-15): the trend line is y(t) = value_at_end +
 // slope_per_day * (t - fit_end_ts) / 86400 and the markers sit at the published warn_ts /
 // crit_ts. Nothing here derives a slope, a date or a confidence from the history points.
+//
+// The time axis zooms and pans (wheel at the pointer, drag, +/-/0 keys, toolbar buttons).
+// Plain ArrowLeft/ArrowRight keep stepping the crosshair (the window follows it); panning
+// by keyboard is Shift+ArrowLeft/ArrowRight. Zoom state is local and keyed to the full
+// domain, so it resets when the range or metric changes and when the dialog is reopened.
 
-import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { scaleLinear, scaleTime } from "d3-scale";
+import { Button } from "kone-design-system";
+import {
+  clampDomain,
+  isFullDomain,
+  isMinSpan,
+  panBy,
+  revealTime,
+  zoomAt,
+  type Domain,
+} from "../lib/chartZoom";
 import type { FitPayload } from "../lib/types";
 import type { HistoryPoint } from "../lib/historyClient";
 
@@ -78,6 +101,16 @@ function segments(points: HistoryPoint[]): HistoryPoint[][] {
 
 export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: ForecastChartProps) {
   const [cursor, setCursor] = useState<number | null>(null);
+  const [zoom, setZoom] = useState<{ key: string; domain: Domain } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{ x: number; view: Domain } | null>(null);
+  const zoomCtx = useRef<{ full: Domain; key: string; view: Domain }>({
+    full: [0, 1],
+    key: "",
+    view: [0, 1],
+  });
+  const clipId = `clip-${useId().replace(/[^A-Za-z0-9_-]/g, "")}`;
 
   const startMs = nowMs - rangeDays * DAY_MS;
   const visible = useMemo(
@@ -137,15 +170,76 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
     };
   }
 
+  const full: Domain = [startMs, endMs];
+  const fullKey = `${startMs}|${endMs}`;
+  const view: Domain = zoom && zoom.key === fullKey ? clampDomain(zoom.domain, full) : full;
+  const zoomed = !isFullDomain(view, full);
+  zoomCtx.current = { full, key: fullKey, view };
+  const inView = (ms: number) => ms >= view[0] && ms <= view[1];
+
   const x = scaleTime()
-    .domain([new Date(startMs), new Date(endMs)])
+    .domain([new Date(view[0]), new Date(view[1])])
     .range([0, INNER_W]);
 
-  const yValues: number[] = visible.map((p) => p.v);
-  if (warn !== null) yValues.push(warn);
-  if (crit !== null) yValues.push(crit);
-  if (trendEnd) yValues.push(trendEnd.value);
-  if (trendStart) yValues.push(trendStart.value);
+  // Applies a domain transform to the latest view. Reads the ref so the native wheel
+  // listener (bound once) and the render-time handlers share one code path.
+  const applyZoom = (fn: (current: Domain, fullDomain: Domain) => Domain) => {
+    setZoom((prev) => {
+      const ctx = zoomCtx.current;
+      const current = prev && prev.key === ctx.key ? clampDomain(prev.domain, ctx.full) : ctx.full;
+      const next = fn(current, ctx.full);
+      return isFullDomain(next, ctx.full) ? null : { key: ctx.key, domain: next };
+    });
+  };
+
+  // React's onWheel is passive and cannot preventDefault, so the wheel listener is native.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      if (event.deltaY === 0) return;
+      const rect = svg.getBoundingClientRect();
+      const frac =
+        rect.width === 0
+          ? 0.5
+          : Math.min(1, Math.max(0, ((((event.clientX - rect.left) / rect.width) * W) - M.left) / INNER_W));
+      const factor = event.deltaY < 0 ? 0.8 : 1.25;
+      applyZoom((cur, f) => zoomAt(cur, cur[0] + frac * (cur[1] - cur[0]), factor, f));
+    };
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
+    // applyZoom only touches state setters and a ref, so binding once is safe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const yValues: number[] = [];
+  if (!zoomed) {
+    visible.forEach((p) => yValues.push(p.v));
+    if (warn !== null) yValues.push(warn);
+    if (crit !== null) yValues.push(crit);
+    if (trendEnd) yValues.push(trendEnd.value);
+    if (trendStart) yValues.push(trendStart.value);
+  } else {
+    // Zoomed: rescale to what is in the window. The projection is evaluated with the
+    // published parameters at the window edges (no refit, D-15); a level only counts when
+    // its crossing marker is inside the window.
+    visible.forEach((p) => {
+      if (inView(p.t * 1000)) yValues.push(p.v);
+    });
+    if (trendStart && trendEnd && fit && fit.slope_per_day !== null && fit.fit_end_ts !== null) {
+      const lo = Math.max(view[0], trendStart.ms);
+      const hi = Math.min(view[1], trendEnd.ms);
+      if (lo <= hi) {
+        const slope = fit.slope_per_day;
+        const fitEndTs = fit.fit_end_ts;
+        const at = (ms: number) => trendStart.value + (slope * (ms / 1000 - fitEndTs)) / 86400;
+        yValues.push(at(lo), at(hi));
+      }
+    }
+    if (warn !== null && warnMarkerMs !== null && inView(warnMarkerMs)) yValues.push(warn);
+    if (crit !== null && critMarkerMs !== null && inView(critMarkerMs)) yValues.push(crit);
+  }
   const yMin = yValues.length > 0 ? Math.min(...yValues) : 0;
   const yMax = yValues.length > 0 ? Math.max(...yValues) : 1;
   const y = scaleLinear()
@@ -154,6 +248,9 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
     .range([PLOT_H, 0]);
   const yTicks = y.ticks(5);
   const xTicks = x.ticks(6);
+  const [yLo, yHi] = y.domain();
+  const levelInDomain = (v: number) => v >= yLo && v <= yHi;
+  const longWindow = view[1] - view[0] > 2 * DAY_MS;
 
   const px = (ms: number) => x(new Date(ms));
   const py = (v: number) => y(v);
@@ -170,47 +267,105 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
   const latest = visible.length > 0 ? visible[visible.length - 1].v : lastValue;
   const ariaLabel =
     `${label}: ${latest !== null ? formatValue(latest) : "no data"}${unit}, ${statusWord}` +
-    (trending && fit?.crit_ts != null ? `, critical by ${formatDate(fit.crit_ts * 1000, nowMs)}` : "");
+    (trending && fit?.crit_ts != null ? `, critical by ${formatDate(fit.crit_ts * 1000, nowMs)}` : "") +
+    (zoomed ? `, showing ${formatDate(view[0], nowMs)} to ${formatDate(view[1], nowMs)}` : "");
 
   const move = (delta: number) => {
     if (visible.length === 0) return;
-    setCursor((c) => {
-      const base = c === null ? visible.length - 1 : c;
-      return Math.max(0, Math.min(visible.length - 1, base + delta));
-    });
+    let base = cursor;
+    if (base === null) {
+      // First step starts from the last point inside the window, not the last overall.
+      base = visible.length - 1;
+      for (let i = visible.length - 1; i >= 0; i--) {
+        if (inView(visible[i].t * 1000)) {
+          base = i;
+          break;
+        }
+      }
+    }
+    const next = Math.max(0, Math.min(visible.length - 1, base + delta));
+    setCursor(next);
+    const ms = visible[next].t * 1000;
+    applyZoom((cur, f) => revealTime(cur, ms, f));
   };
 
+  const cursorPoint = cursor !== null ? (visible[cursor] ?? null) : null;
+  const zoomAnchor = () => (cursorPoint ? cursorPoint.t * 1000 : (view[0] + view[1]) / 2);
+  const zoomBy = (factor: number) => {
+    const anchor = zoomAnchor();
+    applyZoom((cur, f) => zoomAt(cur, anchor, factor, f));
+  };
+  const resetZoom = () => setZoom(null);
+
   const onKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
-    if (event.key === "ArrowLeft") {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
-      move(-1);
-    } else if (event.key === "ArrowRight") {
+      const dir = event.key === "ArrowLeft" ? -1 : 1;
+      if (event.shiftKey) {
+        applyZoom((cur, f) => panBy(cur, dir * 0.2 * (cur[1] - cur[0]), f));
+      } else {
+        move(dir);
+      }
+    } else if (event.key === "+" || event.key === "=") {
       event.preventDefault();
-      move(1);
+      zoomBy(0.5);
+    } else if (event.key === "-" || event.key === "_") {
+      event.preventDefault();
+      zoomBy(2);
+    } else if (event.key === "0") {
+      event.preventDefault();
+      resetZoom();
     } else if (event.key === "Escape") {
       setCursor(null);
       (event.currentTarget as SVGSVGElement).blur();
     }
   };
 
+  const endDrag = () => {
+    dragRef.current = null;
+    setDragging(false);
+  };
+
+  const onMouseDown = (event: MouseEvent<SVGSVGElement>) => {
+    if (event.button !== 0 || !zoomed) return;
+    dragRef.current = { x: event.clientX, view };
+    setDragging(true);
+  };
+
   const onMouseMove = (event: MouseEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
+    const drag = dragRef.current;
+    if (drag) {
+      if (rect.width === 0) return;
+      const startView = drag.view;
+      const deltaMs =
+        ((((event.clientX - drag.x) / rect.width) * W) / INNER_W) * (startView[1] - startView[0]);
+      applyZoom((_cur, f) => panBy(startView, -deltaMs, f));
+      return;
+    }
     if (rect.width === 0 || visible.length === 0) return;
     const vx = ((event.clientX - rect.left) / rect.width) * W - M.left;
-    let best = 0;
+    let best = -1;
     let bestDist = Infinity;
     visible.forEach((p, i) => {
+      if (!inView(p.t * 1000)) return;
       const dist = Math.abs(px(p.t * 1000) - vx);
       if (dist < bestDist) {
         bestDist = dist;
         best = i;
       }
     });
-    setCursor(best);
+    if (best >= 0) setCursor(best);
   };
 
-  const cursorPoint = cursor !== null ? (visible[cursor] ?? null) : null;
-  const segs = segments(visible);
+  // Points inside the window plus the nearest one on each side, so lines run to the edge.
+  let firstIn = visible.findIndex((p) => p.t * 1000 >= view[0]);
+  if (firstIn < 0) firstIn = visible.length;
+  let lastIn = -1;
+  visible.forEach((p, i) => {
+    if (p.t * 1000 <= view[1]) lastIn = i;
+  });
+  const segs = segments(visible.slice(Math.max(0, firstIn - 1), lastIn + 2));
   const lowConfidence = trending && fit?.confidence === "low";
   const historyDays = fit ? Math.round(fit.history_days) : 0;
 
@@ -239,6 +394,29 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
 
   return (
     <div className="flex flex-col gap-2">
+      <div className="flex justify-end gap-2" role="toolbar" aria-label="Chart zoom">
+        <Button
+          variant="neutral"
+          size="sm"
+          aria-label="Zoom in"
+          disabled={isMinSpan(view, full)}
+          onClick={() => zoomBy(0.5)}
+        >
+          +
+        </Button>
+        <Button
+          variant="neutral"
+          size="sm"
+          aria-label="Zoom out"
+          disabled={!zoomed}
+          onClick={() => zoomBy(2)}
+        >
+          −
+        </Button>
+        <Button variant="neutral" size="sm" aria-label="Reset zoom" disabled={!zoomed} onClick={resetZoom}>
+          Reset
+        </Button>
+      </div>
       <div className="relative">
         {(status === "stable" || status === "no_clear_trend") && (
           <div
@@ -251,15 +429,31 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
           </div>
         )}
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${W} ${H}`}
           className="w-full"
+          style={zoomed ? { cursor: dragging ? "grabbing" : "grab" } : undefined}
           role="img"
           aria-label={ariaLabel}
+          data-zoomed={zoomed ? "true" : "false"}
+          data-zoom-start={view[0]}
+          data-zoom-end={view[1]}
           tabIndex={0}
           onKeyDown={onKeyDown}
+          onMouseDown={onMouseDown}
+          onMouseUp={endDrag}
+          onDoubleClick={resetZoom}
           onMouseMove={onMouseMove}
-          onMouseLeave={() => setCursor(null)}
+          onMouseLeave={() => {
+            endDrag();
+            setCursor(null);
+          }}
         >
+          <defs>
+            <clipPath id={clipId}>
+              <rect x={0} y={-M.top} width={INNER_W} height={PLOT_H + M.top} />
+            </clipPath>
+          </defs>
           <g transform={`translate(${M.left},${M.top})`}>
             {yTicks.map((tick, i) => (
               <g key={tick}>
@@ -294,10 +488,11 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
                 fill="currentColor"
                 className="text-fg-tertiary"
               >
-                {formatDate(tick.getTime(), nowMs)}
+                {longWindow ? formatDate(tick.getTime(), nowMs) : formatDateTime(tick.getTime())}
               </text>
             ))}
 
+            <g clipPath={`url(#${clipId})`}>
             {trending && fit && fit.fit_start_ts !== null && fit.fit_end_ts !== null && (
               <rect
                 data-testid="fit-band"
@@ -311,7 +506,7 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
               />
             )}
 
-            {warn !== null && (
+            {warn !== null && levelInDomain(warn) && (
               <g className="text-warning">
                 <line x1={0} x2={INNER_W} y1={py(warn)} y2={py(warn)} stroke="currentColor" strokeWidth={1} />
                 <text x={INNER_W} y={py(warn) - 4} textAnchor="end" fontSize={12} fill="currentColor">
@@ -319,7 +514,7 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
                 </text>
               </g>
             )}
-            {crit !== null && (
+            {crit !== null && levelInDomain(crit) && (
               <g className="text-alert">
                 <line x1={0} x2={INNER_W} y1={py(crit)} y2={py(crit)} stroke="currentColor" strokeWidth={1} />
                 <text x={INNER_W} y={py(crit) - 4} textAnchor="end" fontSize={12} fill="currentColor">
@@ -371,6 +566,7 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
               />
             )}
 
+            {inView(nowMs) && (
             <g className="text-fg-tertiary">
               <line
                 x1={todayX}
@@ -385,10 +581,13 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
                 Today
               </text>
             </g>
+            )}
 
             {critMarkerMs !== null &&
+              inView(critMarkerMs) &&
               marker(critMarkerMs, crit, `Critical ${formatDate(critMarkerMs, nowMs)}`, "text-alert")}
             {warnMarkerMs !== null &&
+              inView(warnMarkerMs) &&
               marker(warnMarkerMs, warn, `Warning ${formatDate(warnMarkerMs, nowMs)}`, "text-warning")}
 
             {cursorPoint && (
@@ -404,6 +603,7 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
                 <circle cx={px(cursorPoint.t * 1000)} cy={py(cursorPoint.v)} r={3} fill="currentColor" />
               </g>
             )}
+            </g>
           </g>
         </svg>
       </div>
