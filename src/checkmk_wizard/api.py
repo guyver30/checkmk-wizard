@@ -409,6 +409,59 @@ class CheckmkClient:
         )
         return resp.json().get("value", [])
 
+    async def get_rule(self, rule_id: str) -> httpx.Response:
+        """GET /objects/rule/{rule_id}; returns the raw response so callers can
+        read the `ETag` header and `.json()`.
+
+        Verified by reading the Checkmk 2.4.0 source
+        (cmk/gui/openapi/endpoints/rule/__init__.py: show_rule). show_rule
+        declares no etag, so the ETag header may be absent and callers must
+        cope. NOT live-verified against 2.4.0p35.
+        """
+        return await self._request("GET", f"/objects/rule/{rule_id}")
+
+    async def update_rule(
+        self,
+        rule_id: str,
+        *,
+        value_raw: str,
+        conditions: dict[str, Any],
+        properties: dict[str, Any],
+        etag: str,
+    ) -> dict[str, Any]:
+        """PUT /objects/rule/{rule_id} with `If-Match: <etag>`.
+
+        `conditions` and `properties` are mandatory arguments on purpose: the
+        2.4.0 `edit_rule` handler reads `body.get("conditions", {})` and
+        `body.get("properties", {})`, so omitting them would silently drop the
+        host_name condition and turn a per-host rule into a site-wide one.
+        Callers must resend the rule's own values.
+
+        Verified by reading the Checkmk 2.4.0 source
+        (cmk/gui/openapi/endpoints/rule/__init__.py: edit_rule, etag="both").
+        NOT live-verified against 2.4.0p35.
+        """
+        resp = await self._request(
+            "PUT",
+            f"/objects/rule/{rule_id}",
+            json_body={
+                "value_raw": value_raw,
+                "conditions": conditions,
+                "properties": properties,
+            },
+            extra_headers={"If-Match": etag},
+        )
+        return resp.json()
+
+    async def delete_rule(self, rule_id: str) -> None:
+        """DELETE /objects/rule/{rule_id} (204, no ETag needed).
+
+        Verified by reading the Checkmk 2.4.0 source
+        (cmk/gui/openapi/endpoints/rule/__init__.py: delete_rule,
+        output_empty 204; 404 if unknown). NOT live-verified against 2.4.0p35.
+        """
+        await self._request("DELETE", f"/objects/rule/{rule_id}")
+
     # -- Phase 2: host tag groups --------------------------------------------
 
     async def get_host_tag_group(self, group_id: str) -> httpx.Response:

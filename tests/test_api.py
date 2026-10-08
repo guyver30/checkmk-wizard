@@ -202,6 +202,60 @@ async def test_list_rules_empty_when_value_absent():
 
 
 @pytest.mark.asyncio
+async def test_get_rule_returns_raw_response_with_etag():
+    with respx.mock:
+        route = respx.get(f"{BASE}/objects/rule/r1").mock(
+            return_value=Response(200, json={"id": "r1"}, headers={"ETag": '"abc"'})
+        )
+        async with CheckmkClient(CONN) as client:
+            resp = await client.get_rule("r1")
+    assert route.called
+    assert resp.headers["ETag"] == '"abc"'
+    assert resp.json() == {"id": "r1"}
+
+
+@pytest.mark.asyncio
+async def test_update_rule_puts_value_conditions_properties_with_if_match():
+    conditions = {"host_name": {"match_on": ["h"], "operator": "one_of"}}
+    properties = {"disabled": False}
+    with respx.mock:
+        route = respx.put(f"{BASE}/objects/rule/r1").mock(return_value=Response(200, json={"id": "r1"}))
+        async with CheckmkClient(CONN) as client:
+            out = await client.update_rule(
+                "r1", value_raw="{'names': []}", conditions=conditions, properties=properties, etag='"abc"'
+            )
+    req = route.calls.last.request
+    assert req.headers["If-Match"] == '"abc"'
+    assert json.loads(req.content) == {
+        "value_raw": "{'names': []}",
+        "conditions": conditions,
+        "properties": properties,
+    }
+    assert out == {"id": "r1"}
+
+
+@pytest.mark.asyncio
+async def test_delete_rule_accepts_204():
+    with respx.mock:
+        route = respx.delete(f"{BASE}/objects/rule/r1").mock(return_value=Response(204))
+        async with CheckmkClient(CONN) as client:
+            assert await client.delete_rule("r1") is None
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_delete_rule_404_and_update_rule_412_raise():
+    with respx.mock:
+        respx.delete(f"{BASE}/objects/rule/gone").mock(return_value=Response(404, json={"title": "nf"}))
+        respx.put(f"{BASE}/objects/rule/r1").mock(return_value=Response(412, json={"title": "stale"}))
+        async with CheckmkClient(CONN) as client:
+            with pytest.raises(CheckmkAPIError):
+                await client.delete_rule("gone")
+            with pytest.raises(CheckmkAPIError):
+                await client.update_rule("r1", value_raw="{}", conditions={}, properties={}, etag="x")
+
+
+@pytest.mark.asyncio
 async def test_list_folders_returns_value_array():
     with respx.mock:
         respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
