@@ -129,11 +129,15 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
 - Clicking a node opens the right-hand host details pane (`/?host=...`; see "Host details pane"
   below) beside the map.
   - **Agent hosts** (those with a `Check_MK Agent` service) get a focused view: the CPU/RAM/disk
-    gauges (with the SMART badge if installed), whether the Checkmk agent is connected (the
+    gauges (with the SMART badge if installed) and a CPU load gauge next to CPU utilisation
+    (1-minute load as the headline, the 1/5/15-minute averages below it, ring colour from the
+    service's own warn/crit; hidden when the host has no `CPU load` service), whether the Checkmk agent is connected (the
     `Check_MK` service state), uptime (the `Uptime` service), only the services chosen in the
     wizard (`Systemd Service <unit>` / `Service <name>` rows) and the monitored TCP ports
     (`TCP Port <N> (expected open)`). Those Checkmk service names are the 2.4 defaults and were
     not live-verified — they are constants in `src/lib/agentDetail.ts`.
+    A `CPU load` WARN or CRIT also counts towards the host's state and raises a service need
+    (tier `urgent` on WARN, `immediate` on CRIT), shown with the normal tier marker.
   - Other hosts (SNMP/ping) keep the full service table.
   - The pane shows no history of its own: the event history pane below the map filters to the
     open host instead (see §5a).

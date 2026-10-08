@@ -53,6 +53,60 @@ describe("HostDetails", () => {
     expect(screen.getByText("12%")).toBeInTheDocument();
   });
 
+  // Regression (quick 261008-d0w): CPU load WARN produced no notification/need and had no visible cause.
+  it("renders the CPU load gauge right after the CPU utilisation gauge", () => {
+    act(() => {
+      useAppStore.getState().handleMessage(
+        "lan/devices/web1/status",
+        encode({
+          id: "web1",
+          state: "WARN",
+          cpu_percent: 42,
+          cpu_warn: 80,
+          cpu_crit: 90,
+          cpu_load1: 3.1,
+          cpu_load5: 2.5,
+          cpu_load15: 1.2,
+          cpu_load_warn: 3,
+          cpu_load_crit: 4,
+          ram_percent: 50,
+          disk_percent: 50,
+        }),
+      );
+    });
+    renderAt("web1");
+    const load = screen.getByLabelText("CPU load");
+    expect(within(load).getByText("3.10")).toBeInTheDocument();
+    expect(within(load).getByText("Load")).toBeInTheDocument();
+    expect(within(load).getByText("1/5/15 min: 3.10 / 2.50 / 1.20")).toBeInTheDocument();
+    expect(screen.getAllByRole("progressbar")).toHaveLength(4);
+    expect(screen.getByLabelText("CPU utilisation").nextElementSibling).toBe(load);
+  });
+
+  it("hides the CPU load gauge when cpu_load1 is null", () => {
+    act(() => {
+      useAppStore.getState().handleMessage(
+        "lan/devices/web1/status",
+        encode({ id: "web1", state: "OK", cpu_percent: 42, cpu_load1: null, ram_percent: 50, disk_percent: 50 }),
+      );
+    });
+    renderAt("web1");
+    expect(screen.queryByLabelText("CPU load")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("progressbar")).toHaveLength(3);
+  });
+
+  it("shows the gauge row when only cpu_load1 is set", () => {
+    act(() => {
+      useAppStore.getState().handleMessage(
+        "lan/devices/web1/status",
+        encode({ id: "web1", state: "OK", cpu_load1: 0.5 }),
+      );
+    });
+    renderAt("web1");
+    expect(screen.getByLabelText("CPU load")).toBeInTheDocument();
+    expect(screen.queryByText("No agent metrics available for this device.")).not.toBeInTheDocument();
+  });
+
   it("hides the CPU gauge and its label when cpu_percent is null", () => {
     act(() => {
       useAppStore.getState().handleMessage(

@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { Badge, Button, ProgressCircle, Table } from "kone-design-system";
 import type { BadgeColor, ProgressColor, TableColumn } from "kone-design-system";
-import { gaugeColor, otherMountsLabel, smartBadge } from "../lib/gauges";
+import { gaugeColor, loadAveragesLabel, loadGaugePercent, otherMountsLabel, smartBadge } from "../lib/gauges";
 import { classifyAgentServices } from "../lib/agentDetail";
 import { compareServices } from "../lib/serviceSort";
 import { displayNameWithAddress } from "../lib/display";
@@ -159,6 +159,15 @@ function GaugeValue({ percent }: { percent: number }) {
   );
 }
 
+// Centre text for the Load gauge: the 1-minute load with two decimals, no % sign.
+function LoadGaugeValue({ load }: { load: number }) {
+  return (
+    <span className="absolute inset-0 flex items-center justify-center text-2xl font-semibold text-fg-primary">
+      {load.toFixed(2)}
+    </span>
+  );
+}
+
 export function HostDetails({ id }: { id: string }) {
   const device = useAppStore((s) => s.devices[id]);
   const services = useAppStore((s) => s.services[id]);
@@ -183,6 +192,7 @@ export function HostDetails({ id }: { id: string }) {
 
   const hasAnyGauge =
     typeof device.cpu_percent === "number" ||
+    typeof device.cpu_load1 === "number" ||
     typeof device.ram_percent === "number" ||
     typeof device.disk_percent === "number";
 
@@ -231,6 +241,24 @@ export function HostDetails({ id }: { id: string }) {
                     <GaugeValue percent={device.cpu_percent} />
                   </span>
                   <span className="text-sm font-semibold">CPU</span>
+                </div>
+              )}
+              {isPercent(device.cpu_load1) && (
+                <div className="flex flex-col items-center gap-2" aria-label="CPU load">
+                  <span className="relative inline-flex">
+                    <ProgressCircle
+                      value={loadGaugePercent(device.cpu_load1, device.cpu_load_crit) ?? 0}
+                      color={gaugeColor(device.cpu_load1, device.cpu_load_warn, device.cpu_load_crit)}
+                      size={96}
+                      strokeWidth={8}
+                      showValue={false}
+                    />
+                    <LoadGaugeValue load={device.cpu_load1} />
+                  </span>
+                  <span className="text-sm font-semibold">Load</span>
+                  <span className="text-xs text-fg-tertiary">
+                    {loadAveragesLabel(device.cpu_load1, device.cpu_load5, device.cpu_load15)}
+                  </span>
                 </div>
               )}
               {isPercent(device.ram_percent) && (
