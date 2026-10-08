@@ -314,6 +314,15 @@ def test_need_failure_host_and_service():
     )
 
 
+def test_need_failure_cpu_load_warn_narration():
+    # Regression (quick 261008-d0w): CPU load WARN produced no notification/need. The need carries
+    # no state, so WARN and CRIT share the generic failing wording (the tier badge tells them apart).
+    assert (
+        narrate.need_narration(source="failure", host="h", service="CPU load", since=NOW, tz=TZ)
+        == "h: CPU load is failing since 12:05."
+    )
+
+
 def test_no_output_contains_none():
     outputs = [
         _all_text(_narrate({"root": "sw1", "root_state": "DOWN"}, None)),

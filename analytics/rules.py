@@ -4,7 +4,9 @@ Three need sources (D-07): a failure (host DOWN, or a monitored service or TCP
 port CRIT), a trend that will reach its critical level, and a sustained or
 already-breached reading. Tiers: failure tier comes from the operator's
 criticality label (D-08), a per-service `service_criticality` entry overriding
-the host's value for that service; trend tier is banded by days to critical
+the host's value for that service; the one exception is the "CPU load" service,
+which raises on WARN (tier urgent) and CRIT (tier immediate) regardless of host
+criticality (quick 261008-d0w); trend tier is banded by days to critical
 (D-09: <3 immediate, 3-20 urgent, >20 standard, >90 no need).
 
 Reading of D-10 (flagged in research A4): the low-confidence cap applies to a
@@ -46,6 +48,11 @@ _CRITICALITY_TIER = {"critical": "immediate", "high": "urgent", "medium": "stand
 # Identical to scripts/mqtt_poller.py lines 767-768 (a test compares the patterns).
 _CHOSEN_SERVICE_RE = re.compile(r"^(Systemd Service|Service) (?!Summary$)")
 _TCP_PORT_SERVICE_RE = re.compile(r"^TCP Port \d+")
+
+# Mirror of scripts/mqtt_poller.py GAUGE_CPU_LOAD_SERVICE (a test compares them). CPU load is the
+# one service that raises a need on WARN as well as CRIT, with fixed tiers (quick 261008-d0w).
+_CPU_LOAD_SERVICE = "CPU load"
+_CPU_LOAD_TIER = {"WARN": "urgent", "CRIT": "immediate"}
 
 # D-14 / D-23: a need must be absent this many consecutive cycles before it is tombstoned.
 RESOLVE_AFTER_CLEAN_CYCLES = 2
@@ -299,10 +306,16 @@ def failure_needs(
             continue
         rows = services.get(host)
         for row in rows if isinstance(rows, list) else []:
-            if not isinstance(row, dict) or row.get("state") != "CRIT":
+            if not isinstance(row, dict):
                 continue
             description = row.get("description")
             if not isinstance(description, str):
+                continue
+            cpu_load_tier = _CPU_LOAD_TIER.get(row.get("state")) if description == _CPU_LOAD_SERVICE else None
+            if cpu_load_tier is not None:
+                needs.append(_make("failure", host, description, "", "", cpu_load_tier, now, tz))
+                continue
+            if row.get("state") != "CRIT":
                 continue
             if _CHOSEN_SERVICE_RE.match(description) or _TCP_PORT_SERVICE_RE.match(description):
                 needs.append(_make("failure", host, description, "", "", _service_tier(node, description), now, tz))

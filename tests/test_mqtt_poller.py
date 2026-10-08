@@ -1935,6 +1935,11 @@ def test_classify_host_services_snmp_only_host_yields_all_gauge_keys_present_and
         "cpu_percent",
         "cpu_warn",
         "cpu_crit",
+        "cpu_load1",
+        "cpu_load5",
+        "cpu_load15",
+        "cpu_load_warn",
+        "cpu_load_crit",
         "ram_percent",
         "ram_warn",
         "ram_crit",
@@ -1950,6 +1955,28 @@ def test_classify_host_services_snmp_only_host_yields_all_gauge_keys_present_and
     }
     assert all(value is None for value in gauge_fields.values())
     assert [row["description"] for row in service_rows] == ["PING"]
+
+
+def test_classify_host_services_cpu_load_gauge_and_row_kept():
+    # Quick 261008-d0w: the CPU load row must STAY in service_rows (analytics builds needs from the
+    # services topic); the dashboard hides it from the list and shows the gauge instead.
+    perf = poller.parse_perf_data("load1=3.1;3;4;0;2 load5=2.5;3;4;0;2 load15=1.2;3;4;0;2")
+    services = [_service("web1", "CPU load", "WARN", perf_data=perf)]
+    gauge_fields, service_rows = poller.classify_host_services(services)
+    assert gauge_fields["cpu_load1"] == 3.1
+    assert gauge_fields["cpu_load5"] == 2.5
+    assert gauge_fields["cpu_load15"] == 1.2
+    assert gauge_fields["cpu_load_warn"] == 3.0
+    assert gauge_fields["cpu_load_crit"] == 4.0
+    assert [row["description"] for row in service_rows] == ["CPU load"]
+
+
+def test_classify_host_services_cpu_load_thresholds_from_first_metric_that_has_them():
+    perf = poller.parse_perf_data("load1=0.5 load5=0.4 load15=1.2;3;4")
+    gauge_fields, _ = poller.classify_host_services([_service("web1", "CPU load", "OK", perf_data=perf)])
+    assert gauge_fields["cpu_load1"] == 0.5
+    assert gauge_fields["cpu_load_warn"] == 3.0
+    assert gauge_fields["cpu_load_crit"] == 4.0
 
 
 def test_classify_host_services_empty_list_returns_all_none_gauges_and_no_rows():
@@ -4495,13 +4522,21 @@ def test_systemd_summary_is_hidden_so_it_does_not_change_agent_host_state():
 @pytest.mark.parametrize(
     "description",
     ["Systemd Service cron", "Service Spooler", "TCP Port 22 (expected open)", "CPU utilization",
-     "Memory", "Filesystem /var", "SMART /dev/sda Stats", "Check_MK", "Uptime"],
+     "Memory", "Filesystem /var", "SMART /dev/sda Stats", "Check_MK", "Uptime", "CPU load"],
 )
 def test_visible_critical_service_drives_agent_host_state(description):
     snapshot = _snapshot("linux1", state="OK")
     services = _agent_services("linux1") + [_service("linux1", description, "CRIT")]
     poller.apply_visible_service_state([snapshot], services)
     assert snapshot.state == "CRIT"
+
+
+def test_cpu_load_warn_drives_agent_host_state():
+    # Regression (quick 261008-d0w): CPU load WARN produced no notification/need and had no visible cause.
+    snapshot = _snapshot("linux1", state="OK")
+    services = _agent_services("linux1") + [_service("linux1", "CPU load", "WARN")]
+    poller.apply_visible_service_state([snapshot], services)
+    assert snapshot.state == "WARN"
 
 
 def test_worst_visible_state_uses_checkmk_order_unknown_below_crit():

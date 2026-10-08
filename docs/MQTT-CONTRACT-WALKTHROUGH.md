@@ -129,6 +129,7 @@ parent. `cam1`, a ping-only host at .30, also behind `sw1`. The poll cycle is 15
  "device_type":"server","folder":"/vlan100","alias":"","address":"192.168.100.20",
  "staleness":0.4,"host_state_raw":"UP","timestamp":"2026-10-03T04:00:00+00:00",
  "cpu_percent":12.3,"cpu_warn":80,"cpu_crit":90,
+ "cpu_load1":0.42,"cpu_load5":0.35,"cpu_load15":0.30,"cpu_load_warn":3,"cpu_load_crit":4,
  "ram_percent":41.0,"ram_warn":80,"ram_crit":90,
  "disk_percent":55.2,"disk_warn":80,"disk_crit":90,
  "disk_other_worst_percent":38.0,"disk_other_worst_warn":80,"disk_other_worst_crit":90,
@@ -148,6 +149,7 @@ changes has to compare.
  "device_type":"switch","folder":"/vlan100","alias":"core switch","address":"192.168.100.1",
  "staleness":0.2,"host_state_raw":"UP","timestamp":"2026-10-03T04:00:00+00:00",
  "cpu_percent":null,"cpu_warn":null,"cpu_crit":null,
+ "cpu_load1":null,"cpu_load5":null,"cpu_load15":null,"cpu_load_warn":null,"cpu_load_crit":null,
  "ram_percent":null,"ram_warn":null,"ram_crit":null,
  "disk_percent":null,"disk_warn":null,"disk_crit":null,
  "disk_other_worst_percent":null,"disk_other_worst_warn":null,"disk_other_worst_crit":null,
@@ -155,11 +157,11 @@ changes has to compare.
 ```
 
 `lan/devices/cam1/status` has the same shape, with `"id":"cam1"`, `"device_type":"camera"` (or whatever
-its `device_type` tag is), `"address":"192.168.100.30"` and the same fifteen `null` gauge keys.
+its `device_type` tag is), `"address":"192.168.100.30"` and the same twenty `null` gauge keys.
 
 What differs from `linux1`:
 
-- **All fifteen gauge keys are present but `null`.** The poller sets a gauge key to `null` when its backing
+- **All twenty gauge keys are present but `null`.** The poller sets a gauge key to `null` when its backing
   Checkmk service does not exist (a ping-only host has no `CPU utilization`, `Memory`, `Filesystem *` or
   `SMART` service). The keys are never omitted, with one exception: on a cycle where the services query
   failed, the gauge keys are left out of every host's payload, so a retained good value is not overwritten
@@ -194,6 +196,10 @@ This is a service that is **not** CPU, RAM, disk or SMART. Three kinds of messag
 2. **`lan/devices/linux1/status`** now has `"state":"CRIT"`, because `cron` is a service the dashboard
    shows. The status topic is the only topic that carries the host-level result.
 
+   The services that count towards an agent host's state are the ones the dashboard shows or backs with a
+   gauge: `Check_MK`, `Uptime`, `CPU utilization`, `CPU load`, `Memory`, `Filesystem *`, `SMART ... Stats`,
+   the chosen `Systemd Service ...` / `Service ...` entries and `TCP Port ...`.
+
 3. **`lan/events/recent`** (the global feed):
 
    ```json
@@ -212,6 +218,13 @@ above. So when `/var` goes from 70% to 82%:
 - The `status` payload's `disk_other_worst_percent` changes. That is all that is published for the numbers.
 - If `/var` crosses its warning threshold the host state changes from OK to WARN, which publishes an `events`
   entry, exactly as in the `cron` example. But there is **no `services` republish**, because those services are not in the list.
+
+**`CPU load` is the exception.** Its numbers are the `cpu_load1`, `cpu_load5`, `cpu_load15` gauge keys
+(absolute load; `cpu_load_warn`/`cpu_load_crit` are the per-core rule levels already multiplied by the core
+count), but its row **stays in the `services` topic**, because analytics builds failure needs from that
+topic; it is hidden from the service list only on the dashboard, which shows it as the Load gauge. A
+`CPU load` WARN or CRIT counts towards the agent host's state, and raises a failure need with a fixed tier:
+`urgent` on WARN, `immediate` on CRIT (same need id, independent of host criticality).
 
 ### 12:05:00: `sw1` goes DOWN, so `linux1` and `cam1` become UNREACH
 

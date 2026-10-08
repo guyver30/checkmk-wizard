@@ -178,6 +178,12 @@ SMART_HEALTH_SERVICE_RE = re.compile(r"^SMART .+ Stats$")
 # instead.
 GAUGE_CPU_SERVICE = "CPU utilization"
 GAUGE_RAM_SERVICE = "Memory"
+# Quick 261008-d0w: the "CPU load" service backs the Load gauge. Perf-data names
+# `load1`/`load5`/`load15` and their warn/crit being ABSOLUTE load (the per-core levels of the
+# `cpu_load` rule multiplied by the CPU count) verified via the Checkmk 2.4.0 source,
+# cmk/plugins/lib/cpu_load.py `_check_cpu_load_type` (`metric_name=f"load{avg}"`,
+# `levels_upper=(levels[0] * num_cpus, levels[1] * num_cpus)`).
+GAUGE_CPU_LOAD_SERVICE = "CPU load"
 GAUGE_FILESYSTEM_PREFIX = "Filesystem "
 
 # Phase 12 (D-02): the systemd roll-up service is explicitly never shown in
@@ -708,9 +714,11 @@ def compute_overall_state(host_state: int, worst_service_state: int) -> str:
 # to monitor in the wizard and does not want hidden ones to alter the host's status. "Shown" mirrors
 # dashboard-react/src/lib/agentDetail.ts (`displayedServices`, `CHOSEN_SERVICE_RE`) plus the
 # gauge-backed services (CPU/RAM/filesystems/SMART) and the agent-connection and uptime rows; keep
-# the two in step. Non-agent hosts (SNMP/ping) show their full service table, so they are unchanged.
+# the two in step. "CPU load" counts too (quick 261008-d0w): the dashboard shows it as a gauge. Non-agent hosts (SNMP/ping) show their full service table, so they are unchanged.
 AGENT_INFO_SERVICE = "Check_MK Agent"
-_VISIBLE_AGENT_SERVICES_EXACT = frozenset({"Check_MK", "Uptime", GAUGE_CPU_SERVICE, GAUGE_RAM_SERVICE})
+_VISIBLE_AGENT_SERVICES_EXACT = frozenset(
+    {"Check_MK", "Uptime", GAUGE_CPU_SERVICE, GAUGE_CPU_LOAD_SERVICE, GAUGE_RAM_SERVICE}
+)
 _CHOSEN_SERVICE_RE = re.compile(r"^(Systemd Service|Service) (?!Summary$)")
 _TCP_PORT_SERVICE_RE = re.compile(r"^TCP Port \d+")
 # Checkmk's own worst-state order (Livestatus docs): OK < WARN < UNKNOWN < CRIT.
@@ -1818,7 +1826,10 @@ def classify_host_services(services: list[ServiceSnapshot]) -> tuple[dict, list[
 
     `gauge_fields` is exactly the `lan/devices/{id}/status` additive-key
     dict (D-12): CPU reads `perf_data["util"]` off `GAUGE_CPU_SERVICE`, RAM
-    reads `perf_data["mem_used_percent"]` off `GAUGE_RAM_SERVICE`, disk
+    reads `perf_data["mem_used_percent"]` off `GAUGE_RAM_SERVICE`, CPU load
+    reads `perf_data["load1"/"load5"/"load15"]` off `GAUGE_CPU_LOAD_SERVICE`
+    (`cpu_load_warn`/`cpu_load_crit` come from the first of the three that
+    carries them; absolute load, already scaled by core count), disk
     reads `perf_data["fs_used_percent"]` off the service named exactly
     "Filesystem /". `disk_other_worst_*` is the highest `fs_used_percent`
     across every other `GAUGE_FILESYSTEM_PREFIX` service (D-01), carrying
@@ -1848,6 +1859,11 @@ def classify_host_services(services: list[ServiceSnapshot]) -> tuple[dict, list[
         "cpu_percent": None,
         "cpu_warn": None,
         "cpu_crit": None,
+        "cpu_load1": None,
+        "cpu_load5": None,
+        "cpu_load15": None,
+        "cpu_load_warn": None,
+        "cpu_load_crit": None,
         "ram_percent": None,
         "ram_warn": None,
         "ram_crit": None,
@@ -1875,6 +1891,17 @@ def classify_host_services(services: list[ServiceSnapshot]) -> tuple[dict, list[
                 gauge_fields["cpu_percent"] = metric.get("value")
                 gauge_fields["cpu_warn"] = metric.get("warn")
                 gauge_fields["cpu_crit"] = metric.get("crit")
+        elif service.description == GAUGE_CPU_LOAD_SERVICE:
+            for key in ("load1", "load5", "load15"):
+                metric = service.perf_data.get(key)
+                if metric:
+                    gauge_fields[f"cpu_{key}"] = metric.get("value")
+            for key in ("load1", "load5", "load15"):
+                metric = service.perf_data.get(key)
+                if metric and (metric.get("warn") is not None or metric.get("crit") is not None):
+                    gauge_fields["cpu_load_warn"] = metric.get("warn")
+                    gauge_fields["cpu_load_crit"] = metric.get("crit")
+                    break
         elif service.description == GAUGE_RAM_SERVICE:
             metric = service.perf_data.get("mem_used_percent")
             if metric:
@@ -1902,6 +1929,9 @@ def classify_host_services(services: list[ServiceSnapshot]) -> tuple[dict, list[
         gauge_fields["disk_other_worst_crit"] = crit
         gauge_fields["disk_other_worst_mount"] = mount
 
+    # GAUGE_CPU_LOAD_SERVICE is deliberately NOT gauge-backed-exact here: its row stays in
+    # `service_rows` because analytics builds failure needs from the services topic
+    # (analytics/service.py). The dashboard hides it from the list for agent hosts anyway.
     gauge_backed_exact = {GAUGE_CPU_SERVICE, GAUGE_RAM_SERVICE}
     service_rows = sorted(
         (
