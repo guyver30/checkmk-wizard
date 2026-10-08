@@ -52,7 +52,14 @@ from checkmk_wizard.wizard import (
     _default_checkmk_host,
     _device_type_and_alias_attributes,
     _ensure_device_type_tag_group,
+    ServiceEditPlan,
+    _apply_host_service_change,
     _ensure_systemd_inactive_crit_rule,
+    _host_service_rules,
+    _parse_systemd_rule_names,
+    _service_candidate_hosts,
+    _systemd_rule_value_raw,
+    manage_existing_host_services,
     _establish_ssh_access,
     _expected_open_ports_by_hostname,
     _format_device_type_legend,
@@ -5215,3 +5222,323 @@ async def test_prompt_new_site_name_warning_printed_once_across_reprompts(
 
     out = " ".join(capsys.readouterr().out.split())
     assert out.count("globally unique") == 1
+
+
+# -- Manage monitored services on existing hosts ------------------------------
+
+_RULES_COLLECTION = f"{BASE}/domain-types/rule/collections/all"
+_SYSTEMD_RULESET = "discovery_systemd_units_services"
+_HOST_COND = {"host_name": {"match_on": ["web1"], "operator": "one_of"}}
+
+
+def _host_entry(name, tag_agent="cmk-agent", folder="/servers", ip="10.0.0.5"):
+    attrs = {}
+    if tag_agent is not None:
+        attrs["tag_agent"] = tag_agent
+    if ip is not None:
+        attrs["ipaddress"] = ip
+    return {"id": name, "extensions": {"folder": folder, "attributes": attrs}}
+
+
+def _rule(rule_id, names, hostnames=("web1",), folder="/servers"):
+    cond = {"host_name": {"match_on": list(hostnames), "operator": "one_of"}} if hostnames else {}
+    return {
+        "id": rule_id,
+        "extensions": {
+            "folder": folder,
+            "conditions": cond,
+            "properties": {"disabled": False},
+            "value_raw": repr({"names": names}),
+        },
+    }
+
+
+def test_service_candidate_hosts_filters_by_agent_tag_and_exclusions():
+    hosts = [
+        _host_entry("a", "cmk-agent"),
+        _host_entry("b", "all-agents", ip=None),
+        _host_entry("c", "no-agent"),
+        _host_entry("d", None),
+        _host_entry("e", "cmk-agent"),
+        {"extensions": {"attributes": {"tag_agent": "cmk-agent"}}},
+    ]
+    out = _service_candidate_hosts(hosts, {"e"})
+    assert out == [("a", "/servers", "10.0.0.5"), ("b", "/servers", "b")]
+
+
+def test_host_service_rules_matches_only_exact_single_host_in_folder():
+    rules = [
+        _rule("mine", ["~^cron$"]),
+        _rule("multi", ["~^cron$"], hostnames=("web1", "web2")),
+        _rule("other-folder", ["~^cron$"], folder="/other"),
+        _rule("no-cond", ["~^cron$"], hostnames=()),
+    ]
+    assert [r["id"] for r in _host_service_rules(rules, "web1", "/servers")] == ["mine"]
+
+
+def test_parse_systemd_rule_names_splits_ours_from_custom_and_rejects_garbage():
+    raw = repr({"names": ["~^cron$", "~^nginx\\-proxy$", "~ssh.*", "bare"]})
+    assert _parse_systemd_rule_names(raw) == (["cron", "nginx-proxy"], ["~ssh.*", "bare"])
+    assert _parse_systemd_rule_names("not python (") is None
+    assert _parse_systemd_rule_names("[1, 2]") is None
+    assert _parse_systemd_rule_names("{'names': 'x'}") is None
+
+
+def test_systemd_rule_value_raw_round_trips_and_strips_service_suffix():
+    raw = _systemd_rule_value_raw(["cron.service", "nginx-proxy"], ["~ssh.*"])
+    assert _parse_systemd_rule_names(raw) == (["cron", "nginx-proxy"], ["~ssh.*"])
+    assert json.loads(raw)["names"][-1] == "~ssh.*"
+
+
+class _Scripted:
+    def __init__(self, value):
+        self.value = value
+
+    async def ask_async(self, *a, **k):
+        return self.value
+
+
+def _script_prompts(monkeypatch, *, confirms, checkboxes=(), texts=()):
+    """Patch questionary.confirm/checkbox/text with scripted answer queues;
+    recorded checkbox/text calls land in the returned dict."""
+    rec = {"checkbox": [], "text": []}
+    c, cb, t = list(confirms), list(checkboxes), list(texts)
+
+    def confirm(prompt, *a, **k):
+        return _Scripted(c.pop(0))
+
+    def checkbox(prompt, *a, **k):
+        rec["checkbox"].append((prompt, k.get("choices", a[0] if a else [])))
+        return _Scripted(cb.pop(0))
+
+    def text(prompt, *a, **k):
+        rec["text"].append((prompt, k.get("default", "")))
+        return _Scripted(t.pop(0))
+
+    monkeypatch.setattr(questionary, "confirm", confirm)
+    monkeypatch.setattr(questionary, "checkbox", checkbox)
+    monkeypatch.setattr(questionary, "text", text)
+    return rec
+
+
+def _mock_hosts_and_rules(rules, hosts=None):
+    respx.get(f"{BASE}/domain-types/host_config/collections/all").mock(
+        return_value=Response(200, json={"value": hosts or [_host_entry("web1")]})
+    )
+    respx.get(_RULES_COLLECTION).mock(return_value=Response(200, json={"value": rules}))
+
+
+def _mock_rule_get(rule):
+    return respx.get(f"{BASE}/objects/rule/{rule['id']}").mock(
+        return_value=Response(200, headers={"ETag": '"e1"'}, json={"id": rule["id"], "extensions": rule["extensions"]})
+    )
+
+
+def _ssh(monkeypatch, running):
+    monkeypatch.setattr(wizard_module, "_establish_ssh_access", AsyncMock(return_value=object()))
+    monkeypatch.setattr(wizard_module.remote, "list_running_systemd_services", AsyncMock(return_value=running))
+    monkeypatch.setattr(wizard_module, "_ensure_systemd_inactive_crit_rule", AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_manage_services_declined_makes_no_rest_calls(monkeypatch):
+    # Regression guard: declining the opt-in prompt must leave the wizard flow
+    # unchanged, so not a single REST call may happen (respx has no routes).
+    _script_prompts(monkeypatch, confirms=[False])
+    with respx.mock:
+        async with CheckmkClient(CONN) as client:
+            assert await manage_existing_host_services(client, exclude_names=set()) == []
+
+
+@pytest.mark.asyncio
+async def test_manage_services_updates_existing_rule_resending_conditions(monkeypatch):
+    _ssh(monkeypatch, ["cron", "nginx"])
+    rec = _script_prompts(monkeypatch, confirms=[True, True], checkboxes=[["web1"], ["cron", "nginx"]])
+    rule = _rule("r1", ["~^cron$", "~^old$"])
+    with respx.mock:
+        _mock_hosts_and_rules([rule])
+        get = _mock_rule_get(rule)
+        put = respx.put(f"{BASE}/objects/rule/r1").mock(return_value=Response(200, json={}))
+        post = respx.post(_RULES_COLLECTION).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            out = await manage_existing_host_services(client, exclude_names=set())
+    assert get.called and not post.called
+    body = json.loads(put.calls.last.request.content)
+    assert put.calls.last.request.headers["If-Match"] == '"e1"'
+    assert body["conditions"] == _HOST_COND
+    assert body["properties"] == {"disabled": False}
+    assert _parse_systemd_rule_names(body["value_raw"]) == (["cron", "nginx"], [])
+    assert [(h.hostname, h.os_family, h.expected_services) for h in out] == [("web1", "linux", ["nginx"])]
+    # monitored-but-not-running "old" is offered, labelled, and pre-ticked.
+    choices = rec["checkbox"][1][1]
+    old = next(c for c in choices if c.value == "old")
+    assert old.checked and "not running" in old.title
+    assert next(c for c in choices if c.value == "cron").checked
+    assert not next(c for c in choices if c.value == "nginx").checked
+
+
+@pytest.mark.asyncio
+async def test_manage_services_creates_rule_when_none_exists(monkeypatch):
+    _ssh(monkeypatch, ["cron"])
+    _script_prompts(monkeypatch, confirms=[True, True], checkboxes=[["web1"], ["cron"]])
+    with respx.mock:
+        _mock_hosts_and_rules([])
+        post = respx.post(_RULES_COLLECTION).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            out = await manage_existing_host_services(client, exclude_names=set())
+    body = json.loads(post.calls.last.request.content)
+    assert body["ruleset"] == _SYSTEMD_RULESET and body["folder"] == "/servers"
+    assert body["conditions"] == _HOST_COND
+    assert [h.expected_services for h in out] == [["cron"]]
+
+
+@pytest.mark.asyncio
+async def test_manage_services_deletes_rule_when_everything_unticked(monkeypatch):
+    _ssh(monkeypatch, ["cron"])
+    _script_prompts(monkeypatch, confirms=[True, True], checkboxes=[["web1"], []])
+    with respx.mock:
+        _mock_hosts_and_rules([_rule("r1", ["~^cron$"])])
+        delete = respx.delete(f"{BASE}/objects/rule/r1").mock(return_value=Response(204))
+        put = respx.put(f"{BASE}/objects/rule/r1").mock(return_value=Response(200, json={}))
+        post = respx.post(_RULES_COLLECTION).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await manage_existing_host_services(client, exclude_names=set())
+    assert delete.called and not put.called and not post.called
+
+
+@pytest.mark.asyncio
+async def test_manage_services_duplicate_rules_unchanged_selection_writes_nothing(monkeypatch):
+    # The current set is the union of both duplicate rules; ticking exactly
+    # that union is "no change", so nothing is written.
+    _ssh(monkeypatch, ["cron", "nginx"])
+    _script_prompts(monkeypatch, confirms=[True], checkboxes=[["web1"], ["cron", "nginx"]])
+    with respx.mock:
+        _mock_hosts_and_rules([_rule("r1", ["~^cron$"]), _rule("r2", ["~^nginx$"])])
+        put = respx.put(f"{BASE}/objects/rule/r1").mock(return_value=Response(200, json={}))
+        delete = respx.delete(f"{BASE}/objects/rule/r2").mock(return_value=Response(204))
+        async with CheckmkClient(CONN) as client:
+            await manage_existing_host_services(client, exclude_names=set())
+    assert not put.called and not delete.called
+
+
+@pytest.mark.asyncio
+async def test_manage_services_collapses_duplicate_rules_to_one(monkeypatch):
+    # Regression guard: a host must never end up with two rules of this ruleset.
+    _ssh(monkeypatch, ["cron"])
+    _script_prompts(monkeypatch, confirms=[True, True], checkboxes=[["web1"], ["cron"]])
+    r1 = _rule("r1", ["~^cron$"])
+    with respx.mock:
+        _mock_hosts_and_rules([r1, _rule("r2", ["~^nginx$"])])
+        _mock_rule_get(r1)
+        put = respx.put(f"{BASE}/objects/rule/r1").mock(return_value=Response(200, json={}))
+        delete = respx.delete(f"{BASE}/objects/rule/r2").mock(return_value=Response(204))
+        async with CheckmkClient(CONN) as client:
+            await manage_existing_host_services(client, exclude_names=set())
+    assert put.called and delete.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ssh_result", ["skipped", "scan_failed"])
+async def test_manage_services_free_text_fallback_prefilled_with_current(monkeypatch, ssh_result):
+    if ssh_result == "skipped":
+        monkeypatch.setattr(wizard_module, "_establish_ssh_access", AsyncMock(return_value=None))
+    else:
+        _ssh(monkeypatch, None)
+    monkeypatch.setattr(wizard_module, "_ensure_systemd_inactive_crit_rule", AsyncMock())
+    rec = _script_prompts(monkeypatch, confirms=[True, True], checkboxes=[["web1"]], texts=["cron, nginx.service"])
+    rule = _rule("r1", ["~^cron$"])
+    with respx.mock:
+        _mock_hosts_and_rules([rule])
+        _mock_rule_get(rule)
+        put = respx.put(f"{BASE}/objects/rule/r1").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await manage_existing_host_services(client, exclude_names=set())
+    assert rec["text"][0][1] == "cron"
+    assert _parse_systemd_rule_names(json.loads(put.calls.last.request.content)["value_raw"]) == (
+        ["cron", "nginx"],
+        [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_manage_services_apply_declined_writes_nothing(monkeypatch):
+    _ssh(monkeypatch, ["cron", "nginx"])
+    _script_prompts(monkeypatch, confirms=[True, False], checkboxes=[["web1"], ["cron", "nginx"]])
+    with respx.mock:
+        _mock_hosts_and_rules([_rule("r1", ["~^cron$"])])
+        put = respx.put(f"{BASE}/objects/rule/r1").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            out = await manage_existing_host_services(client, exclude_names=set())
+    assert out == [] and not put.called
+
+
+@pytest.mark.asyncio
+async def test_manage_services_one_host_failure_does_not_stop_the_next(monkeypatch, capsys):
+    _ssh(monkeypatch, ["cron", "nginx"])
+    _script_prompts(
+        monkeypatch,
+        confirms=[True, True],
+        checkboxes=[["web1", "web2"], ["cron", "nginx"], ["cron", "nginx"]],
+    )
+    hosts = [_host_entry("web1"), _host_entry("web2", ip="10.0.0.6")]
+    web2_rule = _rule("r2", ["~^cron$"], hostnames=("web2",))
+    with respx.mock:
+        _mock_hosts_and_rules([_rule("r1", ["~^cron$"]), web2_rule], hosts)
+        respx.get(f"{BASE}/objects/rule/r1").mock(return_value=Response(500, json={"title": "boom"}))
+        _mock_rule_get(web2_rule)
+        put2 = respx.put(f"{BASE}/objects/rule/r2").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            out = await manage_existing_host_services(client, exclude_names=set())
+    assert put2.called
+    assert [h.hostname for h in out] == ["web2"]
+    assert "web1" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_manage_services_unchanged_host_is_not_returned(monkeypatch, capsys):
+    _ssh(monkeypatch, ["cron"])
+    _script_prompts(monkeypatch, confirms=[True], checkboxes=[["web1"], ["cron"]])
+    with respx.mock:
+        _mock_hosts_and_rules([_rule("r1", ["~^cron$"])])
+        async with CheckmkClient(CONN) as client:
+            out = await manage_existing_host_services(client, exclude_names=set())
+    assert out == []
+    assert "No changes" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_apply_host_service_change_without_etag_sends_if_match_star(monkeypatch):
+    monkeypatch.setattr(wizard_module, "_ensure_systemd_inactive_crit_rule", AsyncMock())
+    rule = _rule("r1", ["~^cron$"])
+    plan = ServiceEditPlan("web1", "/servers", "10.0.0.5", [rule], ["cron"], [], ["cron", "nginx"])
+    with respx.mock:
+        respx.get(f"{BASE}/objects/rule/r1").mock(return_value=Response(200, json={"extensions": rule["extensions"]}))
+        put = respx.put(f"{BASE}/objects/rule/r1").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            assert await _apply_host_service_change(client, plan) is True
+    assert put.calls.last.request.headers["If-Match"] == "*"
+
+
+@pytest.mark.asyncio
+async def test_run_feeds_service_hosts_to_phase6_only(monkeypatch):
+    monkeypatch.setattr(wizard_module, "_ABORT_STATE", _AbortState())
+    onboarded = [OnboardedHost("10.0.0.9", "new1", "/", "linux")]
+    extra = OnboardedHost("10.0.0.5", "web1", "/servers", "linux", expected_services=["nginx"])
+    monkeypatch.setattr(wizard_module, "phase1_site_bringup", AsyncMock(return_value=CONN))
+    monkeypatch.setattr(wizard_module, "_provision_topology_editor", AsyncMock())
+    monkeypatch.setattr(wizard_module, "phase2_folders", AsyncMock(return_value=({}, True)))
+    monkeypatch.setattr(wizard_module, "phase3_discovery", AsyncMock(return_value=[]))
+    monkeypatch.setattr(wizard_module, "phase4_classification", AsyncMock(return_value=onboarded))
+    manage = AsyncMock(return_value=[extra])
+    monkeypatch.setattr(wizard_module, "manage_existing_host_services", manage)
+    p5, p6, p7 = AsyncMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(wizard_module, "phase5_onboarding", p5)
+    monkeypatch.setattr(wizard_module, "phase6_discovery", p6)
+    monkeypatch.setattr(wizard_module, "phase7_activation", p7)
+
+    await wizard_module.run()
+
+    assert manage.await_args.kwargs["exclude_names"] == {"new1", "10.0.0.9"}
+    assert p6.await_args.args[2] == onboarded + [extra]
+    assert p5.await_args.args[2] == onboarded
+    assert p7.await_args.args[2] == onboarded

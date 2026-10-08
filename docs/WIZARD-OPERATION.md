@@ -52,6 +52,7 @@ phase1_site_bringup()
   → phase2_folders()
   → phase3_discovery()
   → phase4_classification()
+  → manage_existing_host_services()  (optional, default No; its hosts go to phase6 only)
   → phase5_onboarding()
   → phase6_discovery()
   → phase7_activation()
@@ -1058,6 +1059,70 @@ listing hosts warns and returns. Nothing here aborts the wizard run.
    straight from the selected `ScannedHost`, never asked interactively.
    `os_family` is one of `"linux"`, `"windows"`, `"snmp"`, or `"ping"`.
 
+## Manage monitored services on existing hosts (optional, between Phase 4 and Phase 5)
+
+`manage_existing_host_services()` is an opt-in step (not a numbered phase)
+that adds or removes monitored systemd services on hosts that are already in
+Checkmk, by editing each host's "Systemd single services discovery" rule
+(`discovery_systemd_units_services`) over the REST API.
+
+- **Opt-in:** the first prompt ("Change which services are monitored on hosts
+  that are already onboarded?") defaults to No. Answering No makes zero REST
+  calls and the rest of the run is unchanged.
+- **Which hosts are offered:** hosts from `list_hosts()` whose explicit
+  `tag_agent` is `cmk-agent` or `all-agents`. Phase 2 folders and Phase 3
+  placeholders carry `no-agent`, and an absent `tag_agent` usually means an
+  inherited `no-agent`, so neither is offered. Hosts promoted in this run
+  are excluded. The SSH address is the host's `ipaddress`, falling back to its
+  name.
+- **Linux/systemd only.** An existing host record carries no OS signal
+  (`cmk-agent` is the same tag for Windows), and the wizard never connects to
+  Windows, so there is no service scan to offer. Picking a Windows host by
+  mistake only yields an SSH failure and a harmless systemd rule that matches
+  nothing.
+- **SSH:** one credential prompt for the whole step (same batch flow as
+  Phase 5, tested against the first picked host). With credentials, each host
+  gets a checkbox of its running services plus its currently monitored ones.
+  Currently monitored services are pre-ticked; a monitored service that is not
+  running is labelled "(monitored, not running)" so it can be unticked.
+  Unticking stops monitoring, ticking starts it. If SSH is skipped or the scan
+  fails for a host, a free-text entry pre-filled with the current names is
+  used instead (blank means monitor none).
+- **Review and apply:** a table lists each host's additions and removals; no
+  change means the host is left out. Nothing is written until a single
+  "Apply these service changes?" confirm (default No) is answered Yes.
+- **What changes in Checkmk:** a rule belongs to a host when it is in the
+  host's folder and its `host_name` condition is exactly that one host. Rules
+  covering several hosts or other folders are never touched.
+  - Existing rule: updated in place. The wizard GETs `/objects/rule/{id}` for
+    the ETag, conditions and properties, then PUTs `value_raw` with the rule's
+    own conditions and properties resent (the 2.4.0 handler defaults omitted
+    ones to `{}`, which would turn the rule site-wide).
+  - No rule: one is created in the host's folder with the host condition.
+  - Nothing left to monitor: the rule is deleted.
+  - Several rules for one host: the first is updated, the others deleted, so
+    the host ends with at most one.
+  - Hand-written entries (regexes or bare names the wizard did not write) are
+    kept unchanged and shown as "kept unchanged". A rule whose value cannot be
+    parsed is never overwritten; the host is skipped with a warning.
+  - The global "systemd inactive = CRIT" rule is ensured when services remain.
+- **Afterwards:** the edited hosts are passed to Phase 6 only, which activates,
+  runs `fix_all` discovery and verifies the added services; removed services
+  vanish on rediscovery. Phase 7 activates the result. They are not given to
+  Phase 5 (no re-creation) or Phase 7's demo host-check rule.
+- **Esc:** the step is inside the abortable range (Phases 1-4 plus this step),
+  so Esc opens the usual apply/revert/leave prompt for any pending rule edits.
+- **Per-host failures** print a yellow warning and the other hosts are still
+  processed.
+
+Manual fallback: Setup > Services > Service discovery rules > "Systemd single
+services discovery", edit the host's rule, run service discovery on the host
+and activate changes.
+
+Not live-verified on 2.4.0p35: the GET/PUT/DELETE `/objects/rule/{id}` shapes
+(read from the 2.4.0 source), whether the GET returns an `ETag` (the wizard
+falls back to `If-Match: *`), and that PUT accepts the echoed `properties`.
+
 ## Phase 5 — Host Onboarding (`wizard.py:1021-1034`, delegating the
 per-host loop to `_onboard_hosts()`, `wizard.py:829-1018`)
 
@@ -1663,6 +1728,8 @@ which accept ordinary JSON lists/dicts fine — this quirk is specific to
 `Alternative`/`CascadingDropdown`-based ones.
 
 ## Phase 6 — Discovery & Baseline (`wizard.py:879-937`)
+
+Phase 6 also receives the hosts edited by the optional "Manage monitored services on existing hosts" step, so their added services are verified.
 
 **Activates pending changes before running discovery
 (`_activate_pending_changes()`, added 2026-08-27 — live-reported bug):**
