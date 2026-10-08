@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetMapDrawingStoreForTests, useMapDrawingStore } from "./mapDrawingStore";
-import type { Shape } from "../lib/mapDrawing";
+import { MAX_SHAPES, type Shape } from "../lib/mapDrawing";
 
 const line = (id: string): Shape => ({ id, type: "line", x1: 0, y1: 0, x2: 10, y2: 10, stroke: "#374151", strokeWidth: 2 });
 const rect = (id: string): Shape => ({ id, type: "rect", x: 0, y: 0, w: 10, h: 10, stroke: "#374151", fill: null, strokeWidth: 2 });
@@ -83,5 +83,22 @@ describe("mapDrawingStore", () => {
     expect(store().dirty).toBe(true);
     expect(store().saveError).toMatch(/500/);
     expect(store().saving).toBe(false);
+  });
+
+  it("addShape refuses at MAX_SHAPES with a visible reason and leaves the draft alone", () => {
+    // WR-07: shapes past the cap were accepted, then dropped by sanitizeDrawing on save.
+    for (let i = 0; i < MAX_SHAPES; i++) store().addShape(rect(`s${i}`));
+    useMapDrawingStore.setState({ dirty: false, saveError: null });
+    store().addShape(rect("extra"));
+    expect(store().draft).toHaveLength(MAX_SHAPES);
+    expect(store().saveError).toMatch(/full \(500 shapes\)/);
+    expect(store().dirty).toBe(false);
+  });
+
+  it("addShape below the cap still works", () => {
+    // WR-07: the cap must not affect normal adds.
+    store().addShape(rect("a"));
+    expect(store().draft).toHaveLength(1);
+    expect(store().dirty).toBe(true);
   });
 });

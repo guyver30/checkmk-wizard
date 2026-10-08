@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MqttClient } from "mqtt";
-import { publishTriage, __resetForTests } from "./triageClient";
+import { PUBLISH_TIMEOUT_MS, publishTriage, __resetForTests } from "./triageClient";
 import { __setRuntimeConfigForTests } from "../lib/runtimeConfig";
 import { buildTriageCommand } from "../lib/triageMode";
 
@@ -80,5 +80,35 @@ describe("publishTriage", () => {
       loadConfig: async () => CONFIG,
     });
     expect(ok).toBe(false);
+  });
+
+  describe("publish timeout", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("resolves false after the timeout when the broker never acks", async () => {
+      // IN-02: with reconnectPeriod 0 the publish callback may never fire.
+      vi.useFakeTimers();
+      const fake = createFakeClient();
+      fake.publish.mockImplementation(() => undefined);
+      const pending = publishTriage(buildTriageCommand("n1", "cancel"), {
+        connectFn: (() => fake) as never,
+        loadConfig: async () => CONFIG,
+      });
+      await vi.advanceTimersByTimeAsync(PUBLISH_TIMEOUT_MS + 1);
+      await expect(pending).resolves.toBe(false);
+    });
+
+    it("resolves true on a normal ack and clears the timer", async () => {
+      // IN-02: the timeout must not outlive a successful publish.
+      vi.useFakeTimers();
+      const fake = createFakeClient();
+      const ok = publishTriage(buildTriageCommand("n1", "cancel"), {
+        connectFn: (() => fake) as never,
+        loadConfig: async () => CONFIG,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(ok).resolves.toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });
