@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostDetails } from "./HostDetails";
 import { useAppStore } from "../store/useAppStore";
@@ -261,7 +261,8 @@ describe("HostDetails", () => {
     expect(screen.getAllByRole("columnheader", { name: "Output" })).toHaveLength(1);
     expect(screen.queryByText("Interface 2")).not.toBeInTheDocument();
     expect(screen.queryByText("PING")).not.toBeInTheDocument();
-    expect(screen.queryByText("History")).not.toBeInTheDocument();
+    // The old event-history section had a "History" heading; the CPU gauges now carry History buttons (quick 261008-kr3), so only the heading is asserted absent.
+    expect(screen.queryByRole("heading", { name: "History" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("progressbar")).toHaveLength(3);
   });
 
@@ -382,7 +383,18 @@ describe("HostDetails", () => {
       expect(screen.getByText("Trends")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /Filesystem \/ · fs_used_percent 71\.3 % Trending, Critical by 20 Oct/ })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Memory · mem_used_percent 40 % Stable" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "CPU · util 12 % No clear trend" })).toBeInTheDocument();
+      // Operator decision of quick 261008-kr3, not a regression: utilization is history-only and
+      // is reached from the CPU gauge, so the Trends list no longer lists it.
+      expect(screen.queryByRole("button", { name: /CPU · util/ })).toBeNull();
+    });
+
+    it("omits the Trends section when only history-only fits exist", () => {
+      act(() => {
+        seedHost();
+        seedForecast([{ service: "CPU utilization", metric: "util", unit: "%", status: "no_clear_trend", last_value: 12 }]);
+      });
+      renderAt("web1");
+      expect(screen.queryByText("Trends")).toBeNull();
     });
 
     it("opens the chart for a stable metric with no need and returns focus on close", () => {
@@ -405,6 +417,85 @@ describe("HostDetails", () => {
       });
       renderAt("web1");
       expect(screen.queryByText("Trends")).toBeNull();
+    });
+  });
+
+  describe("CPU history buttons", () => {
+    function seedGauges() {
+      act(() => {
+        useAppStore.getState().handleMessage(
+          "lan/devices/web1/status",
+          encode({
+            id: "web1",
+            state: "OK",
+            cpu_percent: 42,
+            cpu_warn: 80,
+            cpu_crit: 90,
+            cpu_load1: 1.1,
+            cpu_load5: 0.9,
+            cpu_load15: 0.7,
+            cpu_load_warn: 3,
+            cpu_load_crit: 4,
+          }),
+        );
+      });
+    }
+    function stubFetch() {
+      const fn = vi.fn(async (url: string) => {
+        const m = new URL(url, "http://x").searchParams.get("param_m") ?? "";
+        const t0 = Date.now() / 1000;
+        const data = Array.from({ length: 48 }, (_, i) => ({ t: t0 - (48 - i) * 3600, v: m === "util" ? 40 : 1 }));
+        return new Response(JSON.stringify({ data }), { status: 200 });
+      });
+      vi.stubGlobal("fetch", fn);
+      return fn;
+    }
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("keeps the gauge columns and adds a History button to the CPU and Load ones", () => {
+      seedGauges();
+      stubFetch();
+      renderAt("web1");
+      const cpu = screen.getByLabelText("CPU utilisation");
+      const load = screen.getByLabelText("CPU load");
+      expect(cpu.nextElementSibling).toBe(load);
+      expect(within(cpu).getByRole("button", { name: "CPU utilisation history" })).toHaveTextContent("History");
+      expect(within(load).getByRole("button", { name: "CPU load history" })).toHaveTextContent("History");
+    });
+
+    it("opens the utilization history without forecast badges and returns focus on close", async () => {
+      seedGauges();
+      stubFetch();
+      renderAt("web1");
+      const button = screen.getByRole("button", { name: "CPU utilisation history" });
+      fireEvent.click(button);
+      expect(screen.getByRole("heading", { name: "web1 · CPU utilization util" })).toBeInTheDocument();
+      expect(screen.getByRole("dialog").textContent).not.toMatch(/Confidence|No forecast yet|Stable|No clear trend/);
+      await waitFor(() => expect(screen.getByText("Warn 80%")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(button).toHaveFocus();
+    });
+
+    it("opens the load history with three series and the absolute levels, and zooms", async () => {
+      seedGauges();
+      const fn = stubFetch();
+      renderAt("web1");
+      const button = screen.getByRole("button", { name: "CPU load history" });
+      fireEvent.click(button);
+      expect(screen.getByRole("heading", { name: "web1 · CPU load" })).toBeInTheDocument();
+      await waitFor(() => expect(screen.getAllByTestId("history-series")).toHaveLength(3));
+      expect(screen.getByText("Warn 3")).toBeInTheDocument();
+      expect(screen.getByText("Crit 4")).toBeInTheDocument();
+      const metrics = fn.mock.calls.map(([url]) => new URL(url, "http://x").searchParams.get("param_m")).sort();
+      expect(metrics).toEqual(["load1", "load15", "load5"]);
+      fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      expect(screen.getByRole("img").getAttribute("data-zoomed")).toBe("true");
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(button).toHaveFocus();
     });
   });
 

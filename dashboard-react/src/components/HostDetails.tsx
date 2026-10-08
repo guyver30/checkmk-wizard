@@ -9,6 +9,15 @@ import { StateBadge, StateBadgeForState } from "./StateBadge";
 import { selectVisibleNeeds } from "../lib/forecast";
 import { TIER_BADGE, formatClock } from "../lib/needDisplay";
 import { ForecastDialog } from "./ForecastDialog";
+import { MetricHistoryDialog } from "./MetricHistoryDialog";
+import {
+  CPU_LOAD_SERIES,
+  CPU_LOAD_SERVICE,
+  CPU_UTIL_METRIC,
+  CPU_UTIL_SERVICE,
+  historyLevels,
+  isHistoryOnlyMetric,
+} from "../lib/historyCharts";
 import { useAppStore } from "../store/useAppStore";
 import type { FitPayload, ForecastConfidence, NeedPayload, ServiceEntry } from "../lib/types";
 
@@ -173,7 +182,9 @@ export function HostDetails({ id }: { id: string }) {
   const services = useAppStore((s) => s.services[id]);
   const needRecord = useAppStore((s) => s.needs);
   const forecast = useAppStore((s) => s.forecasts[id]);
-  const [chart, setChart] = useState<{ service: string; metric: string } | null>(null);
+  const [chart, setChart] = useState<
+    { kind: "metric"; service: string; metric: string } | { kind: "load" } | null
+  >(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const [nowMs] = useState(() => Date.now());
   const hostNeeds = useMemo(
@@ -224,6 +235,20 @@ export function HostDetails({ id }: { id: string }) {
       </div>
     ) : undefined;
 
+  const openChart = (service: string, metric: string, trigger: HTMLElement) => {
+    triggerRef.current = trigger;
+    setChart({ kind: "metric", service, metric });
+  };
+  const openLoadChart = (trigger: HTMLElement) => {
+    triggerRef.current = trigger;
+    setChart({ kind: "load" });
+  };
+  const closeChart = () => {
+    setChart(null);
+    // The dialog unmounts, so hand focus back to the entry that opened it.
+    triggerRef.current?.focus();
+  };
+
   const gauges = (
     hasAnyGauge ? (
           <section className="bg-bg-surface rounded-lg shadow-card p-6">
@@ -241,6 +266,14 @@ export function HostDetails({ id }: { id: string }) {
                     <GaugeValue percent={device.cpu_percent} />
                   </span>
                   <span className="text-sm font-semibold">CPU</span>
+                  <Button
+                    variant="tertiary"
+                    size="sm"
+                    aria-label="CPU utilisation history"
+                    onClick={(event) => openChart(CPU_UTIL_SERVICE, CPU_UTIL_METRIC, event.currentTarget)}
+                  >
+                    History
+                  </Button>
                 </div>
               )}
               {isPercent(device.cpu_load1) && (
@@ -259,6 +292,14 @@ export function HostDetails({ id }: { id: string }) {
                   <span className="text-xs text-fg-tertiary">
                     {loadAveragesLabel(device.cpu_load1, device.cpu_load5, device.cpu_load15)}
                   </span>
+                  <Button
+                    variant="tertiary"
+                    size="sm"
+                    aria-label="CPU load history"
+                    onClick={(event) => openLoadChart(event.currentTarget)}
+                  >
+                    History
+                  </Button>
                 </div>
               )}
               {isPercent(device.ram_percent) && (
@@ -298,16 +339,6 @@ export function HostDetails({ id }: { id: string }) {
           <p>{NO_METRICS_TEXT}</p>
         )
   );
-
-  const openChart = (service: string, metric: string, trigger: HTMLElement) => {
-    triggerRef.current = trigger;
-    setChart({ service, metric });
-  };
-  const closeChart = () => {
-    setChart(null);
-    // The dialog unmounts, so hand focus back to the entry that opened it.
-    triggerRef.current?.focus();
-  };
 
   const needsSection =
     hostNeeds.length > 0 ? (
@@ -352,12 +383,15 @@ export function HostDetails({ id }: { id: string }) {
       </section>
     ) : null;
 
+  // Utilization is history-only (quick 261008-kr3): it is reached from the CPU gauge's History
+  // button, not listed as a trend, so the Trends list skips history-only metrics.
+  const trendFits = forecast ? forecast.fits.filter((fit) => !isHistoryOnlyMetric(fit.metric)) : [];
   const trendsSection =
-    forecast && forecast.fits.length > 0 ? (
+    trendFits.length > 0 ? (
       <section className="mt-3">
         <h2 className="text-sm font-semibold">Trends</h2>
         <ul className="mt-1 flex flex-col">
-          {forecast.fits.map((fit) => {
+          {trendFits.map((fit) => {
             const value = formatValue(fit);
             return (
               <li key={`${fit.service}|${fit.metric}`} className="list-none">
@@ -375,9 +409,22 @@ export function HostDetails({ id }: { id: string }) {
       </section>
     ) : null;
 
-  const chartDialog = chart ? (
-    <ForecastDialog host={id} service={chart.service} metric={chart.metric} onClose={closeChart} />
-  ) : null;
+  // Load levels are absolute (per-core level x CPU count, from the poller), shown as-is.
+  const loadLevels = historyLevels("load1", device, null);
+  const chartDialog =
+    chart === null ? null : chart.kind === "load" ? (
+      <MetricHistoryDialog
+        host={id}
+        title={CPU_LOAD_SERVICE}
+        series={CPU_LOAD_SERIES}
+        unit=""
+        warn={loadLevels.warn}
+        crit={loadLevels.crit}
+        onClose={closeChart}
+      />
+    ) : (
+      <ForecastDialog host={id} service={chart.service} metric={chart.metric} onClose={closeChart} />
+    );
 
   // Agent hosts get the focused view (2026-09-25): gauges, SMART (inside the disk gauge),
   // agent connection, uptime, the services chosen in the wizard and the monitored TCP ports

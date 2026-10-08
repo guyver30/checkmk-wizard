@@ -11,6 +11,10 @@
 //
 // The query averages with sum(value_sum)/sum(value_count) because history rows are mixed
 // resolution after the 30-day TTL rollup; a plain avg(value) would weight rollup rows wrong.
+//
+// fetchHistorySeries charts several metrics at once (the 1/5/15 minute CPU load) by reusing
+// the one-series query, one /ch-api/ call per series, chosen over a multi-metric IN query so
+// the single reviewed SQL string stays the only SQL the browser sends.
 
 export interface HistoryPoint {
   t: number; // epoch seconds
@@ -82,4 +86,51 @@ export async function fetchHourlyHistory(
   } catch {
     return { ok: false };
   }
+}
+
+export interface HistorySeriesSpec {
+  service: string;
+  metric: string;
+}
+
+export type HistorySeriesResult = { ok: true; series: HistoryPoint[][] } | { ok: false };
+
+const MAX_SERIES = 4;
+// Same shape analytics/config.py METRIC_NAME_RE accepts.
+const METRIC_NAME_RE = /^[A-Za-z0-9_.]{1,64}$/;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
+
+function validSpec(spec: HistorySeriesSpec): boolean {
+  return (
+    METRIC_NAME_RE.test(spec.metric) &&
+    typeof spec.service === "string" &&
+    spec.service.length > 0 &&
+    spec.service.length <= 128 &&
+    !CONTROL_CHAR_RE.test(spec.service)
+  );
+}
+
+// Never rejects. Invalid specs resolve {ok: false} before any request is made; one failing
+// series fails the whole result (a chart with a silently missing line would mislead).
+export async function fetchHistorySeries(
+  host: string,
+  specs: readonly HistorySeriesSpec[],
+  days: HistoryDays,
+  fetchFn: typeof fetch = fetch,
+): Promise<HistorySeriesResult> {
+  if (specs.length === 0 || specs.length > MAX_SERIES || !specs.every(validSpec)) {
+    return { ok: false };
+  }
+  const results = await Promise.all(
+    specs.map((spec) => fetchHourlyHistory(host, spec.service, spec.metric, days, fetchFn)),
+  );
+  const series: HistoryPoint[][] = [];
+  for (const result of results) {
+    if (!result.ok) {
+      return { ok: false };
+    }
+    series.push(result.points);
+  }
+  return { ok: true, series };
 }

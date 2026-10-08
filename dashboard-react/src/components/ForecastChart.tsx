@@ -10,29 +10,23 @@
 // Plain ArrowLeft/ArrowRight keep stepping the crosshair (the window follows it); panning
 // by keyboard is Shift+ArrowLeft/ArrowRight. Zoom state is local and keyed to the full
 // domain, so it resets when the range or metric changes and when the dialog is reopened.
+// The zoom interaction (useChartZoom, ChartZoomToolbar) is shared with HistoryChart.
 
-import {
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-} from "react";
+import { useMemo, useState, useId, type KeyboardEvent, type MouseEvent } from "react";
 import { scaleLinear, scaleTime } from "d3-scale";
-import { Button } from "kone-design-system";
+import { useChartZoom } from "../hooks/useChartZoom";
 import {
-  clampDomain,
-  isFullDomain,
-  isMinSpan,
-  panBy,
-  revealTime,
-  zoomAt,
-  type Domain,
-} from "../lib/chartZoom";
+  CHART,
+  DAY_MS,
+  formatDate,
+  formatDateTime,
+  formatValue,
+  segments,
+} from "../lib/chartCommon";
+import { type Domain } from "../lib/chartZoom";
 import type { FitPayload } from "../lib/types";
 import type { HistoryPoint } from "../lib/historyClient";
+import { ChartZoomToolbar } from "./ChartZoomToolbar";
 
 export interface ForecastChartProps {
   points: HistoryPoint[];
@@ -44,13 +38,7 @@ export interface ForecastChartProps {
   label: string;
 }
 
-const W = 840;
-const PLOT_H = 240;
-const M = { left: 48, top: 16, right: 16, bottom: 32 };
-const H = PLOT_H + M.top + M.bottom;
-const INNER_W = W - M.left - M.right;
-const GAP_S = 6 * 3600;
-const DAY_MS = 86400000;
+const { W, PLOT_H, M, H, INNER_W } = CHART;
 const MAX_FORWARD_DAYS = 90;
 
 const NO_TREND_BODY: Record<"stable" | "no_clear_trend", string> = {
@@ -58,58 +46,8 @@ const NO_TREND_BODY: Record<"stable" | "no_clear_trend", string> = {
   stable: "Values are flat or falling, so no date is predicted.",
 };
 
-function formatValue(v: number): string {
-  return String(Number(v.toFixed(2)));
-}
-
-function formatDate(ms: number, nowMs: number): string {
-  const d = new Date(ms);
-  const sameYear = d.getFullYear() === new Date(nowMs).getFullYear();
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    ...(sameYear ? {} : { year: "numeric" }),
-  }).format(d);
-}
-
-function formatDateTime(ms: number): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(ms));
-}
-
-function segments(points: HistoryPoint[]): HistoryPoint[][] {
-  const out: HistoryPoint[][] = [];
-  let current: HistoryPoint[] = [];
-  for (const p of points) {
-    const prev = current[current.length - 1];
-    if (prev && p.t - prev.t > GAP_S) {
-      out.push(current);
-      current = [];
-    }
-    current.push(p);
-  }
-  if (current.length > 0) {
-    out.push(current);
-  }
-  return out;
-}
-
 export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: ForecastChartProps) {
   const [cursor, setCursor] = useState<number | null>(null);
-  const [zoom, setZoom] = useState<{ key: string; domain: Domain } | null>(null);
-  const [dragging, setDragging] = useState(false);
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const dragRef = useRef<{ x: number; view: Domain } | null>(null);
-  const zoomCtx = useRef<{ full: Domain; key: string; view: Domain }>({
-    full: [0, 1],
-    key: "",
-    view: [0, 1],
-  });
   const clipId = `clip-${useId().replace(/[^A-Za-z0-9_-]/g, "")}`;
 
   const startMs = nowMs - rangeDays * DAY_MS;
@@ -171,47 +109,13 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
   }
 
   const full: Domain = [startMs, endMs];
-  const fullKey = `${startMs}|${endMs}`;
-  const view: Domain = zoom && zoom.key === fullKey ? clampDomain(zoom.domain, full) : full;
-  const zoomed = !isFullDomain(view, full);
-  zoomCtx.current = { full, key: fullKey, view };
+  const zoomState = useChartZoom(full);
+  const { svgRef, view, zoomed, dragging } = zoomState;
   const inView = (ms: number) => ms >= view[0] && ms <= view[1];
 
   const x = scaleTime()
     .domain([new Date(view[0]), new Date(view[1])])
     .range([0, INNER_W]);
-
-  // Applies a domain transform to the latest view. Reads the ref so the native wheel
-  // listener (bound once) and the render-time handlers share one code path.
-  const applyZoom = (fn: (current: Domain, fullDomain: Domain) => Domain) => {
-    setZoom((prev) => {
-      const ctx = zoomCtx.current;
-      const current = prev && prev.key === ctx.key ? clampDomain(prev.domain, ctx.full) : ctx.full;
-      const next = fn(current, ctx.full);
-      return isFullDomain(next, ctx.full) ? null : { key: ctx.key, domain: next };
-    });
-  };
-
-  // React's onWheel is passive and cannot preventDefault, so the wheel listener is native.
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      if (event.deltaY === 0) return;
-      const rect = svg.getBoundingClientRect();
-      const frac =
-        rect.width === 0
-          ? 0.5
-          : Math.min(1, Math.max(0, ((((event.clientX - rect.left) / rect.width) * W) - M.left) / INNER_W));
-      const factor = event.deltaY < 0 ? 0.8 : 1.25;
-      applyZoom((cur, f) => zoomAt(cur, cur[0] + frac * (cur[1] - cur[0]), factor, f));
-    };
-    svg.addEventListener("wheel", onWheel, { passive: false });
-    return () => svg.removeEventListener("wheel", onWheel);
-    // applyZoom only touches state setters and a ref, so binding once is safe.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const yValues: number[] = [];
   if (!zoomed) {
@@ -286,63 +190,29 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
     const next = Math.max(0, Math.min(visible.length - 1, base + delta));
     setCursor(next);
     const ms = visible[next].t * 1000;
-    applyZoom((cur, f) => revealTime(cur, ms, f));
+    zoomState.reveal(ms);
   };
 
   const cursorPoint = cursor !== null ? (visible[cursor] ?? null) : null;
   const zoomAnchor = () => (cursorPoint ? cursorPoint.t * 1000 : (view[0] + view[1]) / 2);
-  const zoomBy = (factor: number) => {
-    const anchor = zoomAnchor();
-    applyZoom((cur, f) => zoomAt(cur, anchor, factor, f));
-  };
-  const resetZoom = () => setZoom(null);
+  const resetZoom = zoomState.reset;
 
   const onKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
+    if (zoomState.handleZoomKey(event, zoomAnchor())) return;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
-      const dir = event.key === "ArrowLeft" ? -1 : 1;
-      if (event.shiftKey) {
-        applyZoom((cur, f) => panBy(cur, dir * 0.2 * (cur[1] - cur[0]), f));
-      } else {
-        move(dir);
-      }
-    } else if (event.key === "+" || event.key === "=") {
-      event.preventDefault();
-      zoomBy(0.5);
-    } else if (event.key === "-" || event.key === "_") {
-      event.preventDefault();
-      zoomBy(2);
-    } else if (event.key === "0") {
-      event.preventDefault();
-      resetZoom();
+      move(event.key === "ArrowLeft" ? -1 : 1);
     } else if (event.key === "Escape") {
       setCursor(null);
       (event.currentTarget as SVGSVGElement).blur();
     }
   };
 
-  const endDrag = () => {
-    dragRef.current = null;
-    setDragging(false);
-  };
-
-  const onMouseDown = (event: MouseEvent<SVGSVGElement>) => {
-    if (event.button !== 0 || !zoomed) return;
-    dragRef.current = { x: event.clientX, view };
-    setDragging(true);
-  };
+  const { endDrag, onMouseDown } = zoomState;
 
   const onMouseMove = (event: MouseEvent<SVGSVGElement>) => {
+    if (zoomState.dragMove(event)) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const drag = dragRef.current;
-    if (drag) {
-      if (rect.width === 0) return;
-      const startView = drag.view;
-      const deltaMs =
-        ((((event.clientX - drag.x) / rect.width) * W) / INNER_W) * (startView[1] - startView[0]);
-      applyZoom((_cur, f) => panBy(startView, -deltaMs, f));
-      return;
-    }
     if (rect.width === 0 || visible.length === 0) return;
     const vx = ((event.clientX - rect.left) / rect.width) * W - M.left;
     let best = -1;
@@ -394,29 +264,14 @@ export function ForecastChart({ points, fit, unit, nowMs, rangeDays, label }: Fo
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex justify-end gap-2" role="toolbar" aria-label="Chart zoom">
-        <Button
-          variant="neutral"
-          size="sm"
-          aria-label="Zoom in"
-          disabled={isMinSpan(view, full)}
-          onClick={() => zoomBy(0.5)}
-        >
-          +
-        </Button>
-        <Button
-          variant="neutral"
-          size="sm"
-          aria-label="Zoom out"
-          disabled={!zoomed}
-          onClick={() => zoomBy(2)}
-        >
-          −
-        </Button>
-        <Button variant="neutral" size="sm" aria-label="Reset zoom" disabled={!zoomed} onClick={resetZoom}>
-          Reset
-        </Button>
-      </div>
+      <ChartZoomToolbar
+        view={view}
+        full={full}
+        zoomed={zoomed}
+        onZoomIn={() => zoomState.zoomBy(zoomAnchor(), 0.5)}
+        onZoomOut={() => zoomState.zoomBy(zoomAnchor(), 2)}
+        onReset={resetZoom}
+      />
       <div className="relative">
         {(status === "stable" || status === "no_clear_trend") && (
           <div
