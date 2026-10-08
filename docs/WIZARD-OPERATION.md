@@ -701,7 +701,25 @@ scoped `topology_editor` Checkmk role and user
   vars) and does the same create-or-rotate, for provisioning without
   running the whole wizard.
 
-## Phase 2 — Folder Structure (`wizard.py:257-390`; `_network_scan_attributes` at `wizard.py:257-280`, `phase2_folders` at `wizard.py:285-390`)
+## Phase 2 — Folder Structure (`phase2_folders` at `wizard.py:1621`; `_network_scan_attributes` at `wizard.py:800`; `_top_level_folder_names` at `wizard.py:833`; `_network_scan_summary` at `wizard.py:857`; `_prompt_folder_subnet` at `wizard.py:1516`; `_configure_existing_folder` at `wizard.py:1543`)
+
+**Changed 2026-10-08: existing folders are listed and reusable.** Phase 2
+first lists the site's top-level folders (`GET .../folder_config/collections/all`,
+best-effort: on failure it warns and behaves as if there were none). If any
+exist, the confirm below is replaced by a select — use some existing folders
+(a checkbox follows), use existing and add new ones, only add new ones, or skip
+folders. Each chosen folder gets the same subnet prompt; for it only the
+`network_scan` attribute is ever written (`PUT update_attributes
+{network_scan: ...}` under the folder's ETag), never `tag_agent`,
+`tag_snmp_ds` or anything else. A folder with no scan gets one when a subnet
+is given; one that already has a scan is shown and the operator chooses keep or
+replace. A kept scan whose criticality is `offline` is offered (default yes) an
+update to `prod` that keeps addresses, interval, time window and all other scan
+fields. Typing a new-folder name that already exists, or a create that fails
+with "already exists" (a race), reuses the folder instead of printing a red
+failure. `folder_subnets` keys stay `"/name"`. The folder list and folder GET
+shapes (`extensions.path`, `extensions.attributes.network_scan`) and the
+duplicate-folder error are coded defensively and not live-verified.
 
 **Changed 2026-08-25: folders now carry their own subnet, one at a time,**
 instead of a single comma-separated names list with no subnet concept.
@@ -710,8 +728,9 @@ None, ...}` — an empty dict (Phase 2 skipped, or every folder's subnet
 left blank) signals Phase 3 to fall back to a single flat scan into the
 root folder, same as the wizard's original behavior.
 
-1. `questionary.confirm` — "Set up folders?" Defaults to **No**. If no,
-   returns `{}` immediately.
+1. If the site has no existing folders: `questionary.confirm` — "Set up
+   folders?" Defaults to **No**. If no, returns `{}` immediately. (With
+   existing folders, see the 2026-10-08 paragraph above.)
 2. If yes, loops one folder at a time until an empty name is entered:
    - **Folder name** (blank finishes the loop). A leading `/` is stripped
      if typed, then **validated** (`_FOLDER_NAME_RE`, `wizard.py:43`) and
@@ -726,7 +745,8 @@ root folder, same as the wizard's original behavior.
    - Creates the folder via `POST /domain-types/folder_config/collections/all`
      with `{name, title, parent: "/", attributes: {tag_agent: "no-agent",
      tag_snmp_ds: "no-snmp"}}` (`api.py:125-137`). Failures are printed and
-     don't stop the loop.
+     don't stop the loop; a name already in the listing skips the POST and
+     reuses the folder.
    - **Inert-by-default folder attributes (2026-08-26):** `tag_agent:
      "no-agent"`/`tag_snmp_ds: "no-snmp"` are baked into the `create_folder`
      call itself (unlike Network Scan below, these two tag groups are
@@ -744,8 +764,7 @@ root folder, same as the wizard's original behavior.
      configured one. Phase 3 and Phase 5 (below) set these explicitly, per
      host, once a host's real monitoring method is known — explicit
      host-level attributes always win over the folder default.
-   - **Network Scan setup (2026-08-26, `wizard.py:_network_scan_attributes`,
-     `phase2_folders` lines 358-377):** if a subnet was given *and* the
+   - **Network Scan setup (2026-08-26, `wizard.py:_network_scan_attributes`):** if a subnet was given *and* the
      folder was created, a **second, independent** call configures
      Checkmk's own built-in per-folder Network Scan — a background cronjob
      Checkmk runs on its own schedule, distinct from this wizard's
@@ -759,11 +778,21 @@ root folder, same as the wizard's original behavior.
      OpenAPI schema, `NetworkScan`/`IPNetwork` components):
      `{addresses: [{type: "network_range", network: <normalized CIDR>}],
      time_allowed: [{start: "00:00", end: "23:59"}], scan_interval: 86400,
-     tag_criticality: "offline"}`. `tag_criticality: "offline"` ("Do not
-     monitor this host") means newly-found hosts land in host
-     administration unmonitored, for manual review — mirrors this wizard's
-     own Phase 3 (stage) → Phase 4 (promote) split rather than
-     auto-monitoring unclassified hosts. Live-verified: the scan only
+     tag_criticality: "prod"}`. **Changed 2026-10-08:** it was `"offline"`
+     ("Do not monitor this host"), which left every scan-found host
+     unmonitored and invisible on the dashboard until someone re-ran the
+     wizard. `tag_criticality: "prod"` ("Productive system") makes
+     newly-found hosts monitored at once (Checkmk docs, hosts_setup,
+     "Performing a network scan for folders > Setting up a network scan":
+     the default "Set criticality" leaves them unmonitored, "Productive
+     system" enables immediate monitoring). They inherit the folder's
+     no-agent/no-snmp, so they are ping-only, and the device type `other`;
+     re-running the wizard offers them for promotion/retagging in Phase 4.
+     Caveat: anything answering ping in the range becomes a monitored host.
+     Checkmk's network scan supports exclusion ranges (folder properties >
+     Network scan > exclude addresses), which the wizard does not set;
+     add them in the GUI if needed. Whether the scan activates changes by
+     itself is not verified. Live-verified: the scan only
      creates hosts for IPs not already configured anywhere on the site, so
      it never touches or duplicates hosts already onboarded by this
      wizard. Skipped (with a yellow note) for a non-IPv4 CIDR — Checkmk's
@@ -804,7 +833,8 @@ flow when Phase 2 produced no folder/subnet pairs.
 with no explicit agent/SNMP setup (absent tags are folder-inherited, and the
 wizard's folders default to no-agent/no-snmp). These are placeholders left by
 an earlier or aborted run, plus hosts a folder's daily Checkmk network scan
-found since. Then:
+found since (since 2026-10-08 those are already monitored as device type
+`other`; scans set up earlier may still be `offline`). Then:
 
 - **New site (no hosts at all):** no question — the scan is required (Phase 2
   subnets, else a CIDR prompt).
@@ -820,8 +850,10 @@ found since. Then:
   Checkmk").
 - Caveat: a host promoted by an older wizard version has no marker, so an
   IP-named, agent-less one appears as pending once. Promoting a
-  daily-scan host replaces its attributes (the scan's `tag_criticality =
-  offline` is not carried over), i.e. promotion starts monitoring it.
+  daily-scan host replaces its attributes (the scan's `tag_criticality`,
+  `prod` or older `offline`, is not carried over); a `prod` scan host is
+  already monitored as `other`, an `offline` one starts being monitored on
+  promotion.
 
 **Changed 2026-09-12: the scan is optional (superseded above for new
 sites).** The phase used to open with
