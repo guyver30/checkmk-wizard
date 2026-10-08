@@ -185,10 +185,17 @@ export function TriageMenu({ need, hostLabel, publish = publishTriage }: TriageM
     <Button
       variant="tertiary"
       size="sm"
-      disabled={loginUnavailable}
       aria-haspopup="menu"
       aria-expanded={menuOpen}
-      onClick={() => setMenuOpen((open) => !open)}
+      onClick={() => {
+        // IN-02: opening the menu is the retry after a failed send, so clear the flag
+        // rather than leaving Triage disabled until reload.
+        if (!menuOpen && loginUnavailable) {
+          setLoginUnavailable(false);
+          setFeedback(null);
+        }
+        setMenuOpen((open) => !open);
+      }}
     >
       Triage
     </Button>

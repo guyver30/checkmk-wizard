@@ -45,16 +45,20 @@ Each check proves one requirement:
   skipped when its password (MQTT_ANALYTICS_PASSWORD / TRIAGE_WS_PASSWORD) is
   unset. Probes are non-retained so nothing is left on the broker.
 - `check_persistence_across_restart` — a retained message survives a
-  broker restart (BRK-02), skipped via `--skip-restart` for callers (e.g.
-  the worker container) that must not restart a sibling service.
+  broker restart (BRK-02). Opt-in via `--with-restart` (changed 2026-10-08,
+  WR-05: it used to run by default, and restarting a single container turned
+  every real host DOWN on 2026-10-02). `--skip-restart` is still accepted as a
+  no-op for existing documented commands.
 
 Topics live under `sites/<site-id>/...`; `--site-id` (default $CMK_SITE_ID,
 else `dmc`) must equal the deployment's CMK_SITE_ID, because the broker ACL is
 rendered from it at container start.
 
-On dmc-server pass `--skip-restart`: restarting a single container breaks
-Checkmk egress there. The full-stack procedure is
-`podman compose down && podman compose up -d`.
+A plain run never restarts the broker. Restarting a single container breaks
+Checkmk egress on dmc-server, so use `--with-restart` only on a throwaway
+broker; the full-stack procedure is `podman compose down && podman compose up -d`.
+The last line reports `N checks passed, M skipped`, so skipped password groups
+are visible rather than hidden behind "all checks passed".
 """
 
 from __future__ import annotations
@@ -610,8 +614,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Live smoke test proving BRK-01, BRK-02 and BRK-03 against a running Mosquitto broker.",
         epilog="In-container invocation (e.g. from the worker container): "
-        "--host mosquitto --ws-port 9001 --skip-restart "
-        "(the worker container cannot restart its sibling broker).",
+        "--host mosquitto --ws-port 9001 "
+        "(the broker is never restarted unless --with-restart is passed).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", default="localhost")
@@ -633,7 +637,17 @@ def main() -> int:
     parser.add_argument("--triage-ws-user", default="wstriage")
     parser.add_argument("--triage-ws-password", default=os.environ.get("TRIAGE_WS_PASSWORD", ""))
     parser.add_argument("--timeout", type=float, default=5.0)
-    parser.add_argument("--skip-restart", action="store_true")
+    parser.add_argument(
+        "--with-restart",
+        action="store_true",
+        help="also run the persistence-across-restart check, which restarts a single container "
+        "(on the deploy host this has turned all real hosts DOWN; use only on a throwaway broker)",
+    )
+    parser.add_argument(
+        "--skip-restart",
+        action="store_true",
+        help="no-op kept for existing commands; restart is now off by default",
+    )
     parser.add_argument("--restart-cmd", default="podman compose restart mosquitto")
     parser.add_argument("--compose-dir", default="deploy")
     args = parser.parse_args()
@@ -643,6 +657,7 @@ def main() -> int:
 
     seed = uuid.uuid4().hex
     results: list[bool] = []
+    skipped = 0
     try:
         results.append(
             check_poller_publish(args.host, args.site_id, args.tcp_port, args.poller_user, args.poller_password, seed, args.timeout)
@@ -695,6 +710,7 @@ def main() -> int:
             )
         else:
             print("[SKIP] wsadmin checks: ADMIN_WS_PASSWORD not set")
+            skipped += 1
         if args.analytics_password:
             analytics_args = (
                 args.host,
@@ -711,6 +727,7 @@ def main() -> int:
             results.append(check_analytics_incident_status_denied(*analytics_args))
         else:
             print("[SKIP] analytics checks: MQTT_ANALYTICS_PASSWORD not set")
+            skipped += 1
         if args.triage_ws_password and args.analytics_password:
             results.append(
                 check_wstriage_publish_cmd(
@@ -730,8 +747,10 @@ def main() -> int:
             )
         else:
             print("[SKIP] wstriage checks: TRIAGE_WS_PASSWORD or MQTT_ANALYTICS_PASSWORD not set")
-        if args.skip_restart:
-            print("[SKIP] persistence_across_restart (--skip-restart)")
+            skipped += 1
+        if args.skip_restart or not args.with_restart:
+            print("[SKIP] persistence_across_restart (pass --with-restart to run it)")
+            skipped += 1
         else:
             results.append(
                 check_persistence_across_restart(
@@ -749,10 +768,12 @@ def main() -> int:
     finally:
         _cleanup(args.host, args.site_id, args.tcp_port, args.poller_user, args.poller_password, args.timeout)
 
-    if all(results):
-        print("[SUMMARY] all checks passed")
+    passed = sum(results)
+    failed = len(results) - passed
+    if failed == 0:
+        print(f"[SUMMARY] {passed} checks passed, {skipped} skipped")
         return 0
-    print("[SUMMARY] one or more checks failed")
+    print(f"[SUMMARY] {failed} checks failed, {passed} passed, {skipped} skipped")
     return 1
 
 

@@ -159,16 +159,33 @@ describe("TriageMenu", () => {
     expect(screen.queryByText(/Could not apply/)).toBeNull();
   });
 
-  it("disables the trigger with the login-unavailable tooltip when publishing fails", async () => {
+  it("shows the login-unavailable message when publishing fails", async () => {
     open(vi.fn(async (_cmd: TriageCommand) => false));
     await act(async () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Downgrade" }));
     });
-    expect(screen.getByRole("button", { name: "Triage" })).toBeDisabled();
     expect(
       screen.getAllByText(
         "Triage login unavailable. Reload the page, or check the dashboard container configuration.",
       ).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("stays clickable after a failed send and reopening clears the failure state", async () => {
+    // IN-02: one failed send used to disable Triage for that row until a page reload.
+    const publish = open(vi.fn(async (_cmd: TriageCommand) => false));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Downgrade" }));
+    });
+    const trigger = screen.getByRole("button", { name: "Triage" });
+    expect(trigger).not.toBeDisabled();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(
+      screen.queryAllByText(
+        "Triage login unavailable. Reload the page, or check the dashboard container configuration.",
+      ),
+    ).toHaveLength(0);
+    expect(publish).toHaveBeenCalledTimes(1);
   });
 });

@@ -61,7 +61,7 @@ class EventRecorder:
             return []
         try:
             data = json.loads(payload.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError):
+        except (UnicodeDecodeError, ValueError, RecursionError):  # deep nesting raises RecursionError (WR-04)
             return []
         if not isinstance(data, list) or len(data) > MAX_EVENTS:
             return []

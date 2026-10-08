@@ -131,7 +131,7 @@ podman compose down && podman compose up -d   # full down/up, never a single-ser
 
 Never restart or stop a single container; it breaks Checkmk's egress and turns every real host DOWN. The
 verification steps (read cache query, `podman logs analytics`, retained needs/forecast topics, broker smoke
-test with `--skip-restart`) are in `docs/Podman setup for checkmk, minio, mosquitto, worker.md` under
+test; it no longer restarts the broker unless `--with-restart` is passed) are in `docs/Podman setup for checkmk, minio, mosquitto, worker.md` under
 "Upgrading to 14.2".
 
 ## 4. Default credentials in tracked files
@@ -182,7 +182,7 @@ Never restart a single service: a lone container restart breaks Checkmk's egress
 DOWN. Then check against the live stack:
 
 ```bash
-set -a; . deploy/.env; set +a; uv run python scripts/smoke_test_broker.py --skip-restart   # --site-id comes from CMK_SITE_ID
+set -a; . deploy/.env; set +a; uv run python scripts/smoke_test_broker.py   # --site-id comes from CMK_SITE_ID
 podman exec mqtt-poller python /scripts/mqtt_poller.py --check-columns
 ```
 

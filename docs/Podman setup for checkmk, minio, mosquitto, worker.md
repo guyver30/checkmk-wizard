@@ -628,21 +628,23 @@ set -a; . deploy/.env; set +a
 uv run python scripts/smoke_test_broker.py
 ```
 
-From inside the `worker` container (which cannot restart its sibling `mosquitto` service, hence `--skip-restart`): the worker container does not carry `MQTT_POLLER_PASSWORD`/`WS_PASSWORD` in its own environment, so pass them explicitly:
+From inside the `worker` container (the script never restarts the broker unless `--with-restart` is passed): the worker container does not carry `MQTT_POLLER_PASSWORD`/`WS_PASSWORD` in its own environment, so pass them explicitly:
 
 ```bash
-uv run python scripts/smoke_test_broker.py --host mosquitto --ws-port 9001 --skip-restart \
+uv run python scripts/smoke_test_broker.py --host mosquitto --ws-port 9001 \
   --poller-password "$MQTT_POLLER_PASSWORD" --ws-password "$WS_PASSWORD" \
   --site-id "$CMK_SITE_ID"
 ```
 
-What each check proves (the analytics and triage checks take `--analytics-password` / `--triage-ws-password`, which default from `MQTT_ANALYTICS_PASSWORD` / `TRIAGE_WS_PASSWORD`; the broker restart check defaults to a single-service restart, so on the deploy host always pass `--skip-restart`):
+What each check proves (the analytics and triage checks take `--analytics-password` / `--triage-ws-password`, which default from `MQTT_ANALYTICS_PASSWORD` / `TRIAGE_WS_PASSWORD`; the broker restart check is off by default and opt-in via `--with-restart`, because restarting a single container breaks Checkmk egress on the deploy host, so never pass it there; `--skip-restart` is still accepted as a no-op; the last line reports `N checks passed, M skipped`, so groups skipped for lack of a password are visible):
 
 - `analytics_writes_allowed` / `analytics_incident_status_denied` — the `analytics` login may publish under `lan/needs/` and `lan/incidents/<id>/narration` but not on `lan/incidents/<id>/status`
 - `wstriage_publish_cmd` / `wstriage_publish_lan_denied` — the `wstriage` login can publish `needs/triage/cmd` (analytics receives it) and nothing under `lan/`
 - `poller_publish` / `ws_subscribe` — the WebSockets listener is reachable and distinct from 1883
 - `ws_publish_denied` — the `wsreader` ACL is read-only; a write attempt never reaches an independent privileged subscriber
-- `persistence_across_restart` — a retained message survives a broker restart (skipped by `--skip-restart`)
+- `persistence_across_restart` — a retained message survives a broker restart (runs only with `--with-restart`)
+
+The broker config caps every publish at 2 MB (`message_size_limit 2097152` in `deploy/mosquitto.conf`), above the 1 MB events payload analytics accepts; mosquitto silently drops anything larger. Applying a change to `mosquitto.conf` needs a full `podman compose down && podman compose up -d`, never a single-service restart.
 
 ### Poller smoke test
 

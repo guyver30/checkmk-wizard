@@ -5,7 +5,7 @@
 // Last write wins on save: no ETag, no merge.
 
 import { create } from "zustand";
-import { DEFAULT_STROKE, emptyDrawing, type Drawing, type Shape } from "../lib/mapDrawing";
+import { DEFAULT_STROKE, MAX_SHAPES, emptyDrawing, type Drawing, type Shape } from "../lib/mapDrawing";
 import { loadDrawing, saveDrawing } from "../lib/mapDrawingClient";
 
 export type DrawingTool = "none" | "select" | "rect" | "ellipse" | "line" | "text";
@@ -90,7 +90,13 @@ export const useMapDrawingStore = create<MapDrawingState>((set, get) => ({
   },
 
   addShape(shape) {
-    set((s) => ({ draft: [...s.draft, shape], dirty: true }));
+    // WR-07: sanitizeDrawing truncates to MAX_SHAPES on save, so shapes past the cap
+    // used to show as saved and then vanish on reload. Refuse the add with a visible reason.
+    set((s) =>
+      s.draft.length >= MAX_SHAPES
+        ? { saveError: `Drawing is full (${MAX_SHAPES} shapes); remove a shape first` }
+        : { draft: [...s.draft, shape], dirty: true },
+    );
   },
 
   updateShape(id, next) {

@@ -18,6 +18,8 @@ import {
   type TriageConfig,
 } from "../lib/triageMode";
 
+export const PUBLISH_TIMEOUT_MS = 5000;
+
 export interface TriageDeps {
   connectFn?: typeof mqtt.connect;
   loadConfig?: () => Promise<TriageConfig | null>;
@@ -69,7 +71,11 @@ export async function publishTriage(
     const active = client;
     const topic = siteTopic(getRuntimeConfig().checkmkSite, TRIAGE_TOPIC_CMD);
     return await new Promise<boolean>((resolve) => {
+      // IN-02: with reconnectPeriod 0 the publish callback may never fire, which would
+      // leave the caller waiting forever; give up after PUBLISH_TIMEOUT_MS.
+      const timer = setTimeout(() => resolve(false), PUBLISH_TIMEOUT_MS);
       active.publish(topic, JSON.stringify(cmd), { qos: 1, retain: false }, (err) => {
+        clearTimeout(timer);
         resolve(!err);
       });
     });

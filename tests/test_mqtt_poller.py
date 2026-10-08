@@ -4535,3 +4535,9 @@ def test_main_exits_2_on_invalid_cmk_site_id(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["mqtt_poller.py"])
     assert poller.main() == 2
     assert "CMK_SITE_ID" in capsys.readouterr().err
+
+
+def test_parse_admin_command_deeply_nested_is_malformed():
+    # WR-04: ~4000 '[' raised RecursionError instead of AdminCommandError.
+    with pytest.raises(poller.AdminCommandError):
+        poller.parse_admin_command(b"[" * 4000)
