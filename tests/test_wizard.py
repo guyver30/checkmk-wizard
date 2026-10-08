@@ -52,6 +52,7 @@ from checkmk_wizard.wizard import (
     _default_checkmk_host,
     _device_type_and_alias_attributes,
     _ensure_device_type_tag_group,
+    _ensure_systemd_inactive_crit_rule,
     _establish_ssh_access,
     _expected_open_ports_by_hostname,
     _format_device_type_legend,
@@ -3690,6 +3691,116 @@ async def test_create_service_discovery_rules_noop_when_empty():
         async with CheckmkClient(CONN) as client:
             await _create_service_discovery_rules(client, host, [])
     assert not rule_route.called
+
+
+_RULES_URL = f"{BASE}/domain-types/rule/collections/all"
+
+
+def _systemd_rule(folder="/", conditions=None, value_raw=None):
+    return {
+        "extensions": {
+            "folder": folder,
+            "conditions": conditions or {},
+            "value_raw": value_raw
+            or "{'states': {'active': 0, 'inactive': 2, 'failed': 2}, 'states_default': 2}",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_ensure_systemd_inactive_crit_rule_creates_global_rule():
+    # Regression test: a stopped monitored systemd service showed "inactive"
+    # but stayed OK, because Checkmk's default for "Systemd single service"
+    # maps inactive to OK -- so neither Checkmk, the dashboard nor analytics
+    # flagged it. One global rule with inactive = CRIT fixes it.
+    host = OnboardedHost(ip="10.0.0.40", hostname="web", folder="/vlan10", os_family="linux")
+    with respx.mock:
+        respx.get(_RULES_URL).mock(return_value=Response(200, json={"value": []}))
+        post = respx.post(_RULES_URL).mock(return_value=Response(200, json={"id": "r1"}))
+        async with CheckmkClient(CONN) as client:
+            await _ensure_systemd_inactive_crit_rule(client, host, ["cron"])
+
+    assert post.call_count == 1
+    body = json.loads(post.calls.last.request.content)
+    assert body["ruleset"] == "checkgroup_parameters:systemd_units_services"
+    assert body["folder"] == "/"
+    assert body["conditions"] == {}
+    assert json.loads(body["value_raw"]) == {
+        "states": {"active": 0, "inactive": 2, "failed": 2},
+        "states_default": 2,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value_raw",
+    [
+        '{"states": {"active": 0, "inactive": 2, "failed": 2}, "states_default": 2}',
+        "{'states': {'active': 0, 'inactive': 2, 'failed': 2}, 'states_default': 2}",
+    ],
+)
+async def test_ensure_systemd_inactive_crit_rule_skips_existing(value_raw):
+    host = OnboardedHost(ip="10.0.0.40", hostname="web", folder="/", os_family="linux")
+    with respx.mock:
+        respx.get(_RULES_URL).mock(
+            return_value=Response(200, json={"value": [_systemd_rule(value_raw=value_raw)]})
+        )
+        post = respx.post(_RULES_URL).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await _ensure_systemd_inactive_crit_rule(client, host, ["cron"])
+    assert not post.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rule",
+    [
+        _systemd_rule(conditions={"host_name": {"match_on": ["web"], "operator": "one_of"}}),
+        _systemd_rule(folder="/vlan10"),
+        _systemd_rule(value_raw="{'states': {'inactive': 0}}"),
+        _systemd_rule(value_raw="not a literal"),
+    ],
+)
+async def test_ensure_systemd_inactive_crit_rule_ignores_non_matching_rules(rule):
+    host = OnboardedHost(ip="10.0.0.40", hostname="web", folder="/", os_family="linux")
+    with respx.mock:
+        respx.get(_RULES_URL).mock(return_value=Response(200, json={"value": [rule]}))
+        post = respx.post(_RULES_URL).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await _ensure_systemd_inactive_crit_rule(client, host, ["cron"])
+    assert post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_systemd_inactive_crit_rule_warns_when_list_fails(capsys):
+    host = OnboardedHost(ip="10.0.0.40", hostname="web", folder="/", os_family="linux")
+    with respx.mock:
+        respx.get(_RULES_URL).mock(return_value=Response(500, text="boom"))
+        post = respx.post(_RULES_URL).mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await _ensure_systemd_inactive_crit_rule(client, host, ["cron"])
+    assert not post.called
+    assert "could not ensure the systemd inactive = CRIT rule" in " ".join(capsys.readouterr().out.split())
+
+
+@pytest.mark.asyncio
+async def test_ensure_systemd_inactive_crit_rule_warns_when_create_fails(capsys):
+    host = OnboardedHost(ip="10.0.0.40", hostname="web", folder="/", os_family="linux")
+    with respx.mock:
+        respx.get(_RULES_URL).mock(return_value=Response(200, json={"value": []}))
+        respx.post(_RULES_URL).mock(return_value=Response(400, json={"title": "bad"}))
+        async with CheckmkClient(CONN) as client:
+            await _ensure_systemd_inactive_crit_rule(client, host, ["cron"])
+    assert "could not ensure the systemd inactive = CRIT rule" in " ".join(capsys.readouterr().out.split())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("os_family,services", [("windows", ["svc"]), ("linux", [])])
+async def test_ensure_systemd_inactive_crit_rule_gated(os_family, services):
+    host = OnboardedHost(ip="10.0.0.40", hostname="h", folder="/", os_family=os_family)
+    with respx.mock:  # any unmocked request would raise
+        async with CheckmkClient(CONN) as client:
+            await _ensure_systemd_inactive_crit_rule(client, host, services)
 
 
 @pytest.mark.asyncio

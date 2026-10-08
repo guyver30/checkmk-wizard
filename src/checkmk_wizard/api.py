@@ -389,6 +389,26 @@ class CheckmkClient:
         resp = await self._request("POST", "/domain-types/rule/collections/all", json_body=body)
         return resp.json()
 
+    async def list_rules(self, ruleset_name: str) -> list[dict[str, Any]]:
+        """Return every rule of one ruleset (GET
+        /domain-types/rule/collections/all?ruleset_name=...).
+
+        Verified by reading the Checkmk 2.4.0 source on GitHub
+        (cmk/gui/openapi/endpoints/rule/__init__.py: `list_rules` takes the
+        `ruleset_name` query parameter and returns a collection whose `value`
+        list holds one rule object per rule; `_serialize_rule` puts
+        `extensions.folder` ("/" + folder path, so "/" for the main folder),
+        `extensions.conditions` (None-valued keys such as an unused
+        `host_name` are dropped) and `extensions.value_raw` (a Python-repr
+        string) on each). NOT live-verified against 2.4.0p35.
+        """
+        resp = await self._request(
+            "GET",
+            "/domain-types/rule/collections/all",
+            params={"ruleset_name": ruleset_name},
+        )
+        return resp.json().get("value", [])
+
     # -- Phase 2: host tag groups --------------------------------------------
 
     async def get_host_tag_group(self, group_id: str) -> httpx.Response:

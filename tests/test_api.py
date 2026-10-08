@@ -182,6 +182,26 @@ async def test_create_rule_sends_ruleset_folder_conditions():
 
 
 @pytest.mark.asyncio
+async def test_list_rules_sends_ruleset_name_and_returns_value():
+    with respx.mock:
+        route = respx.get(f"{BASE}/domain-types/rule/collections/all").mock(
+            return_value=Response(200, json={"value": [{"id": "r1"}]})
+        )
+        async with CheckmkClient(CONN) as client:
+            rules = await client.list_rules("checkgroup_parameters:systemd_units_services")
+    assert rules == [{"id": "r1"}]
+    assert route.calls.last.request.url.params["ruleset_name"] == "checkgroup_parameters:systemd_units_services"
+
+
+@pytest.mark.asyncio
+async def test_list_rules_empty_when_value_absent():
+    with respx.mock:
+        respx.get(f"{BASE}/domain-types/rule/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            assert await client.list_rules("x") == []
+
+
+@pytest.mark.asyncio
 async def test_list_folders_returns_value_array():
     with respx.mock:
         respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
