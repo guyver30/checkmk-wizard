@@ -318,6 +318,22 @@ minimum of 4 hours, and resets when the range or metric changes or the dialog is
 Markers and the today line outside the window are hidden. The pure domain math is in
 `src/lib/chartZoom.ts`.
 
+**CPU history charts.** (quick 261008-kr3, 2026-10-08) CPU utilization and CPU load are charted
+for history and levels only and are never forecast: a straight-line projection is noise for values
+that swing hour to hour. The History button under the CPU gauge in host details opens utilization
+(measured line plus warn and crit lines; the levels are the device's Checkmk levels, falling back
+to the analytics fallback levels when Checkmk has none). The History button under the Load gauge
+opens the 1, 5 and 15 minute load averages with the absolute warn and crit levels (per-core level
+times CPU count, computed by the poller). Both use the same 14/30/90 day range selector and the same
+zoom and pan as the forecast chart. Utilization entries are no longer listed under Trends, and any
+utilization chart entry (a need row, a Trends entry added through `TREND_NEED_METRICS`) lands on the
+history view; analytics still publishes the utilization fit and the dashboard ignores it. Data is
+read from `history.metrics` rows, service "CPU load" metrics `load1`, `load5`, `load15` and service
+"CPU utilization" metric `util`, with one `/ch-api/` query per series. Files:
+`src/components/HistoryChart.tsx`, `src/components/MetricHistoryDialog.tsx`,
+`src/hooks/useChartZoom.ts`, `src/lib/historyCharts.ts`. No poller, analytics, ClickHouse or nginx
+change is needed.
+
 Deploying this change needs a rebuild of the image, `podman compose build dashboard`, then a full
 `podman compose down && podman compose up -d` on the deploy host; restarting a single container
 breaks Checkmk egress.
