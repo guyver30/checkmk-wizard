@@ -249,7 +249,7 @@ describe("TopologyMap", () => {
     expect(instances[0].options.edges).toMatchObject({ arrows: "to" });
   });
 
-  it("adds a node with a saved map_position at its exact x/y with physics false", () => {
+  it("adds a node with a saved map_position at its exact x/y", () => {
     const topologyDevices = [{ id: "h1", parents: [], map_position: "300,40" }];
     renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) } });
     const nodes = instances[0].data.nodes as unknown as {
@@ -258,7 +258,7 @@ describe("TopologyMap", () => {
     const item = nodes.get("h1");
     expect(item.x).toBe(300);
     expect(item.y).toBe(40);
-    expect(item.physics).toBe(false);
+    expect(item.physics).toBeUndefined();
   });
 
   it("gives an unsaved node its withGridPositions coordinates without a physics key", () => {
@@ -273,13 +273,37 @@ describe("TopologyMap", () => {
     expect(item.physics).toBeUndefined();
   });
 
-  it("calls setOptions with physics false when the fake emits stabilizationIterationsDone", () => {
-    const topologyDevices = [{ id: "h1", parents: [] }];
-    renderMap({ topologyDevices, statuses: { h1: device({ id: "h1" }) } });
+  // Regression (operator report 2026-10-08): dragging one host on the topology map reflowed the
+  // other hosts. Physics was only switched off on stabilizationIterationsDone, and nodes with no
+  // saved position had no per-node freeze, so they could still be pushed around. Physics is now
+  // false in the constructor options and never re-enabled; every node keeps its explicit x/y.
+  it("constructs the Network with physics false and never re-enables it", () => {
+    const topologyDevices = [
+      { id: "h1", parents: [], map_position: "300,40" },
+      { id: "h2", parents: [] },
+    ];
+    const statuses = { h1: device({ id: "h1" }), h2: device({ id: "h2" }) };
+    const { rerender } = renderMap({ topologyDevices, statuses });
+    expect(instances[0].options.physics).toBe(false);
+
+    const nodes = instances[0].data.nodes as unknown as {
+      get: (id: string) => { x: number; y: number };
+    };
+    const before = { h1: { ...nodes.get("h1") }, h2: { ...nodes.get("h2") } };
+
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: true });
+    rerenderMap(rerender, { topologyDevices, statuses, editMode: false });
     act(() => {
       instances[0].emit("stabilizationIterationsDone");
     });
-    expect(instances[0].setOptionsCalls).toContainEqual({ physics: false });
+
+    for (const call of instances[0].setOptionsCalls) {
+      if ("physics" in call) expect(call.physics).toBe(false);
+    }
+    expect(instances[0].options.physics).toBe(false);
+    expect(nodes.get("h1")).toMatchObject({ x: before.h1.x, y: before.h1.y });
+    expect(nodes.get("h2")).toMatchObject({ x: before.h2.x, y: before.h2.y });
+    expect(nodes.get("h1")).toMatchObject({ x: 300, y: 40 });
   });
 
   it("zoom in/out step the scale by 1.25x and fit frames the whole map (zoom controls)", () => {
@@ -1236,7 +1260,6 @@ describe("TopologyMap edit mode", () => {
         id: "sw-lobby",
         label: "sw-lobby",
         title: "Unmanaged switch (not monitored)",
-        physics: false,
       }),
     );
     expect(onEditSaved).toHaveBeenCalledTimes(1);

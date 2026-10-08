@@ -1,5 +1,5 @@
 // Renders useAppStore's `topology` slot as a live, editable vis-network graph. Mounts the
-// vis-network Network exactly once (physics stabilizes then freezes on first load) and merges
+// vis-network Network exactly once (physics off; every node is placed at an explicit x/y) and merges
 // every subsequent topology/status change into the existing node/edge DataSets via
 // `.update()`/`.add()`/`.remove()` -- the whole-graph-replacement Network method is never called.
 //
@@ -250,7 +250,7 @@ function drawTierMarkers(
   ctx.restore();
 }
 
-// 13-UI-SPEC.md "Topology Map Rendering" -- node/edge/physics/interaction options, locked.
+// 13-UI-SPEC.md "Topology Map Rendering" -- node/edge/interaction options, locked (physics deliberately off, see below).
 const NETWORK_OPTIONS = {
   nodes: {
     shape: "circularImage",
@@ -262,7 +262,11 @@ const NETWORK_OPTIONS = {
     color: { color: "#96969f", highlight: "#1450f5", hover: "#1450f5" },
     width: 1,
   },
-  physics: { stabilization: { iterations: 200 } },
+  // Fixed 2026-10-08: physics used to run until the first layout settled and was then
+  // switched off; nodes with no saved position had no per-node freeze, so dragging one host could shove
+  // others. Every node is placed explicitly (withGridPositions, addNode x/y), so physics is off
+  // from construction and a placed host only moves when it is itself dragged.
+  physics: false,
   interaction: { dragNodes: false, hover: true },
   manipulation: { enabled: false },
   layout: { randomSeed: 1 },
@@ -537,7 +541,6 @@ export function TopologyMap({
         id: name,
         label: name,
         title: UNMANAGED_SWITCH_TITLE,
-        physics: false,
         x,
         y,
         ...nodeVisual("NetworkDevice", "PEND"),
@@ -567,10 +570,6 @@ export function TopologyMap({
     const nodes = new DataSet<Record<string, unknown>>([]);
     const edges = new DataSet<Record<string, unknown>>([]);
     const network = new Network(container, { nodes, edges }, NETWORK_OPTIONS);
-
-    network.once("stabilizationIterationsDone", () => {
-      network.setOptions({ physics: false });
-    });
 
     // D-01: registered unconditionally (not gated on editMode) so the grid is always visible,
     // in both read-only and edit mode.
@@ -645,8 +644,8 @@ export function TopologyMap({
     // Position persistence: a drag only ever writes while edit mode is on. The dropped position
     // is snapped to the grid before the write, so saved map_position labels are always on-grid;
     // a node placed from an existing off-grid saved label is left alone until it is next dragged
-    // (D-02 -- no migration, no snapping on load/sync). A successful write freezes that node's
-    // physics so later syncs never move it again.
+    // (D-02 -- no migration, no snapping on load/sync). A successful write reports via
+    // onEditSaved; physics is off globally, so nothing else ever moves the node.
     network.on("dragEnd", (params: { nodes: string[] }) => {
       if (!editModeRef.current) {
         return;
@@ -662,7 +661,6 @@ export function TopologyMap({
         nodesRef.current?.update({ id, x, y });
         setMapPosition(id, x, y)
           .then(() => {
-            nodesRef.current?.update({ id, physics: false });
             onEditSavedRef.current?.();
           })
           .catch(() => {
@@ -774,7 +772,6 @@ export function TopologyMap({
           ...nodeBaseFields(node, admin),
           x: node.x,
           y: node.y,
-          ...(node.saved ? { physics: false } : {}),
         });
       }
     }
