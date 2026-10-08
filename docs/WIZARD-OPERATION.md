@@ -22,6 +22,14 @@ host check rule and fakes the hosts UP after activation (see those sections).
 `deploy/run-wizard.sh` forwards its arguments, so `deploy/run-wizard.sh --demo`
 works in container mode.
 
+`checkmk-wizard --manage` (added 2026-10-08) selects "Manage existing hosts
+only" from the main menu without showing the menu (see "Main menu" below);
+`deploy/run-wizard.sh --manage` works too, since arguments are forwarded.
+`--demo` also skips the menu and onboards (demo hosts do not exist yet, so
+there is nothing to manage). `--demo --manage` is rejected with an argparse
+error (exit status 2), so the demo always-up host-check rule can never be
+applied to real hosts.
+
 Host-native:
 
 ```bash
@@ -49,13 +57,23 @@ resume/checkpoint support**:
 ```
 phase1_site_bringup()
   → CheckmkClient context manager opens
-  → phase2_folders()
-  → phase3_discovery()
-  → phase4_classification()
-  → manage_existing_host_services()  (optional, default No; its hosts go to phase6 only)
-  → phase5_onboarding()
-  → phase6_discovery()
-  → phase7_activation()
+  → _provision_topology_editor()
+  → _prompt_main_menu()   (skipped by --manage / --demo)
+      "onboard" (default):
+        → phase2_folders()
+        → phase3_discovery()
+        → phase4_classification()
+        → manage_existing_host_services()  (optional, default No; its hosts go to phase6 only)
+        → phase5_onboarding()
+        → phase6_discovery()
+        → phase7_activation()
+      "manage":
+        → _manage_existing_hosts()
+            = _ensure_device_type_tag_group()
+            → _retag_existing_hosts(promoting=[], default_yes=True)
+            → manage_existing_host_services(default_yes=True)
+        → phase6_discovery()  (only for the service hosts, only if any)
+        → phase7_activation([])
   → CheckmkClient context manager closes
 ```
 
@@ -66,7 +84,8 @@ Checkmk are simply re-detected or re-created).
 
 ### Leaving the wizard early (Esc)
 
-Pressing Esc (or Ctrl+C) at any prompt in Phases 1-4 ends the run through a
+Pressing Esc (or Ctrl+C) at the main menu, at any prompt in Phases 1-4, or at
+any prompt of "Manage existing hosts only" ends the run through a
 single `WizardAborted` exception. `main()` installs `_abortable_ask_async` in
 place of `questionary.Question.ask_async`, so no prompt call site checks for a
 `None` answer. prompt_toolkit waits a short escape-sequence timeout before it
@@ -99,6 +118,9 @@ It logs in as `cmkadmin`, reusing the password from Phase 1 when this run
 collected it and prompting for it otherwise (blank means Leave). On any
 failure the wizard prints the reason and the manual path Setup > Activate
 changes > Revert changes. This path is not yet live-verified on 2.4.0p35.
+
+Esc in the manage-only flow gets the same Apply / Revert / Leave handling and is
+never disabled, because that flow changes no remote hosts.
 
 From the start of Phase 5 Esc is disabled, and the wizard prints a note saying
 so. Phase 5 changes remote hosts over SSH, which no Checkmk revert can undo.
@@ -702,6 +724,34 @@ scoped `topology_editor` Checkmk role and user
   vars) and does the same create-or-rotate, for provisioning without
   running the whole wizard.
 
+## Main menu (after Phase 1, added 2026-10-08)
+
+After Phase 1 and the topology editor provisioning the wizard asks "What do
+you want to do?" (`_prompt_main_menu`). Not yet live-verified.
+
+1. **Onboard new hosts** (default; Enter selects it): today's flow, Phases 2-7.
+   It still includes the bulk device-type/alias screen inside Phase 4 and the
+   "Manage monitored services on existing hosts" step after it, which is why
+   there is no "both" option.
+2. **Manage existing hosts only** (also `--manage`): no folders, scan,
+   promotion or onboarding. In order: ensure the `device_type` tag group; the
+   bulk device-type/alias screen for all existing hosts; the services step;
+   Phase 6 rediscovery for the hosts whose services changed (skipped if
+   none); Phase 7 with no new hosts, which still activates pending changes,
+   prints the state table of every host on the site and writes the snapshot.
+
+Defaults in option 2: because the operator explicitly chose to manage
+existing hosts, the retag screen's first question ("Do that now?") and the
+services step's opt-in confirm default to **Yes**. In option 1 both keep
+their default No (`default_yes=False`).
+
+If the site has no hosts, option 2 prints that and returns without retag,
+services, Phase 6 or Phase 7.
+
+What the wizard cannot change on an existing host: hostname, IP address,
+folder, monitoring method, SNMP community and expected-open ports. They are set
+at promotion; change them in the Checkmk GUI (Setup > Hosts).
+
 ## Phase 2 — Folder Structure (`phase2_folders` at `wizard.py:1621`; `_network_scan_attributes` at `wizard.py:800`; `_top_level_folder_names` at `wizard.py:833`; `_network_scan_summary` at `wizard.py:857`; `_prompt_folder_subnet` at `wizard.py:1516`; `_configure_existing_folder` at `wizard.py:1543`)
 
 **Changed 2026-10-08: existing folders are listed and reusable.** Phase 2
@@ -909,6 +959,9 @@ folder-subnet scan found it (`/` for the flat-fallback case).
 
 ### Bulk device-type screen (added 2026-09-12, TAG-04; moved 2026-09-25)
 
+Since 2026-10-08 this screen is also reachable directly via "Manage existing
+hosts only" / `--manage` (see "Main menu").
+
 **Changed 2026-09-25: this screen is now the one place device types are
 assigned, and it runs *after* the per-host promotion prompts.** Promotion
 still asks hostname, monitoring method, SNMP details, expected-open ports and
@@ -1060,6 +1113,10 @@ listing hosts warns and returns. Nothing here aborts the wizard run.
    `os_family` is one of `"linux"`, `"windows"`, `"snmp"`, or `"ping"`.
 
 ## Manage monitored services on existing hosts (optional, between Phase 4 and Phase 5)
+
+Since 2026-10-08 this step is also reachable directly via "Manage existing
+hosts only" / `--manage` (see "Main menu"); there its opt-in prompt defaults
+to Yes.
 
 `manage_existing_host_services()` is an opt-in step (not a numbered phase)
 that adds or removes monitored systemd services on hosts that are already in
