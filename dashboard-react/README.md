@@ -309,6 +309,15 @@ Triage menu (Downgrade, Upgrade to immediate, Cancel need) in every mode: normal
 and edit mode. The header has a tier filter and "Updated hh:mm", which becomes "Stale, last update
 hh:mm" after 45 minutes and "Reconnecting" (rows dimmed) while the broker connection is down.
 
+**Forecast chart zoom.** (quick 261008-d9k, 2026-10-08) The forecast chart's time axis zooms; the
+y axis rescales to what is inside the window. The mouse wheel zooms at the pointer without
+scrolling the dialog, dragging pans, and double-click, the Reset button or the 0 key return to the
+full view. The + and - buttons and keys also zoom. Plain Left/Right still step the crosshair (the
+window follows it) and Shift+Left/Right pan. Zoom is limited to the full range shown before and a
+minimum of 4 hours, and resets when the range or metric changes or the dialog is reopened.
+Markers and the today line outside the window are hidden. The pure domain math is in
+`src/lib/chartZoom.ts`.
+
 Deploying this change needs a rebuild of the image, `podman compose build dashboard`, then a full
 `podman compose down && podman compose up -d` on the deploy host; restarting a single container
 breaks Checkmk egress.
