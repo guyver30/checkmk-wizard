@@ -61,6 +61,7 @@ from checkmk_wizard.wizard import (
     _looks_loopback,
     _missing_expected_services,
     _network_scan_attributes,
+    _network_scan_summary,
     _password_problems,
     _ping_only_hostnames,
     _print_linux_manual,
@@ -70,6 +71,7 @@ from checkmk_wizard.wizard import (
     _prompt_threshold_levels,
     _resolve_agent_registration_server,
     _pending_hosts,
+    _top_level_folder_names,
     _provision_topology_editor,
     _retag_existing_hosts,
     _retaggable_hosts,
@@ -1439,7 +1441,41 @@ def test_network_scan_attributes_ipv4(cidr, expected_network):
     scan = attrs["network_scan"]
     assert scan["addresses"] == [{"type": "network_range", "network": expected_network}]
     assert scan["time_allowed"] == [{"start": "00:00", "end": "23:59"}]
-    assert scan["tag_criticality"] == "offline"
+    assert scan["scan_interval"] == 86400
+    # Regression (2026-10-08): "offline" left every scan-found host
+    # unmonitored until someone re-ran the wizard; "prod" monitors them at once.
+    assert scan["tag_criticality"] == "prod"
+
+
+def test_pending_hosts_includes_prod_scan_host():
+    # Scan-found hosts are now prod (monitored); they must still be offered
+    # for promotion, so _pending_hosts must not key on tag_criticality.
+    hosts = [_host("10.0.0.5", "10.0.0.5", folder="/vlan10", tag_criticality="prod")]
+    assert [(p.ip, p.folder) for p in _pending_hosts(hosts)] == [("10.0.0.5", "/vlan10")]
+
+
+def test_top_level_folder_names():
+    folders = [
+        {"id": "~"},
+        {"id": "~vlan10"},
+        {"id": "~a~b"},
+        {"id": "x", "extensions": {"path": "/vlan20"}},
+        {"id": "~bad name"},
+        {"id": "~vlan10"},
+    ]
+    assert _top_level_folder_names(folders) == ["vlan10", "vlan20"]
+
+
+def test_network_scan_summary_renders_and_tolerates_missing_keys():
+    scan = {
+        "addresses": [{"type": "network_range", "network": "10.0.0.0/24"}, {"type": "ip_list", "addresses": ["1.2.3.4"]}],
+        "scan_interval": 3600,
+        "tag_criticality": "offline",
+    }
+    summary = _network_scan_summary(scan)
+    assert "10.0.0.0/24" in summary and "every 3600s" in summary and "criticality offline" in summary
+    assert "ip_list" in summary
+    assert _network_scan_summary({}) == "no addresses"
 
 
 def test_network_scan_attributes_ipv6_unsupported():
@@ -1462,6 +1498,9 @@ async def test_phase2_folders_configures_network_scan(monkeypatch):
 
     with respx.mock:
         respx.get(f"{BASE}/objects/host_tag_group/device_type").mock(return_value=Response(200, json={}))
+        respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"value": []})
+        )
         create_route = respx.post(f"{BASE}/domain-types/folder_config/collections/all").mock(
             return_value=Response(200, json={"id": "~vlan10"})
         )
@@ -1476,7 +1515,8 @@ async def test_phase2_folders_configures_network_scan(monkeypatch):
     assert update_route.called
     assert update_route.calls.last.request.headers["If-Match"] == "etag1"
     sent = json.loads(update_route.calls.last.request.content)
-    assert sent["update_attributes"]["network_scan"]["tag_criticality"] == "offline"
+    # Regression: scan-found hosts used to be left unmonitored ("offline").
+    assert sent["update_attributes"]["network_scan"]["tag_criticality"] == "prod"
     # Every host landing in this folder — including one the live Network
     # Scan creates on its own, outside this wizard's control — must
     # inherit inert defaults rather than Checkmk's implicit "cmk-agent".
@@ -1497,6 +1537,9 @@ async def test_phase2_folders_skips_network_scan_without_subnet(monkeypatch):
 
     with respx.mock:
         respx.get(f"{BASE}/objects/host_tag_group/device_type").mock(return_value=Response(200, json={}))
+        respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"value": []})
+        )
         respx.post(f"{BASE}/domain-types/folder_config/collections/all").mock(
             return_value=Response(200, json={"id": "~vlan10"})
         )
@@ -1523,6 +1566,9 @@ async def test_phase2_folders_network_scan_failure_does_not_lose_folder(monkeypa
 
     with respx.mock:
         respx.get(f"{BASE}/objects/host_tag_group/device_type").mock(return_value=Response(200, json={}))
+        respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"value": []})
+        )
         respx.post(f"{BASE}/domain-types/folder_config/collections/all").mock(
             return_value=Response(200, json={"id": "~vlan10"})
         )
@@ -1716,6 +1762,9 @@ async def test_phase2_folders_reaches_tag_group_check_when_folders_declined(monk
     with respx.mock:
         tag_group_route = respx.get(f"{BASE}/objects/host_tag_group/{DEVICE_TYPE_TAG_GROUP_ID}").mock(
             return_value=Response(200, json={"id": DEVICE_TYPE_TAG_GROUP_ID})
+        )
+        respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
+            return_value=Response(200, json={"value": []})
         )
         async with CheckmkClient(CONN) as client:
             result = await phase2_folders(client)

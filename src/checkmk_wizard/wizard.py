@@ -788,6 +788,15 @@ async def phase1_site_bringup() -> CheckmkConnection:
 # ── Phase 2: Folder structure (optional) ────────────────────────────────
 
 
+# Criticality tag id for "Productive system": a host the folder's network
+# scan finds with this criticality is monitored straight away, whereas
+# Checkmk's default ("Set criticality" left empty) leaves it unmonitored in
+# host administration (docs.checkmk.com hosts_setup, "Performing a network
+# scan for folders > Setting up a network scan", via context7
+# /websites/checkmk_2_3_0_en). Not live-verified on this machine.
+_SCAN_CRITICALITY_MONITORED = "prod"
+
+
 def _network_scan_attributes(cidr: str) -> dict[str, Any] | None:
     """Folder attribute payload that turns on Checkmk's own built-in
     per-folder Network Scan — a background cronjob Checkmk itself runs
@@ -796,10 +805,15 @@ def _network_scan_attributes(cidr: str) -> dict[str, Any] | None:
     re-running the wizard. Live-verified against a real Checkmk 2.4.0p35
     CE site: only creates hosts for IPs not already configured anywhere on
     the site, so it doesn't duplicate or touch hosts already onboarded.
-    `tag_criticality="offline"` ("Do not monitor this host") so newly
-    found hosts land in host administration unmonitored, for manual
-    review/classification — mirrors Phase 3/4's own stage-then-promote
-    flow instead of auto-monitoring unclassified hosts.
+    `tag_criticality="prod"` ("Productive system") so found hosts are
+    monitored straight away. They inherit the folder's no-agent/no-snmp
+    (so ping only) and the device_type "other" (the first value in
+    device_types.json, which Checkmk uses for an untagged host, enforced by
+    `_load_device_types`); a re-run of the wizard still offers them for
+    promotion/retagging in Phase 4.
+    2026-10-08: the previous value "offline" left every scan-found host
+    unmonitored and invisible on the dashboard until someone re-ran the
+    wizard.
     Returns None for a non-IPv4 network — Checkmk's network_scan
     `addresses` field is IPv4-only.
     """
@@ -811,9 +825,51 @@ def _network_scan_attributes(cidr: str) -> dict[str, Any] | None:
             "addresses": [{"type": "network_range", "network": str(network)}],
             "time_allowed": [{"start": "00:00", "end": "23:59"}],
             "scan_interval": 86400,
-            "tag_criticality": "offline",
+            "tag_criticality": _SCAN_CRITICALITY_MONITORED,
         }
     }
+
+
+def _top_level_folder_names(folders: list[dict[str, Any]]) -> list[str]:
+    """Names of the site's top-level folders from a folder_config listing.
+
+    Prefers `extensions.path` ("/vlan10") when it is a string, else derives
+    the path from the REST id by turning "~" into "/" (root-level folder id
+    is "~" + name, live-verified; the root is "~"). Root, nested folders
+    (`_FOLDER_NAME_RE` forbids "/") and names failing `_FOLDER_NAME_RE` are
+    dropped; order is kept and duplicates removed. The `extensions.path`
+    shape follows the Checkmk folder object convention and is NOT
+    live-verified on this machine, hence the id fallback.
+    """
+    names: list[str] = []
+    for folder in folders:
+        path = (folder.get("extensions") or {}).get("path")
+        if not isinstance(path, str):
+            path = str(folder.get("id") or "").replace("~", "/")
+        name = path.lstrip("/")
+        if not name or "/" in name or not _FOLDER_NAME_RE.match(name):
+            continue
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _network_scan_summary(scan: dict[str, Any]) -> str:
+    """One-line description of a folder's network_scan for display, e.g.
+    "192.168.10.0/24, every 86400s, criticality offline". Tolerates missing
+    keys."""
+    addresses: list[str] = []
+    for entry in scan.get("addresses") or []:
+        if isinstance(entry, dict) and entry.get("type") == "network_range" and "network" in entry:
+            addresses.append(str(entry["network"]))
+        else:
+            addresses.append(str(entry))
+    parts = [", ".join(addresses) if addresses else "no addresses"]
+    if scan.get("scan_interval") is not None:
+        parts.append(f"every {scan['scan_interval']}s")
+    if scan.get("tag_criticality") is not None:
+        parts.append(f"criticality {scan['tag_criticality']}")
+    return ", ".join(parts)
 
 
 def _load_device_types() -> list[str]:
@@ -1554,7 +1610,8 @@ async def phase2_folders(client: CheckmkClient) -> tuple[dict[str, str | None], 
                         await client.update_folder_attributes(name, scan_attrs, etag)
                         console.print(
                             f"  [green]network scan configured[/green] on /{name} — Checkmk will keep "
-                            f"re-scanning {cidr} (~daily) for new hosts, added unmonitored for review"
+                            f"re-scanning {cidr} (~daily) for new hosts, monitored as device type 'other' "
+                            "(ping only); re-run the wizard to promote or retag them"
                         )
                 except CheckmkAPIError as exc:
                     console.print(f"  [yellow]could not configure network scan on /{name}: {exc}[/yellow]")
@@ -1723,7 +1780,8 @@ async def phase3_discovery(
     if pending:
         console.print(
             f"[bold]{len(pending)} unpromoted host(s) already in Checkmk[/bold] (left by an earlier "
-            "run or found by a folder's daily network scan) — they will be offered for promotion in Phase 4."
+            "run, or found by a folder's daily network scan and already monitored as device type "
+            "'other') — Phase 4 offers them for promotion/retagging."
         )
 
     if demo:
