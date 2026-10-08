@@ -2144,7 +2144,7 @@ async def _create_demo_host_check_rule(client: CheckmkClient, hostnames: list[st
     return True
 
 
-_DEFAULT_CPU_LOAD_LEVELS = (5.0, 10.0)  # per core
+_DEFAULT_CPU_LOAD_LEVELS = (1.5, 2.0)  # per core
 _DEFAULT_CPU_UTILIZATION_LEVELS = (80.0, 90.0)  # percent, averaged over one check interval (~1 minute)
 _DEFAULT_MEMORY_LEVELS = (80.0, 90.0)  # percent RAM used
 _DEFAULT_FILESYSTEM_LEVELS = (80.0, 90.0)  # percent used
@@ -2172,6 +2172,12 @@ async def _create_threshold_rules(client: CheckmkClient) -> None:
     it applies wherever the matching service exists across every current
     and future host — a host without that service (e.g. a ping-only or
     SNMP-only host) is simply unaffected, so scoping isn't needed.
+
+    Not idempotent: `client.create_rule` always POSTs a new rule, so
+    re-running this step on an existing site appends a duplicate rule in
+    the root folder. Checkmk evaluates rules in order and the older rule
+    keeps winning for the same keys, so the new values would not take
+    effect; existing sites should edit the existing rule in Checkmk instead.
 
     `value_raw` here can't be plain JSON like the other rule-creation
     helpers in this file: live-verified against a real Checkmk 2.4.0p35 CE
