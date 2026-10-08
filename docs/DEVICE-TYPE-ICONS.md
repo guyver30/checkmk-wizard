@@ -11,7 +11,7 @@ files you drop into a folder — there is no code to edit.
 | Icon files, one per device type | `dashboard-react/src/assets/icons/device-types/<device_type>.svg` |
 | Code that loads them (no edit needed) | `dashboard-react/src/lib/mapIcons.ts` |
 
-Current types: `other`, `E-link`, `ACS`, `Multimedia`, `NetworkDevice`, `GroupController`.
+Current types: `other`, `E-link`, `ACS`, `Multimedia`, `NetworkDevice`, `GroupController`, `DOP`.
 
 ## The rule
 
