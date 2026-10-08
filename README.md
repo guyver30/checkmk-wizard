@@ -209,7 +209,8 @@ checked.
 
 ### Leaving early (Esc)
 
-Press Esc (or Ctrl+C) at any prompt in Phases 1-4 to abort. The wizard lists the
+Press Esc (or Ctrl+C) at any prompt in Phases 1-4 (and the optional "Manage
+monitored services on existing hosts" step that follows Phase 4) to abort. The wizard lists the
 site's pending (not yet activated) changes, marks other users' changes, and
 asks whether to apply them, revert them (discards ALL pending changes on the
 site, via the Checkmk GUI's "Revert changes"), or leave them pending. From
