@@ -122,3 +122,10 @@ def test_override_integrates_with_tracker():
     triage, _ = apply_triage(need, parse_triage_command(_payload(need_id=need.id)), NOW)
     tracker.apply_override(need.id, triage)
     assert tracker.get(need.id).tier == "urgent"
+
+
+def test_deeply_nested_json_is_malformed_not_recursion_error():
+    # WR-04: ~4000 '[' fit under MAX_COMMAND_BYTES and made json.loads raise
+    # RecursionError, which escaped as a traceback per message.
+    with pytest.raises(TriageCommandError):
+        parse_triage_command(b"[" * 4000)

@@ -491,3 +491,26 @@ def test_tracker_missed_count_unchanged_by_unevaluated_ticks():
         assert tomb == []
     _, tomb = tracker.update([], NOW)
     assert tomb == [need.id]
+
+
+def test_carry_triage_downgrade_clamped_to_improved_computed_tier():
+    # WR-02: a downgrade immediate->urgent stayed "urgent" after the computed tier
+    # improved to "standard", showing the need above what the data says.
+    prev = make_need(tier="urgent", computed_tier="immediate", triage=_triage("downgrade", "urgent", "immediate"))
+    new, audit = rules.carry_triage(prev, make_need(tier="standard"))
+    assert audit is None
+    assert new.triage == prev.triage
+    assert new.tier == "standard"
+    still, _ = rules.carry_triage(prev, make_need(tier="immediate"))
+    assert still.tier == "urgent"
+
+
+def test_apply_override_downgrade_never_more_urgent_than_computed():
+    # WR-02: same clamp in NeedTracker.apply_override.
+    tracker = rules.NeedTracker(rules.RuleParams())
+    need = make_need(tier="standard")
+    tracker.restore([need])
+    tracker.apply_override(need.id, _triage("downgrade", "urgent", "immediate"))
+    assert tracker.get(need.id).tier == "standard"
+    tracker.apply_override(need.id, _triage("upgrade", "immediate", "standard"))
+    assert tracker.get(need.id).tier == "immediate"

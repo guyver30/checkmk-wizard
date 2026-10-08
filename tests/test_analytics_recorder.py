@@ -121,3 +121,8 @@ def test_seeded_unchanged_status_not_rewritten():
     rec.seed_open([_seed_row()])
     incident = {**INCIDENT, "dependents": []}
     assert rec.on_status("inc-1", incident, NOW, "high") is None
+
+
+def test_deeply_nested_events_payload_yields_no_rows():
+    # WR-04: deep nesting raised RecursionError out of json.loads instead of returning [].
+    assert EventRecorder(set()).new_rows(b"[" * 4000) == []

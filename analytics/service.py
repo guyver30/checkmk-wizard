@@ -73,6 +73,7 @@ from analytics.topics import (
     site_topic,
 )
 from analytics.triage import (
+    MAX_COMMAND_BYTES,
     TriageCommandError,
     apply_triage,
     audit_row,
@@ -80,6 +81,10 @@ from analytics.triage import (
 )
 
 _logger = logging.getLogger("analytics.service")
+
+# Bound on queued inbound MQTT messages (WR-03); beyond it messages are dropped, not buffered.
+_QUEUE_MAX = 10000
+_QUEUE_WARN_INTERVAL_SECONDS = 60.0
 
 # Relative input filters (subscribed under the site prefix, QoS 1).
 INPUT_FILTERS = (
@@ -187,7 +192,7 @@ def iso_utc(moment: datetime) -> str:
 def _load_json(payload: bytes) -> object:
     try:
         return json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):  # deep nesting raises RecursionError (WR-04)
         return None
 
 
@@ -259,6 +264,7 @@ class AnalyticsService:
         # Async dispatch (set by start()); None means handle inline (tests).
         self._queue: queue.Queue | None = None
         self._worker: threading.Thread | None = None
+        self._last_queue_full_warning = float("-inf")
 
     # --- MQTT wiring ------------------------------------------------------
 
@@ -266,7 +272,7 @@ class AnalyticsService:
         """Seed from history, connect, restore state from retained topics, reconcile."""
         self._seed_from_history()
         self.client = (self._client_factory or build_client)(self)
-        self._queue = queue.Queue()
+        self._queue = queue.Queue(maxsize=_QUEUE_MAX)
         self._worker = threading.Thread(target=self._work, name="analytics-dispatch", daemon=True)
         self._worker.start()
         self.client.loop_start()
@@ -275,7 +281,7 @@ class AnalyticsService:
 
     def stop(self) -> None:
         if self._queue is not None:
-            self._queue.put(_STOP)
+            self._queue.put(_STOP, timeout=5)
             if self._worker is not None:
                 self._worker.join(timeout=10)
         if self.client is not None:
@@ -288,8 +294,19 @@ class AnalyticsService:
             client.subscribe(site_topic(topic_filter), qos=1)
 
     def on_message(self, client, userdata, msg) -> None:
+        # WR-03: oversized triage payloads are dropped before queueing; parse_triage_command
+        # would reject them anyway, but only after they had taken a queue slot.
+        if relative_topic(msg.topic) == TRIAGE_CMD_TOPIC and len(msg.payload or b"") > MAX_COMMAND_BYTES:
+            _logger.debug("Dropping oversized triage payload (%d bytes)", len(msg.payload))
+            return
         if self._queue is not None:
-            self._queue.put(msg)
+            try:
+                self._queue.put_nowait(msg)
+            except queue.Full:
+                moment = time.monotonic()
+                if moment - self._last_queue_full_warning >= _QUEUE_WARN_INTERVAL_SECONDS:
+                    self._last_queue_full_warning = moment
+                    _logger.warning("Inbound queue full (%d); dropping messages", _QUEUE_MAX)
         else:
             self.handle_message(msg)
 
@@ -445,13 +462,15 @@ class AnalyticsService:
     def publish_need(self, need: Need, now: datetime) -> None:
         stamped = replace(need, generated_at=iso_utc(now))
         payload = stamped.to_payload()
-        publish_retained_json(self.client, need_status_topic(need.id), payload)
-        self._need_sigs[need.id] = {k: v for k, v in payload.items() if k != "generated_at"}
+        with self.lock:  # _need_sigs is written from both the worker and the main thread (WR-01)
+            publish_retained_json(self.client, need_status_topic(need.id), payload)
+            self._need_sigs[need.id] = {k: v for k, v in payload.items() if k != "generated_at"}
 
     def _need_changed(self, need: Need) -> bool:
         payload = replace(need, generated_at="").to_payload()
         payload.pop("generated_at", None)
-        return self._need_sigs.get(need.id) != payload
+        with self.lock:
+            return self._need_sigs.get(need.id) != payload
 
     def _on_triage(self, payload: bytes, retained: bool) -> None:
         if retained:
@@ -469,13 +488,25 @@ class AnalyticsService:
                 _logger.warning("Ignoring triage command %s: unknown need %s", cmd.id, cmd.need_id)
                 return
             triage, row = apply_triage(need, cmd, now)
-        # Audit first, then republish: the record must exist before the change is visible.
-        self._insert("history.need_triage", [row])
-        with self.lock:
             self.tracker.apply_override(cmd.need_id, triage)
             updated = self.tracker.get(cmd.need_id)
-        if updated is not None:
-            self.publish_need(updated, now)
+            computed_tier = need.computed_tier
+            if updated is not None:
+                self.publish_need(updated, now)
+        # Bug fixed 2026-10-08 (WR-01): the old code released the lock, did the blocking
+        # ClickHouse audit insert (up to 5 s) and only then applied the override in a second
+        # lock window. In that gap run_cycle could tombstone the need (the audit row then
+        # claimed a change that never happened) or auto-reset it (the stale override was
+        # re-applied), and the two threads wrote _need_sigs unlocked. Now the override is
+        # applied and published in one window; the audit runs after, outside the lock, and
+        # is skipped when the need vanished or its computed tier moved since the apply.
+        with self.lock:
+            current = self.tracker.get(cmd.need_id)
+            unchanged = current is not None and current.computed_tier == computed_tier
+        if not unchanged:
+            _logger.warning("Skipping audit for triage command %s: need %s changed after apply", cmd.id, cmd.need_id)
+            return
+        self._insert("history.need_triage", [row])
 
     # --- restore / reconcile ---------------------------------------------
 

@@ -309,6 +309,21 @@ def failure_needs(
     return needs
 
 
+def _effective_tier(triage: dict, computed_tier: str) -> str:
+    """Tier to show for a need carrying `triage`.
+
+    WR-02: a downgrade must never display a tier more urgent than the current
+    computed tier, so it takes the less urgent of the stored tier and the computed one.
+    """
+    action = triage.get("action")
+    if action == "cancel":
+        return computed_tier
+    stored = triage.get("tier", computed_tier)
+    if action == "downgrade":
+        return max(stored, computed_tier, key=lambda t: _TIER_RANK.get(t, 2))
+    return stored
+
+
 def carry_triage(prev: Need | None, new: Need) -> tuple[Need, dict | None]:
     """Apply the previous cycle's triage to a freshly computed need (D-22, D-23).
 
@@ -328,7 +343,7 @@ def carry_triage(prev: Need | None, new: Need) -> tuple[Need, dict | None]:
             "computed_tier": new.computed_tier,
         }
         return new, audit
-    tier = new.computed_tier if triage.get("action") == "cancel" else triage.get("tier", new.computed_tier)
+    tier = _effective_tier(triage, new.computed_tier)
     return replace(new, tier=tier, triage=triage), None
 
 
@@ -358,7 +373,7 @@ class NeedTracker:
         if entry is None:
             return
         need = entry[0]
-        tier = need.computed_tier if triage.get("action") == "cancel" else triage.get("tier", need.computed_tier)
+        tier = _effective_tier(triage, need.computed_tier)
         self._open[need_id] = (replace(need, triage=triage, tier=tier), entry[1])
 
     def update(

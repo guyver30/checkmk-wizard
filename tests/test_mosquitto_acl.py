@@ -144,3 +144,17 @@ def test_compose_creates_new_broker_users():
         )
         assert line in text
         assert text.index(line) < chown
+
+
+def test_broker_message_size_limit_global_and_above_events_cap():
+    # WR-03: no message_size_limit let the openly served wsadmin/wstriage logins publish
+    # arbitrarily large payloads. It must be global (before the first listener) and stay
+    # above analytics' 1 MB events payload cap, or legitimate retained events are dropped.
+    from analytics.recorder import MAX_EVENTS_PAYLOAD_BYTES
+
+    lines = [ln.split("#")[0].strip() for ln in (ROOT / "deploy" / "mosquitto.conf").read_text().splitlines()]
+    lines = [ln for ln in lines if ln]
+    first_listener = next(i for i, ln in enumerate(lines) if ln.startswith("listener"))
+    idx = next(i for i, ln in enumerate(lines) if ln.startswith("message_size_limit"))
+    assert idx < first_listener
+    assert int(lines[idx].split()[1]) > MAX_EVENTS_PAYLOAD_BYTES

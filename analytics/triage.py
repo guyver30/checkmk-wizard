@@ -63,7 +63,7 @@ def parse_triage_command(payload: bytes) -> TriageCommand:
         raise TriageCommandError("malformed command")
     try:
         data = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):  # deep nesting raises RecursionError (WR-04)
         raise TriageCommandError("malformed command") from None
     if not isinstance(data, dict):
         raise TriageCommandError("malformed command")

@@ -1128,7 +1128,7 @@ def parse_admin_command(payload: bytes) -> AdminCommand:
     """
     try:
         data = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):  # deep nesting raises RecursionError (WR-04)
         raise AdminCommandError("malformed command") from None
     if not isinstance(data, dict):
         raise AdminCommandError("malformed command")

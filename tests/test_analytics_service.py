@@ -552,3 +552,98 @@ def test_run_forever_schedule_one_slow_then_fast_ticks(svc):
     cycles = [c for c in calls if c != "rollup"]
     assert cycles[0] == "slow" and set(cycles[1:60]) == {"fast"} and cycles[60] == "slow"
     assert calls.count("rollup") >= 61
+
+
+def test_triage_applied_before_audit_and_sig_matches_publish(svc):
+    # WR-01: override and _need_sigs used to be updated only after the blocking audit
+    # insert; both must be in place when the history insert runs.
+    need = _seed_need(svc)
+    seen = {}
+    real = svc.history.insert_rows
+
+    def spy(config, table, rows):
+        seen["triage"] = svc.tracker.get(need.id).triage
+        return real(config, table, rows)
+
+    svc.history.insert_rows = spy
+    svc.on_message(None, None, msg("needs/triage/cmd", triage_cmd(need.id)))
+    assert seen["triage"]["action"] == "downgrade"
+    body = json.loads(svc.client.published[-1][1])
+    assert svc._need_sigs[need.id] == {k: v for k, v in body.items() if k != "generated_at"}
+
+
+def test_triage_audit_skipped_when_need_disappears_after_apply(svc):
+    # WR-01: a need tombstoned between apply and audit made the audit row claim a
+    # change that never happened.
+    need = _seed_need(svc)
+    real_publish = svc.client.publish
+
+    def publish_and_drop(topic, payload=None, qos=0, retain=False):
+        svc.tracker._open.pop(need.id, None)
+        return real_publish(topic, payload, qos, retain)
+
+    svc.client.publish = publish_and_drop
+    svc.on_message(None, None, msg("needs/triage/cmd", triage_cmd(need.id)))
+    assert svc.history.inserts == []
+
+
+def test_triage_audit_skipped_when_computed_tier_changes_after_apply(svc):
+    # WR-01: same, when run_cycle moved the computed tier in the gap.
+    from dataclasses import replace
+
+    need = _seed_need(svc)
+    real_publish = svc.client.publish
+
+    def publish_and_change(topic, payload=None, qos=0, retain=False):
+        cur, n = svc.tracker._open[need.id]
+        other = "standard" if cur.computed_tier != "standard" else "urgent"
+        svc.tracker._open[need.id] = (replace(cur, computed_tier=other), n)
+        return real_publish(topic, payload, qos, retain)
+
+    svc.client.publish = publish_and_change
+    svc.on_message(None, None, msg("needs/triage/cmd", triage_cmd(need.id)))
+    assert svc.history.inserts == []
+
+
+def test_oversized_triage_payload_dropped_before_queue(svc):
+    # WR-03: oversized triage payloads took a queue slot before parse_triage_command
+    # rejected them.
+    import queue as q
+
+    svc._queue = q.Queue(maxsize=5)
+    big = SimpleNamespace(topic=P + "needs/triage/cmd", payload=b"x" * 5000, retain=False)
+    svc.on_message(None, None, big)
+    assert svc._queue.qsize() == 0
+
+
+def test_full_queue_drops_with_rate_limited_warning(svc, caplog):
+    # WR-03: an unbounded queue grew without limit behind a stalled worker; a full
+    # bounded queue must drop, not block, and warn at most once per interval.
+    import queue as q
+
+    svc._queue = q.Queue(maxsize=1)
+    svc._queue.put("filler")
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            svc.on_message(None, None, msg("lan/events/recent", b"[]"))
+    assert svc._queue.qsize() == 1
+    assert len([r for r in caplog.records if "queue full" in r.getMessage()]) == 1
+
+
+def test_stop_delivers_sentinel_through_bounded_queue(svc):
+    # WR-03: stop() must still deliver its sentinel when the queue is bounded.
+    import queue as q
+
+    from analytics.service import _STOP
+
+    svc._queue = q.Queue(maxsize=2)
+    svc.client = None
+    svc.stop()
+    assert svc._queue.get_nowait() is _STOP
+
+
+def test_load_json_deep_nesting_returns_none():
+    # WR-04: RecursionError from json.loads escaped _load_json.
+    from analytics.service import _load_json
+
+    assert _load_json(b"[" * 4000) is None
