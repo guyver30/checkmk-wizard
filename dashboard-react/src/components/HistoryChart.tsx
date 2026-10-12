@@ -8,9 +8,10 @@
 // double click). Plain ArrowLeft/ArrowRight step the crosshair through the times at which any
 // series has a point.
 //
-// Series styling (a design choice, all token classes): the first series is solid primary at
-// 2 px, the second secondary at 1.5 px, the third tertiary at 1.5 px dashed "4 3", so the
-// three load averages stay distinguishable without relying on colour alone.
+// Series styling (a design choice, all token classes): the first series is brand blue
+// at 2 px, the second purple at 1.5 px, the third green at 1.5 px dashed "4 3". The hues avoid
+// the amber warn and red crit level lines, and the width/dash differences keep the three load
+// averages distinguishable without relying on colour alone.
 
 import { useId, useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { scaleLinear, scaleTime } from "d3-scale";
@@ -48,9 +49,9 @@ export interface HistoryChartProps {
 const { W, PLOT_H, M, H, INNER_W } = CHART;
 
 const SERIES_STYLE = [
-  { className: "text-fg-primary", strokeWidth: 2, dash: undefined },
-  { className: "text-fg-secondary", strokeWidth: 1.5, dash: undefined },
-  { className: "text-fg-tertiary", strokeWidth: 1.5, dash: "4 3" },
+  { className: "text-brand", strokeWidth: 2, dash: undefined },
+  { className: "text-purple-500", strokeWidth: 1.5, dash: undefined },
+  { className: "text-success", strokeWidth: 1.5, dash: "4 3" },
 ] as const;
 
 function styleFor(index: number) {
