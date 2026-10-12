@@ -539,3 +539,7 @@ yes I deleted a host before on checkmk gui, so the topology editor refused to ap
 ## 2026-10-12 11:59
 
 I deleted a host in checkmk gui and after a few sec I saw banner
+
+## 2026-10-12 13:18
+
+banner showed new hosts with their IP, I activated them and they showed up in the dashboard
