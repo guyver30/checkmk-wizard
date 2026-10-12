@@ -26,9 +26,9 @@
 
 ### Broker
 
-- [ ] **BRK-01**: Mosquitto gains a WebSockets listener for browser clients, separate from the existing internal TCP listener the poller uses to publish
-- [ ] **BRK-02**: Mosquitto has `persistence true` against a mounted volume, so retained state survives a broker restart
-- [ ] **BRK-03**: The WebSocket listener is ACL-scoped to read-only for browser clients; only the poller (via the internal listener) can publish
+- [x] **BRK-01**: Mosquitto gains a WebSockets listener for browser clients, separate from the existing internal TCP listener the poller uses to publish
+- [x] **BRK-02**: Mosquitto has `persistence true` against a mounted volume, so retained state survives a broker restart
+- [x] **BRK-03**: The WebSocket listener is ACL-scoped to read-only for browser clients; only the poller (via the internal listener) can publish
 
 ### Tagging
 
@@ -49,8 +49,8 @@
 - [x] **DASH-01**: `index.html` shows an at-a-glance stats strip (counts by state) above the centre's primary view, merging incoming updates in place rather than re-rendering from scratch. The primary view is the topology map (DASH-07, Phase 13); until that lands it is a sized, labelled placeholder pane
 - [ ] **DASH-02**: `devices.html` shows a live sortable device table plus a recent-events panel, updating in place
 - [x] **DASH-03**: `details.html` shows a per-device drill-down with a bounded status-history strip, linking out to Checkmk's own UI for full service-level detail
-- [ ] **DASH-04**: Dashboard shows a distinct stale/unknown visual state (separate from down) when a device's last-seen timestamp exceeds a threshold, or when the poller's own liveness signal goes stale
-- [ ] **DASH-05**: Dashboard shows a connection-status indicator with jittered exponential-backoff reconnect for the MQTT-over-WebSockets connection
+- [x] **DASH-04**: Dashboard shows a distinct stale/unknown visual state (separate from down) when a device's last-seen timestamp exceeds a threshold, or when the poller's own liveness signal goes stale
+- [x] **DASH-05**: Dashboard shows a connection-status indicator with jittered exponential-backoff reconnect for the MQTT-over-WebSockets connection
 - [x] **DASH-06**: Dashboard color-codes/icons hosts by device type and groups/colors by the folder-derived location/group label
 - [x] **DASH-07**: `index.html` renders a live topology map (vis-network) with parent/child links, merging incoming updates via `DataSet.update()` rather than re-rendering from scratch
 - [x] **DASH-08**: The per-device drill-down renders CPU / RAM / Disk ring gauges whose colour is decided by each metric's OWN `perf_data` warn/crit thresholds (not the Checkmk service state), hiding any individual gauge whose backing service does not exist on that host
@@ -66,18 +66,18 @@
 
 ### Fleet History
 
-- [ ] **HIST-01**: The poller writes every parsed `perf_data` metric from every service it already reads to ClickHouse (`history.metrics`), keyed by host, service description and metric name as LowCardinality columns, never by a free-text or high-cardinality field (D-42)
-- [ ] **HIST-02**: The poller writes a per-host state series (UP/DOWN/UNREACHABLE from `host_state_raw`, with a downtime flag and the host's folder) and a per-service state series (OK/WARN/CRIT/UNKNOWN) to ClickHouse, so availability and Grafana state timelines derive from them (D-43)
-- [ ] **HIST-03**: The poller pushes each poll cycle's rows to ClickHouse's HTTP interface as one `INSERT ... FORMAT JSONEachRow` POST per table, adds no on-disk state to the poller container, and drops that cycle's rows (no buffer, no retry) when ClickHouse is unreachable, so the gap reads as "no data" and MQTT publishing is never interrupted (D-44, D-47)
-- [ ] **HIST-04**: A single ClickHouse container stores the history tables under a storage policy with a local volume and an S3 volume: raw rows about 30 days, then TTL GROUP BY downsampling (5-minute, then 1-hour), parts moved to the S3 volume after 31 days by TTL TO VOLUME, deleted after 3 years; ClickHouse's own HTTP interface (internal port 8123, not published) is the one query surface for every consumer (D-21, D-23, D-40, D-40b)
-- [ ] **HIST-05**: ClickHouse's S3 disk, the rollup JSON writer and the Parquet export work against MinIO or AWS S3 by configuration only (endpoint, region, credentials), with no MinIO-specific API calls in the poller or ClickHouse, reusing the existing MinIO root credentials; compose pins the MinIO images to Chainguard (cgr.dev) digests because minio/minio was removed from Docker Hub and quay.io/minio is no longer public (D-41, D-56)
-- [ ] **HIST-06**: Shortly after local midnight (Asia/Singapore) the poller computes the previous day's availability via SQL against ClickHouse's state tables and writes one JSON object per day (`availability/YYYY/MM/YYYY-MM-DD.json`, with `schema_version`) holding per-device and per-folder UP %, DOWN %, UNOBSERVED % (UNREACHABLE), availability = UP / (UP + DOWN), downtime minutes excluded from the denominator, and no-data minutes counted as neither up nor down; the group key is generic so later location groups need no format change (D-45..D-49, D-51, D-53)
-- [ ] **HIST-07**: On startup and at each midnight the rollup job writes every missing day object back as far as raw retention allows (about 30 days), and never overwrites an existing day object (both the JSON and the Parquet object) (D-52)
-- [ ] **HIST-07a**: The rollup job also writes each day's figures as Parquet to `availability_parquet/date=YYYY-MM-DD/availability.parquet` in the same bucket, exported by ClickHouse (`INSERT INTO FUNCTION s3(..., 'Parquet')`) from the same rows the JSON was built from; never-overwrite applies to both objects and a day counts as written only when both exist (D-57)
-- [ ] **HIST-08**: nginx exposes a same-origin, GET-only allowlist: `/ch-api/` to ClickHouse's HTTP query endpoint, authenticated server-side as the dedicated `dashboard_reader` user (settings profile `readonly = 1`, SELECT on the history database only), and `/availability/` to the rollup JSON and Parquet objects; every other path under those prefixes, every write method, client-supplied ClickHouse credentials and every admin/delete endpoint are unreachable through it, and no storage or database credential reaches the browser (D-24, D-54, D-56)
-- [ ] **HIST-09**: A standalone live smoke-test script proves the read path answers a real query and serves a rollup object, and that write, admin and delete operations are rejected through it and on the rollup bucket (D-54)
-- [ ] **HIST-10**: Grafana runs alongside the dashboard with a provisioned ClickHouse datasource (official `grafana-clickhouse-datasource` plugin, read-only `grafana_reader` user) and three provisioned dashboards (host metrics explorer, fleet state timeline, availability); login is required with the admin password from `deploy/.env`, anonymous access is off, and Grafana refuses to start with a default password (D-22, D-55)
-- [ ] **HIST-11**: PROJECT.md and CLAUDE.md record the amendment to the "no new backend for the dashboard" constraint, and the "Time-series graphing/charting" Out of Scope rows are narrowed to match (D-24)
+- [x] **HIST-01**: The poller writes every parsed `perf_data` metric from every service it already reads to ClickHouse (`history.metrics`), keyed by host, service description and metric name as LowCardinality columns, never by a free-text or high-cardinality field (D-42)
+- [x] **HIST-02**: The poller writes a per-host state series (UP/DOWN/UNREACHABLE from `host_state_raw`, with a downtime flag and the host's folder) and a per-service state series (OK/WARN/CRIT/UNKNOWN) to ClickHouse, so availability and Grafana state timelines derive from them (D-43)
+- [x] **HIST-03**: The poller pushes each poll cycle's rows to ClickHouse's HTTP interface as one `INSERT ... FORMAT JSONEachRow` POST per table, adds no on-disk state to the poller container, and drops that cycle's rows (no buffer, no retry) when ClickHouse is unreachable, so the gap reads as "no data" and MQTT publishing is never interrupted (D-44, D-47)
+- [x] **HIST-04**: A single ClickHouse container stores the history tables under a storage policy with a local volume and an S3 volume: raw rows about 30 days, then TTL GROUP BY downsampling (5-minute, then 1-hour), parts moved to the S3 volume after 31 days by TTL TO VOLUME, deleted after 3 years; ClickHouse's own HTTP interface (internal port 8123, not published) is the one query surface for every consumer (D-21, D-23, D-40, D-40b)
+- [x] **HIST-05**: ClickHouse's S3 disk, the rollup JSON writer and the Parquet export work against MinIO or AWS S3 by configuration only (endpoint, region, credentials), with no MinIO-specific API calls in the poller or ClickHouse, reusing the existing MinIO root credentials; compose pins the MinIO images to Chainguard (cgr.dev) digests because minio/minio was removed from Docker Hub and quay.io/minio is no longer public (D-41, D-56)
+- [x] **HIST-06**: Shortly after local midnight (Asia/Singapore) the poller computes the previous day's availability via SQL against ClickHouse's state tables and writes one JSON object per day (`availability/YYYY/MM/YYYY-MM-DD.json`, with `schema_version`) holding per-device and per-folder UP %, DOWN %, UNOBSERVED % (UNREACHABLE), availability = UP / (UP + DOWN), downtime minutes excluded from the denominator, and no-data minutes counted as neither up nor down; the group key is generic so later location groups need no format change (D-45..D-49, D-51, D-53)
+- [x] **HIST-07**: On startup and at each midnight the rollup job writes every missing day object back as far as raw retention allows (about 30 days), and never overwrites an existing day object (both the JSON and the Parquet object) (D-52)
+- [x] **HIST-07a**: The rollup job also writes each day's figures as Parquet to `availability_parquet/date=YYYY-MM-DD/availability.parquet` in the same bucket, exported by ClickHouse (`INSERT INTO FUNCTION s3(..., 'Parquet')`) from the same rows the JSON was built from; never-overwrite applies to both objects and a day counts as written only when both exist (D-57)
+- [x] **HIST-08**: nginx exposes a same-origin, GET-only allowlist: `/ch-api/` to ClickHouse's HTTP query endpoint, authenticated server-side as the dedicated `dashboard_reader` user (settings profile `readonly = 1`, SELECT on the history database only), and `/availability/` to the rollup JSON and Parquet objects; every other path under those prefixes, every write method, client-supplied ClickHouse credentials and every admin/delete endpoint are unreachable through it, and no storage or database credential reaches the browser (D-24, D-54, D-56)
+- [x] **HIST-09**: A standalone live smoke-test script proves the read path answers a real query and serves a rollup object, and that write, admin and delete operations are rejected through it and on the rollup bucket (D-54)
+- [x] **HIST-10**: Grafana runs alongside the dashboard with a provisioned ClickHouse datasource (official `grafana-clickhouse-datasource` plugin, read-only `grafana_reader` user) and three provisioned dashboards (host metrics explorer, fleet state timeline, availability); login is required with the admin password from `deploy/.env`, anonymous access is off, and Grafana refuses to start with a default password (D-22, D-55)
+- [x] **HIST-11**: PROJECT.md and CLAUDE.md record the amendment to the "no new backend for the dashboard" constraint, and the "Time-series graphing/charting" Out of Scope rows are narrowed to match (D-24)
 
 ## v2 Requirements
 
@@ -111,9 +111,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BRK-01 | Phase 8 | Pending |
-| BRK-02 | Phase 8 | Pending |
-| BRK-03 | Phase 8 | Pending |
+| BRK-01 | Phase 8 | Complete |
+| BRK-02 | Phase 8 | Complete |
+| BRK-03 | Phase 8 | Complete |
 | PLR-01 | Phase 9 | Complete |
 | PLR-02 | Phase 9 | Complete |
 | PLR-03 | Phase 9 | Complete |
@@ -131,10 +131,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-03 | Phase 10.1 | Complete |
 | OPS-04 | Phase 10.1 | Complete |
 | DASH-01 | Phase 11 | Complete |
-| DASH-02 | Phase 11 | Pending |
+| DASH-02 | Phase 11 | Descoped in practice (quick 260925-p7d removed the Devices page; awaiting operator confirmation, see 11-VERIFICATION.md) |
 | DASH-03 | Phase 11 / Phase 12 | Partial |
-| DASH-04 | Phase 11 | Pending |
-| DASH-05 | Phase 11 | Pending |
+| DASH-04 | Phase 11 | Complete |
+| DASH-05 | Phase 11 | Complete |
 | DASH-06 | Phase 11 | Complete |
 | DASH-07 | Phase 13 | Complete |
 | DASH-12 | Phase 13 | Complete |
@@ -155,18 +155,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-15 | Phase 14 | Complete |
 | DASH-16 | Phase 14 | Complete |
 | DASH-17 | Phase 14 | Descoped (2026-09-28) |
-| HIST-01 | Phase 14.1 | Pending |
-| HIST-02 | Phase 14.1 | Pending |
-| HIST-03 | Phase 14.1 | Pending |
-| HIST-04 | Phase 14.1 | Pending |
-| HIST-05 | Phase 14.1 | Pending |
-| HIST-06 | Phase 14.1 | Pending |
-| HIST-07 | Phase 14.1 | Pending |
-| HIST-07a | Phase 14.1 | Pending |
-| HIST-08 | Phase 14.1 | Pending |
-| HIST-09 | Phase 14.1 | Pending |
-| HIST-10 | Phase 14.1 | Pending |
-| HIST-11 | Phase 14.1 | Pending |
+| HIST-01 | Phase 14.1 | Complete |
+| HIST-02 | Phase 14.1 | Complete |
+| HIST-03 | Phase 14.1 | Complete |
+| HIST-04 | Phase 14.1 | Complete |
+| HIST-05 | Phase 14.1 | Complete |
+| HIST-06 | Phase 14.1 | Complete |
+| HIST-07 | Phase 14.1 | Complete |
+| HIST-07a | Phase 14.1 | Complete |
+| HIST-08 | Phase 14.1 | Complete |
+| HIST-09 | Phase 14.1 | Complete |
+| HIST-10 | Phase 14.1 | Complete |
+| HIST-11 | Phase 14.1 | Complete |
 
 **Coverage:**
 - v1 requirements: 56 total
@@ -191,3 +191,5 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Phase 14.1 requirement note (2026-09-28, minted during `/bm:plan-phase 14.1`): ROADMAP.md's Phase 14.1 entry carried `Requirements: TBD`. HIST-01..HIST-11 were minted from `14.1-RESEARCH.md`'s proposed table, reworded against `14.1-CONTEXT.md` D-40..D-56 and the carried D-20..D-24. Coverage is now 55. HIST-11 owns narrowing the "Time-series graphing/charting" Out of Scope row, which Phase 14's note anticipated. Dashboard history views stay out of scope (D-50).*
 
 *Phase 14.1 re-plan note (2026-09-28): 14.1-CONTEXT.md D-40 (revised) replaced Prometheus + Thanos with ClickHouse and D-57 added Parquet rollups. HIST-01..08 and HIST-10 were reworded for the ClickHouse design and HIST-07a was minted for D-57; coverage is now 56. The superseded plans were replanned from scratch.*
+
+*Bookkeeping note (2026-10-12, milestone audit follow-up): BRK-01..03, DASH-04/05 and HIST-01..11/07a were ticked from the new 08-, 11- and 14.1-VERIFICATION.md files (verified in code; the live items each file lists remain human_needed). DASH-04's poller-liveness half was restored by quick 261012-pst. DASH-02 (sortable device table) no longer exists since quick 260925-p7d and is left open for an operator descope decision. HIST-06/07/07a now run in the analytics container (Phase 14.2), not the poller.*

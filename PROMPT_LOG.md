@@ -631,3 +631,7 @@ the trend and need are gone after deleting the history rows
 ## 2026-10-12 16:29
 
 fix the 2 defects and the 3 missing verification files
+
+## 2026-10-12 16:33
+
+(verification files and requirement bookkeeping committed)
