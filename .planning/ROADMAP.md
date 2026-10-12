@@ -23,7 +23,7 @@ The existing 7-phase wizard (Phase 1–7, already Validated and out of this mile
 - [x] **Phase 14: Fleet Intelligence** - Service-impact framing, root-cause collapse, operator-set criticality and dependencies, and kiosk mode (history and prediction split out to 14.1/14.2 per 14-CONTEXT.md D-01) (completed 2026-09-28)
 - [x] **Phase 14.1: Fleet History Store, Availability Rollups and Grafana** (INSERTED) - Poller-written TSDB on MinIO, daily availability rollups, read-only dashboard access, and Grafana for analysts
 - [x] **Phase 14.3: Per-site MQTT Namespace** (INSERTED) - Move all topics under sites/<site_id>/, per-site ACLs, legacy retained-topic sweep, wizard uniqueness warning; runs before 14.2 (completed 2026-10-04)
-- [ ] **Phase 14.2: Fleet Failure Prediction and Incident Narration** (INSERTED) - Separate analytics container: regression-based forecasts with confidence tags and template/local incident narration over MQTT
+- [x] **Phase 14.2: Fleet Failure Prediction and Incident Narration** (INSERTED) - Separate analytics container: regression-based forecasts with confidence tags and template/local incident narration over MQTT (completed 2026-10-12)
 
 ## Phase Details
 

@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 14.2 all 19 plans summarized; awaiting live folder auto-monitoring test before closing
+stopped_at: Phase 14.2 closed 2026-10-12 (operator sign-off after live checks); only Phase 15 (parked) remains
 last_updated: "2026-10-12T01:30:00.000Z"
 last_activity: 2026-10-12 -- Phase 14.2 follow-ups committed (load chart colours, filled ACS/NetworkDevice icons)
 progress:
   total_phases: 14
-  completed_phases: 12
+  completed_phases: 13
   total_plans: 102
   completed_plans: 83
   percent: 81
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 
 ## Current Position
 
-Phase: 14.2 (fleet-failure-prediction-and-incident-narration) — EXECUTION COMPLETE, NOT CLOSED
+Phase: 14.2 (fleet-failure-prediction-and-incident-narration) — COMPLETE, CLOSED 2026-10-12
 Plan: 19 of 19 summarized (14.2-VERIFICATION.md status: human_needed)
-Status: Open only for the live folder auto-monitoring test (operator will report); then close in ROADMAP.md and STATE.md
+Status: Closed. Operator confirmed on the test site 2026-10-12: folder auto-monitoring, CPU load gauge/history, trend zoom/pan, map physics, drawing layer, discovered-hosts banner. Not explicitly re-confirmed: triage outside edit mode, low-confidence forecast display, systemd-inactive CRIT rule on a live site (see 14.2-VERIFICATION.md)
 Last activity: 2026-10-12 -- Phase 14.2 follow-ups committed (load chart colours, filled ACS/NetworkDevice icons)
 
 Progress: [██████████] 99%

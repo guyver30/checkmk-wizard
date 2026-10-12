@@ -543,3 +543,7 @@ I deleted a host in checkmk gui and after a few sec I saw banner
 ## 2026-10-12 13:18
 
 banner showed new hosts with their IP, I activated them and they showed up in the dashboard
+
+## 2026-10-12 13:24
+
+yes close 14.2; point 2 also checked
