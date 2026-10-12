@@ -19,6 +19,9 @@ original design, see [PLAN-CONFORMANCE-AUDIT.md](PLAN-CONFORMANCE-AUDIT.md).
 host IPs instead of scanning, Phase 4 defaults the monitoring method to
 `ping` and pre-checks the generated hosts, and Phase 7 creates an always-up
 host check rule and fakes the hosts UP after activation (see those sections).
+Since 2026-10-12 a demo host may also be created as a Linux agent host: the
+`linux` method then sets the agent tags only and skips every SSH, agent,
+discovery and manual step (see Phases 4-7; not live-verified).
 `deploy/run-wizard.sh` forwards its arguments, so `deploy/run-wizard.sh --demo`
 works in container mode.
 
@@ -955,7 +958,10 @@ retag flow and then reports there is nothing to promote.
 In demo mode (`--demo`) the "Monitoring method" select defaults to `ping`; all
 prompts stay. (Changed 2026-10-02: the "Promote which hosts?" checkbox starts
 with every `demo_generated` host checked, so the user deselects rather than
-selects; non-demo runs start with nothing checked.)
+selects; non-demo runs start with nothing checked.) Changed 2026-10-12: the
+`linux` choice's label reads "linux (Checkmk agent) - demo: agent host, nothing
+installed, faked UP" in demo mode (non-demo labels are unchanged); the default
+stays `ping`. What happens to a demo Linux host is described in Phases 5-7.
 
 Purely interactive — **no fingerprinting, and (changed 2026-08-25) no
 folder prompt** — each host's folder is already known from which Phase 2
@@ -1190,6 +1196,18 @@ per-host loop to `_onboard_hosts()`, `wizard.py:829-1018`)
 Esc is disabled from the start of this phase (see "Leaving the wizard early
 (Esc)" above), because SSH changes to remote hosts cannot be undone by a Checkmk
 revert.
+
+**In demo mode (changed 2026-10-12):** `phase5_onboarding(..., demo=True)` and
+`_onboard_hosts(..., demo=True)` create a `linux` demo host with the same
+attributes as the real Linux path (`tag_agent=cmk-agent`, `tag_snmp_ds=no-snmp`,
+device type/alias) and nothing else: no SSH-credential, smartmontools or
+registration-server prompt, no port probe, firewall fix, agent install or
+registration, no expected-services prompt, no discovery or systemd-inactive
+rule, no manual-install text; `expected_services` stays empty. Demo hosts live
+in TEST-NET-2 and do not exist, so any of those steps would only time out. The
+default-thresholds prompt still appears (it only creates rules, no network to
+the host). Ping, SNMP and Windows hosts are handled as before. Not
+live-verified.
 
 **Restructured 2026-08-26** — the per-host firewall/agent/SNMP/ping
 onboarding loop (below) now only covers hosts the user actually promoted
@@ -1792,6 +1810,13 @@ which accept ordinary JSON lists/dicts fine — this quirk is specific to
 
 Phase 6 also receives the hosts edited by the optional "Manage monitored services on existing hosts" step, so their added services are verified.
 
+**In demo mode (changed 2026-10-12):** `phase6_discovery(..., demo=True,
+demo_hostnames=...)` skips service discovery (and its retry waits) for the
+Linux hosts created in this run, printing one dim "skipped discovery for demo
+host X" line each; the pre-discovery activation, ping demo hosts and existing
+real Linux hosts handed over by the services step are unchanged. Non-demo runs
+are untouched.
+
 **Activates pending changes before running discovery
 (`_activate_pending_changes()`, added 2026-08-27 — live-reported bug):**
 the very first thing Phase 6 does, before touching any host, is `POST
@@ -1905,6 +1930,20 @@ and, on final failure, prints the manual `lq` commands without aborting. Undo:
 delete the Host check command rule (Setup > Hosts > Host monitoring rules >
 Host check command) and send `ENABLE_SVC_CHECK;<host>;PING` (plus
 `ENABLE_HOST_CHECK;<host>` if the fallback ran).
+
+**Demo Linux agent hosts (changed 2026-10-12, not live-verified):** an agent
+host has no implicit PING service, so for hosts with `os_family == "linux"`
+`_fake_demo_hosts_up` sends the same `PROCESS_HOST_CHECK_RESULT` but, instead of
+the two PING commands, `DISABLE_SVC_CHECK;<host>;Check_MK`,
+`PROCESS_SERVICE_CHECK_RESULT;<host>;Check_MK;0;OK - [agent] Version: demo, OS:
+linux - demo host, no agent installed`, `DISABLE_SVC_CHECK;<host>;Check_MK
+Discovery` and `PROCESS_SERVICE_CHECK_RESULT;<host>;Check_MK Discovery;0;OK - no
+unmonitored services found, no vanished services found, no new host labels`
+(constants without `;`). The always-up rule already covers every onboarded host,
+so it includes them. Undo for these: `ENABLE_SVC_CHECK;<host>;Check_MK` and
+`ENABLE_SVC_CHECK;<host>;Check_MK Discovery`. Whether both services exist on a
+never-answering agent host and whether the injected results stick under the CE
+core has not been verified on a live site.
 
 1. `_activate_pending_changes(client, connection)` (added 2026-08-27,
    shared with Phase 6's pre-discovery activation above — the exact same

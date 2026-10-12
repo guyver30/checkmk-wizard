@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -4814,9 +4815,17 @@ async def test_phase4_monitoring_method_defaults_to_ping_only_in_demo(monkeypatc
     assert ("default" in method_kwargs) is demo
     if demo:
         assert method_kwargs["default"] == "ping"
+    titles = {c.value: c.title for c in method_kwargs["choices"]}
+    if demo:
+        assert "demo" in titles["linux"] and "nothing installed" in titles["linux"]
+    else:
+        assert titles["linux"] == "linux (Checkmk agent)"
+    assert titles["windows"] == "windows (Checkmk agent)"
 
 
-async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True, rule_status=200, states=None):
+async def _run_phase7_demo(
+    monkeypatch, tmp_path, send, *, demo=True, rule_status=200, states=None, os_family="ping", hostname="dh1"
+):
     monkeypatch.chdir(tmp_path)
     events = []
 
@@ -4826,7 +4835,7 @@ async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True, rule_statu
 
     def fake_query(host, names):
         events.append(("query",))
-        return states if states is not None else {"dh1": 0}
+        return states if states is not None else {hostname: 0}
 
     async def fake_sleep(seconds):
         pass
@@ -4843,7 +4852,7 @@ async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True, rule_statu
     monkeypatch.setattr("checkmk_wizard.wizard.livestatus.query_host_states", fake_query)
     monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
     monkeypatch.setattr("checkmk_wizard.wizard.random.uniform", lambda a, b: 0.412)
-    host = OnboardedHost(ip="10.0.0.5", hostname="dh1", folder="/", os_family="ping")
+    host = OnboardedHost(ip="10.0.0.5", hostname=hostname, folder="/", os_family=os_family)
     with respx.mock:
         respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
             side_effect=_pending_then_clean()
@@ -4852,7 +4861,7 @@ async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True, rule_statu
             side_effect=activate_effect
         )
         respx.post(f"{BASE}/domain-types/rule/collections/all").mock(side_effect=rule_effect)
-        _mock_list_hosts([_host("dh1", "10.0.0.5")])
+        _mock_list_hosts([_host(hostname, "10.0.0.5")])
         respx.get(f"{BASE}/domain-types/folder_config/collections/all").mock(
             return_value=Response(200, json={"value": []})
         )
@@ -5734,6 +5743,218 @@ async def test_run_demo_flag_skips_menu_and_onboards(monkeypatch):
     s["menu"].assert_not_awaited()
     s["p2"].assert_awaited_once()
     s["retag"].assert_not_awaited()
+
+
+def _fail_if_called(name):
+    def _boom(*args, **kwargs):
+        raise AssertionError(f"{name} must not be called for a demo Linux host")
+
+    return _boom
+
+
+@pytest.mark.asyncio
+async def test_phase5_demo_linux_host_is_created_without_any_network_step(monkeypatch, capsys):
+    # Demo hosts do not exist: no SSH/agent/discovery/manual/registration prompt
+    # or remote call may run for them.
+    from checkmk_wizard import wizard as wiz
+
+    for name in (
+        "probe_port",
+        "fix_firewall_linux",
+        "check_os_compatibility",
+        "install_agent_linux",
+        "register_agent_linux",
+        "check_agent_installed",
+        "check_agent_status",
+        "install_smartmontools",
+    ):
+        monkeypatch.setattr(wiz.remote, name, _fail_if_called(name))
+    for name in (
+        "_collect_expected_services",
+        "_create_service_discovery_rules",
+        "_ensure_systemd_inactive_crit_rule",
+        "_establish_ssh_access",
+        "_print_linux_manual",
+    ):
+        monkeypatch.setattr(wiz, name, _fail_if_called(name))
+    resolve_calls = []
+
+    async def fake_resolve(hosts, checkmk_host):
+        resolve_calls.append(list(hosts))  # only prompts when handed a non-loopback host
+        return checkmk_host
+
+    monkeypatch.setattr(wiz, "_resolve_agent_registration_server", fake_resolve)
+    prompts = []
+
+    class _Q:
+        async def ask_async(self):
+            return False
+
+    def fake_confirm(message, **kwargs):
+        prompts.append(message)
+        return _Q()
+
+    monkeypatch.setattr(wiz.questionary, "confirm", fake_confirm)
+
+    host = OnboardedHost(
+        ip="198.51.100.7", hostname="demo-lnx1", folder="/", os_family="linux", expected_services=["x.service"]
+    )
+    with respx.mock:
+        create_route = respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+            return_value=Response(200, json={})
+        )
+        respx.delete(f"{BASE}/objects/host_config/198.51.100.7").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/rule/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [], demo=True)
+
+    body = json.loads(create_route.calls.last.request.content)
+    assert body["host_name"] == "demo-lnx1"
+    assert body["attributes"]["ipaddress"] == "198.51.100.7"
+    assert body["attributes"]["tag_agent"] == "cmk-agent"
+    assert body["attributes"]["tag_snmp_ds"] == "no-snmp"
+    assert body["attributes"]["tag_device_type"] == "other"
+    assert host.expected_services == []
+    assert resolve_calls == [[]]
+    # only the threshold-rules prompt is left; no SSH / smartmontools confirm
+    assert prompts == ["Configure default alert thresholds (CPU load, CPU utilization, memory, filesystem)?"]
+    assert "Demo Linux agent host created" in _flat(capsys.readouterr().out)
+
+
+@pytest.mark.asyncio
+async def test_phase5_without_demo_linux_host_still_asks_for_ssh(monkeypatch):
+    # demo defaults to False: the real Linux path is untouched.
+    from checkmk_wizard import wizard as wiz
+
+    prompts = []
+
+    class _Q:
+        async def ask_async(self):
+            return False
+
+    def fake_confirm(message, **kwargs):
+        prompts.append(message)
+        return _Q()
+
+    monkeypatch.setattr(wiz.questionary, "confirm", fake_confirm)
+    monkeypatch.setattr(wiz, "_resolve_agent_registration_server", AsyncMock(return_value="cmk"))
+    monkeypatch.setattr(wiz, "_collect_expected_services", AsyncMock(return_value=[]))
+    monkeypatch.setattr(wiz, "_create_service_discovery_rules", AsyncMock())
+    monkeypatch.setattr(wiz, "_ensure_systemd_inactive_crit_rule", AsyncMock())
+    monkeypatch.setattr(wiz.remote, "probe_port", AsyncMock(return_value=SimpleNamespace(classification="x")))
+    monkeypatch.setattr(wiz, "_print_linux_manual", lambda *a, **k: None)
+
+    host = OnboardedHost(ip="10.0.0.7", hostname="lnx1", folder="/vlan10", os_family="linux")
+    with respx.mock:
+        respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(return_value=Response(200, json={}))
+        respx.delete(f"{BASE}/objects/host_config/10.0.0.7").mock(return_value=Response(204))
+        respx.post(f"{BASE}/domain-types/rule/collections/all").mock(return_value=Response(200, json={}))
+        async with CheckmkClient(CONN) as client:
+            await phase5_onboarding(client, CONN, [host], [])
+
+    assert "Attempt automated SSH firewall + agent install for Linux hosts?" in prompts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("demo", [True, False])
+async def test_phase6_demo_skips_discovery_for_demo_linux_hosts_only(monkeypatch, capsys, demo):
+    from checkmk_wizard import wizard as wiz
+
+    monkeypatch.setattr(wiz, "_activate_pending_changes", AsyncMock(return_value=True))
+    discovered = []
+
+    async def fake_discovery(self, host_name, mode="fix_all"):
+        discovered.append(host_name)
+        return {}
+
+    monkeypatch.setattr(CheckmkClient, "start_service_discovery", fake_discovery)
+    linux = OnboardedHost(ip="198.51.100.7", hostname="demo-lnx1", folder="/", os_family="linux")
+    ping = OnboardedHost(ip="198.51.100.8", hostname="demo-ping1", folder="/", os_family="ping")
+
+    async with CheckmkClient(CONN) as client:
+        await phase6_discovery(client, CONN, [linux, ping], demo=demo)
+
+    if demo:
+        assert discovered == ["demo-ping1"]
+        assert "skipped discovery for demo host demo-lnx1" in _flat(capsys.readouterr().out)
+    else:
+        assert discovered == ["demo-lnx1", "demo-ping1"]
+
+
+@pytest.mark.asyncio
+async def test_phase6_demo_hostnames_keeps_real_linux_hosts_discovered(monkeypatch):
+    from checkmk_wizard import wizard as wiz
+
+    monkeypatch.setattr(wiz, "_activate_pending_changes", AsyncMock(return_value=True))
+    discovered = []
+
+    async def fake_discovery(self, host_name, mode="fix_all"):
+        discovered.append(host_name)
+        return {}
+
+    monkeypatch.setattr(CheckmkClient, "start_service_discovery", fake_discovery)
+    demo_linux = OnboardedHost(ip="198.51.100.7", hostname="demo-lnx1", folder="/", os_family="linux")
+    real_linux = OnboardedHost(ip="10.0.0.9", hostname="web1", folder="/", os_family="linux")
+
+    async with CheckmkClient(CONN) as client:
+        await phase6_discovery(
+            client, CONN, [demo_linux, real_linux], demo=True, demo_hostnames={"demo-lnx1"}
+        )
+
+    assert discovered == ["web1"]
+
+
+_DEMO_AGENT_TEXT = "OK - [agent] Version: demo, OS: linux - demo host, no agent installed"
+_DEMO_DISCOVERY_TEXT = "OK - no unmonitored services found, no vanished services found, no new host labels"
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_linux_host_fakes_check_mk_services_not_ping(monkeypatch, tmp_path):
+    events = await _run_phase7_demo(
+        monkeypatch, tmp_path, lambda host, commands: None, os_family="linux", hostname="dl1"
+    )
+
+    body = next(e[1] for e in events if e[0] == "rule")
+    assert body["conditions"]["host_name"] == {"match_on": ["dl1"], "operator": "one_of"}
+    send = next(e for e in events if e[0] == "send")
+    assert send[2] == [
+        f"PROCESS_HOST_CHECK_RESULT;dl1;0;{_DEMO_OUTPUT}",
+        "DISABLE_SVC_CHECK;dl1;Check_MK",
+        f"PROCESS_SERVICE_CHECK_RESULT;dl1;Check_MK;0;{_DEMO_AGENT_TEXT}",
+        "DISABLE_SVC_CHECK;dl1;Check_MK Discovery",
+        f"PROCESS_SERVICE_CHECK_RESULT;dl1;Check_MK Discovery;0;{_DEMO_DISCOVERY_TEXT}",
+    ]
+    assert not any(";PING" in c for c in send[2])
+    # the `;` is the Livestatus separator: injected texts must not contain one
+    assert ";" not in _DEMO_AGENT_TEXT and ";" not in _DEMO_DISCOVERY_TEXT
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_linux_rule_failure_disables_host_check_first(monkeypatch, tmp_path):
+    events = await _run_phase7_demo(
+        monkeypatch, tmp_path, lambda host, commands: None, rule_status=500, os_family="linux", hostname="dl1"
+    )
+
+    send = next(e for e in events if e[0] == "send")
+    assert send[2][0] == "DISABLE_HOST_CHECK;dl1"
+    assert send[2][1] == f"PROCESS_HOST_CHECK_RESULT;dl1;0;{_DEMO_OUTPUT}"
+    assert not any(";PING" in c for c in send[2])
+
+
+@pytest.mark.asyncio
+async def test_run_demo_passes_demo_to_phase5_and_phase6(monkeypatch):
+    s = _menu_run_setup(monkeypatch, menu="onboard")
+    h = OnboardedHost("198.51.100.7", "demo-lnx1", "/", "linux")
+    s["p4"].return_value = [h]
+    await wizard_module.run(demo=True)
+    assert s["p5"].await_args.kwargs["demo"] is True
+    assert s["p6"].await_args.kwargs["demo"] is True
+    assert s["p6"].await_args.kwargs["demo_hostnames"] == {"demo-lnx1"}
+
+    s = _menu_run_setup(monkeypatch, menu="onboard")
+    await wizard_module.run()
+    assert s["p5"].await_args.kwargs["demo"] is False
+    assert s["p6"].await_args.kwargs["demo"] is False
 
 
 @pytest.mark.asyncio

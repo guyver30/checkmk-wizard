@@ -2098,12 +2098,19 @@ async def phase4_classification(
             else:
                 hostname = raw_hostname
         # Demo hosts do not exist, so default to ping: no SSH/agent waits.
+        # Linux is still offered in demo mode as a no-install agent host
+        # (agent tags only, nothing contacted, faked UP in Phase 7).
         method_default: dict[str, str] = {"default": "ping"} if demo else {}
+        linux_title = (
+            "linux (Checkmk agent) - demo: agent host, nothing installed, faked UP"
+            if demo
+            else "linux (Checkmk agent)"
+        )
         os_family = await questionary.select(
             f"Monitoring method for {hostname}:",
             **method_default,
             choices=[
-                questionary.Choice("linux (Checkmk agent)", value="linux"),
+                questionary.Choice(linux_title, value="linux"),
                 questionary.Choice("windows (Checkmk agent)", value="windows"),
                 questionary.Choice("snmp (no agent — switch/router/printer/etc.)", value="snmp"),
                 questionary.Choice("simple ping (no agent, no SNMP — reachability only)", value="ping"),
@@ -3152,16 +3159,25 @@ async def _onboard_hosts(
     hosts: list[OnboardedHost],
     *,
     tag_group_available: bool = True,
+    demo: bool = False,
 ) -> None:
     """Per-host firewall/agent/SNMP/ping onboarding loop — everything
     Phase 5 does for hosts the user actually promoted in Phase 4. Split
     out from `phase5_onboarding()` (2026-08-26) so expected-open-port rule
     creation — which now also covers scanned-but-never-promoted hosts —
     still runs even when `hosts` (the promoted list) is empty.
+
+    With `demo=True` Linux hosts are created as plain agent hosts and
+    nothing else: demo hosts live in TEST-NET-2 and do not exist, so every
+    SSH/firewall/agent/smartmontools step would only time out.
     """
+    # Demo Linux hosts take no network step at all, so they must not trigger
+    # the registration-server or SSH prompts either.
+    real_hosts = [h for h in hosts if not (demo and h.os_family == "linux")]
+
     # Agent-receiver (port 8000) is a different service than the REST/GUI
     # port — always the bare host, never connection.port.
-    register_server = await _resolve_agent_registration_server(hosts, connection.host)
+    register_server = await _resolve_agent_registration_server(real_hosts, connection.host)
 
     ssh_creds: remote.SSHCredentials | None = None
     install_smart = False
@@ -3169,7 +3185,7 @@ async def _onboard_hosts(
     # manual path by design; snmp/ping hosts have no agent at all) — asking
     # for SSH credentials when no onboarded host is Linux is a dead-end
     # prompt with nothing to apply it to.
-    linux_hosts = [h for h in hosts if h.os_family == "linux"]
+    linux_hosts = [h for h in real_hosts if h.os_family == "linux"]
     if linux_hosts:
         use_ssh = await questionary.confirm(
             "Attempt automated SSH firewall + agent install for Linux hosts?", default=True
@@ -3249,6 +3265,32 @@ async def _onboard_hosts(
                 console.print("  [green]Ping-only host created[/green] — reachability monitoring only, no agent/SNMP")
             except CheckmkAPIError as exc:
                 console.print(f"  [yellow]host create/update: {exc}[/yellow]")
+            continue
+
+        if demo and h.os_family == "linux":
+            # Same attributes as the real Linux path, but no SSH, firewall,
+            # agent install/registration, smartmontools, discovery-rule or
+            # expected-service step: the host does not exist, so any of them
+            # would only time out. Phase 7 fakes it UP.
+            try:
+                await _create_or_update_host(
+                    client,
+                    host_name=h.hostname,
+                    folder=h.folder,
+                    attributes={
+                        "ipaddress": h.ip,
+                        "tag_agent": "cmk-agent",
+                        "tag_snmp_ds": "no-snmp",
+                        **_device_type_and_alias_attributes(h, tag_group_available=tag_group_available),
+                    },
+                )
+                console.print(
+                    "  [green]Demo Linux agent host created[/green] — no SSH, agent install, "
+                    "discovery or manual steps (demo mode)"
+                )
+            except CheckmkAPIError as exc:
+                console.print(f"  [yellow]host create/update: {exc}[/yellow]")
+            h.expected_services = []
             continue
 
         try:
@@ -3413,6 +3455,7 @@ async def phase5_onboarding(
     scan_results: list[ScannedHost],
     *,
     tag_group_available: bool = True,
+    demo: bool = False,
 ) -> None:
     console.rule("[bold]Phase 5 — Host Onboarding")
     _ABORT_STATE.esc_enabled = False
@@ -3421,7 +3464,9 @@ async def phase5_onboarding(
         "which a Checkmk revert cannot undo.[/dim]"
     )
     if hosts:
-        await _onboard_hosts(client, connection, hosts, tag_group_available=tag_group_available)
+        await _onboard_hosts(
+            client, connection, hosts, tag_group_available=tag_group_available, demo=demo
+        )
 
     # Covers every scanned host, not just the ones promoted above — a scan
     # result the user never promoted stays a bare Phase 3 placeholder
@@ -3432,6 +3477,9 @@ async def phase5_onboarding(
     # reachability stays visible in the GUI alongside the TCP port checks.
     await _create_ping_check_rule(client, _ping_only_hostnames(scan_results, hosts))
 
+    # The threshold prompt stays in demo mode on purpose: it only creates
+    # rules in Checkmk (no network to any host), so it is safe for demo
+    # Linux hosts too.
     if any(h.os_family in ("linux", "windows") for h in hosts):
         configure_thresholds = await questionary.confirm(
             "Configure default alert thresholds (CPU load, CPU utilization, memory, filesystem)?",
@@ -3546,7 +3594,14 @@ async def _activate_pending_changes(client: CheckmkClient, connection: CheckmkCo
         return False
 
 
-async def phase6_discovery(client: CheckmkClient, connection: CheckmkConnection, hosts: list[OnboardedHost]) -> None:
+async def phase6_discovery(
+    client: CheckmkClient,
+    connection: CheckmkConnection,
+    hosts: list[OnboardedHost],
+    *,
+    demo: bool = False,
+    demo_hostnames: set[str] | None = None,
+) -> None:
     console.rule("[bold]Phase 6 — Discovery & Baseline")
     # Service discovery reads host/rule config from the activated core,
     # not from WATO's pending-but-unactivated state — Phase 5's freshly
@@ -3566,6 +3621,24 @@ async def phase6_discovery(client: CheckmkClient, connection: CheckmkConnection,
     # equivalent of the "Accept all" button. mode="refresh" alone only
     # refreshes the discovery state and leaves services "undecided," so
     # they'd never actually go live at Phase 7's activation.
+    if demo:
+        # Demo Linux hosts are agent hosts that never answer: discovery would
+        # only wait out its retries for nothing.
+        # `demo_hostnames` limits this to the freshly created demo hosts;
+        # `run()` also hands existing real Linux hosts to this function for
+        # service rediscovery and those must still be discovered.
+        def _is_demo_linux(h: OnboardedHost) -> bool:
+            return h.os_family == "linux" and (
+                demo_hostnames is None or h.hostname in demo_hostnames
+            )
+
+        for h in hosts:
+            if _is_demo_linux(h):
+                console.print(
+                    f"  [dim]skipped discovery for demo host {h.hostname}: "
+                    "no agent, nothing to discover[/dim]"
+                )
+        hosts = [h for h in hosts if not _is_demo_linux(h)]
     for h in hosts:
         try:
             result = await client.start_service_discovery(h.hostname, mode="fix_all")
@@ -3682,6 +3755,12 @@ async def _query_host_states_best_effort(host: str, host_names: list[str]) -> di
     return {}
 
 
+# Plugin output injected for the Check_MK / Check_MK Discovery services of demo
+# Linux agent hosts. No `;` (the Livestatus command separator).
+_DEMO_AGENT_OUTPUT = "OK - [agent] Version: demo, OS: linux - demo host, no agent installed"
+_DEMO_DISCOVERY_OUTPUT = "OK - no unmonitored services found, no vanished services found, no new host labels"
+
+
 async def _fake_demo_hosts_up(
     livestatus_host: str, hosts: list[OnboardedHost], *, fake_host_checks: bool = False
 ) -> None:
@@ -3702,6 +3781,15 @@ async def _fake_demo_hosts_up(
     command" rule for these hosts (Setup > Hosts > Host monitoring rules > Host
     check command) and send ENABLE_SVC_CHECK;<host>;PING (plus
     ENABLE_HOST_CHECK;<host> if the fallback ran).
+
+    Demo Linux agent hosts (`os_family == "linux"`) have no PING service
+    (Checkmk adds the implicit PING only for hosts with no other check, see
+    `_ping_only_hostnames`), so instead their `Check_MK` and
+    `Check_MK Discovery` services are disabled and set OK. NOT live-verified:
+    that both services exist on an agent host that never answers and that the
+    injected results stick under the CE Nagios core. Their undo is
+    ENABLE_SVC_CHECK;<host>;Check_MK and ENABLE_SVC_CHECK;<host>;Check_MK
+    Discovery. The injected texts are constants without `;`.
     """
     host_names = [h.hostname for h in hosts]
     commands = []
@@ -3710,11 +3798,19 @@ async def _fake_demo_hosts_up(
         output = f"OK - {h.ip} rta {random.uniform(0.2, 3.0):.3f}ms lost 0%"
         if fake_host_checks:
             commands.append(f"DISABLE_HOST_CHECK;{h.hostname}")
-        commands += [
-            f"PROCESS_HOST_CHECK_RESULT;{h.hostname};0;{output}",
-            f"DISABLE_SVC_CHECK;{h.hostname};PING",
-            f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};PING;0;{output}",
-        ]
+        commands.append(f"PROCESS_HOST_CHECK_RESULT;{h.hostname};0;{output}")
+        if h.os_family == "linux":
+            commands += [
+                f"DISABLE_SVC_CHECK;{h.hostname};Check_MK",
+                f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};Check_MK;0;{_DEMO_AGENT_OUTPUT}",
+                f"DISABLE_SVC_CHECK;{h.hostname};Check_MK Discovery",
+                f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};Check_MK Discovery;0;{_DEMO_DISCOVERY_OUTPUT}",
+            ]
+        else:
+            commands += [
+                f"DISABLE_SVC_CHECK;{h.hostname};PING",
+                f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};PING;0;{output}",
+            ]
     last_error: Exception | None = None
     for delay in (*_LIVESTATUS_RETRY_DELAYS_SECONDS, None):
         try:
@@ -3722,7 +3818,17 @@ async def _fake_demo_hosts_up(
         except OSError as exc:
             last_error = exc
         else:
-            detail = "checks disabled" if fake_host_checks else "host check: always up; PING check disabled"
+            has_linux = any(h.os_family == "linux" for h in hosts)
+            has_other = any(h.os_family != "linux" for h in hosts)
+            disabled = " and ".join(
+                part
+                for part, used in (
+                    ("PING", has_other),
+                    ("Check_MK/Check_MK Discovery", has_linux),
+                )
+                if used
+            )
+            detail = "checks disabled" if fake_host_checks else f"host check: always up; {disabled} check disabled"
             console.print(f"[green]Faked {len(host_names)} demo host(s) UP ({detail}).[/green]")
             # Let the core apply the injected results before the state table query.
             await asyncio.sleep(2)
@@ -4077,11 +4183,22 @@ async def run(*, demo: bool = False, manage: bool = False) -> None:
             console.rule("[bold green]Done")
             return
         await phase5_onboarding(
-            client, connection, onboarded, scan_results, tag_group_available=tag_group_available
+            client,
+            connection,
+            onboarded,
+            scan_results,
+            tag_group_available=tag_group_available,
+            demo=demo,
         )
         # service_hosts only need rediscovery; phase7 must not get them (the
         # demo always-up host-check rule would fake them UP).
-        await phase6_discovery(client, connection, onboarded + service_hosts)
+        await phase6_discovery(
+            client,
+            connection,
+            onboarded + service_hosts,
+            demo=demo,
+            demo_hostnames={h.hostname for h in onboarded},
+        )
         await phase7_activation(client, connection, onboarded, demo=demo)
     console.rule("[bold green]Done")
 
