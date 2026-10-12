@@ -213,7 +213,7 @@ for one host (e.g. hostname `demo-lnx1`); leave the others on `ping`. For that h
 the agent tags (`cmk-agent` / `no-snmp`) and nothing else: no SSH, firewall, agent install,
 registration, smartmontools, expected-services prompt or manual instructions (Phase 5), and no
 service discovery (Phase 6). Phase 7 creates the always-up host-check rule for it and fakes the host
-UP and its `Check_MK` and `Check_MK Discovery` services OK (it has no `PING` service).
+UP and its `PING`, `Check_MK` and `Check_MK Discovery` services OK (Checkmk adds an implicit `PING` to a never-discovered agent host, which would otherwise really ping the unroutable demo IP and show CRIT).
 
 ### 2. Preview the forecast (no network)
 

@@ -571,3 +571,7 @@ write these examples properly in a .md file (or insert them in a previous .md)
 ## 2026-10-12 14:39
 
 push
+
+## 2026-10-12 14:56
+
+I created a fake linux host (under --demo) but it showed ping crit now. why?

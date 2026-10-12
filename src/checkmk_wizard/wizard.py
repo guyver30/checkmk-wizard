@@ -3782,10 +3782,11 @@ async def _fake_demo_hosts_up(
     check command) and send ENABLE_SVC_CHECK;<host>;PING (plus
     ENABLE_HOST_CHECK;<host> if the fallback ran).
 
-    Demo Linux agent hosts (`os_family == "linux"`) have no PING service
-    (Checkmk adds the implicit PING only for hosts with no other check, see
-    `_ping_only_hostnames`), so instead their `Check_MK` and
-    `Check_MK Discovery` services are disabled and set OK. NOT live-verified:
+    Demo Linux agent hosts (`os_family == "linux"`) get the PING fake too: a
+    never-discovered agent host with no active-check rule still gets Checkmk's
+    implicit PING service (live report 2026-10-12: it showed PING CRIT without
+    this). Their `Check_MK` and `Check_MK Discovery` services are also disabled
+    and set OK. NOT live-verified:
     that both services exist on an agent host that never answers and that the
     injected results stick under the CE Nagios core. Their undo is
     ENABLE_SVC_CHECK;<host>;Check_MK and ENABLE_SVC_CHECK;<host>;Check_MK
@@ -3799,17 +3800,20 @@ async def _fake_demo_hosts_up(
         if fake_host_checks:
             commands.append(f"DISABLE_HOST_CHECK;{h.hostname}")
         commands.append(f"PROCESS_HOST_CHECK_RESULT;{h.hostname};0;{output}")
+        # PING for every demo host, Linux agent hosts included. Live report 2026-10-12: a demo
+        # Linux host showed PING CRIT because Checkmk adds its implicit PING service to any host
+        # with no discovered service and no active-check rule, which is exactly a never-
+        # discovered demo agent host, and that PING then really pings the unroutable demo IP.
+        commands += [
+            f"DISABLE_SVC_CHECK;{h.hostname};PING",
+            f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};PING;0;{output}",
+        ]
         if h.os_family == "linux":
             commands += [
                 f"DISABLE_SVC_CHECK;{h.hostname};Check_MK",
                 f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};Check_MK;0;{_DEMO_AGENT_OUTPUT}",
                 f"DISABLE_SVC_CHECK;{h.hostname};Check_MK Discovery",
                 f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};Check_MK Discovery;0;{_DEMO_DISCOVERY_OUTPUT}",
-            ]
-        else:
-            commands += [
-                f"DISABLE_SVC_CHECK;{h.hostname};PING",
-                f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};PING;0;{output}",
             ]
     last_error: Exception | None = None
     for delay in (*_LIVESTATUS_RETRY_DELAYS_SECONDS, None):
@@ -3819,15 +3823,7 @@ async def _fake_demo_hosts_up(
             last_error = exc
         else:
             has_linux = any(h.os_family == "linux" for h in hosts)
-            has_other = any(h.os_family != "linux" for h in hosts)
-            disabled = " and ".join(
-                part
-                for part, used in (
-                    ("PING", has_other),
-                    ("Check_MK/Check_MK Discovery", has_linux),
-                )
-                if used
-            )
+            disabled = "PING and Check_MK/Check_MK Discovery" if has_linux else "PING"
             detail = "checks disabled" if fake_host_checks else f"host check: always up; {disabled} check disabled"
             console.print(f"[green]Faked {len(host_names)} demo host(s) UP ({detail}).[/green]")
             # Let the core apply the injected results before the state table query.

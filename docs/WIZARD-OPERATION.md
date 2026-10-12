@@ -1931,16 +1931,19 @@ delete the Host check command rule (Setup > Hosts > Host monitoring rules >
 Host check command) and send `ENABLE_SVC_CHECK;<host>;PING` (plus
 `ENABLE_HOST_CHECK;<host>` if the fallback ran).
 
-**Demo Linux agent hosts (changed 2026-10-12, not live-verified):** an agent
-host has no implicit PING service, so for hosts with `os_family == "linux"`
-`_fake_demo_hosts_up` sends the same `PROCESS_HOST_CHECK_RESULT` but, instead of
-the two PING commands, `DISABLE_SVC_CHECK;<host>;Check_MK`,
+**Demo Linux agent hosts (changed 2026-10-12, not live-verified):** for hosts
+with `os_family == "linux"` `_fake_demo_hosts_up` sends the same
+`PROCESS_HOST_CHECK_RESULT` and the same two PING commands as for ping hosts
+(Checkmk adds its implicit PING service to any host with no discovered service
+and no active-check rule, which a never-discovered demo agent host is; without
+the fake it showed PING CRIT in a live run), and in addition
+`DISABLE_SVC_CHECK;<host>;Check_MK`,
 `PROCESS_SERVICE_CHECK_RESULT;<host>;Check_MK;0;OK - [agent] Version: demo, OS:
 linux - demo host, no agent installed`, `DISABLE_SVC_CHECK;<host>;Check_MK
 Discovery` and `PROCESS_SERVICE_CHECK_RESULT;<host>;Check_MK Discovery;0;OK - no
 unmonitored services found, no vanished services found, no new host labels`
 (constants without `;`). The always-up rule already covers every onboarded host,
-so it includes them. Undo for these: `ENABLE_SVC_CHECK;<host>;Check_MK` and
+so it includes them. Undo for these: `ENABLE_SVC_CHECK;<host>;PING`, `ENABLE_SVC_CHECK;<host>;Check_MK` and
 `ENABLE_SVC_CHECK;<host>;Check_MK Discovery`. Whether both services exist on a
 never-answering agent host and whether the injected results stick under the CE
 core has not been verified on a live site.

@@ -5909,7 +5909,7 @@ _DEMO_DISCOVERY_TEXT = "OK - no unmonitored services found, no vanished services
 
 
 @pytest.mark.asyncio
-async def test_phase7_demo_linux_host_fakes_check_mk_services_not_ping(monkeypatch, tmp_path):
+async def test_phase7_demo_linux_host_fakes_ping_and_check_mk_services(monkeypatch, tmp_path):
     events = await _run_phase7_demo(
         monkeypatch, tmp_path, lambda host, commands: None, os_family="linux", hostname="dl1"
     )
@@ -5917,14 +5917,17 @@ async def test_phase7_demo_linux_host_fakes_check_mk_services_not_ping(monkeypat
     body = next(e[1] for e in events if e[0] == "rule")
     assert body["conditions"]["host_name"] == {"match_on": ["dl1"], "operator": "one_of"}
     send = next(e for e in events if e[0] == "send")
+    # Live report 2026-10-12: a never-discovered demo agent host gets Checkmk's implicit PING,
+    # which showed CRIT because the demo IP is unroutable, so PING is faked as well.
     assert send[2] == [
         f"PROCESS_HOST_CHECK_RESULT;dl1;0;{_DEMO_OUTPUT}",
+        "DISABLE_SVC_CHECK;dl1;PING",
+        f"PROCESS_SERVICE_CHECK_RESULT;dl1;PING;0;{_DEMO_OUTPUT}",
         "DISABLE_SVC_CHECK;dl1;Check_MK",
         f"PROCESS_SERVICE_CHECK_RESULT;dl1;Check_MK;0;{_DEMO_AGENT_TEXT}",
         "DISABLE_SVC_CHECK;dl1;Check_MK Discovery",
         f"PROCESS_SERVICE_CHECK_RESULT;dl1;Check_MK Discovery;0;{_DEMO_DISCOVERY_TEXT}",
     ]
-    assert not any(";PING" in c for c in send[2])
     # the `;` is the Livestatus separator: injected texts must not contain one
     assert ";" not in _DEMO_AGENT_TEXT and ";" not in _DEMO_DISCOVERY_TEXT
 
@@ -5938,7 +5941,7 @@ async def test_phase7_demo_linux_rule_failure_disables_host_check_first(monkeypa
     send = next(e for e in events if e[0] == "send")
     assert send[2][0] == "DISABLE_HOST_CHECK;dl1"
     assert send[2][1] == f"PROCESS_HOST_CHECK_RESULT;dl1;0;{_DEMO_OUTPUT}"
-    assert not any(";PING" in c for c in send[2])
+    assert "DISABLE_SVC_CHECK;dl1;PING" in send[2]
 
 
 @pytest.mark.asyncio
