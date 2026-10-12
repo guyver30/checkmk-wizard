@@ -19,8 +19,9 @@ describe("deviceTypeSvg", () => {
     // Assertion updated 2026-09-26 (deferred-items.md, plan 14-03): the icon was replaced
     // in commit a427d92 (drop-in device-type icons) and no longer contains "15.1001 7.9" --
     // the stale assertion is corrected here to the current markup's own distinctive path,
-    // without touching the icon file itself.
-    expect(deviceTypeSvg("NetworkDevice")).toContain("M18 4l3 3l-3 3");
+    // without touching the icon file itself. Updated 2026-10-12: NetworkDevice redrawn as a
+    // single-colour filled 16x16 (same as DOP) so it takes the state colour.
+    expect(deviceTypeSvg("NetworkDevice")).toContain("M3 4H13A2 2 0 0 1 15 6V10");
   });
 
   it("maps E-link to its own distinct svg markup", () => {
