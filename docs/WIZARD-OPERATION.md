@@ -698,7 +698,11 @@ scoped `topology_editor` Checkmk role and user
 - **Env var:** reads `TOPOLOGY_EDITOR_SECRET` from `deploy/.env`.
 - **Create vs. rotate:** calls `CheckmkClient.provision_topology_editor()`,
   which idempotently ensures the scoped role's permissions
-  (`TOPOLOGY_EDITOR_PERMISSIONS`, `api.py`) and then either creates the
+  (`TOPOLOGY_EDITOR_PERMISSIONS`, `api.py`; since 2026-10-12 this includes
+  `wato.activateforeign`, quick 261012-fx1, so the dashboard's discovered-hosts
+  banner can activate the network scan's host creations — a site provisioned
+  earlier gets it on the next wizard run, or by enabling it once under
+  Setup > Users > Roles & permissions > "Topology editor (dashboard)") and then either creates the
   `topology_editor` automation user (first run) or rotates its secret to
   match `.env` (a re-run) — the same create-or-update shape
   `bootstrap_automation_user()` uses for the `automation` user. A green

@@ -45,8 +45,11 @@ class CheckmkAPIError(RuntimeError):
 # management, global settings, rulesets), not just "edit hosts and activate
 # my own changes". This role is scoped to exactly TOPOLOGY_EDITOR_PERMISSIONS
 # (13-01 VERDICT V-PERMS) and nothing more (RESEARCH.md Anti-Patterns,
-# Security Domain V4): `wato.activateforeign` and every `wato.users`/
-# `wato.global`/`wato.rulesets` id are deliberately excluded.
+# Security Domain V4): every `wato.users`/`wato.global`/`wato.rulesets` id
+# is deliberately excluded. `wato.activateforeign` was excluded until
+# 2026-10-12 and is now granted (quick 261012-fx1, operator decision): the
+# dashboard's discovered-hosts banner must activate the network scan's host
+# creations, which Checkmk attributes to the scan's user, not topology_editor.
 
 TOPOLOGY_EDITOR_ROLE_ID = "topology_editor"
 TOPOLOGY_EDITOR_ROLE_ALIAS = "Topology editor (dashboard)"
@@ -67,9 +70,11 @@ TOPOLOGY_EDITOR_USER_ID = "topology_editor"
 # isn't a contact for in the first place. `wato.see_all_folders` is the
 # separate "see" counterpart to `wato.all_folders`'s "write", and without
 # it a scoped role can edit nothing because it can't find anything.
-# `wato.activateforeign` is present on the admin role too but is
-# deliberately EXCLUDED -- a scoped write role must only activate its own
-# changes, never someone else's.
+# `wato.activateforeign` was deliberately EXCLUDED here until 2026-10-12
+# (a scoped write role activated only its own changes). Quick 261012-fx1,
+# operator decision: it is now INCLUDED so the dashboard's discovered-hosts
+# banner can activate network-scan host creations. The edit-mode Apply flow
+# still sends force_foreign_changes false; only the banner opts in.
 TOPOLOGY_EDITOR_PERMISSIONS: tuple[str, ...] = (
     "wato.use",
     "wato.edit",
@@ -78,6 +83,7 @@ TOPOLOGY_EDITOR_PERMISSIONS: tuple[str, ...] = (
     "wato.edit_hosts",
     "wato.manage_hosts",
     "wato.activate",
+    "wato.activateforeign",
 )
 
 

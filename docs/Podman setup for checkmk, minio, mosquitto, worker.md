@@ -225,10 +225,13 @@ holds this secret. Four things to know:
    (§5.1 "A third signature"); always use the full down/up.
 
 Blast radius: the `topology_editor` credential can edit host attributes (`parents`,
-`map_position`), add new hosts, and activate its own pending changes. It cannot manage users,
-edit global settings or rulesets, and — critically — cannot activate another operator's
-pending changes (`wato.activateforeign` is deliberately not granted), so a topology edit can
-never accidentally push someone else's unreviewed configuration change live. With the secret no
+`map_position`), add new hosts, and activate pending changes. It cannot manage users, edit global
+settings or rulesets. Since 2026-10-12 it also holds `wato.activateforeign`, so the dashboard's
+"new hosts discovered" banner can activate the network scan's host creations (Checkmk attributes
+those to the scan's user); Activate there activates every pending change, which is why the banner
+asks for a second confirmation when non-host changes are pending. Edit-mode Apply still never
+forces foreign changes. Existing sites pick the permission up on the next wizard run (or once in
+Setup > Users > Roles & permissions > Topology editor (dashboard)). With the secret no
 longer reaching the browser at all, a leaked/exfiltrated frontend has nothing to steal in the
 first place.
 

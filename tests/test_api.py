@@ -879,7 +879,10 @@ _TOPOLOGY_USER_URL = f"{BASE}/objects/user_config/{TOPOLOGY_EDITOR_USER_ID}"
 
 
 def test_topology_editor_permissions_excludes_dangerous_ids():
-    assert "wato.activateforeign" not in TOPOLOGY_EDITOR_PERMISSIONS
+    # 2026-10-12 (quick 261012-fx1, operator decision): activateforeign is now granted so the
+    # dashboard banner can activate network-scan host creations. Users, global settings and
+    # rulesets stay excluded, which is what keeps a leaked credential from being admin.
+    assert "wato.activateforeign" in TOPOLOGY_EDITOR_PERMISSIONS
     excluded_prefixes = ("wato.users", "wato.global", "wato.rulesets")
     assert not any(
         perm_id.startswith(prefix) for perm_id in TOPOLOGY_EDITOR_PERMISSIONS for prefix in excluded_prefixes

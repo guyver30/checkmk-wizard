@@ -22,8 +22,10 @@ would otherwise carry full admin power (user management, global settings,
 rulesets), not just "edit hosts and activate my own changes".
 `TOPOLOGY_EDITOR_PERMISSIONS` (`src/checkmk_wizard/api.py`) is scoped to
 exactly those ids (13-01 VERDICT V-PERMS) and nothing more (RESEARCH.md
-Anti-Patterns, Security Domain V4): `wato.activateforeign` and every
-`wato.users`/`wato.global`/`wato.rulesets` id are deliberately excluded.
+Anti-Patterns, Security Domain V4): every `wato.users`/`wato.global`/
+`wato.rulesets` id is deliberately excluded. `wato.activateforeign` is
+granted since 2026-10-12 (quick 261012-fx1) for the dashboard's
+discovered-hosts banner.
 
 Role clone body shape: source-verified, not live-HTTP-tested
 -----------------------------------------------------------------

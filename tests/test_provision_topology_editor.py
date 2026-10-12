@@ -35,9 +35,10 @@ def test_build_role_permissions_enables_exactly_the_given_ids():
     assert result == {perm_id: "yes" for perm_id in provisioner.REQUIRED_PERMISSIONS}
 
 
-def test_build_role_permissions_never_contains_activateforeign_or_excluded_prefixes():
+def test_build_role_permissions_contains_activateforeign_but_never_excluded_prefixes():
+    # activateforeign granted 2026-10-12 (quick 261012-fx1); users/global/rulesets stay excluded.
     result = provisioner.build_role_permissions(provisioner.REQUIRED_PERMISSIONS)
-    assert "wato.activateforeign" not in result
+    assert "wato.activateforeign" in result
     excluded_prefixes = ("wato.users", "wato.global", "wato.rulesets")
     assert not any(perm_id.startswith(prefix) for perm_id in result for prefix in excluded_prefixes)
 
@@ -60,6 +61,7 @@ def test_build_role_permissions_matches_live_verified_v_perms():
         "wato.edit_hosts",
         "wato.manage_hosts",
         "wato.activate",
+        "wato.activateforeign",
     )
 
 
