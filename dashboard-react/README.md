@@ -183,13 +183,32 @@ vis-network's manipulation toolbar:
   switch, delete it in Checkmk's own UI (Setup > Hosts) and activate the change there.
 
 Every individual edit above writes straight to Checkmk but does not go live until **Apply changes**
-is pressed once — this runs Checkmk's own Activate Changes for exactly the scoped
-credential's own pending changes. If another operator has unrelated changes pending in Checkmk
-at the same time, Apply shows "Saved, but not live yet" and stays that way: the scoped
-`topology_editor` credential never force-activates someone else's foreign changes, by design
-(13-CONTEXT.md D-04, `wato.activateforeign` is deliberately not granted). The pending Checkmk
-change must be activated (by that other operator, or by `cmkadmin`) before your edit and theirs
-both go live.
+is pressed once — this runs Checkmk's own Activate Changes with `force_foreign_changes: false`.
+If another operator has unrelated changes pending in Checkmk at the same time, Apply shows
+"Saved, but not live yet" and stays that way: edit-mode Apply never force-activates someone
+else's changes (13-CONTEXT.md D-04). The pending Checkmk change must be activated (by that other
+operator, by `cmkadmin`, or via the discovered-hosts banner below) before your edit and theirs
+both go live. The only exception is the discovered-hosts banner (quick 261012-fx1), which is the
+single place that passes `force_foreign_changes: true`.
+
+### Discovered hosts banner
+
+When hosts created by someone other than `topology_editor` (typically Checkmk's own network
+scan) are pending activation, a banner above the toolbar lists each host's name, IP and folder.
+
+- Appears only when editing is available and admin mode is off; refreshes every 60 s.
+- **Activate** runs Checkmk's Activate Changes with `force_foreign_changes: true` and waits for
+  it to finish. Checkmk activates everything pending at once, so when other users' non-host
+  changes are also pending, the first click shows how many and asks for a second confirmation
+  ("Activate all"). A change that appears after the list was shown aborts the activation and asks
+  for another review.
+- **Not now** hides the banner for the browser session (sessionStorage); the hosts stay pending.
+- If pending changes exist but no host name can be read from them, a generic "N pending changes"
+  banner with the same actions is shown. The pending-change JSON shape is not live-verified, so
+  the parsing is defensive.
+- Requires the `topology_editor` role to hold `wato.activateforeign`: re-run the wizard or
+  `scripts/provision_topology_editor.py` to grant it on an existing site, or do it once by hand
+  (see `docs/WIZARD-OPERATION.md`, "Topology editor provisioning").
 
 Edit mode also has a 5-minute idle auto-exit: if the toggle is left on with no interaction, it
 switches itself off and shows a one-time notice, so a browser tab left open overnight doesn't

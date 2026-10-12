@@ -16,11 +16,16 @@ import { useAppStore } from "../store/useAppStore";
 // top-level beforeEach so the Switch/toolbar tests don't also have to wait out the
 // disabled-until-probed window; TopologyToolbar.test.tsx and the dedicated
 // "editing unavailable" test further down already cover the disabled-hint state.
-vi.mock("../lib/checkmkWrite", () => ({
+// The real pure helpers (classifyPendingChanges, ...) are kept because the discovered-hosts
+// banner imports them from the same module; only the network-touching functions are mocked.
+vi.mock("../lib/checkmkWrite", async () => ({
+  ...(await vi.importActual<typeof import("../lib/checkmkWrite")>("../lib/checkmkWrite")),
   countPendingChanges: vi.fn(),
   activateChanges: vi.fn(),
   setCriticality: vi.fn(),
   probeEditingAvailable: vi.fn(),
+  listPendingChanges: vi.fn(),
+  getHostSummary: vi.fn(),
 }));
 
 // TopologyMap itself is exercised by TopologyMap.test.tsx (including its real onEditSaved/
@@ -57,6 +62,8 @@ beforeEach(() => {
   localStorage.clear();
   useAppStore.setState(INITIAL_STATE, true);
   vi.mocked(checkmkWrite.probeEditingAvailable).mockReset().mockResolvedValue(true);
+  vi.mocked(checkmkWrite.listPendingChanges).mockReset().mockResolvedValue([]);
+  vi.mocked(checkmkWrite.getHostSummary).mockReset();
 });
 
 function encode(value: unknown): Uint8Array {
@@ -88,6 +95,15 @@ describe("IndexRoute", () => {
     );
     expect(screen.queryByRole("status", { name: /fleet state summary/i })).not.toBeInTheDocument();
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
+  });
+
+  it("does not read pending changes when editing is unavailable (banner disabled)", async () => {
+    vi.mocked(checkmkWrite.probeEditingAvailable).mockResolvedValue(false);
+    renderIndex();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(checkmkWrite.listPendingChanges).not.toHaveBeenCalled();
   });
 
 });

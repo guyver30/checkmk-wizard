@@ -10,6 +10,7 @@ import { useSearchParams } from "react-router";
 import { Snackbar } from "kone-design-system";
 import { AdminActionBar, AdminBanner } from "../components/AdminBar";
 import { CriticalityEditor } from "../components/CriticalityEditor";
+import { DiscoveredHostsBanner } from "../components/DiscoveredHostsBanner";
 import { EventHistory } from "../components/EventHistory";
 import { GroupingControls } from "../components/GroupingControls";
 import { HostDetails } from "../components/HostDetails";
@@ -326,6 +327,19 @@ export function IndexRoute() {
       .finally(() => setApplying(false));
   }, [applying]);
 
+  const onDiscoveredActivated = useCallback((count: number) => {
+    setPendingCount(0);
+    setSnackbar({
+      status: "success",
+      message: `${count} new host${count === 1 ? "" : "s"} activated`,
+      autoDismissMs: 3000,
+    });
+  }, []);
+
+  const onDiscoveredFailed = useCallback((message: string) => {
+    setSnackbar({ status: "danger", message });
+  }, []);
+
   useEffect(() => {
     if (!snackbar?.autoDismissMs) {
       return;
@@ -373,6 +387,13 @@ export function IndexRoute() {
             onWheel={touch}
             onKeyDown={touch}
           >
+            {/* Hosts created by someone else (the network scan) and left pending; hidden in
+                admin mode because Activate writes to Checkmk's config. */}
+            <DiscoveredHostsBanner
+              enabled={editingAvailable && !adminMode}
+              onActivated={onDiscoveredActivated}
+              onFailed={onDiscoveredFailed}
+            />
             <TopologyToolbar
               editMode={editMode}
               onEditModeChange={onEditModeChange}
