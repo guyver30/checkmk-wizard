@@ -1931,7 +1931,7 @@ delete the Host check command rule (Setup > Hosts > Host monitoring rules >
 Host check command) and send `ENABLE_SVC_CHECK;<host>;PING` (plus
 `ENABLE_HOST_CHECK;<host>` if the fallback ran).
 
-**Demo Linux agent hosts (changed 2026-10-12, not live-verified):** for hosts
+**Demo Linux agent hosts (changed 2026-10-12, service list live-verified):** for hosts
 with `os_family == "linux"` `_fake_demo_hosts_up` sends the same
 `PROCESS_HOST_CHECK_RESULT` and the same two PING commands as for ping hosts
 (Checkmk adds its implicit PING service to any host with no discovered service
@@ -1946,7 +1946,9 @@ unmonitored services found, no vanished services found, no new host labels`
 so it includes them. Undo for these: `ENABLE_SVC_CHECK;<host>;PING`, `ENABLE_SVC_CHECK;<host>;Check_MK` and
 `ENABLE_SVC_CHECK;<host>;Check_MK Discovery`. Whether both services exist on a
 never-answering agent host and whether the injected results stick under the CE
-core has not been verified on a live site.
+core was checked live on 2026-10-12: PING, Check_MK and Check_MK Discovery are
+all present and green with their active checks disabled. Whether the host stays
+UP rather than STALE over time is still unverified.
 
 1. `_activate_pending_changes(client, connection)` (added 2026-08-27,
    shared with Phase 6's pre-discovery activation above — the exact same

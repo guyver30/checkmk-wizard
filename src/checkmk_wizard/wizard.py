@@ -3786,9 +3786,9 @@ async def _fake_demo_hosts_up(
     never-discovered agent host with no active-check rule still gets Checkmk's
     implicit PING service (live report 2026-10-12: it showed PING CRIT without
     this). Their `Check_MK` and `Check_MK Discovery` services are also disabled
-    and set OK. NOT live-verified:
-    that both services exist on an agent host that never answers and that the
-    injected results stick under the CE Nagios core. Their undo is
+    and set OK. Live-verified 2026-10-12 on the test site: PING, Check_MK and
+    Check_MK Discovery all exist on a never-discovered demo agent host and show
+    OK with their active checks disabled. Their undo is
     ENABLE_SVC_CHECK;<host>;Check_MK and ENABLE_SVC_CHECK;<host>;Check_MK
     Discovery. The injected texts are constants without `;`.
     """

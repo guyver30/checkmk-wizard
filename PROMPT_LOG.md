@@ -575,3 +575,11 @@ push
 ## 2026-10-12 14:56
 
 I created a fake linux host (under --demo) but it showed ping crit now. why?
+
+## 2026-10-12 15:00
+
+what you mean for "Do Check_MK and Check_MK Discovery also show on that host, and are they OK"
+
+## 2026-10-12 15:02
+
+I see 3 services all green: check_mk (active checks disabled), check_mk discover (active check disabled) and ping (active checks disabled)

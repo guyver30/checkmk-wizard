@@ -197,7 +197,7 @@ that login to writing `sites/<site_id>/admin/cmd`; it cannot write anywhere unde
 
 ## Forecast and trend-need demo (demo Linux host + seeded history)
 
-Added 2026-10-12, **not live-verified**. Purpose: show the dashboard's forecast chart and the
+Added 2026-10-12. The demo Linux host's service list was live-verified (PING, `Check_MK`, `Check_MK Discovery`, all green with active checks disabled); the seeded history and the dashboard display are **not live-verified**. Purpose: show the dashboard's forecast chart and the
 "needs attention" trend need on demand, without waiting weeks for a real disk to fill. The host is a
 `--demo` Linux agent host; the history is a synthetic series written straight into ClickHouse.
 
