@@ -1337,10 +1337,15 @@ as a bare host object under `host_name=ip` **in the folder its scan
 belongs to** (see Phase 3 above); a Phase 4 promotion that keeps the
 default hostname (== IP) therefore always collides with that stub host on
 `create_host`. The helper catches the resulting `CheckmkAPIError`, fetches
-the existing host's ETag (`client.get_host()`), and `PUT`s the attributes
-via `update_host_attributes()` instead — so `tag_agent`/`tag_snmp_ds`/
+the existing host (`client.get_host()`: ETag plus current attributes), and
+`PUT`s via `update_host_attributes()` instead — so `tag_agent`/`tag_snmp_ds`/
 `snmp_community`/`ipaddress` still land on the host rather than being
-silently dropped by the failed create. **Note:** this fallback only
+silently dropped by the failed create. Because Checkmk's host-config `PUT`
+replaces the whole attribute set, the fallback read-merges: the existing
+attributes (minus `meta_data`) are the base, the wizard's attributes are
+applied over them, and `labels` is merged key by key (so dashboard-set
+`parents`, `map_position`, `criticality`, `depends_on` etc. survive and
+`cmk_wizard=onboarded` is added). A GET without an ETag re-raises. **Note:** this fallback only
 updates attributes, not folder placement — Checkmk's host-config `PUT`
 doesn't support moving folders — but since Phase 3 now stages each host
 directly into its real target folder (2026-08-25; previously always

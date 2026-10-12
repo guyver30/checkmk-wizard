@@ -1039,6 +1039,69 @@ async def test_create_or_update_host_falls_back_to_update_on_collision():
     assert update_route.calls.last.request.headers["If-Match"] == "abc123"
 
 
+def _mock_collision_with_existing(existing_attributes, etag="abc123"):
+    respx.post(f"{BASE}/domain-types/host_config/collections/all").mock(
+        return_value=Response(400, json={"title": "already exists"})
+    )
+    respx.get(f"{BASE}/objects/host_config/h1").mock(
+        return_value=Response(
+            200,
+            json={"extensions": {"attributes": existing_attributes}},
+            headers={"ETag": etag} if etag else {},
+        )
+    )
+    return respx.put(f"{BASE}/objects/host_config/h1").mock(return_value=Response(200, json={}))
+
+
+@pytest.mark.asyncio
+async def test_create_or_update_host_fallback_preserves_dashboard_attributes():
+    # Regression: the collision fallback PUT only the wizard's attributes, and
+    # the host-config PUT replaces the whole set, so parents and dashboard
+    # labels set on the still-IP-named host were wiped on promotion.
+    existing = {
+        "ipaddress": "10.0.0.2",
+        "parents": ["core-sw"],
+        "labels": {"map_position": "10,20", "criticality": "high", "custom": "x"},
+        "meta_data": {"created_at": "2026-10-01T00:00:00Z"},
+    }
+    with respx.mock:
+        put = _mock_collision_with_existing(existing)
+        async with CheckmkClient(CONN) as client:
+            await _create_or_update_host(
+                client,
+                "h1",
+                "/",
+                {
+                    "ipaddress": "10.0.0.2",
+                    "tag_agent": "cmk-agent",
+                    "tag_snmp_ds": "no-snmp",
+                    "labels": {"cmk_wizard": "onboarded"},
+                },
+            )
+    body = json.loads(put.calls.last.request.content)["attributes"]
+    assert body["parents"] == ["core-sw"]
+    assert body["labels"] == {
+        "map_position": "10,20",
+        "criticality": "high",
+        "custom": "x",
+        "cmk_wizard": "onboarded",
+    }
+    assert body["tag_agent"] == "cmk-agent"
+    assert body["tag_snmp_ds"] == "no-snmp"
+    assert "meta_data" not in body
+    assert put.calls.last.request.headers["If-Match"] == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_create_or_update_host_fallback_without_etag_still_raises():
+    with respx.mock:
+        put = _mock_collision_with_existing({"parents": ["core-sw"]}, etag=None)
+        async with CheckmkClient(CONN) as client:
+            with pytest.raises(CheckmkAPIError):
+                await _create_or_update_host(client, "h1", "/", {"tag_agent": "cmk-agent"})
+    assert not put.called
+
+
 @pytest.mark.asyncio
 async def test_phase3_stages_hosts_inert(monkeypatch):
     # Every host Phase 3 stages must come up with no active monitoring

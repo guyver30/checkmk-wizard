@@ -2216,7 +2216,21 @@ async def _create_or_update_host(
         etag = resp.headers.get("ETag")
         if not etag:
             raise
-        await client.update_host_attributes(host_name, attributes, etag)
+        # Bug fixed 2026-10-12: this used to PUT only the wizard-owned
+        # `attributes`. Checkmk's host-config PUT replaces the whole attribute
+        # set, so everything the operator had set in the dashboard on the
+        # still-IP-named host (parents, and labels such as map_position,
+        # criticality, depends_on) was wiped when the host was promoted. Read
+        # the existing attributes first and merge the wizard's over them, the
+        # same way `_update_host_attributes_merge`-style updates do; `labels`
+        # is merged key by key because a plain dict update would replace it.
+        merged = dict(resp.json().get("extensions", {}).get("attributes", {}))
+        merged.pop("meta_data", None)  # Checkmk-computed, not writable
+        existing_labels = merged.get("labels") or {}
+        merged.update(attributes)
+        if existing_labels or "labels" in attributes:
+            merged["labels"] = {**existing_labels, **(attributes.get("labels") or {})}
+        await client.update_host_attributes(host_name, merged, etag)
 
 
 def _expected_open_ports_by_hostname(
