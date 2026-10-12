@@ -499,3 +499,27 @@ ok next steps?
 ## 2026-10-12 11:15
 
 wizard against existing folders is roughly fine. Changes: 1) default for changing cmkadmin password should be No; 2) at "what do you want to do" menu (onboard new hosts / manage existing hosts) arrow keys move only the pointer, not the whole row highlighted (first row always highlighted); 3) error in Phase 7: Activation failed 422 "Currently there are no changes to activate."
+
+## 2026-10-12 11:17
+
+I checked the auto network scan...it found a new host but it is waiting to activate pending changes
+
+## 2026-10-12 11:19
+
+can the dashboard show that there are new discovered hosts and ask to activate them (or not)? possible?
+
+## 2026-10-12 11:27
+
+let us relax this "activate someone else change"... if there is a new host being discovered, the dashboard should show this info (with device IP etc) and let the user decide to activate it.
+
+## 2026-10-12 11:40
+
+yes go ahead (grant topology_editor wato.activateforeign, flip tests, amend T-13-17 docs)
+
+## 2026-10-12 11:41
+
+which permissions I need to change on checkmk gui ?
+
+## 2026-10-12 11:44
+
+push it
