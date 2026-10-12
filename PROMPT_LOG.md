@@ -427,3 +427,35 @@
 
 ## 2026-10-08 07:58
 /bm:resume-work
+
+## 2026-10-08 17:05
+
+stress-ng --cpu 4 --cpu-load 100 --timeout 600s gave me warn (about 4 load); stress-ng --cpu 8 --timeout 600s gave me crit (more than 7 load)
+
+## 2026-10-08 17:11
+
+/bm:pause-work
+
+## 2026-10-12 08:56
+
+/bm:resume-work
+
+## 2026-10-12 09:15
+
+which colors you chose for 1,5,15 minutes in load history chart
+
+## 2026-10-12 09:17
+
+I rebuilt dashboard but I only see solid black, solid gray and dashed black
+
+## 2026-10-12 09:18
+
+yes commit
+
+## 2026-10-12 09:24
+
+colors ok now. keep the folder auto monitoring test not done yet for now. I will let you know when it is fine; what else?
+
+## 2026-10-12 09:25
+
+you can close 1. then do 2,3,4
