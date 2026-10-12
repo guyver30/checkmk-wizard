@@ -643,3 +643,7 @@ a couple of small things: the "overview" link in dashboard just brings me to mai
 ## 2026-10-12 16:41
 
 push
+
+## 2026-10-12 16:44
+
+/bm:pause-work
