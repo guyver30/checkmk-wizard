@@ -141,9 +141,9 @@ map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only pla
   - Other hosts (SNMP/ping) keep the full service table.
   - The pane shows no history of its own: the event history pane below the map filters to the
     open host instead (see §5a).
-  - The nav bar has only **Overview**; the old placeholder "Devices" page was removed
+  - The nav bar has only **Home** (formerly Overview); the old placeholder "Devices" page was removed
     (2026-09-25).
-  - The fleet state counts sit in the header next to **Overview**, as compact badges such as
+  - The fleet state counts sit in the header next to **Home**, after the Checkmk site id (`CMK_SITE_ID`, shown as a muted label), as compact badges such as
     `OK 17` and `DOWN 3` (OK always shown, other states only when non-zero). They moved there
     from a row of tiles above the map on 2026-09-28. The design system's `NavBar` gained an
     optional `navExtra` slot for this; after changing `design-system/`, rebuild and pack it, then
