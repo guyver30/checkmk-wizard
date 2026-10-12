@@ -619,3 +619,11 @@ PING    pl      30
 ## 2026-10-12 16:16
 
 the trend and need are gone after deleting the history rows
+
+## 2026-10-12 16:17
+
+/bm:audit-milestone
+
+## 2026-10-12 16:23
+
+(audit-milestone completed; report .planning/v1.0-MILESTONE-AUDIT.md)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild the dashboard and analytics images, then bring the whole stack down and
+# Rebuild the dashboard image, then bring the whole stack down and
 # up again with the poller and analytics force-recreated, so a `git pull` is
 # actually picked up (the poller reads scripts/mqtt_poller.py once at start).
 #
@@ -13,7 +13,9 @@ set -euo pipefail
 # compose project (and so the volume names).
 cd "$(dirname "$0")"
 
-podman compose build dashboard analytics
+# Only the dashboard has a build: section; analytics runs a stock python image with the
+# repo bind-mounted, so the --force-recreate below is what makes it pick up new code.
+podman compose build dashboard
 podman compose down
 podman compose up -d --force-recreate poller analytics
 # `up -d` with service names starts only those and their dependencies; this starts
