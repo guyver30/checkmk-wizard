@@ -547,3 +547,15 @@ banner showed new hosts with their IP, I activated them and they showed up in th
 ## 2026-10-12 13:24
 
 yes close 14.2; point 2 also checked
+
+## 2026-10-12 13:29
+
+one thing I want to clarify: the low, medium, high and critical levels, how do they map in terms of cascading, service needs?
+
+## 2026-10-12 13:43
+
+before going for plan 15, I want to discuss another thing: we can fake hosts up/down, but how to fake an entire history of a metric monitored on a linux host? mostly filesystem space, so it can plot a trendline and indicate what kind of service need may be required.
+
+## 2026-10-12 13:48
+
+we use a demo only host (which needs to be created properly in the wizard, as now we can only do ping-only demo hosts) and just do history, no gauge for the moment.
