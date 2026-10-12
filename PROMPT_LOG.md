@@ -603,3 +603,19 @@ I ran it, no errors, trend correct
 ## 2026-10-12 15:37
 
 ran seed_fake_history.py --host fake_elink --delete (inside quotes): output "Deleted the rows of host=fake_elink ..."
+
+## 2026-10-12 15:37
+
+do I need to run also the one-off equivalent on clickhouse?
+
+## 2026-10-12 15:39
+
+clickhouse-client: Code 516 ch_admin authentication failed (password incorrect or no such user)
+
+## 2026-10-12 15:39
+
+PING    pl      30
+
+## 2026-10-12 16:16
+
+the trend and need are gone after deleting the history rows
