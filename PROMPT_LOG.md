@@ -559,3 +559,11 @@ before going for plan 15, I want to discuss another thing: we can fake hosts up/
 ## 2026-10-12 13:48
 
 we use a demo only host (which needs to be created properly in the wizard, as now we can only do ping-only demo hosts) and just do history, no gauge for the moment.
+
+## 2026-10-12 14:36
+
+provide some examples of seed_fake_history
+
+## 2026-10-12 14:38
+
+write these examples properly in a .md file (or insert them in a previous .md)

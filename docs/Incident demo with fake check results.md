@@ -238,6 +238,49 @@ Steering the result:
 | show the sharp-drop cut | `--sawtooth 14` (only the last tooth is fitted; needs end - start > 5) |
 | no trend need | `--metric util` (not a trend-need metric) or `--start 50 --end 50 --noise 0` (stable) |
 
+### Worked examples
+
+Each example below was produced by `--dry-run` on 2026-10-12 (60 days of hourly rows ending now, so
+the dates move with the day you run it). Run any of them from the worker container; only the
+arguments after `--host demo-lnx1` change:
+
+```
+podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/seed_fake_history.py --host demo-lnx1 --dry-run <ARGS>"
+```
+
+Drop `--dry-run` to insert. Add `--seed 42` for the same noise every time, and run `--delete`
+(section 5) before re-seeding so old and new rows do not overlap.
+
+| # | Scenario | `<ARGS>` | Slope/day | Days to crit | Tier | Confidence |
+|---|---|---|---|---|---|---|
+| 1 | Default: disk filling, crit in about two weeks | *(none)* or `--start 60 --end 84` | 0.40 | 14 | `urgent` | medium |
+| 2 | About to hit crit | `--start 60 --end 89` | 0.48 | 1.2 | `immediate` | medium |
+| 3 | Still weeks away (warn in 39 days) | `--start 30 --end 60` | 0.50 | 59 | `standard` | medium |
+| 4 | Longer, cleaner history | `--days 75 --start 40 --end 88 --noise 0.2` | 0.64 | 3.5 | `urgent` | **high** |
+| 5 | Flat disk, no need (fit `stable`) | `--start 50 --end 52` | n/a | n/a | none | n/a |
+| 6 | Log rotation: climbs and drops every 10 days | `--days 30 --sawtooth 10 --start 55 --end 80` | 2.44 | 3.6 | `urgent` | medium |
+| 7 | Memory instead of disk | `--service Memory --metric mem_used_percent --start 40 --end 85` | 0.75 | 6.1 | `urgent` | medium |
+
+Notes per example:
+
+1. The presenter default. The chart shows a steady climb through the warn line (80 %) with the
+   dashed fit reaching crit (90 %) in about two weeks.
+2. Use it to show an immediate-tier need (less than 3 days to crit); it sorts to the top of the
+   Needs pane.
+3. Shows that a slow trend still gets a need, but a low-priority `standard` one.
+4. Confidence is `high` only with more than 60 days of history and r2 of at least 0.9.
+5. Demonstrates the negative case: chart only, no need. The fit is `stable` (r2 0.87, rise under
+   1 point per 30 days).
+6. Each tooth climbs from 55 % to 80 % over 10 days and then drops back. Analytics cuts the series
+   after the last sharp drop (more than 5 points and 25 % of the range) and fits only the last
+   climb, so the slope is the steep 2.4 %/day of the final tooth, not the long-run average.
+7. Any metric in `TREND_NEED_METRICS` (default `fs_used_percent`, `mem_used_percent`) raises a
+   trend need; `util` (CPU) does not.
+
+The expected tier assumes the code defaults of the analytics container. If you changed
+`EVAL_INTERVAL_SECONDS`, `FIT_R2_MIN` or the tier day thresholds there, the real result can differ
+from the preview.
+
 ### 3. Seed
 
 Same command without `--dry-run`:
