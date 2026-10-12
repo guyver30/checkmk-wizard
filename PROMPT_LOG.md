@@ -491,3 +491,11 @@ just write a shell script to rebuild dashboard and analytics, compose down and u
 ## 2026-10-12 10:03
 
 commit and push it
+
+## 2026-10-12 10:06
+
+ok next steps?
+
+## 2026-10-12 11:15
+
+wizard against existing folders is roughly fine. Changes: 1) default for changing cmkadmin password should be No; 2) at "what do you want to do" menu (onboard new hosts / manage existing hosts) arrow keys move only the pointer, not the whole row highlighted (first row always highlighted); 3) error in Phase 7: Activation failed 422 "Currently there are no changes to activate."

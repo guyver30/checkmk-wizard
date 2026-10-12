@@ -456,7 +456,7 @@ data the same way: stop it, remove its data volume, then start it again.
    - **cmkadmin password change (`_prompt_change_cmkadmin_password()`,
      `wizard.py:150-186`, added 2026-08-26):** immediately after printing
      the password, asks "Change the cmkadmin password now? (recommended —
-     the one above was randomly generated)" (default yes). If declined, or
+     the one above was randomly generated)" (default no since 2026-10-12, so Enter keeps the current password). If declined, or
      the operator leaves the new-password prompt blank, the generated
      password stays in effect. Otherwise loops: validates the candidate
      client-side (`_password_problems()`, `wizard.py:101-115` — at least 12

@@ -329,7 +329,7 @@ async def _prompt_change_cmkadmin_password(
     """
     change = await questionary.confirm(
         f"Change the cmkadmin password now? (recommended — {reason})",
-        default=True,
+        default=False,
     ).ask_async()
     if not change:
         return current_password
@@ -3504,7 +3504,13 @@ async def _activate_pending_changes(client: CheckmkClient, connection: CheckmkCo
     cover is activated in another round, up to _ACTIVATION_MAX_ROUNDS.
     """
     try:
-        etag, _ = await client.get_pending_changes()
+        etag, initial_pending = await client.get_pending_changes()
+        # Checkmk answers an activate call with nothing pending by 422 "Currently
+        # there are no changes to activate". Phase 7 hits this whenever Phase 6's
+        # activation already covered everything, which is a success, not a failure.
+        if not initial_pending:
+            console.print("[green]No pending changes to activate.[/green]")
+            return True
         # force_foreign_changes=True: Phase 1's container-mode branch
         # bootstraps the `automation` and `agent_registration` users while
         # authenticated as cmkadmin via the GUI session-cookie flow, so
@@ -4017,6 +4023,9 @@ async def _prompt_main_menu() -> str:
             ),
         ],
         default="onboard",
+        # questionary's default style gives the "highlighted" class no colour, so
+        # arrow keys moved only the pointer glyph and the row looked unchanged.
+        style=questionary.Style([("highlighted", "reverse bold")]),
     ).ask_async()
     return "manage" if answer == "manage" else "onboard"
 

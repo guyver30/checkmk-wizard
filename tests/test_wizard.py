@@ -872,6 +872,38 @@ async def test_prompt_change_cmkadmin_password_declines_keeps_original(monkeypat
     assert result == "original-pw"
 
 
+def test_change_cmkadmin_password_confirm_defaults_to_no(monkeypatch):
+    # Operator request 2026-10-12: Enter at this prompt must keep the current password.
+    seen = {}
+
+    def fake_confirm(message, **kwargs):
+        seen.update(kwargs)
+
+        class _Q:
+            async def ask_async(self):
+                return False
+
+        return _Q()
+
+    monkeypatch.setattr(questionary, "confirm", fake_confirm)
+    import asyncio
+
+    asyncio.run(_prompt_change_cmkadmin_password("cmk.example", "mysite", "original-pw"))
+    assert seen["default"] is False
+
+
+@pytest.mark.asyncio
+async def test_activate_pending_changes_with_nothing_pending_is_success():
+    # Live-reported 2026-10-12: Phase 7 printed "Activation failed ... 422 Currently there are
+    # no changes to activate" when Phase 6 had already activated everything.
+    client = AsyncMock()
+    client.get_pending_changes.return_value = ("etag", [])
+    connection = CheckmkConnection(host="cmk", site="mysite", username="u", secret="s")
+
+    assert await _activate_pending_changes(client, connection) is True
+    client.activate_changes.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_prompt_change_cmkadmin_password_rejects_weak_then_succeeds(monkeypatch):
     # First candidate is too short/simple and must be rejected locally
@@ -4184,6 +4216,19 @@ async def test_phase5_windows_manual_service_entry_creates_rule(monkeypatch):
     assert json.loads(body["value_raw"]) == {"services": ["^MSSQLSERVER$", "^W3SVC$"]}
 
 
+def _pending_then_clean():
+    """side_effect for the pending_changes GET: one pending change on the first read (so
+    _activate_pending_changes proceeds to activate), then none (so it reports success)."""
+    reads = {"n": 0}
+
+    def effect(request):
+        reads["n"] += 1
+        changes = [{"id": "c1"}] if reads["n"] == 1 else []
+        return Response(200, json={"value": changes}, headers={"ETag": '"etag1"'})
+
+    return effect
+
+
 def _mock_activation_routes():
     """phase6_discovery() now activates pending changes before running
     discovery (see _activate_pending_changes()) — register the two routes
@@ -4191,7 +4236,7 @@ def _mock_activation_routes():
     Returns the activate-changes POST route so callers can inspect the
     request body it was sent."""
     respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
-        return_value=Response(200, json={}, headers={"ETag": '"etag1"'})
+        side_effect=_pending_then_clean()
     )
     return respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
         return_value=Response(200, json={"id": "run1"})
@@ -4295,7 +4340,7 @@ async def test_activate_pending_changes_waits_for_running_activation(monkeypatch
     monkeypatch.setattr("checkmk_wizard.wizard.asyncio.sleep", fake_sleep)
     with respx.mock:
         respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
-            return_value=_pending([])
+            side_effect=[_pending([{"id": "c1"}]), _pending([])]
         )
         respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
             return_value=Response(200, json={"id": "run1", "extensions": {"is_running": True}})
@@ -4801,7 +4846,7 @@ async def _run_phase7_demo(monkeypatch, tmp_path, send, *, demo=True, rule_statu
     host = OnboardedHost(ip="10.0.0.5", hostname="dh1", folder="/", os_family="ping")
     with respx.mock:
         respx.get(f"{BASE}/domain-types/activation_run/collections/pending_changes").mock(
-            return_value=Response(200, json={}, headers={"ETag": '"etag1"'})
+            side_effect=_pending_then_clean()
         )
         respx.post(f"{BASE}/domain-types/activation_run/actions/activate-changes/invoke").mock(
             side_effect=activate_effect
