@@ -3,12 +3,13 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useSe
 import { NavBar } from "kone-design-system";
 import { ConnectionIndicator } from "./components/ConnectionIndicator";
 import { HeaderStats } from "./components/StatsStrip";
+import { getRuntimeConfig } from "./lib/runtimeConfig";
 import { hostHref } from "./lib/searchLinks";
 import { IndexRoute } from "./routes/IndexRoute";
 import { connect } from "./store/mqttClient";
 
 // Details is deliberately NOT in the nav (Phase 11 removed it, D-19/D-21) — the host details
-// view now lives in the overview's right-hand pane (?host=<id>, 260928-l4h), reachable from the
+// view now lives in the home view's right-hand pane (?host=<id>, 260928-l4h), reachable from the
 // map/tree/incident cards, not from here.
 function AppNav() {
   const navigate = useNavigate();
@@ -19,9 +20,22 @@ function AppNav() {
       appName="DMC digital live dashboard"
       logo={<img src="/kone-logo.png" alt="KONE" className="h-6 w-auto rounded-sm" />}
       items={[
-        { id: "overview", label: "Overview", active: location.pathname === "/", onClick: () => navigate("/") },
+        { id: "overview", label: "Home", active: location.pathname === "/", onClick: () => navigate("/") },
       ]}
-      navExtra={<HeaderStats />}
+      navExtra={
+        <>
+          {/* The Checkmk site this dashboard shows (CMK_SITE_ID), placed before the state
+              badges so the badges sit further right and never overlap it. */}
+          <span
+            className="mr-3 whitespace-nowrap text-sm text-fg-tertiary"
+            data-testid="site-id"
+            title="Checkmk site"
+          >
+            {getRuntimeConfig().checkmkSite}
+          </span>
+          <HeaderStats />
+        </>
+      }
       actions={<ConnectionIndicator />}
     />
   );

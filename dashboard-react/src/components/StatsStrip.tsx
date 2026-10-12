@@ -1,4 +1,4 @@
-// DASH-01's counts-by-state strip. Since 2026-09-28 it sits in the header next to the Overview
+// DASH-01's counts-by-state strip. Since 2026-09-28 it sits in the header next to the Home
 // link as compact badges (operator request: free the space above the map), rather than as a row
 // of StatTiles on the dashboard. Always shows OK (even at zero) so a healthy fleet still gives a
 // positive signal; every other state renders only when its count is greater than zero.

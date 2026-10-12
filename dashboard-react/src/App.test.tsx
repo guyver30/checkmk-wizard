@@ -14,11 +14,23 @@ describe("App", () => {
     expect(screen.getByTestId("topology-map")).toBeInTheDocument();
   });
 
-  it("shows the fleet state summary as compact badges in the header next to Overview", () => {
+  it("shows the fleet state summary as compact badges in the header next to Home", () => {
     render(<App />);
     const banner = screen.getByRole("banner");
     const status = within(banner).getByRole("status", { name: /fleet state summary/i });
     expect(status).toHaveTextContent("OK 0");
+  });
+
+  it("labels the main link Home and shows the Checkmk site id before the state badges", () => {
+    render(<App />);
+    const banner = screen.getByRole("banner");
+    expect(within(banner).getByText("Home")).toBeInTheDocument();
+    expect(within(banner).queryByText("Overview")).not.toBeInTheDocument();
+    const site = within(banner).getByTestId("site-id");
+    const status = within(banner).getByRole("status", { name: /fleet state summary/i });
+    expect(site).toHaveTextContent(/\S/);
+    // The site id comes before the state badges in document order.
+    expect(site.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("renders the normal app at / with the NavBar present", () => {
