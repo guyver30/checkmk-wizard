@@ -639,3 +639,7 @@ fix the 2 defects and the 3 missing verification files
 ## 2026-10-12 16:36
 
 a couple of small things: the "overview" link in dashboard just brings me to main page, right? then just call it "home". near that name, place the checkmk host id (so shift ok/down etc labels a bit more to the right, to avoid overlapping with host id name)
+
+## 2026-10-12 16:41
+
+push
