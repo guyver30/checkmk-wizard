@@ -595,3 +595,11 @@ I ran this about 15 min ago: podman exec -it automation-worker bash -c "cd /app/
 ## 2026-10-12 15:32
 
 I ran it, no errors, trend correct
+
+## 2026-10-12 15:36
+
+(pasted: ran seed_fake_history.py with --delete placed outside the quotes; script inserted 1441 rows again)
+
+## 2026-10-12 15:37
+
+ran seed_fake_history.py --host fake_elink --delete (inside quotes): output "Deleted the rows of host=fake_elink ..."
