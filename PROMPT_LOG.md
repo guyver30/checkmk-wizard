@@ -459,3 +459,35 @@ colors ok now. keep the folder auto monitoring test not done yet for now. I will
 ## 2026-10-12 09:25
 
 you can close 1. then do 2,3,4
+
+## 2026-10-12 09:51
+
+/bm:resume-work
+
+## 2026-10-12 09:52
+
+I rebuilt the dashboard and compose down then up, but I cannot see the load gauge and its history...what to check?
+
+## 2026-10-12 09:54
+
+yes the checkmk UI shows cpu load and 1,5,15 min; how to run the mosquitto sub in podman with the right usr/psw ?
+
+## 2026-10-12 09:57
+
+(pasted mosquitto_sub output from test machine: status payloads have no cpu_load keys)
+
+## 2026-10-12 09:58
+
+(test machine is at 20092f7, pull says up to date)
+
+## 2026-10-12 10:01
+
+i did a force recreate and rebuilt dashboard and analytics, all good now
+
+## 2026-10-12 10:02
+
+just write a shell script to rebuild dashboard and analytics, compose down and up with force recreate poller and analytics
+
+## 2026-10-12 10:03
+
+commit and push it

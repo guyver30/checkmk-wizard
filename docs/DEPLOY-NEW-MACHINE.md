@@ -423,4 +423,6 @@ podman compose build dashboard && podman compose down && podman compose up -d
 podman compose exec worker bash -c "cd /app/checkmk-wizard && uv sync"
 ```
 
+`deploy/redeploy.sh` does the rebuild and restart in one go: it builds `dashboard` and `analytics`, runs `podman compose down`, then `up -d --force-recreate poller analytics`, then `up -d` for the rest. Run it after a `git pull` (the `uv sync` line above is still separate).
+
 The map drawing layer needs the rebuilt dashboard image (new nginx location and volume), so run `podman compose build dashboard` and then a full `podman compose down && podman compose up -d`, not a single-container restart (that has cut Checkmk's egress before).
