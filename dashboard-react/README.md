@@ -191,6 +191,16 @@ operator, by `cmkadmin`, or via the discovered-hosts banner below) before your e
 both go live. The only exception is the discovered-hosts banner (quick 261012-fx1), which is the
 single place that passes `force_foreign_changes: true`.
 
+### Poller offline banner
+
+When the retained `lan/poller/status` says `offline` (the poller's last-will fired) or its
+`last_poll` is older than 3x the poll interval, a warning banner above the toolbar reads
+"Poller offline since HH:MM" (or "Poller has not reported since HH:MM" when the status still
+says online) followed by "device states may be out of date". It stays hidden until the first
+poller status arrives and while the MQTT connection itself is down (the header's connection
+indicator covers that). Component: `src/components/PollerOfflineBanner.tsx`; derivation:
+`isPollerStale` / `pollerOfflineSince` in `src/lib/staleness.ts`.
+
 ### Discovered hosts banner
 
 When hosts created by someone other than `topology_editor` (typically Checkmk's own network

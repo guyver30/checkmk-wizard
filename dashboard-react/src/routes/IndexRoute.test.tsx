@@ -726,3 +726,49 @@ describe("IndexRoute host details pane (260928-l4h)", () => {
     expect(screen.getByRole("button", { name: /collapse host details/i })).toBeInTheDocument();
   });
 });
+
+describe("IndexRoute poller offline banner", () => {
+  function publishPoller(payload: unknown) {
+    act(() => {
+      useAppStore.getState().handleMessage("lan/poller/status", encode(payload));
+    });
+  }
+
+  beforeEach(() => {
+    useAppStore.getState().setConnection({ phase: "connected" });
+  });
+
+  it("shows no banner for an online, freshly polled poller", () => {
+    publishPoller({ status: "online", last_poll: new Date().toISOString() });
+    renderIndex();
+    expect(screen.queryByTestId("poller-offline-banner")).not.toBeInTheDocument();
+  });
+
+  it("shows the offline banner with the time when the poller's will fired", () => {
+    publishPoller({ status: "offline", last_poll: "2026-10-12T11:50:00Z" });
+    renderIndex();
+    expect(screen.getByTestId("poller-offline-banner")).toHaveTextContent(
+      /Poller offline since \d{2}:\d{2} — device states may be out of date/,
+    );
+  });
+
+  it("shows the banner for a stale last_poll while the status still reads online", () => {
+    publishPoller({
+      status: "online",
+      last_poll: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    });
+    renderIndex();
+    expect(screen.getByTestId("poller-offline-banner")).toHaveTextContent(
+      /Poller has not reported since \d{2}:\d{2}/,
+    );
+  });
+
+  it("shows no poller banner while the MQTT connection is down", () => {
+    publishPoller({ status: "offline", last_poll: "2026-10-12T11:50:00Z" });
+    act(() => {
+      useAppStore.getState().setConnection({ phase: "disconnected" });
+    });
+    renderIndex();
+    expect(screen.queryByTestId("poller-offline-banner")).not.toBeInTheDocument();
+  });
+});

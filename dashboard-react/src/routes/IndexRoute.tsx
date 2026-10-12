@@ -17,6 +17,7 @@ import { HostDetails } from "../components/HostDetails";
 import { AlertsPane, AlertsSummary } from "../components/AlertsPane";
 import { IncidentList } from "../components/IncidentList";
 import { NeedsPane } from "../components/NeedsPane";
+import { PollerOfflineBanner } from "../components/PollerOfflineBanner";
 import { ThreePaneLayout } from "../components/ThreePaneLayout";
 import { TopologyMap, type EditFailure } from "../components/TopologyMap";
 import { TopologyToolbar } from "../components/TopologyToolbar";
@@ -387,6 +388,8 @@ export function IndexRoute() {
             onWheel={touch}
             onKeyDown={touch}
           >
+            {/* Poller offline/stale warning; hidden while the MQTT connection itself is down. */}
+            <PollerOfflineBanner nowMs={nowMs} />
             {/* Hosts created by someone else (the network scan) and left pending; hidden in
                 admin mode because Activate writes to Checkmk's config. */}
             <DiscoveredHostsBanner
