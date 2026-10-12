@@ -187,12 +187,107 @@ test hosts or a short downtime.
 Hosts created by the wizard's `--demo` keep their "Always assume host to be up" rule. Restore puts
 them back to the demo baseline (host UP, `PING` OK, `PING` check disabled); the rule keeps the
 re-enabled host check UP. They are not counted as faked because their host check is enabled.
+For a demo Linux agent host (and a forecast/trend-need demo) see "Forecast and trend-need demo" below.
 
 ### Security
 
 `/admin-config.json` serves the `wsadmin` login to anyone who can reach the dashboard (D-07). That
 is acceptable only on the closed demo network; a CIDR restriction is deferred. The broker limits
 that login to writing `sites/<site_id>/admin/cmd`; it cannot write anywhere under `sites/<site_id>/lan/`.
+
+## Forecast and trend-need demo (demo Linux host + seeded history)
+
+Added 2026-10-12, **not live-verified**. Purpose: show the dashboard's forecast chart and the
+"needs attention" trend need on demand, without waiting weeks for a real disk to fill. The host is a
+`--demo` Linux agent host; the history is a synthetic series written straight into ClickHouse.
+
+### 1. Create the demo Linux host
+
+```
+deploy/run-wizard.sh --demo        # container mode
+uv run checkmk-wizard --demo       # host-native
+```
+
+In Phase 4 pick the `linux (Checkmk agent) - demo: agent host, nothing installed, faked UP` method
+for one host (e.g. hostname `demo-lnx1`); leave the others on `ping`. For that host the wizard sets
+the agent tags (`cmk-agent` / `no-snmp`) and nothing else: no SSH, firewall, agent install,
+registration, smartmontools, expected-services prompt or manual instructions (Phase 5), and no
+service discovery (Phase 6). Phase 7 creates the always-up host-check rule for it and fakes the host
+UP and its `Check_MK` and `Check_MK Discovery` services OK (it has no `PING` service).
+
+### 2. Preview the forecast (no network)
+
+```
+podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/seed_fake_history.py --host demo-lnx1 --dry-run"
+```
+
+Defaults: service `Filesystem /`, metric `fs_used_percent`, 60 days of hourly rows rising from 60 to
+84 %, noise 0.5, warn 80 / crit 90. The preview prints the series summary and what analytics will
+make of it with its code defaults: fit status, slope per day, r2, history days, confidence, days to
+warn / crit with dates, and the expected need tier (or why there is none). With the defaults:
+trending, about 0.4 %/day, about 15 days to crit, tier `urgent`, confidence `medium`. Environment
+overrides on the analytics container (FIT_R2_MIN, TIER_*_DAYS, ...) are not applied by the preview.
+
+Steering the result:
+
+| Goal | Option |
+|---|---|
+| tier `immediate` (< 3 days to crit) | `--end 89` (close to `--crit`) |
+| tier `standard` (> 20 days to crit) | lower `--end`, e.g. `--start 30 --end 60` |
+| confidence `high` | `--days 75 --noise 0.2` (history must exceed 60 days and r2 >= 0.9) |
+| show the sharp-drop cut | `--sawtooth 14` (only the last tooth is fitted; needs end - start > 5) |
+| no trend need | `--metric util` (not a trend-need metric) or `--start 50 --end 50 --noise 0` (stable) |
+
+### 3. Seed
+
+Same command without `--dry-run`:
+
+```
+podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/seed_fake_history.py --host demo-lnx1"
+```
+
+The password is read from `deploy/.env` inside the mounted repo (`CH_WRITER_PASSWORD`, the
+`poller_writer` login). ClickHouse publishes no host port (8123 is reachable only on the compose
+network), so run it in the worker container or pass `--url` for a reachable address. Rows end at
+"now" because analytics takes the warn/crit levels from the last two days only.
+
+### 4. What to see
+
+Within up to 15 minutes (`EVAL_INTERVAL_SECONDS=900`), or right away after
+`podman compose restart analytics`:
+
+- the host's details show the forecast for `Filesystem /` `fs_used_percent`: the history plus a
+  dashed fit line to the crit date;
+- the Needs pane shows a trend need with the tier the preview printed.
+
+The host has no real Filesystem service, so there is no live gauge: history only, by design.
+
+### 5. Cleanup
+
+```
+podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/seed_fake_history.py --host demo-lnx1 --delete"
+```
+
+`--delete` runs `ALTER TABLE history.metrics DELETE WHERE host = ... AND service = ... AND metric =
+...` as `ch_admin` (needs `CH_ADMIN_PASSWORD`; `poller_writer` has only SELECT/INSERT). The one-off
+equivalent for all of the host's rows:
+
+```
+podman exec -i clickhouse clickhouse-client --user ch_admin --password "$CH_ADMIN_PASSWORD" --query "ALTER TABLE history.metrics DELETE WHERE host = 'demo-lnx1'"
+```
+
+The trend need resolves after 2 clean evaluation cycles (`RESOLVE_AFTER_CLEAN_CYCLES`) and the
+forecast topic is tombstoned. Then remove the demo host in Checkmk and its "Host check command" rule,
+as for the other demo hosts.
+
+### 6. Caveats
+
+- Admin mode Set UP / Set DOWN / Restore on a demo Linux host works on `PING`, which an agent host
+  does not have: those service commands are harmless no-ops, the host state still changes.
+- Rows older than 30 days are rolled up to 5-minute buckets and moved to the S3 volume by TTL, like
+  real data; a 60-day seed therefore becomes coarser after insertion.
+- Fake rows are identifiable only by host name (the schema has no marker column), so seed only demo
+  hosts: `--delete` on a real host would also remove its real rows of that service and metric.
 
 ## Why "Fake check results" isn't used, and the cmk helper instead
 
