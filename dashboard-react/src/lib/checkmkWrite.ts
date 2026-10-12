@@ -28,6 +28,9 @@
 // - countPendingChanges/activateChanges <- get_pending_changes_etag()/activate_changes()
 //                              (api.py:295-320) and bootstrap_automation_user()'s activation
 //                              polling loop (api.py:508-532).
+// - listPendingChanges/getHostSummary: read-only lookups behind the discovered-hosts banner
+//                              (quick 261012-fx1); the pure parsing/classification helpers
+//                              live here too because activateChanges' guard needs them.
 //
 // No DOM access, no broker connection, no browser storage -- the browser Fetch API is the
 // only I/O primitive used.
@@ -393,8 +396,168 @@ export function createUnmanagedSwitch(
   });
 }
 
+// The shape of a pending_changes entry is NOT live-verified. Per the Checkmk 2.4 source the
+// fields are id, user_id, action_name, text and time (possibly under `extensions`), so the
+// parser keeps only string/number-typed fields and tolerates anything else being absent.
+export interface PendingChange {
+  id?: string;
+  user_id?: string | null;
+  action_name?: string;
+  text?: string;
+  time?: number | string;
+}
+
+// Must match src/checkmk_wizard/api.py TOPOLOGY_EDITOR_USER_ID.
+export const TOPOLOGY_EDITOR_USER = "topology_editor";
+
+const PENDING_CHANGES_PATH = "/domain-types/activation_run/collections/pending_changes";
+
+export function parsePendingChanges(json: unknown): PendingChange[] {
+  if (typeof json !== "object" || json === null) {
+    return [];
+  }
+  const value = (json as { value?: unknown }).value;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result: PendingChange[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      continue;
+    }
+    const top = entry as Record<string, unknown>;
+    const nested =
+      typeof top.extensions === "object" && top.extensions !== null
+        ? (top.extensions as Record<string, unknown>)
+        : {};
+    const pick = (key: string): unknown => (top[key] !== undefined ? top[key] : nested[key]);
+    const change: PendingChange = {};
+    const id = pick("id");
+    const userId = pick("user_id");
+    const actionName = pick("action_name");
+    const text = pick("text");
+    const time = pick("time");
+    if (typeof id === "string") change.id = id;
+    if (typeof userId === "string") change.user_id = userId;
+    if (typeof actionName === "string") change.action_name = actionName;
+    if (typeof text === "string") change.text = text;
+    if (typeof time === "string" || typeof time === "number") change.time = time;
+    result.push(change);
+  }
+  return result;
+}
+
+// "Created new host web01." and close variants, optionally quoted or wrapped in <tt>. Only a
+// name that passes isValidHostName is ever returned, so nothing else reaches the DOM.
+const CREATED_HOST_RE =
+  /\b(?:created|added)\s+(?:new\s+)?host\s+["'\u2018\u201c]?([^\s"'\u2019\u201d]+?)["'\u2019\u201d]?\.?\s*$/i;
+
+export function extractCreatedHostName(change: Pick<PendingChange, "text">): string | null {
+  if (typeof change.text !== "string") {
+    return null;
+  }
+  const plain = change.text.replace(/<[^>]*>/g, "").trim();
+  const match = CREATED_HOST_RE.exec(plain);
+  if (!match) {
+    return null;
+  }
+  const name = match[1];
+  return isValidHostName(name) ? name : null;
+}
+
+export function isHostCreation(change: Pick<PendingChange, "text" | "action_name">): boolean {
+  if (typeof change.action_name === "string" && /create[-_]host/i.test(change.action_name)) {
+    return true;
+  }
+  return extractCreatedHostName(change) !== null;
+}
+
+export function pendingChangeKey(change: PendingChange): string {
+  if (typeof change.id === "string" && change.id.length > 0) {
+    return change.id;
+  }
+  return `${change.action_name ?? ""}|${change.text ?? ""}|${change.time ?? ""}`;
+}
+
+export interface PendingClassification {
+  newHosts: { key: string; host: string }[];
+  unnamedHostCreations: number;
+  otherForeign: number;
+  own: number;
+  unknownShape: number;
+  allKeys: string[];
+}
+
+export function classifyPendingChanges(
+  changes: PendingChange[],
+  ownUser: string = TOPOLOGY_EDITOR_USER,
+): PendingClassification {
+  const result: PendingClassification = {
+    newHosts: [],
+    unnamedHostCreations: 0,
+    otherForeign: 0,
+    own: 0,
+    unknownShape: 0,
+    allKeys: [],
+  };
+  const seenHosts = new Set<string>();
+  for (const change of changes) {
+    const key = pendingChangeKey(change);
+    result.allKeys.push(key);
+    if (change.user_id === ownUser) {
+      result.own += 1;
+      continue;
+    }
+    if (typeof change.text !== "string" && typeof change.action_name !== "string") {
+      result.unknownShape += 1;
+      continue;
+    }
+    const host = extractCreatedHostName(change);
+    if (host !== null) {
+      if (!seenHosts.has(host)) {
+        seenHosts.add(host);
+        result.newHosts.push({ key, host });
+      }
+    } else if (isHostCreation(change)) {
+      result.unnamedHostCreations += 1;
+    } else {
+      result.otherForeign += 1;
+    }
+  }
+  return result;
+}
+
+// Reads, deliberately not wrapped in serialize(): they never touch an ETag a write relies on.
+export async function listPendingChanges(): Promise<PendingChange[]> {
+  const resp = await request("GET", PENDING_CHANGES_PATH);
+  return parsePendingChanges(await resp.json());
+}
+
+export interface HostSummary {
+  name: string;
+  ip: string | null;
+  folder: string | null;
+}
+
+export async function getHostSummary(name: string): Promise<HostSummary> {
+  if (!isValidHostName(name)) {
+    throw new CheckmkWriteError("GET", name, 0, "invalid host name");
+  }
+  const resp = await request("GET", `/objects/host_config/${encodeURIComponent(name)}`);
+  const json = (await resp.json()) as {
+    extensions?: { folder?: unknown; attributes?: { ipaddress?: unknown } };
+  };
+  const ip = json.extensions?.attributes?.ipaddress;
+  const folder = json.extensions?.folder;
+  return {
+    name,
+    ip: typeof ip === "string" ? ip : null,
+    folder: typeof folder === "string" ? folder : null,
+  };
+}
+
 export async function countPendingChanges(): Promise<number> {
-  const resp = await request("GET", "/domain-types/activation_run/collections/pending_changes");
+  const resp = await request("GET", PENDING_CHANGES_PATH);
   const json = (await resp.json()) as { value?: unknown };
   return Array.isArray(json.value) ? json.value.length : 0;
 }
@@ -405,28 +568,48 @@ function sleep(ms: number): Promise<void> {
 
 // Widens api.py's 30 x 0.3s activation poll (api.py:508-532) to 60 x 500ms: a browser Apply
 // can activate a multi-host batch (13-07), which takes longer than the single-host case that
-// poll loop was tuned for. force_foreign_changes stays hard-coded false so the scoped
-// topology_editor credential can never activate another user's unreviewed changes (T-13-17).
+// poll loop was tuned for. force_foreign_changes defaults to false, so edit-mode Apply can
+// never activate another user's unreviewed changes (T-13-17). Amended 2026-10-12 (quick
+// 261012-fx1, operator decision): the topology_editor role now holds wato.activateforeign, and
+// the discovered-hosts banner -- and only it -- opts in with forceForeignChanges true, passing
+// expectedChangeKeys so it never activates a change the operator was not shown.
 const ACTIVATION_MAX_POLLS = 60;
 const ACTIVATION_POLL_MS = 500;
 
-export function activateChanges(): Promise<void> {
+export interface ActivateOptions {
+  forceForeignChanges?: boolean;
+  expectedChangeKeys?: string[];
+}
+
+export function activateChanges(options?: ActivateOptions): Promise<void> {
   return serialize(async () => {
-    const pendingResp = await request(
-      "GET",
-      "/domain-types/activation_run/collections/pending_changes",
-    );
+    const pendingResp = await request("GET", PENDING_CHANGES_PATH);
     const pendingJson = (await pendingResp.json()) as { value?: unknown };
     const pending = Array.isArray(pendingJson.value) ? pendingJson.value : [];
     if (pending.length === 0) {
       return;
     }
 
+    if (options?.expectedChangeKeys !== undefined) {
+      const expected = new Set(options.expectedChangeKeys);
+      const unexpected = parsePendingChanges(pendingJson).some(
+        (change) => !expected.has(pendingChangeKey(change)),
+      );
+      if (unexpected) {
+        throw new CheckmkWriteError(
+          "GET",
+          `${apiPrefix()}${PENDING_CHANGES_PATH}`,
+          409,
+          "pending changes changed since confirmation",
+        );
+      }
+    }
+
     const etag = pendingResp.headers.get("ETag");
     if (!etag) {
       throw new CheckmkWriteError(
         "GET",
-        `${apiPrefix()}/domain-types/activation_run/collections/pending_changes`,
+        `${apiPrefix()}${PENDING_CHANGES_PATH}`,
         pendingResp.status,
         "missing ETag header",
       );
@@ -436,7 +619,11 @@ export function activateChanges(): Promise<void> {
       "POST",
       "/domain-types/activation_run/actions/activate-changes/invoke",
       {
-        body: { redirect: false, sites: [getRuntimeConfig().checkmkSite], force_foreign_changes: false },
+        body: {
+          redirect: false,
+          sites: [getRuntimeConfig().checkmkSite],
+          force_foreign_changes: options?.forceForeignChanges === true,
+        },
         headers: { "If-Match": etag },
         expect: [200, 201, 204],
       },
