@@ -583,3 +583,15 @@ what you mean for "Do Check_MK and Check_MK Discovery also show on that host, an
 ## 2026-10-12 15:02
 
 I see 3 services all green: check_mk (active checks disabled), check_mk discover (active check disabled) and ping (active checks disabled)
+
+## 2026-10-12 15:10
+
+the host fake_elink was created 25 min ago, but no forecast and no needs showed up
+
+## 2026-10-12 15:12
+
+I ran this about 15 min ago: podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && python3 scripts/seed_fake_history.py --host fake_elink --dry-run"
+
+## 2026-10-12 15:32
+
+I ran it, no errors, trend correct
