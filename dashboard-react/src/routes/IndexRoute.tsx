@@ -46,7 +46,7 @@ interface SnackbarState {
 }
 
 const APPLY_FAILURE_BODY =
-  "Your changes are stored but Activate Changes failed. Press Apply changes again, or finish activation directly in Checkmk.";
+  "Your changes are stored but Activate Changes failed. If the banner above lists pending changes from other users (for example a host deleted in Checkmk), activate them there first, then press Apply changes again; or finish activation directly in Checkmk.";
 
 export function IndexRoute() {
   // useNowTick is the app's single periodic clock (D-34): it drives every time-derived surface

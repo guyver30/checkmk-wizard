@@ -65,15 +65,27 @@ describe("DiscoveredHostsBanner", () => {
     expect(await screen.findByText(/web02 - 10\.0\.0\.2/)).toBeInTheDocument();
   });
 
-  it("renders nothing for own changes only, no changes, or foreign non-host changes only", async () => {
+  it("renders nothing for own changes only or no changes", async () => {
     listPending.mockResolvedValue([
       { id: "x", user_id: "topology_editor", text: "Created new host mine." },
-      OTHER(1),
     ]);
     renderBanner();
     await waitFor(() => expect(listPending).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.queryByTestId("discovered-hosts-banner")).not.toBeInTheDocument();
+  });
+
+  it("shows a foreign non-host change (e.g. a host deleted in the Checkmk GUI) so Apply is not stuck", async () => {
+    // Live report 2026-10-12: a host deleted in the Checkmk GUI left a foreign change pending,
+    // and edit-mode Apply (force false) was refused with no banner to resolve it.
+    listPending.mockResolvedValue([{ id: "d1", user_id: "cmkadmin", text: "Deleted host web09." }]);
+    renderBanner();
+    expect(await screen.findByText("1 pending change awaiting activation")).toBeInTheDocument();
+    expect(screen.getByText("Deleted host web09.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Activate" }));
+    await waitFor(() =>
+      expect(activate).toHaveBeenCalledWith(expect.objectContaining({ forceForeignChanges: true })),
+    );
   });
 
   it("falls back to a generic banner for unparseable host creations or unknown shapes", async () => {

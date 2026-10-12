@@ -203,8 +203,12 @@ scan) are pending activation, a banner above the toolbar lists each host's name,
   ("Activate all"). A change that appears after the list was shown aborts the activation and asks
   for another review.
 - **Not now** hides the banner for the browser session (sessionStorage); the hosts stay pending.
-- If pending changes exist but no host name can be read from them, a generic "N pending changes"
-  banner with the same actions is shown. The pending-change JSON shape is not live-verified, so
+- Any pending change by another user also shows the banner, in the generic "N pending changes"
+  form with the change texts listed, because Checkmk refuses edit-mode Apply (force false) while a
+  foreign change is pending. Example (live, 2026-10-12): a host deleted in the Checkmk GUI left
+  Apply failing with "Saved, but not live yet" and no way to resolve it from the dashboard.
+- If pending changes exist but no host name can be read from them, the same generic banner
+  with the same actions is shown. The pending-change JSON shape is not live-verified, so
   the parsing is defensive.
 - Requires the `topology_editor` role to hold `wato.activateforeign`: re-run the wizard or
   `scripts/provision_topology_editor.py` to grant it on an existing site, or do it once by hand

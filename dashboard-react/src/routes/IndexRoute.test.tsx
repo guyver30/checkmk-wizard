@@ -416,7 +416,7 @@ describe("IndexRoute edit-topology toolbar, Apply flow, Snackbars and idle exit"
 
     expect(screen.getByTestId("snackbar")).toHaveTextContent("Saved, but not live yet");
     expect(screen.getByTestId("snackbar")).toHaveTextContent(
-      "Your changes are stored but Activate Changes failed. Press Apply changes again, or finish activation directly in Checkmk.",
+      "Your changes are stored but Activate Changes failed. If the banner above lists pending changes from other users",
     );
     expect(screen.getByRole("alert")).toHaveTextContent("2 changes not yet applied");
 

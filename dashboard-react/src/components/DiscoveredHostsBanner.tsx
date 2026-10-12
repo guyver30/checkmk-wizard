@@ -29,6 +29,7 @@ import {
   getHostSummary,
   listPendingChanges,
   type PendingChange,
+  TOPOLOGY_EDITOR_USER,
 } from "../lib/checkmkWrite";
 
 const PENDING_POLL_MS = 60_000;
@@ -135,7 +136,11 @@ export function DiscoveredHostsBanner({
   }, [enabled, classification.newHosts]);
 
   const hostCount = classification.newHosts.length;
-  const genericCount = classification.unnamedHostCreations + classification.unknownShape;
+  // Any foreign change blocks edit-mode Apply (Checkmk refuses to activate with another user's
+  // change pending), so a foreign non-host change -- e.g. a host deleted in the Checkmk GUI --
+  // also surfaces here, in the generic form, instead of leaving the operator stuck. 2026-10-12.
+  const genericCount =
+    classification.unnamedHostCreations + classification.unknownShape + classification.otherForeign;
   const genericMode = hostCount === 0 && genericCount > 0;
   const foreignTotal =
     hostCount + classification.unnamedHostCreations + classification.otherForeign +
@@ -187,12 +192,12 @@ export function DiscoveredHostsBanner({
   }, [running, genericMode, foreignTotal, hostCount, classification.allKeys, onActivated, onFailed, load]);
 
   const onActivateClick = useCallback(() => {
-    if (classification.otherForeign > 0 && !confirming) {
+    if (!genericMode && classification.otherForeign > 0 && !confirming) {
       setConfirming(true);
       return;
     }
     void runActivation();
-  }, [classification.otherForeign, confirming, runActivation]);
+  }, [genericMode, classification.otherForeign, confirming, runActivation]);
 
   if (!enabled || allDismissed || (hostCount === 0 && !genericMode)) {
     return null;
@@ -201,6 +206,12 @@ export function DiscoveredHostsBanner({
   const heading = genericMode
     ? `${foreignTotal} pending change${foreignTotal === 1 ? "" : "s"} awaiting activation`
     : "New hosts discovered, awaiting activation";
+
+  // What the generic form will activate, so the operator is not asked to approve a bare count.
+  const foreignTexts = changes
+    .filter((change) => change.user_id !== TOPOLOGY_EDITOR_USER)
+    .map((change) => change.text ?? change.action_name ?? "(no description)")
+    .slice(0, 5);
 
   const ownNote = classification.own > 0 ? `, ${classification.own} of your own topology edits` : "";
   const alsoPending =
@@ -220,6 +231,13 @@ export function DiscoveredHostsBanner({
         message={
           <>
             <span className="font-semibold">{heading}</span>
+            {genericMode && (
+              <ul className="mt-1 text-xs">
+                {foreignTexts.map((text, index) => (
+                  <li key={index}>{text}</li>
+                ))}
+              </ul>
+            )}
             {!genericMode && (
               <ul className="mt-1 text-xs">
                 {classification.newHosts.map(({ host }) => {

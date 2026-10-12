@@ -523,3 +523,15 @@ which permissions I need to change on checkmk gui ?
 ## 2026-10-12 11:44
 
 push it
+
+## 2026-10-12 11:49
+
+I did an edit topology, but got this error after apply changes: "Saved, but not live yet. Your changes are stored but Activate Changes failed. Press Apply changes again, or finish activation directly in Checkmk"
+
+## 2026-10-12 11:51
+
+yes I deleted a host before on checkmk gui, so the topology editor refused to apply changes made by the editor and by checkmk gui
+
+## 2026-10-12 11:52
+
+(implemented: banner also shows for foreign non-host changes)
