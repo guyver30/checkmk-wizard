@@ -195,6 +195,12 @@ def _capture(monkeypatch, response=None, error=None):
     return captured
 
 
+@pytest.fixture(autouse=True)
+def _no_real_livestatus(monkeypatch):
+    # Seeding/deleting sends a Livestatus command; never open a real socket in tests.
+    monkeypatch.setattr(seed.livestatus, "send_commands", lambda *a, **k: None)
+
+
 def _clean_env(monkeypatch, tmp_path):
     for name in (
         "CLICKHOUSE_URL",
@@ -355,3 +361,184 @@ def test_invalid_arguments_exit_2(argv):
 def test_valid_arguments_parse():
     args = seed.parse_args(["--host", "demo-lnx1.example_1", "--sawtooth", "14", "--days", "60"])
     assert args.host == "demo-lnx1.example_1" and args.sawtooth == 14
+
+
+# --- faked service check result ----------------------------------------------------
+
+_WARN_CMD = (
+    "PROCESS_SERVICE_CHECK_RESULT;demo-lnx1;Filesystem /;1;"
+    "WARN - Filesystem /: 84.0% used (warn/crit at 80%/90%)|fs_used_percent=84.0;80;90;0;100"
+)
+_RESET_CMD = (
+    "PROCESS_SERVICE_CHECK_RESULT;demo-lnx1;Filesystem /;0;"
+    "OK - Filesystem /: demo filesystem, no value seeded yet (run scripts/seed_fake_history.py)"
+)
+
+
+@pytest.mark.parametrize(
+    ("end", "state"),
+    [(84, 1), (90, 2), (95, 2), (79.9, 0), (80, 1), (0, 0), (100, 2)],
+)
+def test_check_state_thresholds(end, state):
+    assert seed.check_state(end, 80, 90) == state
+
+
+def test_perf_data_shape_for_defaults():
+    assert seed.perf_data("fs_used_percent", 84, 80, 90) == "fs_used_percent=84.0;80;90;0;100"
+
+
+def test_check_output_prefix_and_text():
+    assert seed.check_output("Filesystem /", 84, 80, 90, 1) == (
+        "WARN - Filesystem /: 84.0% used (warn/crit at 80%/90%)"
+    )
+    assert seed.check_output("Filesystem /", 95, 80, 90, 2).startswith("CRIT - ")
+    assert seed.check_output("Filesystem /", 50, 80, 90, 0).startswith("OK - ")
+
+
+def test_check_result_command_matches_expected_text():
+    cmd = seed.check_result_command("demo-lnx1", "Filesystem /", "fs_used_percent", 84, 80, 90)
+    assert cmd == _WARN_CMD
+    # `;` is the Livestatus field separator: 4 command separators (name, host, service, state) + 4 inside the perf data
+    assert cmd.count(";") == 4 + 4
+
+
+def test_reset_command_has_no_perf_data():
+    cmd = seed.reset_command("demo-lnx1", "Filesystem /")
+    assert cmd == _RESET_CMD
+    assert "|" not in cmd
+
+
+def test_service_with_semicolon_is_rejected():
+    with pytest.raises(SystemExit) as exc:
+        seed.parse_args(["--host", "h", "--service", "a;b"])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("port", ["0", "70000"])
+def test_livestatus_port_out_of_range_is_rejected(port):
+    with pytest.raises(SystemExit) as exc:
+        seed.parse_args(["--host", "h", "--livestatus-port", port])
+    assert exc.value.code == 2
+
+
+def _record_sends(monkeypatch, events, error=None):
+    def fake_send(host, commands, port=6557):
+        events.append(("send", host, list(commands), port))
+        if error is not None:
+            raise error
+
+    monkeypatch.setattr(seed.livestatus, "send_commands", fake_send)
+
+
+def _record_urlopen(monkeypatch, events):
+    def fake_urlopen(request, timeout=None):
+        events.append(("post", request.data.decode()[:40]))
+        return _Resp()
+
+    monkeypatch.setattr(seed.urllib.request, "urlopen", fake_urlopen)
+
+
+def test_dry_run_prints_command_and_sends_nothing(monkeypatch, tmp_path, capsys):
+    env = _clean_env(monkeypatch, tmp_path)
+    events = []
+    _record_sends(monkeypatch, events)
+    _record_urlopen(monkeypatch, events)
+
+    rc = seed.main(["--host", "demo-lnx1", "--dry-run", *env], now_ts=END_TS)
+
+    assert rc == 0
+    assert events == []
+    assert f"Check result (not sent): {_WARN_CMD}" in capsys.readouterr().out
+
+
+def test_seed_inserts_history_first_then_sends_check_result(monkeypatch, tmp_path, capsys):
+    env = _clean_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("CH_WRITER_PASSWORD", "pw")
+    monkeypatch.delenv("LIVESTATUS_HOST", raising=False)
+    monkeypatch.delenv("LIVESTATUS_PORT", raising=False)
+    events = []
+    _record_sends(monkeypatch, events)
+    _record_urlopen(monkeypatch, events)
+
+    rc = seed.main(["--host", "demo-lnx1", *env], now_ts=END_TS)
+
+    assert rc == 0
+    assert [e[0] for e in events] == ["post", "send"]
+    assert events[1] == ("send", "checkmk", [_WARN_CMD], 6557)
+    assert "Set Filesystem / on demo-lnx1 to WARN (84%) via Livestatus checkmk:6557" in (
+        capsys.readouterr().out
+    )
+
+
+def test_livestatus_host_and_port_from_env_and_flags(monkeypatch, tmp_path):
+    env = _clean_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("CH_WRITER_PASSWORD", "pw")
+    monkeypatch.setenv("LIVESTATUS_HOST", "envhost")
+    monkeypatch.setenv("LIVESTATUS_PORT", "7000")
+    events = []
+    _record_sends(monkeypatch, events)
+    _record_urlopen(monkeypatch, events)
+    seed.main(["--host", "h", *env], now_ts=END_TS)
+    assert events[-1][1] == "envhost" and events[-1][3] == 7000
+
+    events.clear()
+    seed.main(
+        ["--host", "h", "--livestatus-host", "other", "--livestatus-port", "6600", *env], now_ts=END_TS
+    )
+    assert events[-1][1] == "other" and events[-1][3] == 6600
+
+
+def test_no_check_result_skips_livestatus(monkeypatch, tmp_path):
+    env = _clean_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("CH_WRITER_PASSWORD", "pw")
+    events = []
+    _record_sends(monkeypatch, events)
+    _record_urlopen(monkeypatch, events)
+
+    rc = seed.main(["--host", "h", "--no-check-result", *env], now_ts=END_TS)
+
+    assert rc == 0
+    assert [e[0] for e in events] == ["post"]
+
+
+def test_delete_resets_service_before_clickhouse_delete(monkeypatch, tmp_path):
+    env = _clean_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("CH_ADMIN_PASSWORD", "adminpw")
+    events = []
+    _record_sends(monkeypatch, events)
+    _record_urlopen(monkeypatch, events)
+
+    rc = seed.main(["--host", "demo-lnx1", "--delete", *env], now_ts=END_TS)
+
+    assert rc == 0
+    assert [e[0] for e in events] == ["send", "post"]
+    assert events[0][2] == [_RESET_CMD]
+
+
+def test_delete_with_no_check_result_skips_reset(monkeypatch, tmp_path):
+    env = _clean_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("CH_ADMIN_PASSWORD", "adminpw")
+    events = []
+    _record_sends(monkeypatch, events)
+    _record_urlopen(monkeypatch, events)
+
+    rc = seed.main(["--host", "h", "--delete", "--no-check-result", *env], now_ts=END_TS)
+
+    assert rc == 0
+    assert [e[0] for e in events] == ["post"]
+
+
+def test_livestatus_failure_reports_manual_hint_and_returns_1(monkeypatch, tmp_path, capsys):
+    env = _clean_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("CH_WRITER_PASSWORD", "pw")
+    events = []
+    _record_sends(monkeypatch, events, error=ConnectionRefusedError("refused"))
+    _record_urlopen(monkeypatch, events)
+
+    rc = seed.main(["--host", "demo-lnx1", "--livestatus-host", "ls", *env], now_ts=END_TS)
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "ls:6557" in err
+    assert 'lq "COMMAND [$(date +%s)] PROCESS_SERVICE_CHECK_RESULT;demo-lnx1;Filesystem /;1;' in err
+    assert "history" in err.lower()

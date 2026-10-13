@@ -3891,8 +3891,10 @@ async def _fake_demo_hosts_up(
             if fake_filesystem:
                 commands += [
                     f"DISABLE_SVC_CHECK;{h.hostname};{_DEMO_FILESYSTEM_SERVICE}",
-                    f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};{_DEMO_FILESYSTEM_SERVICE};0;"
-                    f"{_DEMO_FILESYSTEM_OUTPUT}",
+                    (
+                        f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};{_DEMO_FILESYSTEM_SERVICE};0;"
+                        f"{_DEMO_FILESYSTEM_OUTPUT}"
+                    ),
                 ]
     last_error: Exception | None = None
     for delay in (*_LIVESTATUS_RETRY_DELAYS_SECONDS, None):

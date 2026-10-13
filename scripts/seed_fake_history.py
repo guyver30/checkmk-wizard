@@ -8,8 +8,24 @@ for ONE host / service / metric into `history.metrics`, ending at "now", so the
 dashboard's forecast chart and analytics' trend need fire on demand instead of
 after weeks of waiting.
 
-Scope: it writes ONLY synthetic history rows. It does not fake a current/gauge
-value, a service state or anything in Checkmk (operator scope decision).
+It also sets the CURRENT state and value of that service, so the host shows
+WARN/CRIT in the tree and map and the disk gauge shows the value. Run
+`checkmk-wizard --demo` first: it creates a passive `Filesystem /` service on
+the demo Linux host (an "Integrate Nagios plugins" rule, not live-verified).
+After the history insert this script sends one Livestatus external command,
+
+    PROCESS_SERVICE_CHECK_RESULT;<host>;<service>;<state>;<text>|<perfdata>
+
+with state 2 if --end >= --crit, 1 if --end >= --warn, else 0 and perf data
+`<metric>=<end>;<warn>;<crit>;0;100`. The state comes from --end (the requested
+current value), not from the noisy last point. Channel: Livestatus TCP from the
+worker container (--livestatus-host/--livestatus-port, else LIVESTATUS_HOST /
+LIVESTATUS_PORT, else checkmk:6557; plain-text Livestatus, as the wizard needs).
+Limits: Checkmk silently ignores a result for a service that does not exist;
+the result is passive and stays until replaced; the poller then writes one
+history row per cycle at that value (a flat tail). `--delete` first resets the
+service to OK WITHOUT perf data, then deletes the history rows.
+`--no-check-result` skips all Livestatus traffic. Use it on a `--demo` host.
 
 Identifying and removing fake rows
 ----------------------------------
@@ -70,6 +86,9 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+# The wizard's stdlib-only Livestatus helper (works from a plain checkout, no install).
+if str(_REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from analytics.config import (
     CONFIDENCE_HIGH_DAYS,
@@ -93,6 +112,7 @@ from analytics.config import (
 )
 from analytics.fit import FitParams, fit_series
 from analytics.rules import RuleParams, tier_from_days
+from checkmk_wizard import livestatus
 
 DEFAULT_URL = "http://clickhouse:8123"
 DEFAULT_WRITER_USER = "poller_writer"
@@ -100,6 +120,11 @@ DEFAULT_ADMIN_USER = "ch_admin"
 INSERT_SQL = "INSERT INTO history.metrics FORMAT JSONEachRow"
 BATCH_SIZE = 5000
 EVAL_INTERVAL_SECONDS = 900  # analytics DEFAULT_EVAL_INTERVAL_SECONDS
+
+DEFAULT_LIVESTATUS_HOST = "checkmk"
+_STATE_NAMES = ("OK", "WARN", "CRIT")
+# Kept in step with wizard._DEMO_FILESYSTEM_OUTPUT (default service only).
+_RESET_TEXT = "demo filesystem, no value seeded yet (run scripts/seed_fake_history.py)"
 
 _HOST_RE = re.compile(r"^[A-Za-z0-9_.-]{1,253}$")
 _DAY = 86400.0
@@ -133,12 +158,15 @@ def build_parser() -> argparse.ArgumentParser:
         prog="seed_fake_history.py",
         description=(
             "Backfill a synthetic metric series into ClickHouse history.metrics "
-            "(demo aid; history only, no current values). Run it in the worker "
+            "and set the faked service's current state/value via Livestatus "
+            "(demo aid; run `checkmk-wizard --demo` first). Run it in the worker "
             "container; ClickHouse publishes no host port."
         ),
         epilog=(
             "The expected-outcome preview uses the analytics code defaults; the "
             "analytics container's environment overrides are not applied. "
+            "The check result goes to Livestatus (--livestatus-host/--livestatus-port, "
+            "default checkmk:6557); --no-check-result skips it. "
             "--delete needs the ch_admin password (CH_ADMIN_PASSWORD) because "
             "poller_writer/analytics_writer only have SELECT/INSERT. One-off "
             "alternative: podman exec -i clickhouse clickhouse-client --user "
@@ -168,6 +196,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete", action="store_true", help="remove the seeded series (ch_admin)")
     parser.add_argument("--url", default=None, help=f"ClickHouse HTTP URL (default {DEFAULT_URL})")
     parser.add_argument("--timeout", type=float, default=10.0, help="HTTP timeout seconds")
+    parser.add_argument(
+        "--no-check-result",
+        action="store_true",
+        help="do not send/reset the service check result via Livestatus",
+    )
+    parser.add_argument(
+        "--livestatus-host",
+        default=None,
+        help=f"Livestatus host (default env LIVESTATUS_HOST, else {DEFAULT_LIVESTATUS_HOST})",
+    )
+    parser.add_argument(
+        "--livestatus-port",
+        type=int,
+        default=None,
+        help=f"Livestatus TCP port (default env LIVESTATUS_PORT, else {livestatus.DEFAULT_PORT})",
+    )
     parser.add_argument("--env-file", default=None, help="env file (default deploy/.env)")
     return parser
 
@@ -177,10 +221,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if not _HOST_RE.fullmatch(args.host):
         parser.error("--host must match [A-Za-z0-9_.-]{1,253}")
-    if "'" in args.service or "\\" in args.service or any(
+    if ";" in args.service or "'" in args.service or "\\" in args.service or any(
         ord(c) < 32 or ord(c) == 127 for c in args.service
     ):
-        parser.error("--service must not contain ', \\ or control characters")
+        parser.error("--service must not contain ;, ', \\ or control characters")
     if not args.service:
         parser.error("--service must not be empty")
     if not METRIC_NAME_RE.fullmatch(args.metric):
@@ -205,6 +249,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--delete cannot be combined with --dry-run")
     if args.timeout <= 0:
         parser.error("--timeout must be > 0")
+    if args.livestatus_port is not None and not 1 <= args.livestatus_port <= 65535:
+        parser.error("--livestatus-port must be within 1..65535")
     return args
 
 
@@ -332,6 +378,64 @@ def expected_outcome(
         "reason": reason,
         "sustained": sustained,
     }
+
+
+# --- Livestatus check result -----------------------------------------------------
+
+
+def check_state(end: float, warn: float, crit: float) -> int:
+    """Service state for the requested current value: 2 CRIT, 1 WARN, 0 OK."""
+    if end >= crit:
+        return 2
+    if end >= warn:
+        return 1
+    return 0
+
+
+def perf_data(metric: str, end: float, warn: float, crit: float) -> str:
+    """Nagios perf data `label=value;warn;crit;min;max` (no UOM), 0..100 range."""
+    return f"{metric}={end:.1f};{warn:g};{crit:g};0;100"
+
+
+def check_output(service: str, end: float, warn: float, crit: float, state: int) -> str:
+    return (
+        f"{_STATE_NAMES[state]} - {service}: {end:.1f}% used "
+        f"(warn/crit at {warn:g}%/{crit:g}%)"
+    )
+
+
+def check_result_command(
+    host: str, service: str, metric: str, end: float, warn: float, crit: float
+) -> str:
+    """The external command that sets the service's current state and value.
+
+    Inputs were validated by parse_args (host charset, no `;` in service); numbers
+    are formatted here, so the text holds no field separator and no CR/LF.
+    """
+    state = check_state(end, warn, crit)
+    return (
+        f"PROCESS_SERVICE_CHECK_RESULT;{host};{service};{state};"
+        f"{check_output(service, end, warn, crit, state)}|{perf_data(metric, end, warn, crit)}"
+    )
+
+
+def reset_command(host: str, service: str) -> str:
+    """OK result with NO perf data: the poller writes no further rows from it."""
+    return f"PROCESS_SERVICE_CHECK_RESULT;{host};{service};0;OK - {service}: {_RESET_TEXT}"
+
+
+def send_check_command(host: str, port: int, command: str) -> None:
+    livestatus.send_commands(host, [command], port)
+
+
+def _livestatus_failure(exc: Exception, host: str, port: int, command: str, history_done: str) -> int:
+    print(
+        f"error: could not send the check result via Livestatus {host}:{port} ({exc}). "
+        f"{history_done} Run as the site user instead (also check LIVESTATUS_TCP_TLS is off):\n"
+        f'  lq "COMMAND [$(date +%s)] {command}"',
+        file=sys.stderr,
+    )
+    return 1
 
 
 # --- ClickHouse ------------------------------------------------------------------
@@ -470,14 +574,39 @@ def main(argv: list[str] | None = None, now_ts: float | None = None) -> int:
     rows = build_rows(points, args.host, args.service, args.metric, args.warn, args.crit)
     outcome = expected_outcome(points, args.metric, args.warn, args.crit, now)
     print_summary(args, points, rows, outcome, now)
+    command = check_result_command(
+        args.host, args.service, args.metric, args.end, args.warn, args.crit
+    )
     if args.dry_run:
+        if args.no_check_result:
+            print("Check result: skipped (--no-check-result)")
+        else:
+            print(f"Check result (not sent): {command}")
         return 0
+
+    ls_host = (
+        args.livestatus_host or os.environ.get("LIVESTATUS_HOST") or DEFAULT_LIVESTATUS_HOST
+    )
+    ls_port = args.livestatus_port
+    if ls_port is None:
+        raw_port = os.environ.get("LIVESTATUS_PORT", "")
+        ls_port = int(raw_port) if raw_port.isdigit() else livestatus.DEFAULT_PORT
 
     base = (args.url or os.environ.get("CLICKHOUSE_URL") or DEFAULT_URL).rstrip("/")
     try:
         if args.delete:
             user = os.environ.get("CLICKHOUSE_ADMIN_USER") or DEFAULT_ADMIN_USER
             password = _require_password("CH_ADMIN_PASSWORD")
+            if not args.no_check_result:
+                # Reset first so the poller stops writing rows from the old perf data.
+                reset = reset_command(args.host, args.service)
+                try:
+                    send_check_command(ls_host, ls_port, reset)
+                except OSError as exc:
+                    return _livestatus_failure(
+                        exc, ls_host, ls_port, reset, "No history rows were deleted."
+                    )
+                print(f"Reset {args.service} on {args.host} to OK (no value) via Livestatus {ls_host}:{ls_port}.")
             clickhouse_post(
                 f"{base}/?mutations_sync=1",
                 user,
@@ -501,6 +630,18 @@ def main(argv: list[str] | None = None, now_ts: float | None = None) -> int:
                 url, user, password, insert_body(rows[offset : offset + BATCH_SIZE]), args.timeout
             )
         print(f"Inserted {len(rows)} rows into history.metrics.")
+        if not args.no_check_result:
+            try:
+                send_check_command(ls_host, ls_port, command)
+            except OSError as exc:
+                return _livestatus_failure(
+                    exc, ls_host, ls_port, command, "The history rows were already inserted."
+                )
+            state = _STATE_NAMES[check_state(args.end, args.warn, args.crit)]
+            print(
+                f"Set {args.service} on {args.host} to {state} ({args.end:g}%) "
+                f"via Livestatus {ls_host}:{ls_port}."
+            )
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
