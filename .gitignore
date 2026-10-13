@@ -8,3 +8,5 @@ dashboard-react/node_modules/
 dashboard-react/dist/
 design-system/*.tgz
 web_assets/
+# Chrome performance traces
+Trace-*.json.gz

@@ -71,6 +71,8 @@ Then open `http://<HOST_IP>:5173/` from a LAN browser.
 
 **MQTT namespace (Phase 14.3).** Every topic lives under `sites/<site_id>/`. `checkmkSite` from `/config.json` selects the subtree the dashboard subscribes to and publishes under. `src/lib/topics.ts` and `src/store/mqttClient.ts` are the only prefix-aware modules: the client adds the prefix on subscribe/publish and strips it from incoming messages, so stores and components see relative topics (`lan/...`, `admin/...`). The topic names elsewhere in this README are written in the full prefixed form.
 
+**Message batching (quick 261013-hqy).** Incoming messages are queued and applied once per animation frame (50 ms `setTimeout` fallback when `requestAnimationFrame` is unavailable or the tab is hidden) through `useAppStore.handleMessages`, in arrival order with a single store update, so a burst of retained topics on page load costs one React commit instead of one per message. The queue is flushed before the incident/analytics reset on reconnect.
+
 Per-deployment values (`checkmkSite`, `wsUsername`, `wsPassword`) are loaded at startup from
 `/config.json` (`src/lib/runtimeConfig.ts`), which the production nginx renders from
 `deploy/.env` (`CMK_SITE_ID`, `WS_USERNAME`, `WS_PASSWORD` — see `deploy/dashboard-nginx.conf`).
@@ -120,6 +122,9 @@ no client-side secret at all:
 
 The centre pane's primary view is a live [vis-network](https://visjs.github.io/vis-network/)
 map of the monitored fleet (DASH-07), replacing the earlier stats-strip-only placeholder.
+Each sync pass issues at most one DataSet update and one remove per nodes/edges, skips nodes and
+edges whose rendered fields did not change, and never sends x/y for a node already on the map
+(every DataSet event costs a full vis-network redraw with physics off).
 
 **Read-only behaviour (default state):**
 

@@ -335,6 +335,9 @@ lan/poller/status              lan/incidents/+/status
 - A **zero-length retained payload is a tombstone.** On a `status` tombstone the device and all its
   per-device slices (`services`) are removed together. On an incident
   tombstone the incident is removed.
+- Messages are **batched per animation frame**: the client queues them and applies the queue in one store
+  update (`handleMessages`). Arrival order and last-write-wins per topic are unchanged, and a tombstone
+  that follows a status in the same batch still removes the host.
 
 ### Which topic feeds which part of the screen
 
