@@ -232,3 +232,26 @@ describe("buildTree", () => {
     });
   });
 });
+
+describe("buildTree unmanaged switches", () => {
+  const unmanagedIds = new Set(["sw1"]);
+
+  it("shows an UNKNOWN unmanaged switch as UNMANAGED, not stale", () => {
+    const devices: Record<string, DevicePayload> = {
+      sw1: { id: "sw1", device_type: "NetworkDevice", state: "UNKNOWN", timestamp: STALE_TIMESTAMP, staleness: 9 },
+    };
+    const node = buildTree(devices, "type", NOW_MS, { unmanagedIds })[0].children[0];
+    expect(node.state).toBe("UNMANAGED");
+    expect(node.stale).toBe(false);
+  });
+
+  it("keeps DOWN for a DOWN unmanaged switch and UNKNOWN for a plain host", () => {
+    const devices: Record<string, DevicePayload> = {
+      sw1: { id: "sw1", device_type: "NetworkDevice", state: "DOWN", host_state_raw: "DOWN", timestamp: FRESH_TIMESTAMP },
+      h1: { id: "h1", device_type: "NetworkDevice", state: "UNKNOWN", timestamp: FRESH_TIMESTAMP },
+    };
+    const children = buildTree(devices, "type", NOW_MS, { unmanagedIds })[0].children;
+    expect(children.find((c) => c.id === "sw1")?.state).toBe("DOWN");
+    expect(children.find((c) => c.id === "h1")?.state).toBe("UNKNOWN");
+  });
+});

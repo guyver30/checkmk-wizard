@@ -7,8 +7,7 @@
 // functions only. Persisting the D-05 grouping-mode choice in browser storage is the
 // shell's job (plan 11-06); this module only takes `mode` as an argument.
 
-import { isDeviceStale } from "./staleness";
-import { effectiveState } from "./display";
+import { displayState } from "./display";
 import type { DevicePayload, GroupingMode } from "./types";
 
 // Mirrors compute_overall_state()'s worst-of ordering in scripts/mqtt_poller.py (host
@@ -18,6 +17,9 @@ import type { DevicePayload, GroupingMode } from "./types";
 export const SEVERITY_RANK: Record<string, number> = {
   OK: 0,
   PEND: 0,
+  // Neutral like OK/PEND: an unmanaged switch with no real state never drives a group's worst
+  // or severity sort (a DOWN/UNREACH one is ranked as DOWN/UNREACH instead).
+  UNMANAGED: 0,
   WARN: 1,
   UNKNOWN: 2,
   CRIT: 3,
@@ -83,6 +85,7 @@ export function rollUpGroup(
   deviceIds: Iterable<string>,
   devicesMap: Map<string, DevicePayload>,
   nowMs: number = Date.now(),
+  unmanagedIds: ReadonlySet<string> = new Set(),
 ): RollUpResult {
   let worst = "OK";
   let worstRank = 0;
@@ -100,22 +103,24 @@ export function rollUpGroup(
       continue;
     }
     total += 1;
-    if (isDeviceStale(device, nowMs)) {
+    // Derived once through displayState(): STALE for a stale device, UNMANAGED for an
+    // unmanaged switch with no real state (never stale-hatched), else effectiveState().
+    const state = displayState(device, unmanagedIds.has(id), nowMs);
+    if (state === "STALE") {
       // D-15: stale never masks a known-bad child -- excluded from the worst-of
       // computation and from nonOkCount, but still marks the group hatched so both facts
       // (worst known state AND partial blindness) render simultaneously.
       hatched = true;
       continue;
     }
-    // Read the derived state, never the raw `state` key, so UNREACH ranks correctly
-    // (Pitfall 6) instead of being silently folded into DOWN.
-    const state = effectiveState(device);
+    // `state` comes from effectiveState() (never the raw `state` key), so UNREACH ranks
+    // correctly (Pitfall 6) instead of being silently folded into DOWN.
     const rank = SEVERITY_RANK[state] ?? SEVERITY_RANK.UNKNOWN;
     if (rank > worstRank) {
       worst = state;
       worstRank = rank;
     }
-    if (state !== "OK" && state !== "PEND") {
+    if (state !== "OK" && state !== "PEND" && state !== "UNMANAGED") {
       nonOkCount += 1;
     }
   }

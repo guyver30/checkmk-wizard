@@ -6,12 +6,13 @@
 import { useCallback } from "react";
 import { useShallow } from "zustand/shallow";
 import { Badge, type BadgeColor } from "kone-design-system";
+import { stateLabel } from "../lib/display";
 import { useNowTick } from "../hooks/useNowTick";
 import { makeSelectStateCounts, type StateCounts } from "../store/selectors";
 import { useAppStore } from "../store/useAppStore";
 
 // Display order: OK first, then worst-first among the non-OK states.
-const DISPLAY_ORDER: (keyof StateCounts)[] = ["OK", "DOWN", "CRIT", "UNREACH", "WARN", "UNKNOWN", "STALE", "PEND"];
+const DISPLAY_ORDER: (keyof StateCounts)[] = ["OK", "DOWN", "CRIT", "UNREACH", "WARN", "UNKNOWN", "STALE", "PEND", "UNMANAGED"];
 
 const STATE_COLOR: Record<keyof StateCounts, BadgeColor> = {
   OK: "success",
@@ -22,6 +23,7 @@ const STATE_COLOR: Record<keyof StateCounts, BadgeColor> = {
   UNKNOWN: "neutral",
   STALE: "neutral",
   PEND: "neutral",
+  UNMANAGED: "neutral",
 };
 
 export interface StatsStripProps {
@@ -36,7 +38,7 @@ export function StatsStrip({ counts }: StatsStripProps) {
       {states.map((state) => (
         <span key={state} data-state={state}>
           <Badge variant="soft" color={STATE_COLOR[state]}>
-            {state} {counts[state]}
+            {stateLabel(state)} {counts[state]}
           </Badge>
         </span>
       ))}

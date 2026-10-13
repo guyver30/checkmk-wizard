@@ -49,3 +49,22 @@ describe("rollUpGroup", () => {
     expect(result.total).toBe(1);
   });
 });
+
+describe("rollUpGroup unmanaged switches", () => {
+  it("does not let an UNKNOWN unmanaged switch drive worst or nonOkCount", () => {
+    const devices = new Map<string, DevicePayload>([["sw", { state: "UNKNOWN", timestamp: FRESH_TIMESTAMP }]]);
+    const result = rollUpGroup(["sw"], devices, NOW_MS, new Set(["sw"]));
+    expect(result).toEqual({ worst: "OK", worstRank: 0, nonOkCount: 0, total: 1, hatched: false });
+    // Without the unmanaged id the same device is a plain UNKNOWN, as before.
+    expect(rollUpGroup(["sw"], devices, NOW_MS).worst).toBe("UNKNOWN");
+  });
+
+  it("still ranks a DOWN unmanaged switch as DOWN", () => {
+    const devices = new Map<string, DevicePayload>([
+      ["sw", { state: "DOWN", host_state_raw: "DOWN", timestamp: FRESH_TIMESTAMP }],
+    ]);
+    const result = rollUpGroup(["sw"], devices, NOW_MS, new Set(["sw"]));
+    expect(result.worst).toBe("DOWN");
+    expect(result.nonOkCount).toBe(1);
+  });
+});

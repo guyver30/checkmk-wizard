@@ -5,6 +5,7 @@ import { gaugeColor, loadAveragesLabel, loadGaugePercent, otherMountsLabel, smar
 import { classifyAgentServices } from "../lib/agentDetail";
 import { compareServices } from "../lib/serviceSort";
 import { displayNameWithAddress } from "../lib/display";
+import { unmanagedChildrenHint, unmanagedIdsFromTopology } from "../lib/topologyLayout";
 import { StateBadge, StateBadgeForState } from "./StateBadge";
 import { selectVisibleNeeds } from "../lib/forecast";
 import { TIER_BADGE, formatClock } from "../lib/needDisplay";
@@ -182,6 +183,14 @@ export function HostDetails({ id }: { id: string }) {
   const services = useAppStore((s) => s.services[id]);
   const needRecord = useAppStore((s) => s.needs);
   const forecast = useAppStore((s) => s.forecasts[id]);
+  // Primitives only (boolean / string), so a store update that leaves them unchanged does not
+  // re-render this panel.
+  const unmanaged = useAppStore((s) => unmanagedIdsFromTopology(s.topology?.devices).has(id));
+  const unmanagedHint = useAppStore((s) =>
+    unmanagedIdsFromTopology(s.topology?.devices).has(id)
+      ? unmanagedChildrenHint(id, s.topology?.devices, s.devices, Date.now())
+      : null,
+  );
   const [chart, setChart] = useState<
     { kind: "metric"; service: string; metric: string } | { kind: "load" } | null
   >(null);
@@ -437,8 +446,9 @@ export function HostDetails({ id }: { id: string }) {
       <div className="px-4 py-3">
         <div className="flex items-center gap-2">
           <h1 className="text-xl font-semibold">{displayNameWithAddress(device)}</h1>
-          <StateBadge device={device} />
+          <StateBadge device={device} unmanaged={unmanaged} />
         </div>
+        {unmanagedHint && <p className="mt-1 text-sm text-fg-tertiary">{unmanagedHint}</p>}
 
         {gauges}
 
@@ -494,8 +504,9 @@ export function HostDetails({ id }: { id: string }) {
     <div className="px-4 py-3">
       <div className="flex items-center gap-2">
         <h1 className="text-xl font-semibold">{displayNameWithAddress(device)}</h1>
-        <StateBadge device={device} />
+        <StateBadge device={device} unmanaged={unmanaged} />
       </div>
+      {unmanagedHint && <p className="mt-1 text-sm text-fg-tertiary">{unmanagedHint}</p>}
 
       {gauges}
 

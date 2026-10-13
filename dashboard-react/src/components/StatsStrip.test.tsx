@@ -13,6 +13,7 @@ function counts(overrides: Partial<StateCounts> = {}): StateCounts {
     UNREACH: 0,
     DOWN: 0,
     STALE: 0,
+    UNMANAGED: 0,
     ...overrides,
   };
 }
@@ -35,5 +36,14 @@ describe("StatsStrip", () => {
   it("exposes the strip via role=status with an accessible name for screen readers", () => {
     render(<StatsStrip counts={counts({ WARN: 1 })} />);
     expect(screen.getByRole("status", { name: /fleet state summary/i })).toBeInTheDocument();
+  });
+});
+
+describe("StatsStrip unmanaged", () => {
+  it("shows an 'Unmanaged N' badge only when N > 0", () => {
+    const { rerender } = render(<StatsStrip counts={counts({ OK: 2 })} />);
+    expect(screen.queryByText(/Unmanaged/)).not.toBeInTheDocument();
+    rerender(<StatsStrip counts={counts({ OK: 2, UNMANAGED: 3 })} />);
+    expect(screen.getByText("Unmanaged 3")).toBeInTheDocument();
   });
 });

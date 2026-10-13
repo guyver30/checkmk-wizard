@@ -9,8 +9,7 @@
 // functions only.
 
 import { buildGroupIndex, rollUpGroup, sortedGroupKeys, SEVERITY_RANK } from "./grouping";
-import { displayAddress, displayName, effectiveState, isTagGroupMissing } from "./display";
-import { isDeviceStale } from "./staleness";
+import { displayAddress, displayName, displayState, effectiveState, isTagGroupMissing } from "./display";
 import type { IncidentLookup } from "./incidents";
 import type { TierLookup } from "./needDisplay";
 import type { DevicePayload, GroupingMode, NeedTier } from "./types";
@@ -52,6 +51,8 @@ export interface BuildTreeOptions {
   incidentLookup?: IncidentLookup;
   // Worst service-need tier per host (plain parameter, same rule as incidentLookup).
   tierLookup?: TierLookup;
+  // Ids of unmanaged switches (topology flag), shown as UNMANAGED instead of UNKNOWN/OK/STALE.
+  unmanagedIds?: ReadonlySet<string>;
 }
 
 export function buildTree(
@@ -65,7 +66,8 @@ export function buildTree(
   // there is nowhere in this module for a stale order to be kept.
   options: BuildTreeOptions = {},
 ): TreeGroupNode[] {
-  const { orderBySeverity = false, incidentLookup, tierLookup } = options;
+  const { orderBySeverity = false, incidentLookup, tierLookup, unmanagedIds } = options;
+  const unmanagedSet: ReadonlySet<string> = unmanagedIds ?? new Set();
 
   // grouping.ts's primitives take a Map (its vanilla signature, unchanged); the store holds a
   // plain Record for Zustand selector equality. This conversion is the one intentional
@@ -77,19 +79,22 @@ export function buildTree(
   // that sort order is computed from current state on each rebuild.
   const groups: TreeGroupNode[] = sortedGroupKeys(index).map((key) => {
     const ids = index.get(key) ?? new Set<string>();
-    const rollup = rollUpGroup(ids, devicesMap, nowMs);
+    const rollup = rollUpGroup(ids, devicesMap, nowMs, unmanagedSet);
 
     const children: TreeDeviceNode[] = [...ids]
       .map((id) => {
         const device = devicesMap.get(id);
         const membership = incidentLookup?.get(id);
+        // TreeNode renders `stale ? "STALE" : state`, so an unmanaged switch's UNMANAGED goes
+        // in `state` with stale false, and a genuinely stale device keeps its reported state.
+        const shown = displayState(device, unmanagedSet.has(id), nowMs);
         return {
           kind: "device" as const,
           id,
           label: displayName(device),
           address: displayAddress(device),
-          state: effectiveState(device),
-          stale: isDeviceStale(device, nowMs),
+          state: shown === "STALE" ? effectiveState(device) : shown,
+          stale: shown === "STALE",
           deviceType: device?.device_type,
           tagGroupMissing: isTagGroupMissing(device),
           dimmed: membership?.role === "consequence",

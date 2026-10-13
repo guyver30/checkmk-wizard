@@ -6,11 +6,11 @@
 // only the counting is ported, the overview cards are not.
 
 import type { AppState, ConnectionPhase } from "./useAppStore";
-import { effectiveState } from "../lib/display";
-import { isDeviceStale } from "../lib/staleness";
+import { displayState } from "../lib/display";
+import { unmanagedIdsFromTopology } from "../lib/topologyLayout";
 import type { DeviceState } from "../lib/types";
 
-export type StateCounts = Record<DeviceState | "STALE", number>;
+export type StateCounts = Record<DeviceState | "STALE" | "UNMANAGED", number>;
 
 const ZERO_COUNTS: StateCounts = {
   OK: 0,
@@ -21,6 +21,7 @@ const ZERO_COUNTS: StateCounts = {
   UNREACH: 0,
   DOWN: 0,
   STALE: 0,
+  UNMANAGED: 0,
 };
 
 // A selector factory rather than a fixed `Date.now()` captured at module load, so callers
@@ -29,10 +30,12 @@ const ZERO_COUNTS: StateCounts = {
 export function makeSelectStateCounts(nowMs: number = Date.now()) {
   return function selectStateCounts(state: AppState): StateCounts {
     const counts: StateCounts = { ...ZERO_COUNTS };
-    for (const device of Object.values(state.devices)) {
+    const unmanagedIds = unmanagedIdsFromTopology(state.topology?.devices);
+    for (const [id, device] of Object.entries(state.devices)) {
       // Staleness overrides the reported state (D-15) -- a stale device counts once, under
-      // STALE, and never also under its reported state.
-      const key = isDeviceStale(device, nowMs) ? "STALE" : (effectiveState(device) as DeviceState);
+      // STALE, and never also under its reported state. An unmanaged switch with no real
+      // state counts under UNMANAGED, never OK/UNKNOWN/STALE.
+      const key = displayState(device, unmanagedIds.has(id), nowMs) as keyof StateCounts;
       counts[key] = (counts[key] ?? 0) + 1;
     }
     return counts;

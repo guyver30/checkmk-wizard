@@ -49,6 +49,7 @@ describe("selectStateCounts", () => {
       UNREACH: 0,
       PEND: 0,
       STALE: 0,
+      UNMANAGED: 0,
     });
   });
 
@@ -86,6 +87,7 @@ describe("selectStateCounts", () => {
       UNREACH: 0,
       DOWN: 0,
       STALE: 0,
+      UNMANAGED: 0,
     });
   });
 });
@@ -95,5 +97,36 @@ describe("selectConnectionPhase", () => {
     const state = stateWithDevices({});
     state.connection = { phase: "reconnecting", delayMs: 2000 };
     expect(selectConnectionPhase(state)).toBe("reconnecting");
+  });
+});
+
+describe("selectStateCounts unmanaged switches", () => {
+  const topology = { devices: [{ id: "sw1", parents: [], unmanaged: true }, { id: "h1", parents: ["sw1"] }] };
+  const withTopology = (devices: Record<string, DevicePayload>): AppState =>
+    ({ ...stateWithDevices(devices), topology } as AppState);
+
+  it("counts an UNKNOWN or OK unmanaged switch under UNMANAGED only", () => {
+    const select = makeSelectStateCounts(NOW);
+    const unknown = select(withTopology({ sw1: fresh("UNKNOWN"), h1: fresh("OK") }));
+    expect(unknown.UNMANAGED).toBe(1);
+    expect(unknown.UNKNOWN).toBe(0);
+    expect(unknown.OK).toBe(1);
+    const fakedUp = select(withTopology({ sw1: fresh("OK", { host_state_raw: "UP" }) }));
+    expect(fakedUp.UNMANAGED).toBe(1);
+    expect(fakedUp.OK).toBe(0);
+  });
+
+  it("still counts a DOWN unmanaged switch under DOWN", () => {
+    const counts = makeSelectStateCounts(NOW)(withTopology({ sw1: fresh("DOWN", { host_state_raw: "DOWN" }) }));
+    expect(counts.DOWN).toBe(1);
+    expect(counts.UNMANAGED).toBe(0);
+  });
+
+  it("counts a non-unmanaged UNKNOWN host under UNKNOWN, and works with topology null", () => {
+    const select = makeSelectStateCounts(NOW);
+    expect(select(withTopology({ h1: fresh("UNKNOWN") })).UNKNOWN).toBe(1);
+    const counts = select(stateWithDevices({ sw1: fresh("UNKNOWN") }));
+    expect(counts.UNKNOWN).toBe(1);
+    expect(counts.UNMANAGED).toBe(0);
   });
 });

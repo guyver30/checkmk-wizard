@@ -3,14 +3,15 @@
 // STALE/UNKNOWN are separated by icon as well as color.
 
 import { Badge } from "kone-design-system";
-import { effectiveState } from "../lib/display";
-import { isDeviceStale } from "../lib/staleness";
+import { displayState, stateLabel } from "../lib/display";
 import type { DevicePayload } from "../lib/types";
 import { badgeForState } from "../lib/stateMapping";
 
 export interface StateBadgeProps {
   device: DevicePayload | null | undefined;
   nowMs?: number;
+  // The host is an unmanaged switch: UNKNOWN/OK then reads "Unmanaged".
+  unmanaged?: boolean;
 }
 
 function Icon({ iconName }: { iconName: string | null }) {
@@ -20,15 +21,15 @@ function Icon({ iconName }: { iconName: string | null }) {
   return <span className={iconName} aria-hidden />;
 }
 
-export function StateBadge({ device, nowMs = Date.now() }: StateBadgeProps) {
+export function StateBadge({ device, nowMs = Date.now(), unmanaged = false }: StateBadgeProps) {
   // Staleness overrides the reported state (D-15) -- a device can be reporting "OK" while its
-  // last update is too old to trust. `effectiveState` (never `device.state` directly) is used
-  // for the non-stale path because `state` structurally cannot contain "UNREACH".
-  const state = isDeviceStale(device, nowMs) ? "STALE" : effectiveState(device);
+  // last update is too old to trust. displayState() reads `effectiveState` (never
+  // `device.state` directly) because `state` structurally cannot contain "UNREACH".
+  const state = displayState(device, unmanaged, nowMs);
   const spec = badgeForState(state);
   return (
     <Badge color={spec.color} variant={spec.variant} icon={<Icon iconName={spec.iconName} />}>
-      {state}
+      {stateLabel(state)}
     </Badge>
   );
 }
@@ -37,7 +38,7 @@ export function StateBadgeForState({ state }: { state: string }) {
   const spec = badgeForState(state);
   return (
     <Badge color={spec.color} variant={spec.variant} icon={<Icon iconName={spec.iconName} />}>
-      {state}
+      {stateLabel(state)}
     </Badge>
   );
 }

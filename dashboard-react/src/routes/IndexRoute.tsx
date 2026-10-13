@@ -37,6 +37,7 @@ import { newestGeneratedAt, selectVisibleNeeds } from "../lib/forecast";
 import { buildTierLookup } from "../lib/needDisplay";
 import { buildIncidentLookup, selectOpenIncidents } from "../lib/incidents";
 import { buildTree } from "../lib/treeModel";
+import { unmanagedIdsFromTopology } from "../lib/topologyLayout";
 import type { GroupingMode, TopologyNode } from "../lib/types";
 import { useAppStore } from "../store/useAppStore";
 
@@ -63,6 +64,8 @@ export function IndexRoute() {
     () => (Array.isArray(topology?.devices) ? topology.devices : []),
     [topology],
   );
+
+  const unmanagedIds = useMemo(() => unmanagedIdsFromTopology(topologyDevices), [topologyDevices]);
 
   // Grouping mode and severity ordering are persisted (guarded storage) preferences (D-32).
   // Open-group state is lifted here, not into Tree/TreeNode, so a device-status message
@@ -134,8 +137,8 @@ export function IndexRoute() {
   }, [setSearchParams]);
 
   const groups = useMemo(
-    () => buildTree(devices, mode, nowMs, { orderBySeverity, incidentLookup, tierLookup }),
-    [devices, mode, nowMs, orderBySeverity, incidentLookup, tierLookup],
+    () => buildTree(devices, mode, nowMs, { orderBySeverity, incidentLookup, tierLookup, unmanagedIds }),
+    [devices, mode, nowMs, orderBySeverity, incidentLookup, tierLookup, unmanagedIds],
   );
   // Hosts the dashboard currently lists, for the admin "Select all" button. "Listed" means the
   // tree model built from the live device map; collapsed groups still count because their hosts

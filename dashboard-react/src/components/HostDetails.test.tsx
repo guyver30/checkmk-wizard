@@ -508,3 +508,35 @@ describe("HostDetails", () => {
     expect(screen.queryByText("No recent transitions for this device.")).not.toBeInTheDocument();
   });
 });
+
+describe("HostDetails unmanaged switch", () => {
+  it("shows the Unmanaged badge and the children hint; a normal host shows neither", () => {
+    act(() => {
+      const { handleMessage } = useAppStore.getState();
+      handleMessage(
+        "lan/devices/topology",
+        encode({
+          devices: [
+            { id: "sw1", parents: [], unmanaged: true },
+            { id: "pc1", parents: ["sw1"] },
+          ],
+        }),
+      );
+      handleMessage(
+        "lan/devices/sw1/status",
+        encode({ id: "sw1", state: "UNKNOWN", timestamp: new Date().toISOString() }),
+      );
+      handleMessage(
+        "lan/devices/pc1/status",
+        encode({ id: "pc1", state: "UNKNOWN", timestamp: new Date().toISOString() }),
+      );
+    });
+    const { unmount } = renderAt("sw1");
+    expect(screen.getByText("Unmanaged")).toBeInTheDocument();
+    expect(screen.getByText("1 of 1 device behind it is up")).toBeInTheDocument();
+    unmount();
+    renderAt("pc1");
+    expect(screen.queryByText("Unmanaged")).not.toBeInTheDocument();
+    expect(screen.queryByText(/behind it/)).not.toBeInTheDocument();
+  });
+});

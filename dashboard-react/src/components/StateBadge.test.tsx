@@ -38,3 +38,22 @@ describe("StateBadgeForState", () => {
     expect(screen.getByText("DOWN")).toBeInTheDocument();
   });
 });
+
+describe("StateBadge unmanaged", () => {
+  const device = { id: "sw-01", state: "UNKNOWN", timestamp: "2026-09-21T11:59:59Z" };
+
+  it("shows 'Unmanaged' for an UNKNOWN unmanaged switch", () => {
+    render(<StateBadge device={device} unmanaged nowMs={NOW} />);
+    expect(screen.getByText("Unmanaged")).toBeInTheDocument();
+  });
+
+  it("without the prop behaves as before", () => {
+    render(<StateBadge device={device} nowMs={NOW} />);
+    expect(screen.getByText("UNKNOWN")).toBeInTheDocument();
+  });
+
+  it("still shows DOWN for a DOWN unmanaged switch", () => {
+    render(<StateBadge device={{ ...device, state: "DOWN", host_state_raw: "DOWN" }} unmanaged nowMs={NOW} />);
+    expect(screen.getByText("DOWN")).toBeInTheDocument();
+  });
+});
