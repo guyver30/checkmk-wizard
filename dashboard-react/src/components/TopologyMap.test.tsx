@@ -1463,3 +1463,82 @@ describe("TopologyMap centre-on-host request", () => {
     expect(instances[0].focusCalls).toHaveLength(0);
   });
 });
+
+describe("sync batching (quick 261013-hqy)", () => {
+  // Each DataSet event makes vis-network run a full synchronous redraw with physics off, so a
+  // sync pass must issue at most one call per DataSet operation and none when nothing changed.
+  type Spied = ReturnType<typeof vi.spyOn>;
+  function spyDataSets() {
+    const nodes = instances[0].data.nodes as unknown as Record<string, (...a: unknown[]) => unknown>;
+    const edges = instances[0].data.edges as unknown as Record<string, (...a: unknown[]) => unknown>;
+    return {
+      nodeUpdate: vi.spyOn(nodes, "update") as Spied,
+      nodeAdd: vi.spyOn(nodes, "add") as Spied,
+      nodeRemove: vi.spyOn(nodes, "remove") as Spied,
+      edgeUpdate: vi.spyOn(edges, "update") as Spied,
+      edgeAdd: vi.spyOn(edges, "add") as Spied,
+      edgeRemove: vi.spyOn(edges, "remove") as Spied,
+    };
+  }
+
+  const baseDevices = () => [
+    { id: "h1", parents: [] as string[] },
+    { id: "h2", parents: ["h1"] },
+    { id: "h3", parents: ["h1"] },
+  ];
+  const baseStatuses = () => ({
+    h1: device({ id: "h1" }),
+    h2: device({ id: "h2" }),
+    h3: device({ id: "h3" }),
+  });
+
+  it("one changed host makes exactly one nodes.update with only that node and no x/y", () => {
+    const { rerender } = renderMap({ topologyDevices: baseDevices(), statuses: baseStatuses() });
+    const spies = spyDataSets();
+    rerenderMap(rerender, {
+      topologyDevices: baseDevices(),
+      statuses: { ...baseStatuses(), h2: device({ id: "h2", state: "DOWN" }) },
+    });
+    expect(spies.nodeUpdate).toHaveBeenCalledTimes(1);
+    const items = spies.nodeUpdate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(Array.isArray(items)).toBe(true);
+    expect(items.map((i) => i.id)).toEqual(["h2"]);
+    expect("x" in items[0]).toBe(false);
+    expect("y" in items[0]).toBe(false);
+    expect(spies.nodeAdd).not.toHaveBeenCalled();
+    expect(spies.nodeRemove).not.toHaveBeenCalled();
+    expect(spies.edgeUpdate).not.toHaveBeenCalled();
+    expect(spies.edgeAdd).not.toHaveBeenCalled();
+    expect(spies.edgeRemove).not.toHaveBeenCalled();
+  });
+
+  it("a rerender with deep-equal fresh props makes no DataSet call", () => {
+    const { rerender } = renderMap({ topologyDevices: baseDevices(), statuses: baseStatuses() });
+    const spies = spyDataSets();
+    rerenderMap(rerender, { topologyDevices: baseDevices(), statuses: baseStatuses() });
+    for (const spy of Object.values(spies)) {
+      expect(spy).not.toHaveBeenCalled();
+    }
+  });
+
+  it("adding one host and dropping one batches into one update and one remove per DataSet", () => {
+    const { rerender } = renderMap({ topologyDevices: baseDevices(), statuses: baseStatuses() });
+    const spies = spyDataSets();
+    rerenderMap(rerender, {
+      topologyDevices: [
+        { id: "h1", parents: [] as string[] },
+        { id: "h2", parents: ["h1"] },
+        { id: "h4", parents: ["h1"] },
+      ],
+      statuses: { h1: device({ id: "h1" }), h2: device({ id: "h2" }), h4: device({ id: "h4" }) },
+    });
+    expect(spies.nodeUpdate.mock.calls.length + spies.nodeAdd.mock.calls.length).toBeLessThanOrEqual(1);
+    const items = spies.nodeUpdate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    const withPosition = items.filter((i) => "x" in i || "y" in i);
+    expect(withPosition.map((i) => i.id)).toEqual(["h4"]);
+    expect(spies.nodeRemove).toHaveBeenCalledTimes(1);
+    expect(spies.nodeRemove.mock.calls[0][0]).toEqual(["h3"]);
+    expect(spies.edgeUpdate.mock.calls.length + spies.edgeAdd.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(spies.edgeRemove.mock.calls.length).toBeLessThanOrEqual(1);
+  });
+});

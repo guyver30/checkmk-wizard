@@ -272,8 +272,8 @@ const NETWORK_OPTIONS = {
   layout: { randomSeed: 1 },
 };
 
-// Fields shared by nodes.update() (existing node) and nodes.add() (new node) -- NO x/y here,
-// so an update never disturbs a dragged/panned/zoomed position (Phase 11 D-09).
+// Fields sent for both an existing node (update) and a new node (update upserts) -- NO x/y
+// here, so an update never disturbs a dragged/panned/zoomed position (Phase 11 D-09).
 // Canvas cannot read CSS variables: same hex as the existing highlight border and the index.css
 // brand colour (UI-SPEC Color rules).
 const SELECTED_BORDER_HEX = "#1450f5";
@@ -333,6 +333,8 @@ export function TopologyMap({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const nodesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
   const edgesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
+  // Last-applied nodeBaseFields signature per node id, so the sync pass only sends changes.
+  const nodeSignatures = useRef(new Map<string, string>());
   const networkRef = useRef<Network | null>(null);
   const editModeRef = useRef(editMode);
   const adminMode = isAdminMode();
@@ -672,9 +674,12 @@ export function TopologyMap({
     nodesRef.current = nodes;
     edgesRef.current = edges;
     networkRef.current = network;
+    // A fresh pair of DataSets starts empty, so no node has a last-applied signature yet.
+    nodeSignatures.current.clear();
 
     return () => {
       network.destroy();
+      nodeSignatures.current.clear();
       nodesRef.current = null;
       edgesRef.current = null;
       networkRef.current = null;
@@ -718,8 +723,11 @@ export function TopologyMap({
   }, [editMode]);
 
   // Sync -- diffs the current model (plus the pending-edit overlay above) against the live
-  // DataSets and patches in place (nodes.update/add/remove, edges.add/remove); the
-  // whole-graph-replacement method is never used here.
+  // DataSets and patches in place; the whole-graph-replacement method is never used here.
+  // The pass is batched into at most one call per DataSet operation (update/remove, nodes and
+  // edges) and skips unchanged items, because each DataSet event triggers a full synchronous
+  // vis-network redraw with physics off (quick 261013-hqy, Chrome trace: about 100 redraws per
+  // pass at 50 hosts).
   useEffect(() => {
     const nodes = nodesRef.current;
     const edges = edgesRef.current;
@@ -761,40 +769,60 @@ export function TopologyMap({
     const existingNodeIds = new Set(nodes.getIds() as string[]);
     const effectiveNodeIds = new Set(positioned.map((n) => n.id));
 
+    // Only items that are new or whose rendered fields changed are sent. New nodes carry their
+    // grid x/y; an update to a node already on the map never does (Phase 11 D-09).
+    const nodeChanges: Array<Record<string, unknown>> = [];
     for (const node of positioned) {
       const admin = adminMode
         ? { selected: adminSelected.has(node.id), faked: node.id in adminFaked }
         : undefined;
-      if (existingNodeIds.has(node.id)) {
-        nodes.update(nodeBaseFields(node, admin));
-      } else {
-        nodes.add({
-          ...nodeBaseFields(node, admin),
-          x: node.x,
-          y: node.y,
-        });
+      const fields = nodeBaseFields(node, admin);
+      const signature = JSON.stringify(fields);
+      if (!existingNodeIds.has(node.id)) {
+        nodeChanges.push({ ...fields, x: node.x, y: node.y });
+        nodeSignatures.current.set(node.id, signature);
+      } else if (nodeSignatures.current.get(node.id) !== signature) {
+        nodeChanges.push(fields);
+        nodeSignatures.current.set(node.id, signature);
       }
     }
+    const removedNodeIds: string[] = [];
     for (const id of existingNodeIds) {
       if (!effectiveNodeIds.has(id)) {
-        nodes.remove(id);
+        removedNodeIds.push(id);
+        nodeSignatures.current.delete(id);
       }
+    }
+    if (removedNodeIds.length > 0) {
+      nodes.remove(removedNodeIds);
+    }
+    if (nodeChanges.length > 0) {
+      nodes.update(nodeChanges);
     }
 
     const existingEdgeIds = new Set(edges.getIds() as string[]);
     const effectiveEdgeIds = new Set(effectiveEdges.map((e) => e.id));
 
+    const edgeChanges: Array<Record<string, unknown>> = [];
     for (const edge of effectiveEdges) {
-      if (existingEdgeIds.has(edge.id)) {
-        edges.update({ id: edge.id, from: edge.from, to: edge.to });
-      } else {
-        edges.add({ id: edge.id, from: edge.from, to: edge.to });
+      const live = existingEdgeIds.has(edge.id)
+        ? (edges.get(edge.id) as unknown as { from: string; to: string } | null)
+        : null;
+      if (!live || live.from !== edge.from || live.to !== edge.to) {
+        edgeChanges.push({ id: edge.id, from: edge.from, to: edge.to });
       }
     }
+    const removedEdgeIds: string[] = [];
     for (const id of existingEdgeIds) {
       if (!effectiveEdgeIds.has(id)) {
-        edges.remove(id);
+        removedEdgeIds.push(id);
       }
+    }
+    if (edgeChanges.length > 0) {
+      edges.update(edgeChanges);
+    }
+    if (removedEdgeIds.length > 0) {
+      edges.remove(removedEdgeIds);
     }
   }, [model, adminMode, adminSelected, adminFaked]);
 
