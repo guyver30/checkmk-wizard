@@ -707,3 +707,7 @@ if I add an unmanaged switch in topology editor, it's showing "unknown" by defau
 ## 2026-10-13 13:39
 
 option 1 and 2, but ensure that the "inferred down" is maintained if all its children are down. Unmanaged is better than unknown
+
+## 2026-10-13 13:49
+
+push it
