@@ -711,3 +711,19 @@ option 1 and 2, but ensure that the "inferred down" is maintained if all its chi
 ## 2026-10-13 13:49
 
 push it
+
+## 2026-10-13 14:13
+
+if a linux host is having a trend line that crossed the warning level (filesystem, memory), and I see the service need, should it show as warning instead of ok in the device tree and map? Well it's a demo linux host, with faked history, but it may be applicable to normal hosts as well
+
+## 2026-10-13 14:16
+
+so you are saying that in real life the current disk utilization is above warning level so it should show "not ok", and the trendline gives me the forecast when it gets critical. But in a demo linux host, the current disk utilization is below warning so it's staying ok?
+
+## 2026-10-13 14:18
+
+yes, fake the Filesystem service in demo mode and set it at current level based on faked history push
+
+## 2026-10-13 14:25
+
+can I manually force the host to warn status ?
