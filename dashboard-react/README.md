@@ -130,6 +130,14 @@ edges whose rendered fields did not change, and never sends x/y for a node alrea
 
 - Node icons are coloured by the same live state (`OK`/`WARN`/`CRIT`/`UNKNOWN`/`DOWN`) as the
   rest of the dashboard, updated in place as MQTT messages arrive.
+- An unmanaged switch whose own state is `UNKNOWN` or `OK` (including after an admin fake UP)
+  shows as a neutral grey **Unmanaged** instead, in the map, tree, state badge and host details,
+  and is counted under an "Unmanaged N" badge in the header strip rather than OK or UNKNOWN. A
+  real or faked `DOWN`/`UNREACH` still shows as such. Staleness is not applied to a quiet
+  unmanaged switch (it has no checks, so it would always look stale). Its map tooltip and host
+  details carry a hint derived from its direct children: "3 of 4 devices behind it are up", or
+  "No devices connected". This is a display mapping only; the poller and MQTT payloads are
+  unchanged.
 - Edges are drawn parent→child from each host's Checkmk `parents` attribute.
 - Clicking a node opens the right-hand host details pane (`/?host=...`; see "Host details pane"
   below) beside the map.
@@ -183,7 +191,8 @@ vis-network's manipulation toolbar:
   are until the node is next dragged.
 - **Add Node** creates an unmanaged switch — a real, check-free Checkmk host (DASH-13) added at
   the drop position; see `scripts/provision_topology_editor.py`'s docstring and 13-CONTEXT.md
-  D-06 for the exact no-agent/no-ip/no-snmp attribute shape that keeps it at zero services.
+  D-06 for the exact no-agent/no-ip/no-snmp attribute shape that keeps it at zero services. It
+  appears on the map and in the tree as **Unmanaged**, not UNKNOWN.
 - The dashboard deliberately has **no delete-host action** — to remove a mistakenly added
   switch, delete it in Checkmk's own UI (Setup > Hosts) and activate the change there.
 
@@ -424,7 +433,10 @@ last within its tier), ties broken by incident id.
   hosts (an UNREACH host, or *any* consequence of an inferred incident, even one Checkmk itself
   reports as DOWN — an unmanaged switch hides what is actually happening behind it).
 - An inferred incident (root is an unmanaged switch with at least two non-OK children, one DOWN)
-  carries an "Inferred, not confirmed" badge next to its title.
+  carries an "Inferred, not confirmed" badge next to its title. On the map the inferred root
+  keeps its dashed warning border and the title "Inferred root cause, not confirmed", which take
+  precedence over the Unmanaged styling and hint. A lone DOWN child does not infer a root, so
+  that switch just shows plain Unmanaged with "0 of 1 device behind it is up".
 
 **Layout:** the card's title is `"{root label} — {duration}"` (duration ticks live: seconds under
 a minute, minutes under an hour, hours+minutes under a day, days+hours beyond that; `since` being

@@ -491,7 +491,9 @@ What the audience sees: ONE card rooted at the unmanaged switch — `"{switch la
 every consequence of an inferred incident is reported as not observable, even though both
 children are actually DOWN). Both children are dimmed in the tree with "See incident". On the
 map, the unmanaged switch itself gets a distinct warning-coloured dashed border instead of
-DOWN/UNREACH red (its own Checkmk state is still UP/unchecked).
+DOWN/UNREACH red (its own Checkmk state is still UP/unchecked). Outside an incident the
+dashboard shows that switch as a neutral grey "Unmanaged" (never UNKNOWN or OK), and its tooltip
+reads e.g. "3 of 4 devices behind it are up".
 
 **Split — restore one child:**
 
