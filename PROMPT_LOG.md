@@ -647,3 +647,47 @@ push
 ## 2026-10-12 16:44
 
 /bm:pause-work
+
+## 2026-10-13 09:32
+
+/bm:resume-work
+
+## 2026-10-13 09:35
+
+I don't remember how you configure a linux host in demo mode on the wizard, so then I can fake some history
+
+## 2026-10-13 09:40
+
+I wrongly set that host as ping only...how to modify it ?
+
+## 2026-10-13 09:44
+
+what I answer on this: "Configure default alert thresholds (CPU load, CPU utilization, memory, filesystem)? (y/N)"
+
+## 2026-10-13 09:50
+
+Dashboard via router dst-nat on IP:8090 loads page but shows "connecting", no map/hosts
+
+## 2026-10-13 12:32
+
+/bm:resume-work
+
+## 2026-10-13 12:33
+
+we have a lagging issue on the dashboard. We have about 50 hosts there, and dragging the map, clicking a host to fake it down, etc are quite lagging. Also refreshing the web page pops up with a message to wait or exit. What to do?
+
+## 2026-10-13 12:37
+
+(pasted DevTools INP interaction list: canvas pointer 72-176 ms, edit-mode toggle 64-144 ms, vis-manipulation 32 ms)
+
+## 2026-10-13 12:43
+
+look at trace logs @Trace-20261013T124118.json.gz and @Trace-20261013T124047.json.gz
+
+## 2026-10-13 12:46
+
+go ahead with fixes 1 and 2
+
+## 2026-10-13 12:55
+
+commit this and push
