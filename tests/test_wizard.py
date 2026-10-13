@@ -5969,6 +5969,9 @@ async def test_phase6_demo_hostnames_keeps_real_linux_hosts_discovered(monkeypat
 
 _DEMO_AGENT_TEXT = "OK - [agent] Version: demo, OS: linux - demo host, no agent installed"
 _DEMO_DISCOVERY_TEXT = "OK - no unmonitored services found, no vanished services found, no new host labels"
+_DEMO_FILESYSTEM_TEXT = (
+    "OK - Filesystem /: demo filesystem, no value seeded yet (run scripts/seed_fake_history.py)"
+)
 
 
 @pytest.mark.asyncio
@@ -5990,9 +5993,71 @@ async def test_phase7_demo_linux_host_fakes_ping_and_check_mk_services(monkeypat
         f"PROCESS_SERVICE_CHECK_RESULT;dl1;Check_MK;0;{_DEMO_AGENT_TEXT}",
         "DISABLE_SVC_CHECK;dl1;Check_MK Discovery",
         f"PROCESS_SERVICE_CHECK_RESULT;dl1;Check_MK Discovery;0;{_DEMO_DISCOVERY_TEXT}",
+        "DISABLE_SVC_CHECK;dl1;Filesystem /",
+        f"PROCESS_SERVICE_CHECK_RESULT;dl1;Filesystem /;0;{_DEMO_FILESYSTEM_TEXT}",
     ]
-    # the `;` is the Livestatus separator: injected texts must not contain one
-    assert ";" not in _DEMO_AGENT_TEXT and ";" not in _DEMO_DISCOVERY_TEXT
+    # the `;` is the Livestatus separator: injected texts must not contain one; the
+    # Filesystem text also has no `|` so no perf data is injected (the poller writes
+    # history rows from perf data)
+    for text in (_DEMO_AGENT_TEXT, _DEMO_DISCOVERY_TEXT, _DEMO_FILESYSTEM_TEXT):
+        assert ";" not in text
+    assert "|" not in _DEMO_FILESYSTEM_TEXT
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_linux_host_gets_passive_filesystem_rule_after_host_check_rule(
+    monkeypatch, tmp_path
+):
+    events = await _run_phase7_demo(
+        monkeypatch, tmp_path, lambda host, commands: None, os_family="linux", hostname="dl1"
+    )
+
+    rules = [e[1] for e in events if e[0] == "rule"]
+    assert len(rules) == 2
+    assert rules[0]["ruleset"] == "host_check_commands"
+    fs = rules[1]
+    assert fs["ruleset"] == "custom_checks"
+    assert fs["conditions"]["host_name"] == {"match_on": ["dl1"], "operator": "one_of"}
+    assert fs["value_raw"] == repr({"service_description": "Filesystem /", "has_perfdata": True})
+    # created before activation so activating applies it
+    assert events.index(("rule", fs)) < events.index(("activate",))
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_ping_host_gets_no_filesystem_rule_or_commands(monkeypatch, tmp_path):
+    events = await _run_phase7_demo(monkeypatch, tmp_path, lambda host, commands: None)
+
+    assert [e[1]["ruleset"] for e in events if e[0] == "rule"] == ["host_check_commands"]
+    send = next(e for e in events if e[0] == "send")
+    assert not any("Filesystem" in c for c in send[2])
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_filesystem_rule_failure_sends_no_filesystem_commands(
+    monkeypatch, tmp_path, capsys
+):
+    async def fail_fs_rule(client, hostnames):
+        return False
+
+    monkeypatch.setattr("checkmk_wizard.wizard._create_demo_filesystem_rule", fail_fs_rule)
+    events = await _run_phase7_demo(
+        monkeypatch, tmp_path, lambda host, commands: None, os_family="linux", hostname="dl1"
+    )
+
+    send = next(e for e in events if e[0] == "send")
+    assert not any("Filesystem" in c for c in send[2])
+    assert "DISABLE_SVC_CHECK;dl1;Check_MK" in send[2]
+
+
+@pytest.mark.asyncio
+async def test_phase7_demo_filesystem_rule_http_failure_warns(monkeypatch, tmp_path, capsys):
+    events = await _run_phase7_demo(
+        monkeypatch, tmp_path, lambda host, commands: None, rule_status=500, os_family="linux", hostname="dl1"
+    )
+
+    send = next(e for e in events if e[0] == "send")
+    assert not any("Filesystem" in c for c in send[2])
+    assert "Filesystem /" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio

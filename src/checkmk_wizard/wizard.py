@@ -2387,6 +2387,48 @@ async def _create_demo_host_check_rule(client: CheckmkClient, hostnames: list[st
     return True
 
 
+async def _create_demo_filesystem_rule(client: CheckmkClient, hostnames: list[str]) -> bool:
+    """Demo mode: one "Integrate Nagios plugins" rule (ruleset `custom_checks`)
+    that gives the demo Linux hosts a passive `Filesystem /` service. Returns
+    True if the rule exists (or there was nothing to do), False if creation
+    failed (the caller then sends no Filesystem commands).
+
+    Why: the demo hosts have no agent, so Checkmk has no filesystem service
+    for them; without one the seeded `fs_used_percent` history cannot be paired
+    with a current state or the dashboard's disk gauge (which reads the service
+    named exactly `Filesystem /`). A custom check with no command line is a
+    passive classical check (Checkmk sets active checks off and no freshness,
+    so the core never runs it and the last injected result stays). The result
+    is injected by `_fake_demo_hosts_up` (OK, no value) and later replaced by
+    scripts/seed_fake_history.py.
+
+    NOT live-verified on 2.4.0p35: the ruleset name `custom_checks` and the
+    Python-literal dict value_raw shape (same style as the other unverified
+    demo rule). To check: create the rule in the GUI (Setup > Services > Other
+    services > Integrate Nagios plugins), then `GET /objects/rule/{id}` and
+    compare `extensions.value_raw`. Also unverified: whether adding a custom
+    check removes Checkmk's implicit PING service; if it does, the
+    DISABLE_SVC_CHECK on PING is a harmless no-op logged by the core and the
+    host stays UP through the host_check_commands rule.
+    """
+    if not hostnames:
+        return True
+    try:
+        await client.create_rule(
+            ruleset="custom_checks",
+            folder="/",
+            value_raw=repr({"service_description": _DEMO_FILESYSTEM_SERVICE, "has_perfdata": True}),
+            conditions={"host_name": {"match_on": hostnames, "operator": "one_of"}},
+        )
+    except CheckmkAPIError as exc:
+        console.print(
+            f"[yellow]could not create the demo '{_DEMO_FILESYSTEM_SERVICE}' service rule "
+            f"({exc}); no filesystem service will be faked[/yellow]"
+        )
+        return False
+    return True
+
+
 _DEFAULT_CPU_LOAD_LEVELS = (1.5, 2.0)  # per core
 _DEFAULT_CPU_UTILIZATION_LEVELS = (80.0, 90.0)  # percent, averaged over one check interval (~1 minute)
 _DEFAULT_MEMORY_LEVELS = (80.0, 90.0)  # percent RAM used
@@ -3773,10 +3815,21 @@ async def _query_host_states_best_effort(host: str, host_names: list[str]) -> di
 # Linux agent hosts. No `;` (the Livestatus command separator).
 _DEMO_AGENT_OUTPUT = "OK - [agent] Version: demo, OS: linux - demo host, no agent installed"
 _DEMO_DISCOVERY_OUTPUT = "OK - no unmonitored services found, no vanished services found, no new host labels"
+# Passive `Filesystem /` service of demo Linux hosts. The initial result carries NO perf data
+# (no `|`): the dashboard poller writes history rows from perf data every cycle, so a fake
+# value here would add rows before the seeder runs. No `;` either.
+_DEMO_FILESYSTEM_SERVICE = "Filesystem /"
+_DEMO_FILESYSTEM_OUTPUT = (
+    "OK - Filesystem /: demo filesystem, no value seeded yet (run scripts/seed_fake_history.py)"
+)
 
 
 async def _fake_demo_hosts_up(
-    livestatus_host: str, hosts: list[OnboardedHost], *, fake_host_checks: bool = False
+    livestatus_host: str,
+    hosts: list[OnboardedHost],
+    *,
+    fake_host_checks: bool = False,
+    fake_filesystem: bool = False,
 ) -> None:
     """Demo mode: make hosts that do not exist report UP, via Livestatus.
 
@@ -3805,6 +3858,12 @@ async def _fake_demo_hosts_up(
     OK with their active checks disabled. Their undo is
     ENABLE_SVC_CHECK;<host>;Check_MK and ENABLE_SVC_CHECK;<host>;Check_MK
     Discovery. The injected texts are constants without `;`.
+
+    With `fake_filesystem=True` (the passive `custom_checks` rule from
+    `_create_demo_filesystem_rule` exists) Linux demo hosts also get their
+    `Filesystem /` service disabled and set OK without perf data. NOT
+    live-verified. Undo: delete the "Integrate Nagios plugins" rule for the
+    host (and ENABLE_SVC_CHECK;<host>;Filesystem / if needed).
     """
     host_names = [h.hostname for h in hosts]
     commands = []
@@ -3829,6 +3888,12 @@ async def _fake_demo_hosts_up(
                 f"DISABLE_SVC_CHECK;{h.hostname};Check_MK Discovery",
                 f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};Check_MK Discovery;0;{_DEMO_DISCOVERY_OUTPUT}",
             ]
+            if fake_filesystem:
+                commands += [
+                    f"DISABLE_SVC_CHECK;{h.hostname};{_DEMO_FILESYSTEM_SERVICE}",
+                    f"PROCESS_SERVICE_CHECK_RESULT;{h.hostname};{_DEMO_FILESYSTEM_SERVICE};0;"
+                    f"{_DEMO_FILESYSTEM_OUTPUT}",
+                ]
     last_error: Exception | None = None
     for delay in (*_LIVESTATUS_RETRY_DELAYS_SECONDS, None):
         try:
@@ -3839,6 +3904,8 @@ async def _fake_demo_hosts_up(
             has_linux = any(h.os_family == "linux" for h in hosts)
             disabled = "PING and Check_MK/Check_MK Discovery" if has_linux else "PING"
             detail = "checks disabled" if fake_host_checks else f"host check: always up; {disabled} check disabled"
+            if fake_filesystem and has_linux:
+                detail += f"; passive '{_DEMO_FILESYSTEM_SERVICE}' service set OK"
             console.print(f"[green]Faked {len(host_names)} demo host(s) UP ({detail}).[/green]")
             # Let the core apply the injected results before the state table query.
             await asyncio.sleep(2)
@@ -3871,15 +3938,20 @@ async def phase7_activation(
     # Demo mode: the always-up host check rule must exist before activation so
     # activating applies it.
     demo_rule_ok = True
+    filesystem_ok = False
     if demo and hosts:
         demo_rule_ok = await _create_demo_host_check_rule(client, [h.hostname for h in hosts])
+        linux_hosts = [h.hostname for h in hosts if h.os_family == "linux"]
+        filesystem_ok = bool(linux_hosts) and await _create_demo_filesystem_rule(client, linux_hosts)
 
     if not await _activate_pending_changes(client, connection):
         return
 
     if demo and hosts:
         # Livestatus is a different port than REST — bare host only.
-        await _fake_demo_hosts_up(connection.host, hosts, fake_host_checks=not demo_rule_ok)
+        await _fake_demo_hosts_up(
+            connection.host, hosts, fake_host_checks=not demo_rule_ok, fake_filesystem=filesystem_ok
+        )
 
     # Pull the site's actual current host/folder configuration, not just a
     # log of what this run touched — used for the state table below and for
