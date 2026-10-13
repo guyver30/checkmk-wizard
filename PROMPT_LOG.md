@@ -691,3 +691,7 @@ go ahead with fixes 1 and 2
 ## 2026-10-13 12:55
 
 commit this and push
+
+## 2026-10-13 13:28
+
+problem seems fixed, no lagging.
