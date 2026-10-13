@@ -7,6 +7,7 @@
 // No DOM access, no broker connection, no browser storage, no network calls -- pure
 // functions only.
 
+import { isDeviceStale } from "./staleness";
 import type { DevicePayload } from "./types";
 
 export function displayName(devicePayload: DevicePayload | null | undefined): string {
@@ -59,8 +60,37 @@ export function effectiveState(devicePayload: DevicePayload | null | undefined):
   return typeof devicePayload.state === "string" ? devicePayload.state : "UNKNOWN";
 }
 
+// Derived pseudo-state for an unmanaged switch (topology flag `unmanaged === true`, host label
+// unmanaged_switch=yes): it has no IP, agent, SNMP or services, so Checkmk reports it as
+// UNKNOWN (no services) or, after an admin fake DOWN then UP, as a fabricated OK -- neither is
+// something monitoring actually observed. It is shown as a neutral "Unmanaged" instead.
+export const UNMANAGED_STATE = "UNMANAGED";
+
+export function displayState(
+  devicePayload: DevicePayload | null | undefined,
+  unmanaged: boolean,
+  nowMs: number = Date.now(),
+): string {
+  // Only UNKNOWN/OK map to Unmanaged: a real or faked DOWN/UNREACH (and WARN/CRIT/PEND) passes
+  // through unchanged, so an outage is never masked.
+  //
+  // Staleness is deliberately not applied to the UNKNOWN/OK case: a check-free switch has no
+  // checks, so Checkmk's `staleness` column grows while the switch is merely quiet, and STALE
+  // would be as misleading as UNKNOWN. The poller's own liveness is already surfaced by
+  // PollerOfflineBanner. A faked DOWN refreshes staleness, so it still reads DOWN.
+  const effective = effectiveState(devicePayload);
+  if (unmanaged && (effective === "UNKNOWN" || effective === "OK")) {
+    return UNMANAGED_STATE;
+  }
+  return isDeviceStale(devicePayload, nowMs) ? "STALE" : effective;
+}
+
+export function stateLabel(state: string): string {
+  return state === UNMANAGED_STATE ? "Unmanaged" : state;
+}
+
 export function stateClass(state: string | null | undefined): string {
-  const known = new Set(["ok", "warn", "crit", "down", "unknown", "unreach", "pend"]);
+  const known = new Set(["ok", "warn", "crit", "down", "unknown", "unreach", "pend", "unmanaged"]);
   const normalised = typeof state === "string" ? state.toLowerCase() : "";
   return known.has(normalised) ? `state-${normalised}` : "state-unknown";
 }
@@ -77,6 +107,12 @@ export function stateIcon(state: string | null | undefined): string {
     UNKNOWN: "icon-question-circle-filled",
     UNREACH: "icon-status-unavailable",
     PEND: "icon-clock",
+    // Not UNKNOWN's question mark nor UNREACH's unavailable glyph: an unmanaged switch is
+    // neither unrecognised nor failing, it is simply outside monitoring. The badge text
+    // ("Unmanaged") carries the meaning; the icon class name follows the existing
+    // `icon-<name>-filled` convention (the icon CSS is supplied by the host page, so no
+    // stylesheet in this repo enumerates the available names).
+    UNMANAGED: "icon-minus-circle-filled",
   };
   return (state && icons[state]) || icons.UNKNOWN;
 }

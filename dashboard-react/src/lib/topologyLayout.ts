@@ -1,8 +1,8 @@
 // Turns the poller's raw topology device list plus current device statuses into the node/edge
 // model the topology map renders, and computes initial grid positions for hosts with no saved
-// `map_position` yet. Mirrors the STALE-overrides-state rule already used by
-// store/selectors.ts's selectStateCounts and treeModel.ts's buildTree, and reuses
-// display.ts's displayName()/effectiveState() rather than re-deriving them.
+// `map_position` yet. Node state comes from display.ts's displayState() (STALE overrides state,
+// and an unmanaged switch with no real state of its own reads UNMANAGED), the same helper
+// store/selectors.ts's selectStateCounts and treeModel.ts's buildTree use.
 //
 // D-11 forward-compatibility: buildMapModel takes an already-filtered device list as a plain
 // parameter and never reads the store. A later tag-filter pass (Phase 15) can narrow the input
@@ -11,7 +11,7 @@
 // No DOM access, no broker connection, no browser storage, no network calls -- pure
 // functions only.
 
-import { displayName, displayNameWithAddress, effectiveState } from "./display";
+import { displayName, displayNameWithAddress, displayState, effectiveState } from "./display";
 import { isDeviceStale } from "./staleness";
 import type { IncidentLookup } from "./incidents";
 import type { DevicePayload } from "./types";
@@ -67,6 +67,8 @@ export interface MapNode {
   incidentId: string | null;
   incidentRole: "root" | "consequence" | null;
   inferredRoot: boolean;
+  // For an unmanaged switch: "N of M devices behind it are up" / "No devices connected".
+  hint: string | null;
 }
 
 export interface MapEdge {
@@ -91,6 +93,65 @@ function isValidEntry(entry: unknown): entry is RawTopologyEntry {
   }
   const id = (entry as { id?: unknown }).id;
   return typeof id === "string" && id.length > 0;
+}
+
+export function unmanagedIdsFromTopology(topologyDevices: unknown): Set<string> {
+  const ids = new Set<string>();
+  if (!Array.isArray(topologyDevices)) {
+    return ids;
+  }
+  for (const entry of topologyDevices) {
+    if (isValidEntry(entry) && entry.unmanaged === true) {
+      ids.add(entry.id);
+    }
+  }
+  return ids;
+}
+
+function childrenHintText(total: number, up: number): string {
+  if (total === 0) {
+    return "No devices connected";
+  }
+  return total === 1
+    ? `${up} of 1 device behind it is up`
+    : `${up} of ${total} devices behind it are up`;
+}
+
+function isChildUp(
+  child: DevicePayload | undefined,
+  nowMs: number,
+): boolean {
+  if (!child || isDeviceStale(child, nowMs)) {
+    return false;
+  }
+  const state = effectiveState(child);
+  return state !== "DOWN" && state !== "UNREACH";
+}
+
+export function unmanagedChildrenHint(
+  switchId: string,
+  topologyDevices: unknown,
+  statuses: Record<string, DevicePayload>,
+  nowMs: number,
+): string {
+  const entries = Array.isArray(topologyDevices) ? topologyDevices : [];
+  const safeStatuses = statuses && typeof statuses === "object" ? statuses : {};
+  let total = 0;
+  let up = 0;
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!isValidEntry(entry) || seen.has(entry.id)) {
+      continue;
+    }
+    seen.add(entry.id);
+    if (Array.isArray(entry.parents) && entry.parents.includes(switchId)) {
+      total += 1;
+      if (isChildUp(safeStatuses[entry.id], nowMs)) {
+        up += 1;
+      }
+    }
+  }
+  return childrenHintText(total, up);
 }
 
 export function buildMapModel(
@@ -119,9 +180,31 @@ export function buildMapModel(
     validEntries.push(entry as RawTopologyEntry);
   }
 
+  // Direct children per parent, computed once so the per-switch hint is O(n) overall.
+  const childIdsByParent = new Map<string, string[]>();
+  for (const entry of validEntries) {
+    if (!Array.isArray(entry.parents)) {
+      continue;
+    }
+    for (const parent of new Set(entry.parents)) {
+      if (typeof parent === "string") {
+        const list = childIdsByParent.get(parent) ?? [];
+        list.push(entry.id);
+        childIdsByParent.set(parent, list);
+      }
+    }
+  }
+
   const nodes: MapNode[] = validEntries.map((entry) => {
     const status = safeStatuses[entry.id];
-    const state = isDeviceStale(status, nowMs) ? "STALE" : effectiveState(status);
+    const unmanaged = entry.unmanaged === true;
+    const state = displayState(status, unmanaged, nowMs);
+    let hint: string | null = null;
+    if (unmanaged) {
+      const childIds = childIdsByParent.get(entry.id) ?? [];
+      const up = childIds.filter((id) => isChildUp(safeStatuses[id], nowMs)).length;
+      hint = childrenHintText(childIds.length, up);
+    }
     const label = status
       ? displayNameWithAddress(status)
       : displayName({ id: entry.id, alias: entry.alias });
@@ -132,11 +215,12 @@ export function buildMapModel(
       deviceType: entry.device_type,
       state,
       position: parseMapPosition(entry.map_position),
-      unmanaged: entry.unmanaged === true,
+      unmanaged,
       dimmed: membership?.role === "consequence",
       incidentId: membership?.incidentId ?? null,
       incidentRole: membership?.role ?? null,
       inferredRoot: membership !== undefined && membership.role === "root" && membership.inferred,
+      hint,
     };
   });
 

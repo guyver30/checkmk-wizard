@@ -158,3 +158,14 @@ describe("nodeVisual", () => {
     });
   });
 });
+
+describe("UNMANAGED node visual", () => {
+  it("uses neutral grey, and inferred-root still wins", () => {
+    const plain = nodeVisual("NetworkDevice", "UNMANAGED");
+    expect(plain.color.border).toBe("#96969f");
+    expect(plain.image).toBe(nodeVisual("NetworkDevice", "UNMANAGED").image);
+    const inferred = nodeVisual("NetworkDevice", "UNMANAGED", "inferred-root");
+    expect(inferred.color.border).toBe("#f97316");
+    expect(inferred.shapeProperties.borderDashes).toEqual([6, 3]);
+  });
+});

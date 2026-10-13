@@ -10,6 +10,9 @@ import {
   formatRelativeTime,
   formatClock,
   formatDateTime,
+  displayState,
+  stateLabel,
+  UNMANAGED_STATE,
 } from "./display";
 
 describe("displayName", () => {
@@ -153,5 +156,43 @@ describe("formatDateTime", () => {
     expect(formatDateTime(null)).toBe("unknown");
     expect(formatDateTime("")).toBe("unknown");
     expect(formatDateTime("not-a-date")).toBe("unknown");
+  });
+});
+
+describe("displayState / unmanaged", () => {
+  const NOW = Date.parse("2026-10-13T12:00:00Z");
+  const fresh = new Date(NOW - 5000).toISOString();
+  const d = (o: Record<string, unknown>) =>
+    ({ id: "sw", timestamp: fresh, staleness: 0, ...o }) as never;
+
+  it("maps UNKNOWN and OK (faked UP) of an unmanaged switch to UNMANAGED", () => {
+    expect(displayState(d({ state: "UNKNOWN" }), true, NOW)).toBe(UNMANAGED_STATE);
+    expect(displayState(d({ state: "OK", host_state_raw: "UP" }), true, NOW)).toBe("UNMANAGED");
+  });
+
+  it("keeps DOWN and UNREACH", () => {
+    expect(displayState(d({ state: "DOWN", host_state_raw: "DOWN" }), true, NOW)).toBe("DOWN");
+    expect(displayState(d({ state: "DOWN", host_state_raw: "UNREACH" }), true, NOW)).toBe("UNREACH");
+  });
+
+  it("does not show STALE for a quiet unmanaged switch but does for a stale DOWN one", () => {
+    expect(displayState(d({ state: "UNKNOWN", staleness: 9 }), true, NOW)).toBe("UNMANAGED");
+    expect(displayState(d({ state: "DOWN", host_state_raw: "DOWN", staleness: 9 }), true, NOW)).toBe("STALE");
+  });
+
+  it("leaves non-unmanaged hosts exactly as before", () => {
+    expect(displayState(d({ state: "UNKNOWN" }), false, NOW)).toBe("UNKNOWN");
+    expect(displayState(d({ state: "OK", staleness: 9 }), false, NOW)).toBe("STALE");
+  });
+
+  it("treats a missing status of an unmanaged switch as UNMANAGED", () => {
+    expect(displayState(undefined, true, NOW)).toBe("UNMANAGED");
+  });
+
+  it("labels and classifies the state", () => {
+    expect(stateLabel("UNMANAGED")).toBe("Unmanaged");
+    expect(stateLabel("DOWN")).toBe("DOWN");
+    expect(stateClass("UNMANAGED")).toBe("state-unmanaged");
+    expect(stateIcon("UNMANAGED")).not.toBe(stateIcon("UNKNOWN"));
   });
 });

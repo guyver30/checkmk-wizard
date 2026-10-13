@@ -18,6 +18,9 @@ export const STATE_HEX: Record<string, string> = {
   UNKNOWN: "#111114",
   PEND: "#55555f",
   STALE: "#55555f",
+  // Unmanaged switch with no real state of its own: the same neutral-400 tone the dimmed border
+  // uses -- not green/amber/red, and lighter than UNKNOWN's near-black.
+  UNMANAGED: "#96969f",
 };
 
 // Drop-in device-type icons: every `assets/icons/device-types/<device_type>.svg` is picked up at
@@ -89,6 +92,7 @@ const BORDER_STYLE: Record<string, { borderWidth: number; borderDashes: false | 
   WARN: { borderWidth: 2, borderDashes: false },
   PEND: { borderWidth: 2, borderDashes: false },
   UNKNOWN: { borderWidth: 2, borderDashes: false },
+  UNMANAGED: { borderWidth: 2, borderDashes: false },
 };
 
 // Cached by "${deviceType}|${state}|${emphasis}" so a DataSet.update() of an unchanged node

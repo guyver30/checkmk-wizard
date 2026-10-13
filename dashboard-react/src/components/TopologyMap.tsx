@@ -290,7 +290,9 @@ function nodeBaseFields(node: MapNode, admin?: AdminDecoration) {
     : node.dimmed
       ? DIMMED_NODE_TITLE
       : node.unmanaged
-        ? UNMANAGED_SWITCH_TITLE
+        ? node.hint
+          ? `${UNMANAGED_SWITCH_TITLE} \u2014 ${node.hint}`
+          : UNMANAGED_SWITCH_TITLE
         : undefined;
   const visual = nodeVisual(node.deviceType, node.state, emphasis);
   if (!admin || (!admin.selected && !admin.faked)) {
@@ -537,6 +539,7 @@ export function TopologyMap({
         incidentId: null,
         incidentRole: null,
         inferredRoot: false,
+        hint: null,
       });
       callback({
         ...data,

@@ -451,7 +451,7 @@ describe("TopologyMap", () => {
     const topologyDevices = [{ id: "sw1", parents: [], unmanaged: true }];
     renderMap({ topologyDevices, statuses: {} });
     const nodes = instances[0].data.nodes as unknown as { get: (id: string) => { title?: string } };
-    expect(nodes.get("sw1").title).toBe("Unmanaged switch (not monitored)");
+    expect(nodes.get("sw1").title).toBe("Unmanaged switch (not monitored) \u2014 No devices connected");
   });
 
   it("has data-testid='topology-map' when nodes are present", () => {
@@ -676,6 +676,31 @@ describe("TopologyMap incidentLookup (DASH-15)", () => {
     expect(screen.queryByTestId("incident-probe")).not.toBeInTheDocument();
   });
 
+  it("shows the children hint in a plain unmanaged node's title and keeps the inferred-root title over it", () => {
+    const topologyDevices = [
+      { id: "sw1", parents: [], unmanaged: true },
+      { id: "h1", parents: ["sw1"] },
+      { id: "h2", parents: ["sw1"] },
+    ];
+    const statuses = { h1: device({ id: "h1" }), h2: device({ id: "h2", state: "DOWN" }) };
+    const { unmount } = renderMap({ topologyDevices, statuses });
+    const nodes = instances[0].data.nodes as unknown as {
+      get: (id: string) => { title?: string };
+    };
+    expect(nodes.get("sw1").title).toBe(
+      "Unmanaged switch (not monitored) \u2014 1 of 2 devices behind it are up",
+    );
+    unmount();
+    const incidentLookup: IncidentLookup = new Map([
+      ["sw1", { incidentId: "incident-sw1", role: "root", inferred: true }],
+    ]);
+    renderMap({ topologyDevices, statuses, incidentLookup });
+    const inferred = instances[instances.length - 1].data.nodes as unknown as {
+      get: (id: string) => { title?: string };
+    };
+    expect(inferred.get("sw1").title).toBe("Inferred root cause, not confirmed");
+  });
+
   it("gives an inferred root's DataSet entry the dashed warning border, full opacity", () => {
     const topologyDevices = [{ id: "sw1", parents: [], unmanaged: true }];
     const incidentLookup: IncidentLookup = new Map([
@@ -739,7 +764,7 @@ describe("TopologyMap incidentLookup (DASH-15)", () => {
       get: (id: string) => { opacity?: number; title?: string };
     };
     expect(nodes.get("sw1").opacity).toBe(1);
-    expect(nodes.get("sw1").title).toBe("Unmanaged switch (not monitored)");
+    expect(nodes.get("sw1").title).toBe("Unmanaged switch (not monitored) \u2014 No devices connected");
   });
 });
 

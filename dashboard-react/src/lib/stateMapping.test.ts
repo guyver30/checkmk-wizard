@@ -64,3 +64,14 @@ describe("badgeForState", () => {
     expect(stale.iconName).not.toBe(unknown.iconName);
   });
 });
+
+describe("badgeForState UNMANAGED", () => {
+  it("is a neutral, iconned badge labelled Unmanaged, distinct from STALE and UNKNOWN", () => {
+    const spec = badgeForState("UNMANAGED");
+    expect(spec.label).toBe("Unmanaged");
+    expect(spec.color).toBe("neutral");
+    expect(spec.iconName).not.toBeNull();
+    expect(spec.iconName).not.toBe(badgeForState("STALE").iconName);
+    expect(spec.iconName).not.toBe(badgeForState("UNKNOWN").iconName);
+  });
+});

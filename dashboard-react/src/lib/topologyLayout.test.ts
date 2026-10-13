@@ -9,6 +9,8 @@ import {
   parseMapPosition,
   snapToGrid,
   UNMANAGED_SWITCH_LABEL,
+  unmanagedChildrenHint,
+  unmanagedIdsFromTopology,
   withGridPositions,
 } from "./topologyLayout";
 import type { IncidentLookup } from "./incidents";
@@ -287,6 +289,7 @@ describe("withGridPositions", () => {
         incidentId: null,
         incidentRole: null,
         inferredRoot: false,
+        hint: null,
       },
       {
         id: "b",
@@ -299,6 +302,7 @@ describe("withGridPositions", () => {
         incidentId: null,
         incidentRole: null,
         inferredRoot: false,
+        hint: null,
       },
       {
         id: "c",
@@ -311,6 +315,7 @@ describe("withGridPositions", () => {
         incidentId: null,
         incidentRole: null,
         inferredRoot: false,
+        hint: null,
       },
     ];
     const result = withGridPositions(nodes);
@@ -335,9 +340,84 @@ describe("withGridPositions", () => {
         incidentId: null,
         incidentRole: null,
         inferredRoot: false,
+        hint: null,
       },
     ];
     const result = withGridPositions(nodes);
     expect(result[0]).toMatchObject({ x: 0, y: 0, saved: false });
+  });
+});
+
+describe("unmanaged switch display", () => {
+  const dev = (id: string, state: string, extra: Partial<DevicePayload> = {}): DevicePayload =>
+    ({ id, state, timestamp: FRESH_TIMESTAMP, staleness: 0, ...extra }) as DevicePayload;
+  const topo = [
+    { id: "sw", parents: [], unmanaged: true },
+    { id: "a", parents: ["sw"] },
+    { id: "b", parents: ["sw"] },
+    { id: "c", parents: ["sw"] },
+    { id: "d", parents: ["sw"] },
+    { id: "other", parents: ["a"] },
+  ];
+
+  it("unmanagedIdsFromTopology returns only unmanaged === true ids and ignores junk", () => {
+    const ids = unmanagedIdsFromTopology([
+      ...topo,
+      null,
+      "x",
+      { id: "", unmanaged: true },
+      { id: "y", unmanaged: "yes" },
+    ]);
+    expect([...ids]).toEqual(["sw"]);
+    expect(unmanagedIdsFromTopology(undefined).size).toBe(0);
+  });
+
+  it("hint counts direct children that are up", () => {
+    const statuses = {
+      a: dev("a", "OK"),
+      b: dev("b", "OK"),
+      c: dev("c", "OK"),
+      d: dev("d", "DOWN", { host_state_raw: "DOWN" } as Partial<DevicePayload>),
+    };
+    expect(unmanagedChildrenHint("sw", topo, statuses, NOW_MS)).toBe("3 of 4 devices behind it are up");
+  });
+
+  it("hint wording for all up, one child, and none", () => {
+    const two = [{ id: "sw", parents: [], unmanaged: true }, { id: "a", parents: ["sw"] }, { id: "b", parents: ["sw"] }];
+    expect(unmanagedChildrenHint("sw", two, { a: dev("a", "OK"), b: dev("b", "OK") }, NOW_MS)).toBe(
+      "2 of 2 devices behind it are up",
+    );
+    const one = [{ id: "sw", parents: [], unmanaged: true }, { id: "a", parents: ["sw"] }];
+    expect(unmanagedChildrenHint("sw", one, { a: dev("a", "DOWN") }, NOW_MS)).toBe(
+      "0 of 1 device behind it is up",
+    );
+    expect(unmanagedChildrenHint("sw", [{ id: "sw", parents: [], unmanaged: true }], {}, NOW_MS)).toBe(
+      "No devices connected",
+    );
+  });
+
+  it("a stale or status-less child does not count as up", () => {
+    const one = [{ id: "sw", parents: [], unmanaged: true }, { id: "a", parents: ["sw"] }, { id: "b", parents: ["sw"] }];
+    const statuses = { a: dev("a", "OK", { staleness: 9 }) };
+    expect(unmanagedChildrenHint("sw", one, statuses, NOW_MS)).toBe("0 of 2 devices behind it are up");
+  });
+
+  it("buildMapModel maps an UNKNOWN or faked-UP unmanaged switch to UNMANAGED with a hint", () => {
+    const unknown = buildMapModel(topo, { sw: dev("sw", "UNKNOWN") }, NOW_MS);
+    const sw = unknown.nodes.find((n) => n.id === "sw");
+    expect(sw?.state).toBe("UNMANAGED");
+    expect(sw?.hint).toBe("0 of 4 devices behind it are up");
+    const fakedUp = buildMapModel(topo, { sw: dev("sw", "OK", { host_state_raw: "UP" } as Partial<DevicePayload>) }, NOW_MS);
+    expect(fakedUp.nodes.find((n) => n.id === "sw")?.state).toBe("UNMANAGED");
+  });
+
+  it("buildMapModel keeps DOWN and UNREACH for an unmanaged switch and null hint elsewhere", () => {
+    const down = buildMapModel(topo, { sw: dev("sw", "DOWN", { host_state_raw: "DOWN" } as Partial<DevicePayload>) }, NOW_MS);
+    expect(down.nodes.find((n) => n.id === "sw")?.state).toBe("DOWN");
+    const unreach = buildMapModel(topo, { sw: dev("sw", "DOWN", { host_state_raw: "UNREACH" } as Partial<DevicePayload>) }, NOW_MS);
+    expect(unreach.nodes.find((n) => n.id === "sw")?.state).toBe("UNREACH");
+    const a = down.nodes.find((n) => n.id === "a");
+    expect(a?.hint).toBeNull();
+    expect(a?.state).toBe("STALE");
   });
 });

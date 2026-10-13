@@ -26,6 +26,7 @@ export interface BadgeSpec {
 // module adds for the derived pseudo-state STALE and the icon-disambiguated UNKNOWN).
 const ICON_CLOCK = "icon-clock";
 const ICON_QUESTION = "icon-question-circle-filled";
+const ICON_MINUS = "icon-minus-circle-filled";
 
 const STATE_SPECS: Record<string, BadgeSpec> = {
   OK: { color: "success", variant: "soft", iconName: null, label: "OK" },
@@ -36,6 +37,9 @@ const STATE_SPECS: Record<string, BadgeSpec> = {
   UNREACH: { color: "danger", variant: "outline", iconName: null, label: "UNREACH" },
   DOWN: { color: "danger", variant: "solid", iconName: null, label: "DOWN" },
   STALE: { color: "neutral", variant: "outline", iconName: ICON_CLOCK, label: "STALE" },
+  // An unmanaged switch (no checks by design): neutral like PEND/STALE, but with its own icon
+  // so it is not distinguishable from them by colour alone.
+  UNMANAGED: { color: "neutral", variant: "soft", iconName: ICON_MINUS, label: "Unmanaged" },
 };
 
 export function badgeForState(state: string): BadgeSpec {
