@@ -695,3 +695,15 @@ commit this and push
 ## 2026-10-13 13:28
 
 problem seems fixed, no lagging.
+
+## 2026-10-13 13:35
+
+it's already pushed right?
+
+## 2026-10-13 13:35
+
+if I add an unmanaged switch in topology editor, it's showing "unknown" by default. But if I fake it down and up again , it shows "ok". Bit misleading...suggestions?
+
+## 2026-10-13 13:39
+
+option 1 and 2, but ensure that the "inferred down" is maintained if all its children are down. Unmanaged is better than unknown
