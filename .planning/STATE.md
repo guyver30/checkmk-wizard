@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-05)
 Phase: 14.2 (fleet-failure-prediction-and-incident-narration) — COMPLETE, CLOSED 2026-10-12
 Plan: 19 of 19 summarized (14.2-VERIFICATION.md status: human_needed)
 Status: Closed. Operator confirmed on the test site 2026-10-12: folder auto-monitoring, CPU load gauge/history, trend zoom/pan, map physics, drawing layer, discovered-hosts banner. Not explicitly re-confirmed: triage outside edit mode, low-confidence forecast display, systemd-inactive CRIT rule on a live site (see 14.2-VERIFICATION.md)
-Last activity: 2026-10-12 -- Phase 14.2 follow-ups committed (load chart colours, filled ACS/NetworkDevice icons)
+Last activity: 2026-10-13 -- Completed quick task 261013-hqy: dashboard lag fixes (batched map sync, coalesced MQTT messages)
 
 Progress: [██████████] 99%
 
@@ -149,6 +149,7 @@ None.
 | 261012-j6d | Demo Linux agent host in wizard --demo (no SSH/agent/discovery, Check_MK checks faked OK) and scripts/seed_fake_history.py (backdated history.metrics series, --dry-run expected tier, --delete via ch_admin); live-verified 2026-10-12: agent-host service list and injected OKs, seeded insert, forecast and trend need (PING fake added after a live report, 300a457); --delete ran OK live and the forecast/need cleared; still unverified: host staying UP over time | 2026-10-12 | c880d98 | [261012-j6d](./quick/261012-j6d-demo-linux-agent-host-in-wizard-demo-mod/) |
 | 261012-pst | Dashboard poller-offline/stale banner restored (DASH-04/05 gap from the v1.0 audit); jsdom tests only, not seen in a browser | 2026-10-12 | 9cf2a39 | [261012-pst](./quick/261012-pst-dashboard-poller-offline-banner/) |
 | 261012-wmg | Wizard host-update fallback now read-merges (keeps dashboard-set parents/labels on promotion); mocked tests only | 2026-10-12 | 81de4ce | [261012-wmg](./quick/261012-wmg-wizard-fallback-read-merge/) |
+| 261013-hqy | Dashboard lag: topology map sync batched (one DataSet call per op, unchanged nodes/edges skipped) and MQTT messages coalesced into one store write per frame; found from Chrome traces (82% of main thread in per-item nodes.update redraws); 975 jsdom tests pass, not yet seen in a browser, no new trace | 2026-10-13 | 54ec7a9 | [261013-hqy](./quick/261013-hqy-dashboard-lag-batch-map-sync-updates-and/) |
 | fast | Dashboard admin mode: action bar (selection, Set UP/DOWN, Restore all) moved from page bottom to beside the Edit topology toolbar; not yet seen in a browser | 2026-10-05 | d070ad2 | - |
 | fast | Tier marker dot colours: red immediate, orange urgent, yellow standard (all filled dots; standard now shown); docs and UI-SPEC amended; not yet seen in a browser | 2026-10-05 | d6bd7cd | - |
 | fast | Switch MinIO image to cgr.dev/chainguard/minio pinned by digest (Docker Hub and quay.io both unpullable) | 2026-09-30 | c77c3fd | - |
