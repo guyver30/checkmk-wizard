@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "./useAppStore";
 
 // Reset choice: useAppStore.setState(initialState, true) in beforeEach, using a snapshot of
@@ -337,5 +337,58 @@ describe("handleMessage - unknown topic", () => {
       useAppStore.getState().handleMessage("lan/some/unknown/topic", encode({ x: 1 }));
     }).not.toThrow();
     expect(useAppStore.getState().devices).toBe(before.devices);
+  });
+});
+
+describe("handleMessages (quick 261013-hqy)", () => {
+  const enc = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
+  const empty = new Uint8Array(0);
+
+  beforeEach(() => {
+    useAppStore.setState({ devices: {}, services: {} });
+  });
+
+  it("applies a batch of device statuses with exactly one subscriber notification", () => {
+    const listener = vi.fn();
+    const unsubscribe = useAppStore.subscribe(listener);
+    useAppStore.getState().handleMessages([
+      ["lan/devices/h1/status", enc({ state: "OK" })],
+      ["lan/devices/h2/status", enc({ state: "OK" })],
+      ["lan/devices/h3/status", enc({ state: "DOWN" })],
+    ]);
+    unsubscribe();
+    expect(Object.keys(useAppStore.getState().devices).sort()).toEqual(["h1", "h2", "h3"]);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("a tombstone after a status removes the host and its services", () => {
+    useAppStore.getState().handleMessages([
+      ["lan/devices/h1/status", enc({ state: "OK" })],
+      ["lan/devices/h1/services", enc([])],
+      ["lan/devices/h1/status", empty],
+    ]);
+    expect(useAppStore.getState().devices.h1).toBeUndefined();
+    expect(useAppStore.getState().services.h1).toBeUndefined();
+  });
+
+  it("a status after a tombstone leaves the host present; the last status wins", () => {
+    useAppStore.getState().handleMessages([
+      ["lan/devices/h1/status", empty],
+      ["lan/devices/h1/status", enc({ state: "OK" })],
+      ["lan/devices/h1/status", enc({ state: "DOWN" })],
+    ]);
+    expect(useAppStore.getState().devices.h1.state).toBe("DOWN");
+  });
+
+  it("a batch of only malformed payloads makes no notification", () => {
+    const listener = vi.fn();
+    const unsubscribe = useAppStore.subscribe(listener);
+    useAppStore.getState().handleMessages([
+      ["lan/devices/h1/status", new TextEncoder().encode("{not json")],
+      ["lan/devices/h2/status", enc([1, 2])],
+      ["lan/unknown/topic", enc({})],
+    ]);
+    unsubscribe();
+    expect(listener).not.toHaveBeenCalled();
   });
 });

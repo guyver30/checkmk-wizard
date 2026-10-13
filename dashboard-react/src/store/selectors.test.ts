@@ -19,6 +19,7 @@ function stateWithDevices(devices: Record<string, DevicePayload>): AppState {
     lastKnownPollerTimestamp: null,
     connection: { phase: "connected" },
     handleMessage: () => {},
+    handleMessages: () => {},
     setConnection: () => {},
     resetIncidents: () => {},
     resetAnalytics: () => {},

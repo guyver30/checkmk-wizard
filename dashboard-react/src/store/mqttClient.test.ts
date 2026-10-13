@@ -3,6 +3,7 @@ import type { IClientOptions, MqttClient } from "mqtt";
 import {
   connect,
   disconnect,
+  flushPendingMessages,
   BASE_DELAY_MS,
   MAX_DELAY_MS,
   publishAdminCommand,
@@ -223,16 +224,20 @@ describe("connect", () => {
     errorSpy.mockRestore();
   });
 
-  it("routes each message event to useAppStore.getState().handleMessage", () => {
+  // Intended behaviour change (quick 261013-hqy): messages are queued and applied through
+  // handleMessages() as one batch on flush, not through handleMessage() per message.
+  it("routes each message event through useAppStore.getState().handleMessages on flush", () => {
     const fake = createFakeClient();
     const connectFn = vi.fn(() => fake as unknown as MqttClient);
-    const handleMessageSpy = vi.spyOn(useAppStore.getState(), "handleMessage");
+    const handleMessageSpy = vi.spyOn(useAppStore.getState(), "handleMessages");
 
     connect({ connectFn });
     const payload = new TextEncoder().encode(JSON.stringify({ state: "OK" }));
     fake.emit("message", "sites/site1/lan/devices/h1/status", payload);
+    expect(handleMessageSpy).not.toHaveBeenCalled();
+    flushPendingMessages();
 
-    expect(handleMessageSpy).toHaveBeenCalledWith("lan/devices/h1/status", payload);
+    expect(handleMessageSpy).toHaveBeenCalledWith([["lan/devices/h1/status", payload]]);
 
     handleMessageSpy.mockRestore();
   });
@@ -243,12 +248,13 @@ describe("site namespace", () => {
     __setAdminModeForTests(true);
     const fake = createFakeClient();
     connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
-    const appSpy = vi.spyOn(useAppStore.getState(), "handleMessage");
+    const appSpy = vi.spyOn(useAppStore.getState(), "handleMessages");
     const adminSpy = vi.spyOn(useAdminStore.getState(), "handleAdminMessage");
     const body = new TextEncoder().encode("{}");
     fake.emit("message", "lan/devices/h1/status", body);
     fake.emit("message", "admin/faked", body);
     fake.emit("message", "sites/other/lan/devices/h1/status", body);
+    flushPendingMessages();
     expect(appSpy).not.toHaveBeenCalled();
     expect(adminSpy).not.toHaveBeenCalled();
     appSpy.mockRestore();
@@ -285,9 +291,10 @@ describe("admin mode", () => {
     __setAdminModeForTests(true);
     const fake = createFakeClient();
     connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
-    const handleSpy = vi.spyOn(useAppStore.getState(), "handleMessage");
+    const handleSpy = vi.spyOn(useAppStore.getState(), "handleMessages");
     const body = new TextEncoder().encode(JSON.stringify({ hosts: { a: "DOWN" } }));
     fake.emit("message", "sites/site1/admin/faked", body);
+    flushPendingMessages();
     expect(useAdminStore.getState().faked).toEqual({ a: "DOWN" });
     expect(handleSpy).not.toHaveBeenCalled();
     handleSpy.mockRestore();
@@ -296,10 +303,11 @@ describe("admin mode", () => {
   it("still routes lan/ messages to the app store", () => {
     const fake = createFakeClient();
     connect({ connectFn: vi.fn(() => fake as unknown as MqttClient) });
-    const handleSpy = vi.spyOn(useAppStore.getState(), "handleMessage");
+    const handleSpy = vi.spyOn(useAppStore.getState(), "handleMessages");
     const body = new TextEncoder().encode(JSON.stringify({ status: "online" }));
     fake.emit("message", "sites/site1/lan/poller/status", body);
-    expect(handleSpy).toHaveBeenCalledWith("lan/poller/status", body);
+    flushPendingMessages();
+    expect(handleSpy).toHaveBeenCalledWith([["lan/poller/status", body]]);
     handleSpy.mockRestore();
   });
 
@@ -328,5 +336,92 @@ describe("admin mode", () => {
     __setAdminModeForTests(false);
     expect(publishAdminCommand("down", ["a"])).toBeNull();
     expect(fake.publish).not.toHaveBeenCalled();
+  });
+});
+
+describe("message coalescing (quick 261013-hqy)", () => {
+  const enc = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
+  const topicOf = (id: string) => `sites/site1/lan/devices/${id}/status`;
+
+  function setup() {
+    const scheduled: Array<() => void> = [];
+    const fake = createFakeClient();
+    connect({
+      connectFn: vi.fn(() => fake as unknown as MqttClient),
+      scheduleFlushFn: (cb) => scheduled.push(cb),
+    });
+    return { fake, scheduled };
+  }
+
+  it("applies a burst in one flush with one store notification", () => {
+    const { fake, scheduled } = setup();
+    for (let i = 0; i < 5; i++) {
+      fake.emit("message", topicOf(`h${i}`), enc({ state: "OK" }));
+    }
+    expect(Object.keys(useAppStore.getState().devices)).toHaveLength(0);
+    expect(scheduled).toHaveLength(1);
+
+    const listener = vi.fn();
+    const unsubscribe = useAppStore.subscribe(listener);
+    scheduled[0]();
+    unsubscribe();
+
+    expect(Object.keys(useAppStore.getState().devices)).toHaveLength(5);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules again for a message that arrives after a flush", () => {
+    const { fake, scheduled } = setup();
+    fake.emit("message", topicOf("h1"), enc({ state: "OK" }));
+    scheduled[0]();
+    fake.emit("message", topicOf("h2"), enc({ state: "OK" }));
+    expect(scheduled).toHaveLength(2);
+    scheduled[1]();
+    expect(Object.keys(useAppStore.getState().devices).sort()).toEqual(["h1", "h2"]);
+  });
+
+  it("keeps admin messages in arrival order through the same queue", () => {
+    __setAdminModeForTests(true);
+    const { fake, scheduled } = setup();
+    const order: string[] = [];
+    const appSpy = vi
+      .spyOn(useAppStore.getState(), "handleMessages")
+      .mockImplementation((batch) => {
+        order.push(`app:${batch.map(([t]) => t).join(",")}`);
+      });
+    const adminSpy = vi
+      .spyOn(useAdminStore.getState(), "handleAdminMessage")
+      .mockImplementation((topic) => {
+        order.push(`admin:${topic}`);
+      });
+    fake.emit("message", topicOf("a"), enc({ state: "OK" }));
+    fake.emit("message", "sites/site1/admin/faked", enc({ hosts: {} }));
+    fake.emit("message", topicOf("b"), enc({ state: "OK" }));
+    scheduled[0]();
+    expect(order).toEqual([
+      "app:lan/devices/a/status",
+      "admin:admin/faked",
+      "app:lan/devices/b/status",
+    ]);
+    appSpy.mockRestore();
+    adminSpy.mockRestore();
+  });
+
+  it("a flush captured before __resetForTests applies nothing", () => {
+    const { fake, scheduled } = setup();
+    fake.emit("message", topicOf("h1"), enc({ state: "OK" }));
+    __resetForTests();
+    scheduled[0]();
+    expect(useAppStore.getState().devices).toEqual({});
+  });
+
+  it("flushes queued messages before the reset on reconnect", () => {
+    const { fake } = setup();
+    fake.emit("message", "sites/site1/lan/incidents/i1/status", enc({ id: "i1" }));
+    fake.emit("connect");
+    expect(useAppStore.getState().incidents).toEqual({});
+    // The queue was drained on connect, so a later flush has nothing stale to re-apply.
+    flushPendingMessages();
+    expect(useAppStore.getState().incidents).toEqual({});
   });
 });

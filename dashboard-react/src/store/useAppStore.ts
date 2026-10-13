@@ -13,7 +13,7 @@
 //
 // This module owns no DOM access and no `mqtt` reference. It receives
 // `(topic, payloadBuffer)` from src/store/mqttClient.ts via
-// `handleMessage()` and nothing else.
+// `handleMessages()` (a coalesced batch) or `handleMessage()` (one message) and nothing else.
 //
 // Malformed-payload tolerance mirrors this codebase's own precedent for
 // defensively parsing external/restored data
@@ -75,6 +75,7 @@ export interface AppState {
   lastKnownPollerTimestamp: string | null;
   connection: ConnectionState;
   handleMessage: (topic: string, payload: Uint8Array) => void;
+  handleMessages: (batch: ReadonlyArray<readonly [string, Uint8Array]>) => void;
   setConnection: (status: ConnectionState) => void;
   resetIncidents: () => void;
   resetAnalytics: () => void;
@@ -102,6 +103,169 @@ function parsePayload(payloadBuffer: Uint8Array | null | undefined): ParseResult
   } catch {
     return { ok: false };
   }
+}
+
+// Routes one MQTT message to a state patch (or null when the message is malformed, ignored
+// or for an unknown topic, so last-known-good is kept). Pure: it reads `state` and returns
+// the keys to replace, so handleMessage (one message) and handleMessages (a batch) share it.
+function applyMessage(
+  state: AppState,
+  topic: string,
+  payload: Uint8Array,
+): Partial<AppState> | null {
+  // Routes one MQTT message into the store. Parses the topic by splitting on "/" and
+  // matching segment positions rather than a single regex over the whole string, because
+  // the device id segment (parts[2]) is arbitrary text sourced from Checkmk host names.
+  // `topic` is RELATIVE: mqttClient.ts strips `sites/<checkmkSite>/` before calling.
+  const parts = topic.split("/");
+
+  if (parts[1] === "incidents" && parts[3] === "status") {
+    const id = parts[2];
+    const parsed = parsePayload(payload);
+    if (!parsed.ok) {
+      return null; // malformed -- ignore, keep last-known-good
+    }
+    if (parsed.value === null) {
+      // Zero-length retained payload is a tombstone -- the incident closed.
+      const incidents = { ...state.incidents };
+      delete incidents[id];
+      return { incidents };
+    }
+    if (!isPlainObject(parsed.value)) {
+      return null; // wrong shape -- malformed, drop
+    }
+    return { incidents: { ...state.incidents, [id]: parsed.value as IncidentPayload } };
+  }
+
+  if (parts[1] === "needs" && parts[3] === "status") {
+    const id = parts[2];
+    const parsed = parsePayload(payload);
+    if (!parsed.ok) {
+      return null; // malformed -- keep last-known-good
+    }
+    if (parsed.value === null) {
+      const needs = { ...state.needs };
+      delete needs[id];
+      return { needs };
+    }
+    const need = parseNeed(parsed.value);
+    if (!need) {
+      return null; // wrong shape -- keep last-known-good
+    }
+    return { needs: { ...state.needs, [id]: need } };
+  }
+
+  if (parts[1] === "forecasts" && parts.length === 3) {
+    const host = parts[2];
+    const parsed = parsePayload(payload);
+    if (!parsed.ok) {
+      return null;
+    }
+    if (parsed.value === null) {
+      const forecasts = { ...state.forecasts };
+      delete forecasts[host];
+      return { forecasts };
+    }
+    const forecast = parseForecast(parsed.value);
+    if (!forecast) {
+      return null;
+    }
+    return { forecasts: { ...state.forecasts, [host]: forecast } };
+  }
+
+  if (parts[1] === "incidents" && parts[3] === "narration") {
+    const id = parts[2];
+    const parsed = parsePayload(payload);
+    if (!parsed.ok) {
+      return null;
+    }
+    if (parsed.value === null) {
+      const narrations = { ...state.narrations };
+      delete narrations[id];
+      return { narrations };
+    }
+    const narration = parseNarration(parsed.value);
+    if (!narration) {
+      return null;
+    }
+    return { narrations: { ...state.narrations, [id]: narration } };
+  }
+
+  if (parts[1] === "devices" && parts[3] === "status") {
+    const id = parts[2];
+    const parsed = parsePayload(payload);
+    if (!parsed.ok) {
+      return null; // malformed -- ignore, keep last-known-good
+    }
+    if (parsed.value === null) {
+      // Zero-length retained payload is MQTT's own tombstone semantic
+      // (scripts/mqtt_poller.py::publish_tombstone) -- remove the device and its
+      // services, so a device removed from Checkmk leaves nothing orphaned behind even
+      // if its status tombstone arrives before the services one.
+      const devices = { ...state.devices };
+      const services = { ...state.services };
+      delete devices[id];
+      delete services[id];
+      return { devices, services };
+    }
+    if (!isPlainObject(parsed.value)) {
+      return null; // wrong shape -- malformed, drop
+    }
+    return { devices: { ...state.devices, [id]: parsed.value as DevicePayload } };
+  }
+
+  if (parts[1] === "devices" && parts[3] === "services") {
+    const id = parts[2];
+    const parsed = parsePayload(payload);
+    if (!parsed.ok) {
+      return null;
+    }
+    if (parsed.value === null) {
+      return { services: { ...state.services, [id]: [] } };
+    }
+    if (!Array.isArray(parsed.value)) {
+      return null;
+    }
+    return { services: { ...state.services, [id]: parsed.value as ServiceEntry[] } };
+  }
+
+  if (topic === "lan/devices/topology") {
+    const parsed = parsePayload(payload);
+    if (!parsed.ok || parsed.value === null || !isPlainObject(parsed.value)) {
+      return null;
+    }
+    return { topology: parsed.value as TopologyPayload };
+  }
+
+  if (topic === "lan/events/recent") {
+    const parsed = parsePayload(payload);
+    if (!parsed.ok) {
+      return null;
+    }
+    if (parsed.value === null) {
+      return { events: [] };
+    }
+    if (!Array.isArray(parsed.value)) {
+      return null;
+    }
+    return { events: parsed.value as EventEntry[] };
+  }
+
+  if (topic === "lan/poller/status") {
+    const parsed = parsePayload(payload);
+    if (!parsed.ok || parsed.value === null || !isPlainObject(parsed.value)) {
+      return null;
+    }
+    const pollerStatus = parsed.value as PollerStatusPayload;
+    const raw = pollerStatus.last_poll || pollerStatus.since;
+    return {
+      pollerStatus,
+      lastKnownPollerTimestamp: raw || state.lastKnownPollerTimestamp,
+    };
+  }
+
+  // Unknown topic: no-op.
+  return null;
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
@@ -137,173 +301,34 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   handleMessage: (topic, payload) => {
-    // Routes one MQTT message into the store. Parses the topic by splitting on "/" and
-    // matching segment positions rather than a single regex over the whole string, because
-    // the device id segment (parts[2]) is arbitrary text sourced from Checkmk host names.
-    // `topic` is RELATIVE: mqttClient.ts strips `sites/<checkmkSite>/` before calling.
-    const parts = topic.split("/");
-
-    if (parts[1] === "incidents" && parts[3] === "status") {
-      const id = parts[2];
-      const parsed = parsePayload(payload);
-      if (!parsed.ok) {
-        return; // malformed -- ignore, keep last-known-good
-      }
-      if (parsed.value === null) {
-        // Zero-length retained payload is a tombstone -- the incident closed.
-        const incidents = { ...get().incidents };
-        delete incidents[id];
-        set({ incidents });
-        return;
-      }
-      if (!isPlainObject(parsed.value)) {
-        return; // wrong shape -- malformed, drop
-      }
-      set({ incidents: { ...get().incidents, [id]: parsed.value as IncidentPayload } });
-      return;
+    const patch = applyMessage(get(), topic, payload);
+    if (patch) {
+      set(patch);
     }
-
-    if (parts[1] === "needs" && parts[3] === "status") {
-      const id = parts[2];
-      const parsed = parsePayload(payload);
-      if (!parsed.ok) {
-        return; // malformed -- keep last-known-good
-      }
-      if (parsed.value === null) {
-        const needs = { ...get().needs };
-        delete needs[id];
-        set({ needs });
-        return;
-      }
-      const need = parseNeed(parsed.value);
-      if (!need) {
-        return; // wrong shape -- keep last-known-good
-      }
-      set({ needs: { ...get().needs, [id]: need } });
-      return;
-    }
-
-    if (parts[1] === "forecasts" && parts.length === 3) {
-      const host = parts[2];
-      const parsed = parsePayload(payload);
-      if (!parsed.ok) {
-        return;
-      }
-      if (parsed.value === null) {
-        const forecasts = { ...get().forecasts };
-        delete forecasts[host];
-        set({ forecasts });
-        return;
-      }
-      const forecast = parseForecast(parsed.value);
-      if (!forecast) {
-        return;
-      }
-      set({ forecasts: { ...get().forecasts, [host]: forecast } });
-      return;
-    }
-
-    if (parts[1] === "incidents" && parts[3] === "narration") {
-      const id = parts[2];
-      const parsed = parsePayload(payload);
-      if (!parsed.ok) {
-        return;
-      }
-      if (parsed.value === null) {
-        const narrations = { ...get().narrations };
-        delete narrations[id];
-        set({ narrations });
-        return;
-      }
-      const narration = parseNarration(parsed.value);
-      if (!narration) {
-        return;
-      }
-      set({ narrations: { ...get().narrations, [id]: narration } });
-      return;
-    }
-
-    if (parts[1] === "devices" && parts[3] === "status") {
-      const id = parts[2];
-      const parsed = parsePayload(payload);
-      if (!parsed.ok) {
-        return; // malformed -- ignore, keep last-known-good
-      }
-      if (parsed.value === null) {
-        // Zero-length retained payload is MQTT's own tombstone semantic
-        // (scripts/mqtt_poller.py::publish_tombstone) -- remove the device and its
-        // services, so a device removed from Checkmk leaves nothing orphaned behind even
-        // if its status tombstone arrives before the services one.
-        const devices = { ...get().devices };
-        const services = { ...get().services };
-        delete devices[id];
-        delete services[id];
-        set({ devices, services });
-        return;
-      }
-      if (!isPlainObject(parsed.value)) {
-        return; // wrong shape -- malformed, drop
-      }
-      set({ devices: { ...get().devices, [id]: parsed.value as DevicePayload } });
-      return;
-    }
-
-    if (parts[1] === "devices" && parts[3] === "services") {
-      const id = parts[2];
-      const parsed = parsePayload(payload);
-      if (!parsed.ok) {
-        return;
-      }
-      if (parsed.value === null) {
-        set({ services: { ...get().services, [id]: [] } });
-        return;
-      }
-      if (!Array.isArray(parsed.value)) {
-        return;
-      }
-      set({ services: { ...get().services, [id]: parsed.value as ServiceEntry[] } });
-      return;
-    }
-
-    if (topic === "lan/devices/topology") {
-      const parsed = parsePayload(payload);
-      if (!parsed.ok || parsed.value === null || !isPlainObject(parsed.value)) {
-        return;
-      }
-      set({ topology: parsed.value as TopologyPayload });
-      return;
-    }
-
-    if (topic === "lan/events/recent") {
-      const parsed = parsePayload(payload);
-      if (!parsed.ok) {
-        return;
-      }
-      if (parsed.value === null) {
-        set({ events: [] });
-        return;
-      }
-      if (!Array.isArray(parsed.value)) {
-        return;
-      }
-      set({ events: parsed.value as EventEntry[] });
-      return;
-    }
-
-    if (topic === "lan/poller/status") {
-      const parsed = parsePayload(payload);
-      if (!parsed.ok || parsed.value === null || !isPlainObject(parsed.value)) {
-        return;
-      }
-      const pollerStatus = parsed.value as PollerStatusPayload;
-      const raw = pollerStatus.last_poll || pollerStatus.since;
-      set({
-        pollerStatus,
-        lastKnownPollerTimestamp: raw || get().lastKnownPollerTimestamp,
-      });
-      return;
-    }
-
-    // Unknown topic: no-op.
   },
+
+  // Applies a batch in arrival order (last write wins, tombstones included) and notifies
+  // subscribers once. mqttClient coalesces a frame's worth of messages into one call so a
+  // burst of retained topics costs one store update and one React commit, not one each.
+  handleMessages: (batch) => {
+    let draft = get();
+    const changed = new Set<keyof AppState>();
+    for (const [topic, payload] of batch) {
+      const patch = applyMessage(draft, topic, payload);
+      if (patch) {
+        draft = { ...draft, ...patch };
+        for (const key of Object.keys(patch) as Array<keyof AppState>) {
+          changed.add(key);
+        }
+      }
+    }
+    if (changed.size === 0) {
+      return;
+    }
+    const merged: Partial<AppState> = {};
+    for (const key of changed) {
+      (merged as Record<string, unknown>)[key] = draft[key];
+    }
+    set(merged);
+  }
 }));

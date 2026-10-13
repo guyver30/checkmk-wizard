@@ -679,7 +679,6 @@ export function TopologyMap({
 
     return () => {
       network.destroy();
-      nodeSignatures.current.clear();
       nodesRef.current = null;
       edgesRef.current = null;
       networkRef.current = null;
