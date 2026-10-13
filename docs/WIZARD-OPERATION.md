@@ -1955,6 +1955,25 @@ core was checked live on 2026-10-12: PING, Check_MK and Check_MK Discovery are
 all present and green with their active checks disabled. Whether the host stays
 UP rather than STALE over time is still unverified.
 
+For demo Linux hosts Phase 7 also creates a second rule, before activation and
+after the always-up rule: ruleset `custom_checks` ("Integrate Nagios plugins",
+Setup > Services > Other services), folder `/`, `host_name` one_of the demo
+Linux hosts only, `value_raw` = `{'service_description': 'Filesystem /',
+'has_perfdata': True}` (Python literal). With no command line this is a passive
+classical check, so the core never runs it. `_fake_demo_hosts_up` then sends
+`DISABLE_SVC_CHECK;<host>;Filesystem /` and
+`PROCESS_SERVICE_CHECK_RESULT;<host>;Filesystem /;0;OK - Filesystem /: demo
+filesystem, no value seeded yet (run scripts/seed_fake_history.py)` (no `|`, so
+no perf data: the dashboard poller writes history rows from perf data).
+`scripts/seed_fake_history.py` later replaces that result with the seeded
+state and value. Ping demo hosts get neither the rule nor the commands; if the
+rule POST fails a yellow warning is printed and no Filesystem commands are sent.
+NOT live-verified on 2.4.0p35: the ruleset name and `value_raw` shape, whether
+the custom check removes the implicit PING service (the PING commands are then
+harmless no-ops), and the `|` perf-data split on `PROCESS_SERVICE_CHECK_RESULT`.
+To check the rule shape, create it in the GUI and `GET /objects/rule/{id}`.
+Undo: delete the "Integrate Nagios plugins" rule for the host.
+
 1. `_activate_pending_changes(client, connection)` (added 2026-08-27,
    shared with Phase 6's pre-discovery activation above — the exact same
    helper, not a duplicate): `GET /domain-types/activation_run/

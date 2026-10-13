@@ -215,6 +215,10 @@ registration, smartmontools, expected-services prompt or manual instructions (Ph
 service discovery (Phase 6). Phase 7 creates the always-up host-check rule for it and fakes the host
 UP and its `PING`, `Check_MK` and `Check_MK Discovery` services OK (Checkmk adds an implicit `PING` to a never-discovered agent host, which would otherwise really ping the unroutable demo IP and show CRIT).
 
+Phase 7 also creates a passive `Filesystem /` service for the host (an "Integrate Nagios plugins"
+rule, ruleset `custom_checks`) and sets it OK without a value. The seeder in step 3 then sets that
+service's current state and value. The `custom_checks` rule shape is **not live-verified**.
+
 ### 2. Preview the forecast (no network)
 
 ```
@@ -227,6 +231,9 @@ make of it with its code defaults: fit status, slope per day, r2, history days, 
 warn / crit with dates, and the expected need tier (or why there is none). With the defaults:
 trending, about 0.4 %/day, about 15 days to crit, tier `urgent`, confidence `medium`. Environment
 overrides on the analytics container (FIT_R2_MIN, TIER_*_DAYS, ...) are not applied by the preview.
+The preview also prints the check result it would send, for example
+`Check result (not sent): PROCESS_SERVICE_CHECK_RESULT;demo-lnx1;Filesystem /;1;WARN - Filesystem /: 84.0% used (warn/crit at 80%/90%)|fs_used_percent=84.0;80;90;0;100`.
+The state follows `--end`: CRIT at or above `--crit`, WARN at or above `--warn`, otherwise OK.
 
 Steering the result:
 
@@ -294,6 +301,12 @@ The password is read from `deploy/.env` inside the mounted repo (`CH_WRITER_PASS
 network), so run it in the worker container or pass `--url` for a reachable address. Rows end at
 "now" because analytics takes the warn/crit levels from the last two days only.
 
+After the insert the seeder also sets the current state and value of `Filesystem /` with a
+`PROCESS_SERVICE_CHECK_RESULT` over Livestatus TCP (default `checkmk:6557`, or env
+`LIVESTATUS_HOST` / `LIVESTATUS_PORT`, or `--livestatus-host` / `--livestatus-port`; Livestatus TLS
+must be off, as for the wizard). `--no-check-result` skips this and sends nothing. If Livestatus is
+unreachable the history is already in and the script prints the manual `lq` command and exits 1.
+
 ### 4. What to see
 
 Within up to 15 minutes (`EVAL_INTERVAL_SECONDS=900`), or right away after
@@ -303,7 +316,9 @@ Within up to 15 minutes (`EVAL_INTERVAL_SECONDS=900`), or right away after
   dashed fit line to the crit date;
 - the Needs pane shows a trend need with the tier the preview printed.
 
-The host has no real Filesystem service, so there is no live gauge: history only, by design.
+- the host shows WARN (end >= warn) or CRIT (end >= crit) in the tree and on the map, and the disk
+  gauge shows the seeded value (the demo host has no agent; the gauge for a host without an agent is
+  **not live-verified**).
 
 ### 5. Cleanup
 
@@ -320,13 +335,20 @@ podman exec -i clickhouse clickhouse-client --user ch_admin --password "$CH_ADMI
 ```
 
 The trend need resolves after 2 clean evaluation cycles (`RESOLVE_AFTER_CLEAN_CYCLES`) and the
-forecast topic is tombstoned. Then remove the demo host in Checkmk and its "Host check command" rule,
+forecast topic is tombstoned. `--delete` first resets `Filesystem /` to OK without a value (so the
+host goes green and the poller stops writing rows), then deletes the history; `--no-check-result`
+skips the reset. Then remove the demo host in Checkmk and its "Host check command" rule,
 as for the other demo hosts.
 
 ### 6. Caveats
 
 - Admin mode Set UP / Set DOWN / Restore on a demo Linux host works on `PING`, which an agent host
   does not have: those service commands are harmless no-ops, the host state still changes.
+- The poller keeps writing one row per cycle at the gauge value, so the series gets a flat tail
+  after seeding. The result needs the service created by the wizard run (Checkmk silently ignores a
+  result for an unknown service) and, being passive, stays until replaced.
+- Not live-verified: the `custom_checks` rule shape, whether the custom check removes the implicit
+  `PING`, and the `|` perf-data split on `PROCESS_SERVICE_CHECK_RESULT`.
 - Rows older than 30 days are rolled up to 5-minute buckets and moved to the S3 volume by TTL, like
   real data; a 60-day seed therefore becomes coarser after insertion.
 - Fake rows are identifiable only by host name (the schema has no marker column), so seed only demo
