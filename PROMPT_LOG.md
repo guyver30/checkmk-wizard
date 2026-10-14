@@ -787,3 +787,7 @@ make another drawing (different name) with high level dataflow
 ## 2026-10-14 14:26
 
 update the data flow docs to say that (that daily availability rollup and the sync between clickhouse and minio)
+
+## 2026-10-14 15:28
+
+/bm:execute-phase 17
