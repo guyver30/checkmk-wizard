@@ -47,6 +47,7 @@ from analytics.config import (
     WEAR_METRICS,
     AnalyticsConfig,
     smart_allowlist_warning,
+    valid_sen,
 )
 from analytics.fit import FitParams, fit_series
 from analytics.narrate import incident_narration
@@ -739,6 +740,29 @@ def _log_series_matches(config: AnalyticsConfig, history_mod=_history) -> None:
             _logger.warning("Chart metric %s matched 0 series; check the metric name", metric)
 
 
+def _run_cloud_ingest(config: AnalyticsConfig) -> int:
+    """ANALYTICS_MODE=cloud-ingest: history writer only, no AnalyticsService."""
+    from analytics import ingest
+
+    if not valid_sen(config.site_sen):
+        print(
+            f"error: SITE_SEN {config.site_sen!r} must be a positive integer "
+            "without leading zeros for ANALYTICS_MODE=cloud-ingest",
+            file=sys.stderr,
+        )
+        return 2
+    if not config.clickhouse_url:
+        _logger.warning("CLICKHOUSE_URL is not set; cloud-ingest will not write anything")
+    stop_event = threading.Event()
+
+    def _handle_signal(signum, frame):
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+    return ingest.run_ingest(config, stop_event)
+
+
 def main() -> int:
     config = AnalyticsConfig.from_env()
     logging.basicConfig(
@@ -756,6 +780,8 @@ def main() -> int:
             "namespace is sites/dmc/. This collides with any other unconfigured "
             "site sharing the broker."
         )
+    if config.mode == "cloud-ingest":
+        return _run_cloud_ingest(config)
     if config.clickhouse_url:
         _log_series_matches(config)
     warning = smart_allowlist_warning(config)
