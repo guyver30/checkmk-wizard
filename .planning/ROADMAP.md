@@ -567,12 +567,23 @@ Plans:
 **Plans:** 9 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 17-01-PLAN.md — Live two-broker bridge smoke test (remap, event_id user property, tombstones, retained re-send, include_dir, outage queue, per-SEN ACL); gates the phase
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 17-02-PLAN.md — Rendered opt-in Mosquitto bridge, queue limits, local bridge login, cloud ACL example, compose/init-env/.env wiring
 - [ ] 17-03-PLAN.md — Poller MQTT v5, SITE_SEN, deterministic event_id on discrete publishes, chunked history over MQTT
-- [ ] 17-04-PLAN.md — Poller status throttle: change, warn/crit band crossing, CLOUD_METRICS_HEARTBEAT_S heartbeat, heartbeat_s payload key
 - [ ] 17-05-PLAN.md — Dashboard staleness fallback widened by heartbeat_s; siteSen in /config.json and header
 - [ ] 17-06-PLAN.md — Analytics ANALYTICS_MODE=cloud-ingest: v5 persistent history subscriber with event_id dedupe and row validation
 - [ ] 17-07-PLAN.md — Wizard SEN prompt after Phase 1, written to deploy/.env as SITE_SEN
-- [ ] 17-08-PLAN.md — Docs, PROJECT.md constraint amendment, live on-prem verification checkpoint
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 17-04-PLAN.md — Poller status throttle: change, warn/crit band crossing, CLOUD_METRICS_HEARTBEAT_S heartbeat, heartbeat_s payload key
 - [ ] 17-09-PLAN.md — Analytics client MQTT v5 and deterministic event_id on needs, forecasts, narration and their tombstones
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 17-08-PLAN.md — Docs, PROJECT.md constraint amendment, live on-prem verification checkpoint
