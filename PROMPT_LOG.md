@@ -751,3 +751,7 @@ yes, add it as Phase 17
 ## 2026-10-14 11:41
 
 /bm:discuss-phase 17
+
+## 2026-10-14 12:37
+
+before planning, I want to have a separate branch for this on git. So I don't affect the main branch.
