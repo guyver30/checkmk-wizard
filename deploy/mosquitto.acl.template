@@ -11,7 +11,7 @@
 # /mosquitto/config/mosquitto.acl. Mosquitto ACL files have no environment
 # expansion and `pattern` only knows %u/%c (mosquitto.org/man/mosquitto-conf-5.html),
 # so rendering is the way to scope grants to one site subtree. One site per
-# deployment; per-site users are a later concern for a shared cloud broker.
+# deployment; the shared cloud broker's per-SEN ACL is deploy/mosquitto.cloud-acl.example.
 
 user poller
 topic readwrite sites/@SITE_ID@/#
@@ -47,3 +47,8 @@ topic write sites/@SITE_ID@/lan/incidents/+/narration
 # analytics validates and audits before acting on it.
 user wstriage
 topic write sites/@SITE_ID@/needs/triage/cmd
+
+# Cloud bridge login (Phase 17 D-04). Read-only over this site's subtree: the
+# bridge forwards `out` only, so it needs no write.
+user bridge
+topic read sites/@SITE_ID@/#

@@ -76,6 +76,7 @@ def test_rendered_grants_are_exact(tmp_path):
             ("write", "sites/testsite/lan/incidents/+/narration"),
         },
         "wstriage": {("write", "sites/testsite/needs/triage/cmd")},
+        "bridge": {("read", "sites/testsite/#")},
     }
 
 
@@ -158,3 +159,31 @@ def test_broker_message_size_limit_global_and_above_events_cap():
     idx = next(i for i, ln in enumerate(lines) if ln.startswith("message_size_limit"))
     assert idx < first_listener
     assert int(lines[idx].split()[1]) > MAX_EVENTS_PAYLOAD_BYTES
+
+
+def _conf_lines():
+    lines = [
+        ln.split("#")[0].strip()
+        for ln in (ROOT / "deploy" / "mosquitto.conf").read_text().splitlines()
+    ]
+    return [ln for ln in lines if ln]
+
+
+def test_bridge_queue_limits_before_listeners_and_include_dir_after():
+    lines = _conf_lines()
+    first_listener = next(i for i, ln in enumerate(lines) if ln.startswith("listener"))
+    last_listener = max(i for i, ln in enumerate(lines) if ln.startswith("listener"))
+    assert lines.index("max_queued_messages 20000") < first_listener
+    assert lines.index("max_queued_bytes 104857600") < first_listener
+    assert lines.index("include_dir /mosquitto/config/conf.d") > last_listener
+
+
+def test_cloud_acl_example_confines_each_sen_to_its_subtree():
+    text = (ROOT / "deploy" / "mosquitto.cloud-acl.example").read_text()
+    body = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+    assert "pattern write app/%u/#" in body
+    assert body[body.index("user fsu-mqtt") + 1] == "topic read app/#"
+    assert (
+        body[body.index("user analytics-ingest") + 1] == "topic read app/+/+/history/#"
+    )
+    assert not any(ln.startswith("topic readwrite") for ln in body)

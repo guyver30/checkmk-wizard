@@ -1,0 +1,19 @@
+# EXAMPLE topic ACL for the shared cloud broker. Not deployed by this repo; the
+# cloud deployment is out of scope.
+#
+# Each site's bridge logs in with username = its SEN and publishes under
+# app/<SEN>/<site_id>/... (see deploy/mosquitto.bridge.template).
+# `pattern write app/%u/#` confines a SEN login to its own subtree; verified live
+# in plan 17-01 (A8: own subtree accepted, another SEN's subtree denied).
+#
+# A SEN login has no read grant anywhere, so a compromised site cannot read other
+# tenants. fsu-mqtt (the archiver) reads app/#. The cloud history writer
+# (ANALYTICS_MODE=cloud-ingest) reads only app/+/+/history/#.
+
+pattern write app/%u/#
+
+user fsu-mqtt
+topic read app/#
+
+user analytics-ingest
+topic read app/+/+/history/#
