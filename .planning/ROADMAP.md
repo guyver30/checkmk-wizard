@@ -564,7 +564,7 @@ Plans:
 **Goal:** Each site's retained and discrete MQTT messages reach the cloud broker under the archive contract `app/<SEN>/<site_id>/<suffix>` (SEN = site equipment number, uniquely identifies a site; one or many Checkmk sites per SEN stays supported), so the S3 archive service (`docs/MQTT_CLIENT_DATA_FLOW.md`) can land them as JSONL. Adds a required `SITE_SEN` setting, a prefix remap from the local `sites/<site_id>/` namespace (Mosquitto bridge preferred; local contract, ACLs and tests stay untouched), MQTT v5 with a stable `event_id` user property on discrete messages (events, incidents, commands), a decision on whether per-cycle `status` samples are archived or only discrete events, and per-SEN ACLs for a shared cloud broker. Source: `docs/MQTT_CLIENT_DATA_FLOW.md`, `docs/MQTT-CONTRACT-WALKTHROUGH.md`.
 **Requirements**: TBD
 **Depends on:** Phase 14.2, Phase 14.3
-**Plans:** 6/9 plans executed
+**Plans:** 8/9 plans executed
 
 Plans:
 **Wave 1**
@@ -581,8 +581,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 17-04-PLAN.md — Poller status throttle: change, warn/crit band crossing, CLOUD_METRICS_HEARTBEAT_S heartbeat, heartbeat_s payload key
-- [ ] 17-09-PLAN.md — Analytics client MQTT v5 and deterministic event_id on needs, forecasts, narration and their tombstones
+- [x] 17-04-PLAN.md — Poller status throttle: change, warn/crit band crossing, CLOUD_METRICS_HEARTBEAT_S heartbeat, heartbeat_s payload key
+- [x] 17-09-PLAN.md — Analytics client MQTT v5 and deterministic event_id on needs, forecasts, narration and their tombstones
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
