@@ -51,7 +51,7 @@ from analytics.config import (
 )
 from analytics.fit import FitParams, fit_series
 from analytics.narrate import incident_narration
-from analytics.publish import publish_retained_json, publish_tombstone
+from analytics.publish import content_event_id, publish_retained_json, publish_tombstone
 from analytics.recorder import EventRecorder, IncidentRecorder
 from analytics.rules import (
     Need,
@@ -203,11 +203,16 @@ def build_client(service: AnalyticsService):
     Clean session and no will: analytics publishes no status topic (staleness
     shows through `generated_at`), and subscriptions are re-issued in
     `on_connect` on every reconnect. Reconnect/backoff is left to paho.
+
+    2026-10-14 (Phase 17 D-10): MQTT v5, for the `event_id` user property on
+    every discrete publish. v5 has no clean_session; the default clean_start
+    with session expiry 0 keeps the previous clean-session behaviour, and
+    `on_connect` still re-subscribes on every connect.
     """
     import paho.mqtt.client as mqtt
 
     config = service.config
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
     client.username_pw_set(config.mqtt_username, config.mqtt_password)
     client.on_connect = service.on_connect
     client.on_message = service.on_message
@@ -420,7 +425,13 @@ class AnalyticsService:
                 self._narration_sigs.pop(incident_id, None)
             if row is not None:
                 self._insert("history.incidents", [row])
-            publish_tombstone(self.client, incident_narration_topic(incident_id))
+            # Event id = identity plus the deciding cycle, never the publish
+            # instant (same rule as the poller's closed-incident tombstone).
+            publish_tombstone(
+                self.client,
+                incident_narration_topic(incident_id),
+                event_id=f"{incident_id}-narration-closed-{int(now.timestamp())}",
+            )
             return
         incident = _load_json(payload)
         if not isinstance(incident, dict):
@@ -446,16 +457,18 @@ class AnalyticsService:
             if self._narration_sigs.get(incident_id) == signature:
                 return
             self._narration_sigs[incident_id] = signature
+        payload = {
+            "id": incident_id,
+            "headline": narration["headline"],
+            "sentences": narration["sentences"],
+            "tier": tier,
+            "generated_at": iso_utc(now),
+        }
         publish_retained_json(
             self.client,
             incident_narration_topic(incident_id),
-            {
-                "id": incident_id,
-                "headline": narration["headline"],
-                "sentences": narration["sentences"],
-                "tier": tier,
-                "generated_at": iso_utc(now),
-            },
+            payload,
+            event_id=content_event_id(f"{incident_id}-narration", payload),
         )
 
     # --- triage -----------------------------------------------------------
@@ -464,7 +477,12 @@ class AnalyticsService:
         stamped = replace(need, generated_at=iso_utc(now))
         payload = stamped.to_payload()
         with self.lock:  # _need_sigs is written from both the worker and the main thread (WR-01)
-            publish_retained_json(self.client, need_status_topic(need.id), payload)
+            publish_retained_json(
+                self.client,
+                need_status_topic(need.id),
+                payload,
+                event_id=content_event_id(need.id, payload),
+            )
             self._need_sigs[need.id] = {k: v for k, v in payload.items() if k != "generated_at"}
 
     def _need_changed(self, need: Need) -> bool:
@@ -560,7 +578,11 @@ class AnalyticsService:
             orphans = sorted(self._retained_narrations - retained_ids)
         self._insert("history.incidents", rows)
         for incident_id in orphans:
-            publish_tombstone(self.client, incident_narration_topic(incident_id))
+            publish_tombstone(
+                self.client,
+                incident_narration_topic(incident_id),
+                event_id=f"{incident_id}-narration-closed-{int(now.timestamp())}",
+            )
 
     # --- evaluation cycle -------------------------------------------------
 
@@ -632,14 +654,21 @@ class AnalyticsService:
             if not is_publishable_device_id(host):
                 _logger.warning("Skipping forecast for host %r: unsafe as a topic segment", host)
                 continue
+            payload = {"host": host, "generated_at": iso_utc(now), "fits": fits_by_host[host]}
             publish_retained_json(
                 self.client,
                 forecast_topic(host),
-                {"host": host, "generated_at": iso_utc(now), "fits": fits_by_host[host]},
+                payload,
+                event_id=content_event_id(f"{host}-forecast", payload),
             )
             published.add(host)
+        epoch = int(now.timestamp())
         for host in sorted(self._forecast_hosts - published):
-            publish_tombstone(self.client, forecast_topic(host))
+            publish_tombstone(
+                self.client,
+                forecast_topic(host),
+                event_id=f"{host}-forecast-cleared-{epoch}",
+            )
         self._forecast_hosts = published
 
     def run_cycle(self, now: datetime, slow: bool = True) -> None:
@@ -678,7 +707,11 @@ class AnalyticsService:
         for need_id in tombstones:
             self._slow_candidates.pop(need_id, None)
             self._need_sigs.pop(need_id, None)
-            publish_tombstone(self.client, need_status_topic(need_id))
+            publish_tombstone(
+                self.client,
+                need_status_topic(need_id),
+                event_id=f"{need_id}-cleared-{int(now.timestamp())}",
+            )
 
     # --- main loop --------------------------------------------------------
 

@@ -25,11 +25,16 @@ class FakeInfo:
 class FakeClient:
     def __init__(self):
         self.published = []  # (topic, payload, qos, retain)
+        self.event_ids = []  # (topic, event_id or None), parallel to published
         self.subscribed = []
         self.unsubscribed = []
 
-    def publish(self, topic, payload=None, qos=0, retain=False):
+    def publish(self, topic, payload=None, qos=0, retain=False, properties=None):
         self.published.append((topic, payload, qos, retain))
+        event_id = None
+        if properties is not None:
+            event_id = dict(properties.UserProperty).get("event_id")
+        self.event_ids.append((topic, event_id))
         return FakeInfo()
 
     def subscribe(self, topic, qos=0):
@@ -578,9 +583,9 @@ def test_triage_audit_skipped_when_need_disappears_after_apply(svc):
     need = _seed_need(svc)
     real_publish = svc.client.publish
 
-    def publish_and_drop(topic, payload=None, qos=0, retain=False):
+    def publish_and_drop(topic, payload=None, qos=0, retain=False, properties=None):
         svc.tracker._open.pop(need.id, None)
-        return real_publish(topic, payload, qos, retain)
+        return real_publish(topic, payload, qos, retain, properties)
 
     svc.client.publish = publish_and_drop
     svc.on_message(None, None, msg("needs/triage/cmd", triage_cmd(need.id)))
@@ -594,11 +599,11 @@ def test_triage_audit_skipped_when_computed_tier_changes_after_apply(svc):
     need = _seed_need(svc)
     real_publish = svc.client.publish
 
-    def publish_and_change(topic, payload=None, qos=0, retain=False):
+    def publish_and_change(topic, payload=None, qos=0, retain=False, properties=None):
         cur, n = svc.tracker._open[need.id]
         other = "standard" if cur.computed_tier != "standard" else "urgent"
         svc.tracker._open[need.id] = (replace(cur, computed_tier=other), n)
-        return real_publish(topic, payload, qos, retain)
+        return real_publish(topic, payload, qos, retain, properties)
 
     svc.client.publish = publish_and_change
     svc.on_message(None, None, msg("needs/triage/cmd", triage_cmd(need.id)))
@@ -647,3 +652,110 @@ def test_load_json_deep_nesting_returns_none():
     from analytics.service import _load_json
 
     assert _load_json(b"[" * 4000) is None
+
+
+# --- MQTT v5 and event_id on every discrete publish ----------------------------
+
+
+def _event_ids(client, prefix, tombstone=False):
+    out = {}
+    for (topic, payload, _, _), (_, eid) in zip(client.published, client.event_ids):
+        if topic.startswith(P + prefix) and (payload is None) == tombstone:
+            out[topic] = (payload, eid)
+    return out
+
+
+def test_build_client_uses_mqtt_v5(svc, monkeypatch):
+    import paho.mqtt.client as mqtt
+
+    from analytics.service import build_client
+
+    calls = []
+
+    class _FakePaho:
+        def __init__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    monkeypatch.setattr(mqtt, "Client", _FakePaho)
+    build_client(svc)
+    assert calls[0][0] == (mqtt.CallbackAPIVersion.VERSION2,)
+    assert calls[0][1] == {"protocol": mqtt.MQTTv5}
+
+
+def test_need_publish_carries_content_event_id(cycle_svc):
+    from analytics.publish import content_event_id
+
+    cycle_svc.run_cycle(NOW)
+    needs = _event_ids(cycle_svc.client, "lan/needs/")
+    assert needs
+    for payload, eid in needs.values():
+        body = json.loads(payload)
+        assert eid == content_event_id(body["id"], body)
+
+
+def test_forecast_publish_carries_content_event_id(cycle_svc):
+    from analytics.publish import content_event_id
+
+    cycle_svc.run_cycle(NOW)
+    forecasts = _event_ids(cycle_svc.client, "lan/forecasts/")
+    assert forecasts
+    for payload, eid in forecasts.values():
+        body = json.loads(payload)
+        assert eid == content_event_id(f"{body['host']}-forecast", body)
+
+
+def test_narration_event_id_is_deterministic_and_content_sensitive(svc):
+    from analytics.publish import content_event_id
+
+    svc.on_message(None, None, msg("lan/incidents/i1/status", INCIDENT))
+    ((_, payload, _, _),) = narration_publishes(svc.client)
+    (_, eid) = svc.client.event_ids[-1]
+    body = json.loads(payload)
+    assert eid == content_event_id("i1-narration", body)
+    changed = dict(body, headline=body["headline"] + "!")
+    assert content_event_id("i1-narration", changed) != eid
+
+
+def test_cycle_tombstones_carry_cleared_event_ids(cycle_svc):
+    cycle_svc.run_cycle(NOW)
+    cycle_svc.history.buckets = {}
+    cycle_svc.client.published.clear()
+    cycle_svc.client.event_ids.clear()
+    cycle_svc.run_cycle(NOW)
+    cycle_svc.run_cycle(NOW)
+    tombs = _event_ids(cycle_svc.client, "lan/", tombstone=True)
+    need_tombs = {t: e for t, (_, e) in tombs.items() if t.startswith(P + "lan/needs/")}
+    assert need_tombs
+    for topic, eid in need_tombs.items():
+        assert eid == f"{topic.split('/')[-2]}-cleared-{NOW_TS}"
+    for host in ("srv1", "srv2"):
+        assert tombs[f"{P}lan/forecasts/{host}"][1] == f"{host}-forecast-cleared-{NOW_TS}"
+
+
+def test_incident_tombstone_carries_narration_closed_event_id(svc):
+    svc.on_message(None, None, msg("lan/incidents/i1/status", INCIDENT))
+    svc.client.published.clear()
+    svc.client.event_ids.clear()
+    svc.on_message(None, None, tomb("lan/incidents/i1/status"))
+    assert svc.client.event_ids == [
+        (f"{P}lan/incidents/i1/narration", f"i1-narration-closed-{NOW_TS}")
+    ]
+
+
+def test_reconcile_orphan_tombstone_carries_event_id(svc):
+    svc._retained_narrations.add("orphan")
+    svc.reconcile()
+    assert svc.client.event_ids == [
+        (f"{P}lan/incidents/orphan/narration", f"orphan-narration-closed-{NOW_TS}")
+    ]
+
+
+def test_cloud_ingest_module_never_publishes():
+    from pathlib import Path
+
+    from analytics import ingest
+
+    assert ".publish(" not in Path(ingest.__file__).read_text()
