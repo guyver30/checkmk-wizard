@@ -1,0 +1,39 @@
+# Cloud bridge for the Mosquitto broker (cloud feed).
+#
+# This file is a template. deploy/render-mosquitto-bridge.sh fills the
+# placeholders from the container environment at mosquitto start and writes the
+# result to /mosquitto/config/conf.d/bridge.conf (pulled in by the include_dir
+# line in deploy/mosquitto.conf). Mosquitto config has no env expansion, so
+# rendering is the only way to carry the SEN, site id and credentials in.
+#
+# Remap (D-04, D-05): everything under sites/<site_id>/ on this broker is
+# published to app/<SEN>/<site_id>/ on the cloud broker. Only the broker knows
+# the SEN and the cloud; the poller, ACLs and dashboard keep the local namespace.
+#
+# Direction is `out` only, so nothing from the cloud can write the local broker
+# (admin/cmd and triage topics stay local). The local `bridge` login is
+# read-only over this site's subtree (deploy/mosquitto.acl.template).
+#
+# remote_clientid is explicit because the cloud session is persistent
+# (cleansession false): the default name.hostname changes with the container and
+# would orphan the queued session. notifications are off because the per-SEN
+# cloud ACL (deploy/mosquitto.cloud-acl.example) would deny the $SYS state topic.
+#
+# Live-verified 2026-10-14 by scripts/smoke_test_bridge.py (plan 17-01), except
+# TLS (bridge_cafile): remap, user-property pass-through, tombstones, include_dir
+# and queueing across a WAN outage all behaved as written here.
+
+connection cloud-@SITE_SEN@-@SITE_ID@
+address @CLOUD_BROKER_HOST@:@CLOUD_BROKER_PORT@
+bridge_protocol_version mqttv50
+bridge_cafile @CLOUD_BROKER_CAFILE@
+remote_clientid bridge-@SITE_SEN@-@SITE_ID@
+remote_username @SITE_SEN@
+remote_password @CLOUD_BROKER_PASSWORD@
+local_username bridge
+local_password @MQTT_BRIDGE_PASSWORD@
+cleansession false
+bridge_session_expiry_interval 86400
+keepalive_interval 60
+notifications false
+topic # out 1 sites/@SITE_ID@/ app/@SITE_SEN@/@SITE_ID@/
