@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime
+import hashlib
 import json
 import logging
 import math
@@ -57,6 +58,8 @@ import urllib.request
 from dataclasses import dataclass, field
 
 import paho.mqtt.client as mqtt
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.properties import Properties
 
 DEFAULT_LIVESTATUS_PORT = 6557
 DEFAULT_MQTT_PORT = 1883
@@ -105,6 +108,11 @@ TOPIC_ADMIN_FAKED = "admin/faked"
 # a trailing newline. The id becomes an MQTT topic level, so `/ + #` and
 # whitespace must never get through.
 _SITE_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,15}")
+# The archive contract (docs/MQTT_CLIENT_DATA_FLOW.md) requires a positive
+# decimal SEN without leading zeros and silently drops anything else; same
+# rule as deploy/render-mosquitto-bridge.sh and the wizard's _SEN_RE. Matched
+# with fullmatch because `$` would accept a trailing newline.
+_SEN_RE = re.compile(r"[1-9][0-9]{0,17}")
 _site_prefix: str | None = None
 
 # Phase 14 (D-13/PLR-14): prefix for the incident id `compute_incidents()`
@@ -400,6 +408,9 @@ class PollerConfig:
     clickhouse_writer_user: str = "poller_writer"
     clickhouse_writer_password: str = ""
     clickhouse_timeout_seconds: float = DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS
+    # Cloud feed identity. A non-empty value switches on MQTT publishing of
+    # each cycle's history rows (publish_history()); empty keeps it off.
+    site_sen: str = ""
 
     def __repr__(self) -> str:
         # T-09-02: this object must be safe to log — never render the raw
@@ -426,7 +437,8 @@ class PollerConfig:
             f"clickhouse_url={self.clickhouse_url!r}, "
             f"clickhouse_writer_user={self.clickhouse_writer_user!r}, "
             "clickhouse_writer_password='***', "
-            f"clickhouse_timeout_seconds={self.clickhouse_timeout_seconds!r})"
+            f"clickhouse_timeout_seconds={self.clickhouse_timeout_seconds!r}, "
+            f"site_sen={self.site_sen!r})"
         )
 
     @classmethod
@@ -461,6 +473,7 @@ class PollerConfig:
             clickhouse_timeout_seconds=_env_float(
                 "CLICKHOUSE_TIMEOUT_SECONDS", DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS
             ),
+            site_sen=os.environ.get("SITE_SEN", "").strip(),
         )
 
 
@@ -1503,18 +1516,24 @@ class AdminContext:
 
 
 def publish_admin_faked(client, hosts: dict[str, str], source: str, timestamp: str) -> None:
+    payload = {"hosts": hosts, "source": source, "timestamp": timestamp}
     _publish_json(
         client,
         site_topic(TOPIC_ADMIN_FAKED),
-        {"hosts": hosts, "source": source, "timestamp": timestamp},
+        payload,
         qos=1,
         retain=True,
+        event_id=content_event_id("faked", payload),
     )
 
 
 def publish_admin_ack(client, ack: dict) -> None:
     # Not retained: a late admin tab must never show a stale result.
-    _publish_json(client, site_topic(TOPIC_ADMIN_ACK), ack, qos=1, retain=False)
+    ack_id = ack.get("id")
+    event_id = (
+        f"{ack_id}-ack" if isinstance(ack_id, str) and ack_id else content_event_id("ack", ack)
+    )
+    _publish_json(client, site_topic(TOPIC_ADMIN_ACK), ack, qos=1, retain=False, event_id=event_id)
 
 
 def refresh_admin_faked(client, context: AdminContext, config: PollerConfig) -> None:
@@ -2419,6 +2438,69 @@ def build_history_rows(
     return HistoryBatch(metrics=metric_rows, host_state=host_rows, service_state=service_rows)
 
 
+# Rows per history MQTT message. Keeps each message far below the broker's
+# message_size_limit (2 MB) and limits loss when a 4G link drops mid-batch.
+HISTORY_CHUNK_ROWS = 500
+
+# (HistoryBatch attribute, topic/table suffix)
+HISTORY_MQTT_TABLES = (
+    ("metrics", "metrics"),
+    ("host_state", "host_state"),
+    ("service_state", "service_state"),
+)
+
+
+def publish_history(
+    client: mqtt.Client,
+    config: PollerConfig,
+    batch: HistoryBatch,
+    ts: datetime.datetime,
+) -> None:
+    """Publish one cycle's history rows over MQTT in chunks for the cloud writer.
+
+    A no-op unless `config.site_sen` is set. Rows are exactly what
+    `build_history_rows()` produced (D-02); the cloud writer adds site/SEN
+    from the topic. Each chunk goes on `sites/<site_id>/history/<table>` at
+    QoS 1, not retained (a retained batch would be re-sent on every bridge
+    reconnect), with the deterministic event_id
+    `<cycle_epoch>-<table>-<chunk_index>` in both the MQTT user property and
+    the payload (D-03), so a retried cycle deduplicates downstream.
+
+    Never raises: it publishes through `_publish_json`, which swallows
+    transient broker errors, so history can never stop the poll loop.
+    Every cycle is published, uncompressed (flagged volume assumption).
+    """
+    if not config.site_sen:
+        return
+    stamp = ts.astimezone(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+    for attr, table in HISTORY_MQTT_TABLES:
+        rows = getattr(batch, attr)
+        if not rows:
+            continue
+        chunks = [
+            rows[start : start + HISTORY_CHUNK_ROWS]
+            for start in range(0, len(rows), HISTORY_CHUNK_ROWS)
+        ]
+        for index, chunk_rows in enumerate(chunks):
+            event_id = history_event_id(ts, table, index)
+            envelope = {
+                "event_id": event_id,
+                "ts": stamp,
+                "table": f"history.{table}",
+                "chunk": index,
+                "chunks": len(chunks),
+                "rows": chunk_rows,
+            }
+            _publish_json(
+                client,
+                site_topic(f"history/{table}"),
+                envelope,
+                qos=1,
+                retain=False,
+                event_id=event_id,
+            )
+
+
 def write_history(config: PollerConfig, batch: HistoryBatch) -> None:
     """Push one cycle's `HistoryBatch` to ClickHouse -- never raises (D-44/D-47).
 
@@ -2799,7 +2881,11 @@ def build_mqtt_client(
     the only client in the module configured with a will; the
     short-lived `reconcile_state` client deliberately has none (T-09-06).
     """
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    # Phase 17 D-10: MQTT v5 so discrete publishes can carry the event_id user
+    # property. v5 has no clean_session; the default clean_start (first connect
+    # only) plus session expiry 0 keeps the previous clean-session behaviour,
+    # and on_connect below still re-subscribes admin/cmd on every connect.
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
     client.username_pw_set(config.mqtt_username, config.mqtt_password)
     client.will_set(
         site_topic(TOPIC_POLLER_STATUS),
@@ -2830,7 +2916,48 @@ def build_mqtt_client(
     return client
 
 
-def _publish_json(client: mqtt.Client, topic: str, payload: object, qos: int, retain: bool) -> None:
+def _event_properties(event_id: str | None) -> Properties | None:
+    """MQTT v5 PUBLISH properties carrying the `event_id` user property, or None.
+
+    Per-cycle status and poller-status publishes deliberately have no event_id:
+    they are liveness, not discrete events (D-06, D-11).
+    """
+    if not event_id:
+        return None
+    props = Properties(PacketTypes.PUBLISH)
+    props.UserProperty = ("event_id", event_id)
+    return props
+
+
+def content_event_id(prefix: str, payload: object) -> str:
+    """Stable event id for a content-addressed message: `<prefix>-<16 hex of sha1>`.
+
+    Computed only from the payload (D-11), never from wall-clock time at
+    publish, so a retry of the same message computes the same id. Key order
+    does not matter (`sort_keys=True`).
+    """
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"{prefix}-{hashlib.sha1(blob).hexdigest()[:16]}"
+
+
+def history_event_id(ts: datetime.datetime, table: str, chunk_index: int) -> str:
+    """Event id of one history chunk: `<cycle_epoch>-<table>-<chunk_index>` (D-03)."""
+    return f"{int(ts.timestamp())}-{table}-{chunk_index}"
+
+
+def _cycle_epoch(now_iso: str) -> int:
+    """Integer epoch seconds of run_cycle's `now` ISO timestamp (tombstone identity)."""
+    return int(datetime.datetime.fromisoformat(now_iso).timestamp())
+
+
+def _publish_json(
+    client: mqtt.Client,
+    topic: str,
+    payload: object,
+    qos: int,
+    retain: bool,
+    event_id: str | None = None,
+) -> None:
     """Serialize `payload` as JSON and publish, one choke point for every publish helper.
 
     Mirrors `CheckmkClient._request()`'s pattern (src/checkmk_wizard/api.py):
@@ -2842,9 +2969,18 @@ def _publish_json(client: mqtt.Client, topic: str, payload: object, qos: int, re
     table): the every-cycle status topic uses QoS 0 (self-correcting by
     the next cycle), every change-triggered topic uses QoS 1. Callers
     choose `qos`; this function does not second-guess it.
+
+    `event_id`, when given, is attached as the MQTT v5 `event_id` user
+    property so the cloud archive can deduplicate retries (D-10, D-11).
     """
     try:
-        client.publish(topic, json.dumps(payload), qos=qos, retain=retain)
+        client.publish(
+            topic,
+            json.dumps(payload),
+            qos=qos,
+            retain=retain,
+            properties=_event_properties(event_id),
+        )
     except (TimeoutError, OSError) as exc:
         _logger.warning("Failed to publish to %s: %s", topic, exc)
 
@@ -2885,7 +3021,14 @@ def publish_device_status(
 def publish_topology(client: mqtt.Client, nodes: list[dict], timestamp: str) -> None:
     """Publish the full device topology. QoS 1: only republished when it actually changes."""
     payload = {"devices": nodes, "timestamp": timestamp}
-    _publish_json(client, site_topic(TOPIC_TOPOLOGY), payload, qos=1, retain=True)
+    _publish_json(
+        client,
+        site_topic(TOPIC_TOPOLOGY),
+        payload,
+        qos=1,
+        retain=True,
+        event_id=content_event_id("topology", payload),
+    )
 
 
 def publish_services(client: mqtt.Client, device_id: str, rows: list[dict]) -> None:
@@ -2893,12 +3036,26 @@ def publish_services(client: mqtt.Client, device_id: str, rows: list[dict]) -> N
     republished every cycle -- the caller only calls this when `services_signature` differs
     from the previously published signature.
     """
-    _publish_json(client, device_services_topic(device_id), rows, qos=1, retain=True)
+    _publish_json(
+        client,
+        device_services_topic(device_id),
+        rows,
+        qos=1,
+        retain=True,
+        event_id=content_event_id(f"{device_id}-services", rows),
+    )
 
 
 def publish_events(client: mqtt.Client, entries: list[dict]) -> None:
     """Publish the full bounded global events feed (already truncated by the caller)."""
-    _publish_json(client, site_topic(TOPIC_EVENTS), entries, qos=1, retain=True)
+    _publish_json(
+        client,
+        site_topic(TOPIC_EVENTS),
+        entries,
+        qos=1,
+        retain=True,
+        event_id=content_event_id("events", entries),
+    )
 
 
 def publish_raw_tombstone(client: mqtt.Client, full_topic: str) -> None:
@@ -2928,7 +3085,9 @@ def publish_raw_tombstone(client: mqtt.Client, full_topic: str) -> None:
         _logger.warning("Failed to publish tombstone to %s: %s", full_topic, exc)
 
 
-def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
+def publish_tombstone(
+    client: mqtt.Client, device_id: str, *, event_id: str | None = None
+) -> None:
     """Clear a removed device's retained status and services topics (plus the retired
     history and service_history topics, for one release).
 
@@ -2953,7 +3112,13 @@ def publish_tombstone(client: mqtt.Client, device_id: str) -> None:
         site_topic(f"lan/devices/{device_id}/service_history"),
     ):
         try:
-            info = client.publish(topic, payload=None, retain=True, qos=1)
+            info = client.publish(
+                topic,
+                payload=None,
+                retain=True,
+                qos=1,
+                properties=_event_properties(event_id),
+            )
             info.wait_for_publish(timeout=5)
         except (TimeoutError, OSError) as exc:
             _logger.warning("Failed to publish tombstone to %s: %s", topic, exc)
@@ -2965,10 +3130,19 @@ def publish_incident(client: mqtt.Client, incident: dict, timestamp: str) -> Non
     published signature -- not republished every cycle like `publish_device_status`.
     """
     payload = {**incident, "timestamp": timestamp}
-    _publish_json(client, incident_status_topic(incident["id"]), payload, qos=1, retain=True)
+    _publish_json(
+        client,
+        incident_status_topic(incident["id"]),
+        payload,
+        qos=1,
+        retain=True,
+        event_id=content_event_id(incident["id"], payload),
+    )
 
 
-def publish_incident_tombstone(client: mqtt.Client, incident_id: str) -> None:
+def publish_incident_tombstone(
+    client: mqtt.Client, incident_id: str, *, event_id: str | None = None
+) -> None:
     """Clear a closed incident's retained status topic.
 
     Same tombstone contract as `publish_tombstone()` above (a zero-length
@@ -2978,7 +3152,9 @@ def publish_incident_tombstone(client: mqtt.Client, incident_id: str) -> None:
     """
     topic = incident_status_topic(incident_id)
     try:
-        info = client.publish(topic, payload=None, retain=True, qos=1)
+        info = client.publish(
+            topic, payload=None, retain=True, qos=1, properties=_event_properties(event_id)
+        )
         info.wait_for_publish(timeout=5)
     except (TimeoutError, OSError) as exc:
         _logger.warning("Failed to publish tombstone to %s: %s", topic, exc)
@@ -3340,7 +3516,7 @@ def reconcile_state(config: PollerConfig) -> PollerState:
         elif rel == TOPIC_EVENTS:
             events_result.append(msg.payload)
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
     client.username_pw_set(config.mqtt_username, config.mqtt_password)
     client.on_message = on_message
     try:
@@ -3439,6 +3615,7 @@ def run_cycle(
     UNREACH set) still triggers exactly one republish.
     """
     now = utc_now_iso()
+    cycle_epoch = _cycle_epoch(now)
 
     if services is not None:
         apply_visible_service_state(snapshots, services)
@@ -3471,7 +3648,7 @@ def run_cycle(
     events_this_cycle: list[dict] = []
 
     for device_id in removed_ids:
-        publish_tombstone(client, device_id)
+        publish_tombstone(client, device_id, event_id=f"{device_id}-removed-{cycle_epoch}")
         last_state = state.last_status.pop(device_id, None)
         # The tombstone published above already clears the broker side of
         # the per-device topics; this pop clears the in-process side so a
@@ -3495,7 +3672,7 @@ def run_cycle(
         # dozens of events after a rebuild would flood the bounded feed.
         stale_ids = state.retained_ids - current_ids - previous_ids
         for device_id in sorted(stale_ids):
-            publish_tombstone(client, device_id)
+            publish_tombstone(client, device_id, event_id=f"{device_id}-removed-{cycle_epoch}")
             state.last_status.pop(device_id, None)
             state.previous_services.pop(device_id, None)
             _logger.info("Cleared stale retained topics for absent host %s", device_id)
@@ -3546,7 +3723,9 @@ def run_cycle(
     incidents = compute_incidents(snapshots)
     current_incidents = {incident["id"]: incident for incident in incidents}
     for incident_id in sorted(set(state.previous_incidents) - set(current_incidents)):
-        publish_incident_tombstone(client, incident_id)
+        publish_incident_tombstone(
+            client, incident_id, event_id=f"{incident_id}-closed-{cycle_epoch}"
+        )
     for incident_id, incident in current_incidents.items():
         signature = incident_signature(incident)
         if signature != state.previous_incidents.get(incident_id):
@@ -3796,9 +3975,10 @@ def run_forever(config: PollerConfig) -> int:
             # ClickHouse can never delay status (D-44). A skipped cycle
             # (the LivestatusError branch above) writes nothing at all,
             # which is the "no data" gap D-47 describes.
-            write_history(config, build_history_rows(
-                snapshots, services, datetime.datetime.now(datetime.UTC)
-            ))
+            cycle_ts = datetime.datetime.now(datetime.UTC)
+            batch = build_history_rows(snapshots, services, cycle_ts)
+            publish_history(client, config, batch, cycle_ts)
+            write_history(config, batch)
         # 2026-10-04 (Phase 14.2 D-04): the daily availability rollup (the old
         # maybe_run_rollups call) moved to analytics/rollup.py;
         # never-overwrite writes made the hand-over safe.
@@ -3844,6 +4024,21 @@ def main() -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if config.site_sen and not _SEN_RE.fullmatch(config.site_sen):
+        print(
+            f"error: SITE_SEN {config.site_sen!r} is not a positive integer "
+            "without leading zeros",
+            file=sys.stderr,
+        )
+        return 2
+    if config.site_sen:
+        _logger.info(
+            "Cloud feed identity SEN=%s; history is published on sites/%s/history/<table>",
+            config.site_sen,
+            config.cmk_site_id,
+        )
+    else:
+        _logger.info("SITE_SEN is not set; history is not published over MQTT (cloud feed off)")
     if "CMK_SITE_ID" not in os.environ:
         _logger.warning(
             "CMK_SITE_ID is not set; using the default site id 'dmc', so the MQTT "
@@ -3988,9 +4183,10 @@ def main() -> int:
         # Same D-44 placement as run_forever's loop: after MQTT publishing,
         # so this one-shot verification path writes the same history a
         # long-running cycle would.
-        write_history(config, build_history_rows(
-            snapshots, once_services, datetime.datetime.now(datetime.UTC)
-        ))
+        cycle_ts = datetime.datetime.now(datetime.UTC)
+        batch = build_history_rows(snapshots, once_services, cycle_ts)
+        publish_history(client, config, batch, cycle_ts)
+        write_history(config, batch)
         shutdown_mqtt_client(client)
         return 0
 

@@ -2087,7 +2087,9 @@ def test_build_mqtt_client_uses_version2_callback_api():
     with patch.object(poller, "mqtt") as mock_mqtt:
         poller.build_mqtt_client(_make_config())
 
-    mock_mqtt.Client.assert_called_once_with(mock_mqtt.CallbackAPIVersion.VERSION2)
+    mock_mqtt.Client.assert_called_once_with(
+        mock_mqtt.CallbackAPIVersion.VERSION2, protocol=mock_mqtt.MQTTv5
+    )
 
 
 def test_build_mqtt_client_on_connect_publishes_online_birth_message():
@@ -3436,6 +3438,36 @@ def test_once_branch_degrades_when_folder_fetch_fails(monkeypatch):
     assert mock_query.call_args.kwargs["folders"] == {}
 
 
+def test_once_branch_publishes_history_with_same_ts_and_batch(monkeypatch):
+    """--once builds one cycle timestamp and one batch for both MQTT and ClickHouse."""
+    monkeypatch.setattr(sys, "argv", ["mqtt_poller.py", "--once"])
+    batch = poller.HistoryBatch()
+    with (
+        patch.object(poller.PollerConfig, "from_env", staticmethod(lambda: _make_config())),
+        patch.object(poller, "configure_logging"),
+        patch.object(poller, "reconcile_state", return_value=poller.PollerState(previous_nodes={}, last_status={}, events=[], since="t")),
+        patch.object(poller, "build_mqtt_client"),
+        patch.object(poller, "shutdown_mqtt_client"),
+        patch.object(poller, "available_host_columns", return_value={"name", "state"}),
+        patch.object(poller, "select_host_columns", return_value=["name", "state"]),
+        patch.object(poller, "fetch_host_config", return_value={}),
+        patch.object(poller, "query_devices", return_value=[]),
+        patch.object(
+            poller, "available_service_columns", return_value={"host_name", "description", "state"}
+        ),
+        patch.object(poller, "query_services", return_value=[]),
+        patch.object(poller, "run_cycle"),
+        patch.object(poller, "build_history_rows", return_value=batch) as mock_build,
+        patch.object(poller, "publish_history") as mock_publish,
+        patch.object(poller, "write_history") as mock_write,
+    ):
+        assert poller.main() == 0
+    build_ts = mock_build.call_args.args[2]
+    assert mock_publish.call_args.args[2] is batch
+    assert mock_publish.call_args.args[3] is build_ts
+    assert mock_write.call_args.args[1] is batch
+
+
 # --- stale retained-topic sweep (quick 260925-b81) -----------------------------
 
 
@@ -4576,3 +4608,200 @@ def test_parse_admin_command_deeply_nested_is_malformed():
     # WR-04: ~4000 '[' raised RecursionError instead of AdminCommandError.
     with pytest.raises(poller.AdminCommandError):
         poller.parse_admin_command(b"[" * 4000)
+
+
+# --- Cloud feed: MQTT v5 event_id, SITE_SEN, history chunks -------------------
+
+
+def _event_id_of(call):
+    props = call.kwargs.get("properties")
+    if props is None:
+        return None
+    return dict(props.UserProperty)["event_id"]
+
+
+def test_reconcile_state_client_uses_mqtt_v5():
+    with patch.object(poller, "mqtt") as mock_mqtt:
+        mock_mqtt.Client.return_value.connect.side_effect = OSError("no broker")
+        with pytest.raises(OSError):
+            poller.reconcile_state(_make_config())
+    mock_mqtt.Client.assert_called_once_with(
+        mock_mqtt.CallbackAPIVersion.VERSION2, protocol=mock_mqtt.MQTTv5
+    )
+
+
+def test_publish_json_attaches_event_id_user_property():
+    client = MagicMock()
+    poller._publish_json(client, "t", {"a": 1}, qos=1, retain=True, event_id="x")
+    props = client.publish.call_args.kwargs["properties"]
+    assert props.UserProperty == [("event_id", "x")]
+
+
+def test_publish_json_without_event_id_passes_no_properties():
+    client = MagicMock()
+    poller._publish_json(client, "t", {"a": 1}, qos=0, retain=True)
+    assert client.publish.call_args.kwargs["properties"] is None
+
+
+def test_content_event_id_is_key_order_independent_and_content_sensitive():
+    a = poller.content_event_id("topology", {"x": 1, "y": 2})
+    b = poller.content_event_id("topology", {"y": 2, "x": 1})
+    c = poller.content_event_id("topology", {"x": 1, "y": 3})
+    assert a == b
+    assert a != c
+    assert a.startswith("topology-")
+    digest = a.removeprefix("topology-")
+    assert len(digest) == 16
+    assert digest == digest.lower()
+    int(digest, 16)
+
+
+def test_history_event_id_uses_cycle_epoch_table_and_chunk():
+    ts = datetime.datetime(2026, 10, 14, 12, 0, 0, tzinfo=datetime.UTC)
+    assert poller.history_event_id(ts, "metrics", 2) == f"{int(ts.timestamp())}-metrics-2"
+
+
+def test_discrete_publishers_carry_event_ids():
+    client = MagicMock()
+    poller.publish_topology(client, [{"id": "a"}], "t")
+    poller.publish_services(client, "a", [{"d": "x"}])
+    poller.publish_events(client, [{"e": 1}])
+    poller.publish_incident(client, {"id": "incident-a", "x": 1}, "t")
+    poller.publish_admin_faked(client, {"a": "DOWN"}, "ledger", "t")
+    ids = [_event_id_of(c) for c in client.publish.call_args_list]
+    prefixes = ["topology-", "a-services-", "events-", "incident-a-", "faked-"]
+    assert len(ids) == 5
+    for got, prefix in zip(ids, prefixes):
+        assert got is not None and got.startswith(prefix)
+
+
+def test_admin_ack_event_id_is_command_id_ack():
+    client = MagicMock()
+    poller.publish_admin_ack(client, {"id": "cmd-7", "ok": True})
+    assert _event_id_of(client.publish.call_args) == "cmd-7-ack"
+
+
+def test_status_poller_status_and_shutdown_publish_without_event_id():
+    client = MagicMock()
+    poller.publish_device_status(client, _snapshot("a"), "t")
+    poller.publish_poller_status(client, since="s", last_poll=None, device_count=0)
+    poller.shutdown_mqtt_client(client)
+    assert client.publish.call_count == 3
+    for call in client.publish.call_args_list:
+        assert call.kwargs.get("properties") is None
+
+
+def test_run_cycle_removed_device_tombstones_carry_event_id():
+    client = MagicMock()
+    node_a = {"id": "a", "parents": [], "device_type": "server", "folder": "", "alias": ""}
+    state = _poller_state(previous_nodes={"a": node_a}, last_status={"a": "OK"})
+    poller.run_cycle(client, _make_config(), state, [])
+    tombstones = [
+        c for c in client.publish.call_args_list if c.kwargs.get("payload", "unset") is None
+    ]
+    assert len(tombstones) == 4
+    ids = {_event_id_of(c) for c in tombstones}
+    assert len(ids) == 1
+    (event_id,) = ids
+    assert event_id.startswith("a-removed-")
+    assert event_id.removeprefix("a-removed-").isdigit()
+
+
+def test_run_cycle_closed_incident_tombstone_carries_event_id():
+    client = MagicMock()
+    state = _poller_state()
+    poller.run_cycle(client, _make_config(), state, [_snapshot("sw1", host_state_raw="DOWN")])
+    client.reset_mock()
+    poller.run_cycle(client, _make_config(), state, [_snapshot("sw1")])
+    tombstones = [
+        c
+        for c in client.publish.call_args_list
+        if c.args[0] == "sites/testsite/lan/incidents/incident-sw1/status"
+        and c.kwargs.get("payload", "unset") is None
+    ]
+    assert len(tombstones) == 1
+    assert _event_id_of(tombstones[0]).startswith("incident-sw1-closed-")
+
+
+def test_site_sen_from_env_and_repr(monkeypatch):
+    monkeypatch.delenv("SITE_SEN", raising=False)
+    assert poller.PollerConfig.from_env().site_sen == ""
+    monkeypatch.setenv("SITE_SEN", " 123 ")
+    cfg = poller.PollerConfig.from_env()
+    assert cfg.site_sen == "123"
+    assert "site_sen='123'" in repr(cfg)
+
+
+@pytest.mark.parametrize("bad", ["007", "0", "abc", "-1"])
+def test_main_exits_2_on_malformed_site_sen(monkeypatch, capsys, bad):
+    monkeypatch.setenv("CMK_SITE_ID", "testsite")
+    monkeypatch.setenv("SITE_SEN", bad)
+    monkeypatch.setattr(sys, "argv", ["mqtt_poller.py"])
+    assert poller.main() == 2
+    assert "SITE_SEN" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("good", ["", "123"])
+def test_main_accepts_empty_or_valid_site_sen(monkeypatch, good):
+    monkeypatch.setenv("CMK_SITE_ID", "testsite")
+    monkeypatch.setenv("SITE_SEN", good)
+    monkeypatch.setattr(sys, "argv", ["mqtt_poller.py"])
+    monkeypatch.setattr(poller, "run_forever", lambda config: 0)
+    assert poller.main() == 0
+
+
+def _history_batch(metrics=0, hosts=0, services=0):
+    return poller.HistoryBatch(
+        metrics=[{"ts": "2026-10-14 12:00:00", "n": i} for i in range(metrics)],
+        host_state=[{"ts": "2026-10-14 12:00:00", "n": i} for i in range(hosts)],
+        service_state=[{"ts": "2026-10-14 12:00:00", "n": i} for i in range(services)],
+    )
+
+
+_HISTORY_TS = datetime.datetime(2026, 10, 14, 12, 0, 0, tzinfo=datetime.UTC)
+
+
+def test_publish_history_is_noop_without_site_sen():
+    client = MagicMock()
+    poller.publish_history(client, _make_config(), _history_batch(5, 5, 5), _HISTORY_TS)
+    client.publish.assert_not_called()
+
+
+def test_publish_history_chunks_rows_at_500():
+    client = MagicMock()
+    poller.publish_history(
+        client, _make_config(site_sen="123"), _history_batch(1201, 3, 0), _HISTORY_TS
+    )
+    metrics = _published(client, "sites/testsite/history/metrics")
+    hosts = _published(client, "sites/testsite/history/host_state")
+    assert _published(client, "sites/testsite/history/service_state") == []
+    assert [len(json.loads(c.args[1])["rows"]) for c in metrics] == [500, 500, 201]
+    assert len(hosts) == 1
+    for index, call in enumerate(metrics):
+        payload = json.loads(call.args[1])
+        assert set(payload) == {"event_id", "ts", "table", "chunk", "chunks", "rows"}
+        assert payload["chunk"] == index
+        assert payload["chunks"] == 3
+        assert payload["table"] == "history.metrics"
+        assert payload["ts"] == "2026-10-14 12:00:00"
+        assert call.kwargs["qos"] == 1
+        assert call.kwargs["retain"] is False
+        assert payload["event_id"] == _event_id_of(call)
+        assert payload["event_id"] == poller.history_event_id(_HISTORY_TS, "metrics", index)
+
+
+def test_publish_history_event_ids_are_retry_stable():
+    cfg = _make_config(site_sen="123")
+    first, second = MagicMock(), MagicMock()
+    poller.publish_history(first, cfg, _history_batch(600, 1, 1), _HISTORY_TS)
+    poller.publish_history(second, cfg, _history_batch(600, 1, 1), _HISTORY_TS)
+    assert [_event_id_of(c) for c in first.publish.call_args_list] == [
+        _event_id_of(c) for c in second.publish.call_args_list
+    ]
+
+
+def test_publish_history_survives_publish_errors():
+    client = MagicMock()
+    client.publish.side_effect = [OSError("boom"), None, None]
+    poller.publish_history(client, _make_config(site_sen="123"), _history_batch(1001), _HISTORY_TS)
+    assert client.publish.call_count == 3
