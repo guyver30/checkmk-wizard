@@ -73,6 +73,23 @@ DEFAULT_RECONCILE_TIMEOUT_SECONDS = 5.0
 # matching src/checkmk_wizard/livestatus.py's existing hardcoded default.
 DEFAULT_LIVESTATUS_TIMEOUT_SECONDS = 10.0
 DEFAULT_REST_PORT = 5000
+# Phase 17 (D-08): seconds between unconditional republishes of a device's
+# lan/devices/{id}/status when nothing changed; 0 publishes every cycle.
+DEFAULT_METRICS_HEARTBEAT_SECONDS = 300
+# Mirrors STALENESS_FACTOR in dashboard-react/src/lib/config.ts and must move
+# with it: the dashboard's isDeviceStale prefers the payload's Checkmk
+# `staleness`, so a throttled (frozen) value must republish when it crosses
+# this threshold or a stale host would keep reading fresh.
+STATUS_STALE_THRESHOLD = 3.0
+# (value key, warn key, crit key) of each gauge whose ok/warn/crit band
+# crossing republishes status immediately (D-07).
+_STATUS_BAND_KEYS = (
+    ("cpu_percent", "cpu_warn", "cpu_crit"),
+    ("cpu_load1", "cpu_load_warn", "cpu_load_crit"),
+    ("ram_percent", "ram_warn", "ram_crit"),
+    ("disk_percent", "disk_warn", "disk_crit"),
+    ("disk_other_worst_percent", "disk_other_worst_warn", "disk_other_worst_crit"),
+)
 # Not env-configurable, same reasoning as DEFAULT_LIVESTATUS_TIMEOUT_SECONDS
 # above: this is the per-request timeout for the poller's own REST folder
 # lookup, kept as a named constant rather than inlined.
@@ -411,6 +428,8 @@ class PollerConfig:
     # Cloud feed identity. A non-empty value switches on MQTT publishing of
     # each cycle's history rows (publish_history()); empty keeps it off.
     site_sen: str = ""
+    # Phase 17 (D-08): see DEFAULT_METRICS_HEARTBEAT_SECONDS.
+    metrics_heartbeat_seconds: int = DEFAULT_METRICS_HEARTBEAT_SECONDS
 
     def __repr__(self) -> str:
         # T-09-02: this object must be safe to log — never render the raw
@@ -438,11 +457,16 @@ class PollerConfig:
             f"clickhouse_writer_user={self.clickhouse_writer_user!r}, "
             "clickhouse_writer_password='***', "
             f"clickhouse_timeout_seconds={self.clickhouse_timeout_seconds!r}, "
-            f"site_sen={self.site_sen!r})"
+            f"site_sen={self.site_sen!r}, "
+            f"metrics_heartbeat_seconds={self.metrics_heartbeat_seconds!r})"
         )
 
     @classmethod
     def from_env(cls) -> PollerConfig:
+        heartbeat = _env_int("CLOUD_METRICS_HEARTBEAT_S", DEFAULT_METRICS_HEARTBEAT_SECONDS)
+        if heartbeat < 0:
+            _logger.warning("CLOUD_METRICS_HEARTBEAT_S=%r is negative; using 0", heartbeat)
+            heartbeat = 0
         return cls(
             livestatus_host=os.environ.get("LIVESTATUS_HOST", "checkmk"),
             livestatus_port=_env_int("LIVESTATUS_PORT", DEFAULT_LIVESTATUS_PORT),
@@ -474,6 +498,7 @@ class PollerConfig:
                 "CLICKHOUSE_TIMEOUT_SECONDS", DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS
             ),
             site_sen=os.environ.get("SITE_SEN", "").strip(),
+            metrics_heartbeat_seconds=heartbeat,
         )
 
 
@@ -2985,13 +3010,93 @@ def _publish_json(
         _logger.warning("Failed to publish to %s: %s", topic, exc)
 
 
+@dataclass(frozen=True)
+class StatusMark:
+    """What was last published for one device's status (in-memory only)."""
+
+    discrete: tuple
+    bands: tuple | None
+    published_at: float
+
+
+def gauge_band(value: object, warn: object, crit: object) -> str:
+    """Classify a gauge reading as none/ok/warn/crit against its own levels (D-07)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "none"
+    if not isinstance(crit, bool) and isinstance(crit, (int, float)) and value >= crit:
+        return "crit"
+    if not isinstance(warn, bool) and isinstance(warn, (int, float)) and value >= warn:
+        return "warn"
+    return "ok"
+
+
+def status_bands(gauge_fields: dict | None) -> tuple | None:
+    """Band of each gauge in `_STATUS_BAND_KEYS` order; None when no gauges this cycle."""
+    if gauge_fields is None:
+        return None
+    return tuple(
+        gauge_band(gauge_fields.get(value), gauge_fields.get(warn), gauge_fields.get(crit))
+        for value, warn, crit in _STATUS_BAND_KEYS
+    )
+
+
+def status_discrete_signature(snapshot: DeviceSnapshot, gauge_fields: dict | None) -> tuple:
+    """Fields whose change republishes status at once (D-07).
+
+    Includes whether Checkmk staleness is at or past STATUS_STALE_THRESHOLD
+    (D-09): isDeviceStale prefers the payload's `staleness`, which a throttled
+    retained payload freezes, so crossing the threshold must republish.
+    """
+    stale = snapshot.staleness is not None and snapshot.staleness >= STATUS_STALE_THRESHOLD
+    signature: tuple = (
+        snapshot.state,
+        snapshot.host_state_raw,
+        snapshot.in_downtime,
+        snapshot.acknowledged,
+        snapshot.device_type,
+        snapshot.folder,
+        snapshot.alias,
+        snapshot.address,
+        stale,
+    )
+    if gauge_fields is not None:
+        signature += (
+            gauge_fields.get("smart_total"),
+            gauge_fields.get("smart_failing"),
+            gauge_fields.get("disk_other_worst_mount"),
+        )
+    return signature
+
+
+def should_publish_status(
+    previous: StatusMark | None,
+    discrete: tuple,
+    bands: tuple | None,
+    now_s: float,
+    heartbeat_s: int,
+) -> bool:
+    """Decide whether a device's status goes out this cycle (D-07/D-08).
+
+    True on first sight (restart), a discrete change, a gauge band crossing,
+    or once `heartbeat_s` seconds passed since the last publish (0 = always).
+    """
+    if previous is None or heartbeat_s <= 0:
+        return True
+    if discrete != previous.discrete:
+        return True
+    if bands is not None and bands != previous.bands:
+        return True
+    return now_s - previous.published_at >= heartbeat_s
+
+
 def publish_device_status(
     client: mqtt.Client,
     snapshot: DeviceSnapshot,
     timestamp: str,
     gauge_fields: dict | None = None,
+    heartbeat_s: int | None = None,
 ) -> None:
-    """Publish one device's current status. QoS 0: republished every cycle from live data."""
+    """Publish one device's current status. QoS 0, retained; run_cycle throttles it."""
     payload = {
         "id": snapshot.id,
         "state": snapshot.state,
@@ -3015,6 +3120,10 @@ def publish_device_status(
     # failure this cycle) keeps the status topic publishing without gauge
     # keys rather than publishing wrong `null`s over a good retained value.
     payload.update(gauge_fields or {})
+    if heartbeat_s is not None:
+        # Phase 17 (D-09): lets the dashboard widen its timestamp-age
+        # staleness fallback to the throttled republish interval.
+        payload["heartbeat_s"] = heartbeat_s
     _publish_json(client, device_status_topic(snapshot.id), payload, qos=0, retain=True)
 
 
@@ -3214,6 +3323,10 @@ class PollerState:
     # `run_cycle` makes for device-level status. The cost is one redundant
     # `services` republish per device after a restart.
     previous_services: dict[str, tuple] = field(default_factory=dict)
+    # Phase 17 (D-07): device id -> last status publish. In-memory only like
+    # `last_status`; empty after a restart so every host publishes once,
+    # which also re-seeds retained state.
+    status_marks: dict[str, StatusMark] = field(default_factory=dict)
     # 2026-09-25 (quick 260925-b81): device ids that had any non-empty
     # retained per-device topic at startup. This can include ghosts that are
     # NOT in the retained topology, which `previous_nodes` alone can never
@@ -3570,6 +3683,7 @@ def run_cycle(
     snapshots: list[DeviceSnapshot],
     services: list[ServiceSnapshot] | None = None,
     allow_stale_sweep: bool = False,
+    monotonic_now: float | None = None,
 ) -> None:
     """Run one poll cycle: publish status, detect changes, tombstone removals.
 
@@ -3613,9 +3727,17 @@ def run_cycle(
     was last published, so an operator's criticality/dependency edit (which
     changes `worst_criticality`/`dependents` without changing the DOWN/
     UNREACH set) still triggers exactly one republish.
+
+    Phase 17 (D-07/D-08/D-09): a device's status republishes only on a
+    discrete change, a gauge ok/warn/crit band crossing, or every
+    `config.metrics_heartbeat_seconds` (0 = every cycle). The Checkmk
+    staleness band is part of the discrete signature because the dashboard
+    prefers the payload's frozen `staleness` over timestamp age. Poller
+    liveness (`lan/poller/status`) still publishes every cycle.
     """
     now = utc_now_iso()
     cycle_epoch = _cycle_epoch(now)
+    now_s = time.monotonic() if monotonic_now is None else monotonic_now
 
     if services is not None:
         apply_visible_service_state(snapshots, services)
@@ -3626,12 +3748,32 @@ def run_cycle(
             services_by_host.setdefault(service.host_name, []).append(service)
 
     for snapshot in snapshots:
-        if services is None:
-            publish_device_status(client, snapshot, now)
-            continue
+        gauge_fields: dict | None = None
+        rows: list[dict] = []
+        if services is not None:
+            gauge_fields, rows = classify_host_services(services_by_host.get(snapshot.id, []))
 
-        gauge_fields, rows = classify_host_services(services_by_host.get(snapshot.id, []))
-        publish_device_status(client, snapshot, now, gauge_fields=gauge_fields)
+        discrete = status_discrete_signature(snapshot, gauge_fields)
+        bands = status_bands(gauge_fields)
+        previous_mark = state.status_marks.get(snapshot.id)
+        if should_publish_status(
+            previous_mark, discrete, bands, now_s, config.metrics_heartbeat_seconds
+        ):
+            publish_device_status(
+                client,
+                snapshot,
+                now,
+                gauge_fields=gauge_fields,
+                heartbeat_s=config.metrics_heartbeat_seconds,
+            )
+            # A services outage (bands None) keeps the previous bands so band
+            # tracking survives it.
+            if bands is None and previous_mark is not None:
+                bands = previous_mark.bands
+            state.status_marks[snapshot.id] = StatusMark(discrete, bands, now_s)
+
+        if services is None:
+            continue
 
         signature = services_signature(rows)
         if signature != state.previous_services.get(snapshot.id):
@@ -3654,6 +3796,7 @@ def run_cycle(
         # the per-device topics; this pop clears the in-process side so a
         # re-added host with the same id starts clean.
         state.previous_services.pop(device_id, None)
+        state.status_marks.pop(device_id, None)
         events_this_cycle.append(
             {
                 "timestamp": now,
@@ -3675,6 +3818,7 @@ def run_cycle(
             publish_tombstone(client, device_id, event_id=f"{device_id}-removed-{cycle_epoch}")
             state.last_status.pop(device_id, None)
             state.previous_services.pop(device_id, None)
+            state.status_marks.pop(device_id, None)
             _logger.info("Cleared stale retained topics for absent host %s", device_id)
         # The sweep runs once per process; `previous_nodes` tracks from here.
         state.retained_ids = set()

@@ -4805,3 +4805,202 @@ def test_publish_history_survives_publish_errors():
     client.publish.side_effect = [OSError("boom"), None, None]
     poller.publish_history(client, _make_config(site_sen="123"), _history_batch(1001), _HISTORY_TS)
     assert client.publish.call_count == 3
+
+
+# --- Phase 17: status throttle (D-07/D-08/D-09) -----------------------------
+
+
+def _mark(discrete=("x",), bands=("ok",), at=1000.0):
+    return poller.StatusMark(discrete=discrete, bands=bands, published_at=at)
+
+
+def test_gauge_band_levels():
+    assert poller.gauge_band(None, 80, 90) == "none"
+    assert poller.gauge_band(True, 80, 90) == "none"
+    assert poller.gauge_band(10, 80, 90) == "ok"
+    assert poller.gauge_band(80, 80, 90) == "warn"
+    assert poller.gauge_band(90, 80, 90) == "crit"
+    assert poller.gauge_band(95, None, None) == "ok"
+
+
+def test_status_bands_none_and_tuple():
+    assert poller.status_bands(None) is None
+    bands = poller.status_bands({"ram_percent": 85.0, "ram_warn": 80.0, "ram_crit": 90.0})
+    assert len(bands) == 5
+    assert bands[2] == "warn"
+    assert bands[0] == "none"
+
+
+def test_status_discrete_signature_changes_on_discrete_fields():
+    gauges = {"smart_total": 1, "smart_failing": 0}
+    base = poller.status_discrete_signature(_snapshot("a"), gauges)
+    assert base != poller.status_discrete_signature(_snapshot("a", state="CRIT"), gauges)
+    assert base != poller.status_discrete_signature(_snapshot("a", in_downtime=True), gauges)
+    assert base != poller.status_discrete_signature(_snapshot("a", acknowledged=True), gauges)
+    assert base != poller.status_discrete_signature(_snapshot("a", host_state_raw="DOWN"), gauges)
+    assert base != poller.status_discrete_signature(
+        _snapshot("a"), {"smart_total": 1, "smart_failing": 1}
+    )
+    assert base != poller.status_discrete_signature(
+        _snapshot("a"), {"smart_total": 2, "smart_failing": 0}
+    )
+
+
+def test_status_discrete_signature_ignores_gauge_values_and_small_staleness():
+    snap = _snapshot("a")
+    snap.staleness = 0.2
+    sig = poller.status_discrete_signature(snap, {"cpu_percent": 10})
+    assert sig == poller.status_discrete_signature(snap, {"cpu_percent": 11})
+    snap.staleness = 0.4
+    assert sig == poller.status_discrete_signature(snap, {"cpu_percent": 10})
+
+
+def test_status_discrete_signature_staleness_threshold_crossing():
+    snap = _snapshot("a")
+    snap.staleness = 2.9
+    below = poller.status_discrete_signature(snap, None)
+    snap.staleness = 3.0
+    assert poller.status_discrete_signature(snap, None) != below
+    snap.staleness = None
+    assert poller.status_discrete_signature(snap, None) == below
+    snap.staleness = 0.5
+    assert poller.status_discrete_signature(snap, None) == below
+
+
+def test_should_publish_status_first_cycle_and_heartbeat_window():
+    assert poller.should_publish_status(None, ("x",), ("ok",), 0.0, 300) is True
+    mark = _mark()
+    assert poller.should_publish_status(mark, ("x",), ("ok",), 1299.0, 300) is False
+    assert poller.should_publish_status(mark, ("x",), ("ok",), 1300.0, 300) is True
+
+
+def test_should_publish_status_change_overrides_elapsed_time():
+    mark = _mark()
+    assert poller.should_publish_status(mark, ("y",), ("ok",), 1001.0, 300) is True
+    assert poller.should_publish_status(mark, ("x",), ("warn",), 1001.0, 300) is True
+
+
+def test_should_publish_status_heartbeat_zero_always_publishes():
+    assert poller.should_publish_status(_mark(), ("x",), ("ok",), 1000.0, 0) is True
+
+
+def test_should_publish_status_bands_none_ignores_band_comparison():
+    mark = _mark()
+    assert poller.should_publish_status(mark, ("x",), None, 1001.0, 300) is False
+    assert poller.should_publish_status(mark, ("y",), None, 1001.0, 300) is True
+
+
+def test_poller_config_heartbeat_env(monkeypatch):
+    monkeypatch.delenv("CLOUD_METRICS_HEARTBEAT_S", raising=False)
+    assert poller.PollerConfig.from_env().metrics_heartbeat_seconds == 300
+    monkeypatch.setenv("CLOUD_METRICS_HEARTBEAT_S", "45")
+    config = poller.PollerConfig.from_env()
+    assert config.metrics_heartbeat_seconds == 45
+    assert "metrics_heartbeat_seconds=45" in repr(config)
+    monkeypatch.setenv("CLOUD_METRICS_HEARTBEAT_S", "-5")
+    assert poller.PollerConfig.from_env().metrics_heartbeat_seconds == 0
+    monkeypatch.setenv("CLOUD_METRICS_HEARTBEAT_S", "junk")
+    assert poller.PollerConfig.from_env().metrics_heartbeat_seconds == 300
+
+
+_STATUS_A = "sites/testsite/lan/devices/a/status"
+_STATUS_B = "sites/testsite/lan/devices/b/status"
+
+
+def _ram_services(host, value):
+    perf = {"mem_used_percent": {"value": value, "warn": 80.0, "crit": 90.0, "min": None, "max": None}}
+    return [_service(host, "Memory", "OK", perf_data=perf)]
+
+
+def test_run_cycle_throttle_quiet_second_cycle_publishes_no_status_but_liveness():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+    snaps = [_snapshot("a"), _snapshot("b")]
+
+    poller.run_cycle(client, config, state, snaps, monotonic_now=1000.0)
+    assert len(_published(client, _STATUS_A)) == 1
+    assert len(_published(client, _STATUS_B)) == 1
+    poller.run_cycle(client, config, state, snaps, monotonic_now=1015.0)
+
+    assert len(_published(client, _STATUS_A)) == 1
+    assert len(_published(client, _STATUS_B)) == 1
+    assert len(_published(client, "sites/testsite/lan/poller/status")) == 2
+
+
+def test_run_cycle_throttle_state_change_publishes_only_that_host():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+
+    poller.run_cycle(client, config, state, [_snapshot("a"), _snapshot("b")], monotonic_now=1000.0)
+    poller.run_cycle(
+        client, config, state, [_snapshot("a", state="CRIT"), _snapshot("b")], monotonic_now=1015.0
+    )
+
+    assert len(_published(client, _STATUS_A)) == 2
+    assert len(_published(client, _STATUS_B)) == 1
+
+
+def test_run_cycle_throttle_band_crossing_publishes_but_in_band_move_does_not():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+    snaps = [_snapshot("b")]
+
+    poller.run_cycle(client, config, state, snaps, services=_ram_services("b", 50.0), monotonic_now=1000.0)
+    poller.run_cycle(client, config, state, snaps, services=_ram_services("b", 55.0), monotonic_now=1015.0)
+    assert len(_published(client, _STATUS_B)) == 1
+    poller.run_cycle(client, config, state, snaps, services=_ram_services("b", 85.0), monotonic_now=1030.0)
+    assert len(_published(client, _STATUS_B)) == 2
+
+
+def test_run_cycle_throttle_heartbeat_republishes_after_interval():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+    snaps = [_snapshot("a"), _snapshot("b")]
+
+    poller.run_cycle(client, config, state, snaps, monotonic_now=1000.0)
+    poller.run_cycle(client, config, state, snaps, monotonic_now=1299.0)
+    assert len(_published(client, _STATUS_A)) == 1
+    poller.run_cycle(client, config, state, snaps, monotonic_now=1300.0)
+    assert len(_published(client, _STATUS_A)) == 2
+    assert len(_published(client, _STATUS_B)) == 2
+
+
+def test_run_cycle_throttle_heartbeat_zero_publishes_every_cycle():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config(metrics_heartbeat_seconds=0)
+
+    for i in range(3):
+        poller.run_cycle(client, config, state, [_snapshot("a")], monotonic_now=1000.0 + i)
+
+    assert len(_published(client, _STATUS_A)) == 3
+
+
+def test_run_cycle_status_payload_carries_heartbeat_s():
+    client = MagicMock()
+    config = _make_config(metrics_heartbeat_seconds=120)
+
+    poller.run_cycle(client, config, _poller_state(), [_snapshot("a")], monotonic_now=1000.0)
+
+    payload = json.loads(_published(client, _STATUS_A)[0].args[1])
+    assert payload["heartbeat_s"] == 120
+
+
+def test_run_cycle_removed_host_drops_status_mark_so_readd_publishes():
+    client = MagicMock()
+    state = _poller_state()
+    config = _make_config()
+
+    poller.run_cycle(client, config, state, [_snapshot("a")], monotonic_now=1000.0)
+    poller.run_cycle(client, config, state, [], monotonic_now=1015.0)
+    assert "a" not in state.status_marks
+    poller.run_cycle(client, config, state, [_snapshot("a")], monotonic_now=1030.0)
+
+    # The removal tombstone is an empty payload on the same topic; only
+    # non-empty publishes are status messages.
+    status_msgs = [c for c in _published(client, _STATUS_A) if c.kwargs.get("payload") or (len(c.args) > 1 and c.args[1])]
+    assert len(status_msgs) == 2
