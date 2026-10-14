@@ -28,6 +28,12 @@ from analytics.config import (
 
 ANALYTICS_TABLES = frozenset({"history.events", "history.incidents", "history.need_triage"})
 
+# Written only by ANALYTICS_MODE=cloud-ingest (Phase 17 D-02); on-prem the
+# poller is the sole writer of these tables (14.1).
+HISTORY_INGEST_TABLES = frozenset(
+    {"history.host_state", "history.service_state", "history.metrics"}
+)
+
 _MIGRATION_HINT = (
     "run deploy/clickhouse-config/migrations/14.2-analytics.sql "
     "(see docs/DEPLOY-NEW-MACHINE.md)"
@@ -85,16 +91,18 @@ def _clickhouse_insert(
     table: str,
     rows: list[dict],
     timeout: float,
+    *,
+    allowed: frozenset[str] = ANALYTICS_TABLES,
 ) -> None:
     """POST `rows` as one `INSERT INTO {table} FORMAT JSONEachRow` batch.
 
-    `table` must be one of `ANALYTICS_TABLES`: the name is interpolated into
+    `table` must be in `allowed` (default `ANALYTICS_TABLES`): the name is interpolated into
     the SQL text (no parameterized identifiers over HTTP), so an unlisted
     table never reaches a request.  Empty `rows` is a no-op.
     """
     if not rows:
         return
-    if table not in ANALYTICS_TABLES:
+    if table not in allowed:
         raise ValueError(f"Refusing to insert into unlisted table {table!r}")
     try:
         body = "\n".join(json.dumps(row, allow_nan=False) for row in rows).encode("utf-8")
@@ -249,6 +257,19 @@ def insert_rows(config: AnalyticsConfig, table: str, rows: list[dict]) -> None:
         table,
         rows,
         config.clickhouse_timeout_seconds,
+    )
+
+
+def insert_history_rows(config: AnalyticsConfig, table: str, rows: list[dict]) -> None:
+    """Insert `rows` into a poller history table (cloud-ingest mode only)."""
+    _clickhouse_insert(
+        config.clickhouse_url,
+        config.clickhouse_writer_user,
+        config.clickhouse_writer_password,
+        table,
+        rows,
+        config.clickhouse_timeout_seconds,
+        allowed=HISTORY_INGEST_TABLES,
     )
 
 

@@ -22,6 +22,8 @@ _logger = logging.getLogger("analytics.config")
 # --- env-overridable defaults ------------------------------------------------
 
 DEFAULT_MQTT_PORT = 1883
+ANALYTICS_MODES = ("full", "cloud-ingest")
+DEFAULT_MQTT_SESSION_EXPIRY_SECONDS = 86400
 DEFAULT_CLICKHOUSE_TIMEOUT_SECONDS = 5.0
 DEFAULT_POLL_INTERVAL_SECONDS = 15
 DEFAULT_ROLLUP_TZ = "Asia/Singapore"
@@ -85,6 +87,14 @@ METRIC_NAME_RE = re.compile(r"^[A-Za-z0-9_.]{1,64}$")
 # SMART/NVMe names are added via CHART_METRICS / TREND_NEED_METRICS env (and
 # WEAR_METRICS in code) once such a service exists.
 _WEAR_HINT_RE = re.compile(r"smart|nvme|realloc|wear", re.IGNORECASE)
+
+
+# Same rule as the poller, the bridge renderer and the wizard (archive contract).
+_SEN_RE = re.compile(r"[1-9][0-9]{0,17}")
+
+
+def valid_sen(value: str) -> bool:
+    return _SEN_RE.fullmatch(value) is not None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -161,6 +171,10 @@ class AnalyticsConfig:
     fit_min_rise_30d: float = DEFAULT_FIT_MIN_RISE_30D
     chart_metrics: tuple[str, ...] = DEFAULT_CHART_METRICS
     trend_need_metrics: tuple[str, ...] = DEFAULT_TREND_NEED_METRICS
+    mode: str = "full"
+    site_sen: str = ""
+    mqtt_client_id: str = ""
+    mqtt_session_expiry_seconds: int = DEFAULT_MQTT_SESSION_EXPIRY_SECONDS
 
     def __repr__(self) -> str:
         # T-09-02: safe to log -- never render the MQTT password, the
@@ -196,11 +210,19 @@ class AnalyticsConfig:
             f"fit_r2_high={self.fit_r2_high!r}, "
             f"fit_min_rise_30d={self.fit_min_rise_30d!r}, "
             f"chart_metrics={self.chart_metrics!r}, "
-            f"trend_need_metrics={self.trend_need_metrics!r})"
+            f"trend_need_metrics={self.trend_need_metrics!r}, "
+            f"mode={self.mode!r}, "
+            f"site_sen={self.site_sen!r}, "
+            f"mqtt_client_id={self.mqtt_client_id!r}, "
+            f"mqtt_session_expiry_seconds={self.mqtt_session_expiry_seconds!r})"
         )
 
     @classmethod
     def from_env(cls) -> AnalyticsConfig:
+        mode = os.environ.get("ANALYTICS_MODE", "full").strip() or "full"
+        if mode not in ANALYTICS_MODES:
+            _logger.warning("Invalid ANALYTICS_MODE=%r; using 'full'", mode)
+            mode = "full"
         return cls(
             mqtt_host=os.environ.get("MQTT_HOST", "mosquitto"),
             mqtt_port=_env_int("MQTT_PORT", DEFAULT_MQTT_PORT),
@@ -233,6 +255,12 @@ class AnalyticsConfig:
             fit_min_rise_30d=_env_float("FIT_MIN_RISE_30D", DEFAULT_FIT_MIN_RISE_30D),
             chart_metrics=_env_list("CHART_METRICS", DEFAULT_CHART_METRICS),
             trend_need_metrics=_env_list("TREND_NEED_METRICS", DEFAULT_TREND_NEED_METRICS),
+            mode=mode,
+            site_sen=os.environ.get("SITE_SEN", "").strip(),
+            mqtt_client_id=os.environ.get("MQTT_CLIENT_ID", ""),
+            mqtt_session_expiry_seconds=_env_int(
+                "MQTT_SESSION_EXPIRY_S", DEFAULT_MQTT_SESSION_EXPIRY_SECONDS
+            ),
         )
 
 
