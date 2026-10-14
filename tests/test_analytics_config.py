@@ -12,7 +12,7 @@ ENV_NAMES = {
     "S3_ADDRESSING_STYLE", "AVAILABILITY_BUCKET", "ROLLUP_TZ", "ROLLUP_BACKFILL_DAYS",
     "ROLLUP_DELAY_MINUTES", "POLL_INTERVAL_SECONDS", "EVAL_INTERVAL_SECONDS", "TIER_IMMEDIATE_DAYS", "TIER_URGENT_DAYS",
     "NEED_HORIZON_DAYS", "FIT_R2_MIN", "FIT_R2_HIGH", "FIT_MIN_RISE_30D", "CHART_METRICS",
-    "TREND_NEED_METRICS",
+    "TREND_NEED_METRICS", "ANALYTICS_MODE", "SITE_SEN", "MQTT_CLIENT_ID", "MQTT_SESSION_EXPIRY_S",
 }
 
 
@@ -88,3 +88,34 @@ def test_fixed_constants_not_env(env):
     assert cfg.CONFIDENCE_HIGH_DAYS == 60.0
     assert cfg.WEAR_METRICS == frozenset()
     assert cfg.FALLBACK_LEVELS["util"][0] < cfg.FALLBACK_LEVELS["util"][1]
+
+
+def test_cloud_ingest_defaults_and_mode(env):
+    c = AnalyticsConfig.from_env()
+    assert (c.mode, c.site_sen, c.mqtt_client_id, c.mqtt_session_expiry_seconds) == ("full", "", "", 86400)
+    env.setenv("ANALYTICS_MODE", "cloud-ingest")
+    env.setenv("SITE_SEN", " 123 ")
+    assert AnalyticsConfig.from_env().mode == "cloud-ingest"
+    assert AnalyticsConfig.from_env().site_sen == "123"
+
+
+def test_unknown_mode_falls_back_to_full(env, caplog):
+    env.setenv("ANALYTICS_MODE", "cloud")
+    assert AnalyticsConfig.from_env().mode == "full"
+    assert "ANALYTICS_MODE" in caplog.text
+
+
+@pytest.mark.parametrize("bad", ["", "0", "007", "-1", "abc", "1 2", "123\n"])
+def test_valid_sen_rejects(bad):
+    assert not cfg.valid_sen(bad)
+
+
+def test_valid_sen_accepts():
+    assert cfg.valid_sen("123")
+
+
+def test_repr_shows_ingest_fields_and_still_masks(env):
+    c = AnalyticsConfig(mode="cloud-ingest", site_sen="42", mqtt_client_id="cid", mqtt_password="pw-zz")
+    text = repr(c)
+    assert "cloud-ingest" in text and "'42'" in text and "cid" in text
+    assert "pw-zz" not in text
