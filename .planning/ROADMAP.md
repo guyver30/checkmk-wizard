@@ -564,7 +564,7 @@ Plans:
 **Goal:** Each site's retained and discrete MQTT messages reach the cloud broker under the archive contract `app/<SEN>/<site_id>/<suffix>` (SEN = site equipment number, uniquely identifies a site; one or many Checkmk sites per SEN stays supported), so the S3 archive service (`docs/MQTT_CLIENT_DATA_FLOW.md`) can land them as JSONL. Adds a required `SITE_SEN` setting, a prefix remap from the local `sites/<site_id>/` namespace (Mosquitto bridge preferred; local contract, ACLs and tests stay untouched), MQTT v5 with a stable `event_id` user property on discrete messages (events, incidents, commands), a decision on whether per-cycle `status` samples are archived or only discrete events, and per-SEN ACLs for a shared cloud broker. Source: `docs/MQTT_CLIENT_DATA_FLOW.md`, `docs/MQTT-CONTRACT-WALKTHROUGH.md`.
 **Requirements**: TBD
 **Depends on:** Phase 14.2, Phase 14.3
-**Plans:** 1/9 plans executed
+**Plans:** 6/9 plans executed
 
 Plans:
 **Wave 1**
@@ -573,11 +573,11 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 17-02-PLAN.md — Rendered opt-in Mosquitto bridge, queue limits, local bridge login, cloud ACL example, compose/init-env/.env wiring
-- [ ] 17-03-PLAN.md — Poller MQTT v5, SITE_SEN, deterministic event_id on discrete publishes, chunked history over MQTT
-- [ ] 17-05-PLAN.md — Dashboard staleness fallback widened by heartbeat_s; siteSen in /config.json and header
-- [ ] 17-06-PLAN.md — Analytics ANALYTICS_MODE=cloud-ingest: v5 persistent history subscriber with event_id dedupe and row validation
-- [ ] 17-07-PLAN.md — Wizard SEN prompt after Phase 1, written to deploy/.env as SITE_SEN
+- [x] 17-02-PLAN.md — Rendered opt-in Mosquitto bridge, queue limits, local bridge login, cloud ACL example, compose/init-env/.env wiring
+- [x] 17-03-PLAN.md — Poller MQTT v5, SITE_SEN, deterministic event_id on discrete publishes, chunked history over MQTT
+- [x] 17-05-PLAN.md — Dashboard staleness fallback widened by heartbeat_s; siteSen in /config.json and header
+- [x] 17-06-PLAN.md — Analytics ANALYTICS_MODE=cloud-ingest: v5 persistent history subscriber with event_id dedupe and row validation
+- [x] 17-07-PLAN.md — Wizard SEN prompt after Phase 1, written to deploy/.env as SITE_SEN
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
