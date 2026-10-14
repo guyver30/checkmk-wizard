@@ -727,3 +727,27 @@ yes, fake the Filesystem service in demo mode and set it at current level based 
 ## 2026-10-13 14:25
 
 can I manually force the host to warn status ?
+
+## 2026-10-14 13:59
+
+/document-architecture-visual on main branch of this project, using /draw-topology command in high level
+
+## 2026-10-14 14:05
+
+now redo it with topology in detail. But don't include grafana
+
+## 2026-10-14 14:09
+
+I want you to update the architecture.md to explain in detail what is the role of each container and service
+
+## 2026-10-14 14:12
+
+ok now /document-architecture-visual drawing the data flow in detail
+
+## 2026-10-14 14:17
+
+make another drawing (different name) with high level dataflow
+
+## 2026-10-14 14:26
+
+update the data flow docs to say that (that daily availability rollup and the sync between clickhouse and minio)
