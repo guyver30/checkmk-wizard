@@ -25,6 +25,10 @@ from checkmk_wizard.remote import (
 from checkmk_wizard.scanner import HostScanResult
 import checkmk_wizard.wizard as wizard_module
 from checkmk_wizard.wizard import (
+    _SEN_RE,
+    _configure_site_sen,
+    _read_env_value,
+    _write_env_value,
     _DEFAULT_CPU_LOAD_LEVELS,
     _DEFAULT_CPU_UTILIZATION_LEVELS,
     _DEFAULT_FILESYSTEM_LEVELS,
@@ -6160,3 +6164,206 @@ async def test_services_step_optin_default(monkeypatch, kwargs, expected):
     )
     assert result == []
     assert defaults == [expected]
+
+
+# --- Site equipment number (SEN) ---------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_deploy_env(monkeypatch, tmp_path):
+    """No test may read or write the real deploy/.env, and run() tests must
+    not hit the SEN prompt."""
+    monkeypatch.setattr(wizard_module, "_DEPLOY_ENV_FILE", tmp_path / "no-such-dir" / ".env")
+    monkeypatch.setattr(wizard_module, "_configure_site_sen", AsyncMock(return_value="123"))
+    monkeypatch.delenv("SITE_SEN", raising=False)
+
+
+@pytest.mark.parametrize("value", ["1", "123", "9" * 18])
+def test_sen_re_accepts(value):
+    assert _SEN_RE.fullmatch(value)
+
+
+@pytest.mark.parametrize(
+    "value", ["", "0", "007", "-1", "abc", "1 2", "12a", "123\n", "1" * 19]
+)
+def test_sen_re_rejects(value):
+    assert not _SEN_RE.fullmatch(value)
+
+
+def test_read_env_value_last_uncommented_wins(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("# SITE_SEN=5\nSITE_SEN=7\nOTHER=1\nSITE_SEN=9\n")
+    assert _read_env_value(env, "SITE_SEN") == "9"
+    assert _read_env_value(env, "MISSING") is None
+    assert _read_env_value(tmp_path / "nope", "SITE_SEN") is None
+
+
+def test_read_env_value_ignores_commented_only(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("# SITE_SEN=5\n")
+    assert _read_env_value(env, "SITE_SEN") is None
+
+
+def test_write_env_value_replaces_existing_line_keeps_mode(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("A=1\nSITE_SEN=9\nB=2\n")
+    env.chmod(0o600)
+    assert _write_env_value(env, "SITE_SEN", "123") is True
+    assert env.read_text() == "A=1\nSITE_SEN=123\nB=2\n"
+    assert env.stat().st_mode & 0o777 == 0o600
+    assert [p.name for p in tmp_path.iterdir()] == [".env"]
+
+
+def test_write_env_value_replaces_first_commented_line(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("A=1\n# SITE_SEN=\nB=2\n# SITE_SEN=\n")
+    assert _write_env_value(env, "SITE_SEN", "5") is True
+    assert env.read_text() == "A=1\nSITE_SEN=5\nB=2\n# SITE_SEN=\n"
+
+
+def test_write_env_value_appends(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("A=1")
+    assert _write_env_value(env, "SITE_SEN", "5") is True
+    assert env.read_text() == "A=1\nSITE_SEN=5\n"
+
+
+def test_write_env_value_missing_file_returns_false(tmp_path):
+    assert _write_env_value(tmp_path / "nope" / ".env", "SITE_SEN", "5") is False
+    assert not (tmp_path / "nope").exists()
+
+
+def test_write_env_value_unwritable_dir_leaves_no_temp(tmp_path):
+    d = tmp_path / "ro"
+    d.mkdir()
+    env = d / ".env"
+    env.write_text("A=1\n")
+    d.chmod(0o500)
+    try:
+        assert _write_env_value(env, "SITE_SEN", "5") is False
+        assert env.read_text() == "A=1\n"
+        assert [p.name for p in d.iterdir()] == [".env"]
+    finally:
+        d.chmod(0o700)
+
+
+def test_write_env_value_rejects_unsafe_value(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("A=1\n")
+    with pytest.raises(ValueError):
+        _write_env_value(env, "SITE_SEN", "1\nEVIL=1")
+
+
+def _sen_prompt_spy(monkeypatch, answers):
+    queue = list(answers)
+    seen = {"validate": None, "asked": 0}
+    real_text = questionary.text
+
+    def fake_text(message, **kwargs):
+        seen["validate"] = kwargs.get("validate")
+        return real_text(message, **kwargs)
+
+    async def fake_ask(self, patch_stdout=False, kbi_msg=""):
+        seen["asked"] += 1
+        answer = queue.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(questionary, "text", fake_text)
+    monkeypatch.setattr(questionary.Question, "ask_async", fake_ask)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_configure_site_sen_existing_value_no_prompt(tmp_path, monkeypatch, capsys):
+    env = tmp_path / ".env"
+    env.write_text("SITE_SEN=123\n")
+    seen = _sen_prompt_spy(monkeypatch, [])
+    assert await _configure_site_sen(env) == "123"
+    assert seen["asked"] == 0
+    assert "SITE_SEN 123" in _flat(capsys.readouterr().out)
+
+
+@pytest.mark.asyncio
+async def test_configure_site_sen_prompts_and_writes(tmp_path, monkeypatch, capsys):
+    env = tmp_path / ".env"
+    env.write_text("SITE_SEN=007\nA=1\n")
+    seen = _sen_prompt_spy(monkeypatch, ["4711"])
+    assert await _configure_site_sen(env) == "4711"
+    assert seen["asked"] == 1
+    validate = seen["validate"]
+    for bad in ("0", "007", "abc"):
+        assert isinstance(validate(bad), str)
+    assert validate("4711") is True
+    assert env.read_text() == "SITE_SEN=4711\nA=1\n"
+    out = _flat(capsys.readouterr().out)
+    assert "podman compose down" in out and "up" in out
+
+
+@pytest.mark.asyncio
+async def test_configure_site_sen_unwritable_prints_line(tmp_path, monkeypatch, capsys):
+    _sen_prompt_spy(monkeypatch, ["4711"])
+    assert await _configure_site_sen(tmp_path / "missing" / ".env") == "4711"
+    out = _flat(capsys.readouterr().out)
+    assert "SITE_SEN=4711" in out and "deploy/.env" in out
+
+
+@pytest.mark.asyncio
+async def test_configure_site_sen_file_beats_environ(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("SITE_SEN=11\n")
+    monkeypatch.setenv("SITE_SEN", "22")
+    _sen_prompt_spy(monkeypatch, [])
+    assert await _configure_site_sen(env) == "11"
+
+
+@pytest.mark.asyncio
+async def test_configure_site_sen_environ_used_without_prompt(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("A=1\n")
+    monkeypatch.setenv("SITE_SEN", "22")
+    seen = _sen_prompt_spy(monkeypatch, [])
+    assert await _configure_site_sen(env) == "22"
+    assert seen["asked"] == 0
+    assert "SITE_SEN=22" in env.read_text()
+
+
+@pytest.mark.asyncio
+async def test_configure_site_sen_esc_aborts_run(monkeypatch, capsys):
+    monkeypatch.setattr(wizard_module, "_ABORT_STATE", _AbortState())
+    monkeypatch.setattr(wizard_module, "phase1_site_bringup", AsyncMock(return_value=CONN))
+    monkeypatch.setattr(wizard_module, "_configure_site_sen", AsyncMock(side_effect=WizardAborted))
+    ctor = AsyncMock()
+    monkeypatch.setattr(wizard_module, "CheckmkClient", ctor)
+    await wizard_module.run()
+    assert "Aborted — no pending changes" in _flat(capsys.readouterr().out)
+    ctor.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_configures_sen_after_phase1_before_client(monkeypatch):
+    order = []
+
+    async def phase1():
+        order.append("phase1")
+        return CONN
+
+    async def sen():
+        order.append("sen")
+        return "123"
+
+    class Stop(Exception):
+        pass
+
+    def client(connection):
+        order.append("client")
+        raise Stop
+
+    monkeypatch.setattr(wizard_module, "_ABORT_STATE", _AbortState())
+    monkeypatch.setattr(wizard_module, "phase1_site_bringup", phase1)
+    monkeypatch.setattr(wizard_module, "_configure_site_sen", sen)
+    monkeypatch.setattr(wizard_module, "CheckmkClient", client)
+    with pytest.raises(Stop):
+        await wizard_module.run()
+    assert order == ["phase1", "sen", "client"]

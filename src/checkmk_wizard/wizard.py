@@ -15,6 +15,7 @@ import random
 import re
 import secrets
 import socket
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -103,6 +104,11 @@ async def _abortable_ask_async(
 # via `uv run` from a checkout rather than installed as a distributed wheel.
 _SMARTMONTOOLS_DIR = Path(__file__).resolve().parents[2] / "docs" / "smart"
 
+# The deployment env file compose reads. Same source-checkout assumption as
+# _SMARTMONTOOLS_DIR; the worker container bind-mounts the whole checkout
+# read-write, so the file is reachable from inside it as well.
+_DEPLOY_ENV_FILE = Path(__file__).resolve().parents[2] / "deploy" / ".env"
+
 # Single source of truth for the device-type host tag group's id. Every
 # call site that needs the `tag_<group_id>` attribute key derives it from
 # this constant (`f"tag_{DEVICE_TYPE_TAG_GROUP_ID}"`) rather than repeating
@@ -179,6 +185,121 @@ _HOST_NAME_RE = re.compile(r"^[-0-9a-zA-Z_.]+$")
 _HOSTNAME_RE = re.compile(
     r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$"
 )
+
+
+# Site equipment number (SEN): the cloud archive contract
+# (docs/MQTT_CLIENT_DATA_FLOW.md) needs a positive integer without leading
+# zeros, otherwise the archiver silently drops the topic. Same rule as
+# scripts/mqtt_poller.py, analytics/config.py, deploy/render-mosquitto-bridge.sh
+# and the dashboard's runtimeConfig.ts. Always used with fullmatch, since `$`
+# also accepts a trailing newline.
+_SEN_RE = re.compile(r"^[1-9][0-9]{0,17}$")
+
+_ENV_VALUE_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+
+
+def _read_env_value(path: Path, key: str) -> str | None:
+    """Value of the last uncommented `KEY=` line (deploy/init-env.sh get_val
+    semantics), or None when the file or key is missing."""
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return None
+    prefix = f"{key}="
+    value = None
+    for line in lines:
+        if line.startswith(prefix):
+            value = line[len(prefix):]
+    return value
+
+
+def _write_env_value(path: Path, key: str, value: str) -> bool:
+    """Set `KEY=value` in an env file, mirroring deploy/init-env.sh set_val:
+    replace the `KEY=` line, else the first `# KEY=` line, else append.
+
+    Atomic (temp file in the same directory, then os.replace) and keeps the
+    original mode so the 0600 init-env.sh sets survives; every other line is
+    left byte-identical. Returns False on any OSError (missing or read-only
+    file) so the caller can fall back to telling the operator the line.
+    """
+    if not _ENV_VALUE_RE.fullmatch(value):
+        raise ValueError(f"unsafe env value for {key}: {value!r}")
+    tmp_path: Path | None = None
+    try:
+        original = path.read_text()
+        mode = path.stat().st_mode & 0o7777
+        lines = original.splitlines(keepends=True)
+        new_line = f"{key}={value}\n"
+        commented = re.compile(rf"^#\s*{re.escape(key)}=")
+        index = next((i for i, ln in enumerate(lines) if ln.startswith(f"{key}=")), None)
+        if index is None:
+            index = next((i for i, ln in enumerate(lines) if commented.match(ln)), None)
+        if index is not None:
+            lines[index] = new_line
+        else:
+            if lines and not lines[-1].endswith("\n"):
+                lines[-1] += "\n"
+            lines.append(new_line)
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".env.", suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w") as handle:
+            handle.write("".join(lines))
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, path)
+        return True
+    except OSError:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        return False
+
+
+async def _configure_site_sen(env_path: Path | None = None) -> str:
+    """Make sure deploy/.env holds this site's equipment number (SITE_SEN).
+
+    The SEN identifies the site in the cloud archive contract; it and the
+    site id are independent keys. Best-effort write: when the file cannot be
+    written the operator gets the exact line to add and the run continues.
+    The file value wins over os.environ; the environment is only a source
+    when the file has no valid value.
+    """
+    path = env_path if env_path is not None else _DEPLOY_ENV_FILE
+    current = _read_env_value(path, "SITE_SEN")
+    if current is not None and _SEN_RE.fullmatch(current):
+        console.print(f"Site equipment number: SITE_SEN {current}")
+        return current
+
+    sen = os.environ.get("SITE_SEN", "")
+    if not _SEN_RE.fullmatch(sen):
+
+        def _validate(text: str) -> bool | str:
+            if _SEN_RE.fullmatch(text.strip()):
+                return True
+            return "Positive whole number without leading zeros (e.g. 4711)"
+
+        while True:
+            answer = await questionary.text(
+                "Site equipment number (SEN):", validate=_validate
+            ).ask_async()
+            sen = (answer or "").strip()
+            if _SEN_RE.fullmatch(sen):
+                break
+            console.print(
+                "[red]Positive whole number without leading zeros (e.g. 4711).[/red]"
+            )
+
+    note = (
+        "It takes effect after the wizard finishes, with "
+        "`podman compose down && podman compose up -d` from deploy/ "
+        "(compose reads deploy/.env only when containers are created)."
+    )
+    if _write_env_value(path, "SITE_SEN", sen):
+        console.print(f"Saved SITE_SEN={sen} to deploy/.env. {note}")
+    else:
+        console.print(
+            "[yellow]Could not write deploy/.env. Add this line to it "
+            f"yourself:[/yellow]\nSITE_SEN={sen}\n{note}"
+        )
+    return sen
 
 
 def _valid_checkmk_host(value: str) -> bool:
@@ -4225,6 +4346,7 @@ async def run(*, demo: bool = False, manage: bool = False) -> None:
     _ABORT_STATE.cmkadmin_password = None
     try:
         connection = await phase1_site_bringup()
+        await _configure_site_sen()
     except WizardAborted:
         # No REST client exists yet, so there is nothing to summarise.
         console.print("Aborted — no pending changes")
