@@ -22,6 +22,9 @@ export interface DevicePayload {
   folder?: string;
   timestamp?: string;
   staleness?: number | null;
+  // Seconds between unchanged status republishes (scripts/mqtt_poller.py, Phase 17 D-07/D-08);
+  // 0 or absent means every poll cycle.
+  heartbeat_s?: number | null;
   downtime?: boolean;
   acknowledged?: boolean;
   // Gauge fields produced by scripts/mqtt_poller.py::classify_host_services. A `null` value

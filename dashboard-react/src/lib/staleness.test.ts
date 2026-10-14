@@ -30,6 +30,40 @@ describe("isDeviceStale", () => {
   });
 });
 
+describe("isDeviceStale with heartbeat_s", () => {
+  const ago = (s: number) => new Date(NOW_MS - s * 1000).toISOString();
+
+  it("is not stale 200 s old with heartbeat_s 300 and null staleness", () => {
+    expect(isDeviceStale({ staleness: null, heartbeat_s: 300, timestamp: ago(200) }, NOW_MS)).toBe(false);
+  });
+
+  it("is stale 900 s old with heartbeat_s 300", () => {
+    expect(isDeviceStale({ staleness: null, heartbeat_s: 300, timestamp: ago(900) }, NOW_MS)).toBe(true);
+  });
+
+  it("keeps 3 x 15 s when heartbeat_s is absent", () => {
+    expect(isDeviceStale({ staleness: null, timestamp: ago(50) }, NOW_MS)).toBe(true);
+  });
+
+  it("keeps 3 x 15 s when heartbeat_s is 0", () => {
+    expect(isDeviceStale({ staleness: null, heartbeat_s: 0, timestamp: ago(50) }, NOW_MS)).toBe(true);
+  });
+
+  it.each([-5, Number.NaN, Number.POSITIVE_INFINITY, "300"])(
+    "ignores invalid heartbeat_s %j",
+    (bad) => {
+      const payload = { staleness: null, heartbeat_s: bad, timestamp: ago(50) } as unknown as Parameters<
+        typeof isDeviceStale
+      >[0];
+      expect(isDeviceStale(payload, NOW_MS)).toBe(true);
+    },
+  );
+
+  it("lets a Checkmk staleness >= 3 win over a fresh timestamp and heartbeat_s", () => {
+    expect(isDeviceStale({ staleness: 3.2, heartbeat_s: 300, timestamp: ago(1) }, NOW_MS)).toBe(true);
+  });
+});
+
 describe("isPollerStale", () => {
   it("is true for a null payload and for an explicit offline status", () => {
     expect(isPollerStale(null, NOW_MS)).toBe(true);
