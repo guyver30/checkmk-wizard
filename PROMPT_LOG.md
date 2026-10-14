@@ -791,3 +791,7 @@ update the data flow docs to say that (that daily availability rollup and the sy
 ## 2026-10-14 15:28
 
 /bm:execute-phase 17
+
+## 2026-10-14 16:19
+
+/bm:pause-work
