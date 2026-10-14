@@ -8,8 +8,10 @@
 #            CH_WRITER_PASSWORD, CH_READER_PASSWORD, CH_GRAFANA_PASSWORD,
 #            GRAFANA_ADMIN_PASSWORD, MQTT_POLLER_PASSWORD, WS_PASSWORD,
 #            ADMIN_WS_PASSWORD, MQTT_ANALYTICS_PASSWORD, TRIAGE_WS_PASSWORD,
-#            CH_ANALYTICS_PASSWORD
+#            CH_ANALYTICS_PASSWORD, MQTT_BRIDGE_PASSWORD
 # Asked:     CMK_SITE_ID (default dmc), CMK_PUBLIC_HOST
+# Not set here: SITE_SEN (the wizard writes it) and the cloud feed settings
+#            (CLOUD_BROKER_HOST, CLOUD_BROKER_PASSWORD come from the cloud operator).
 #
 # Secrets are 32 URL-safe characters ([A-Za-z0-9_-]), which also satisfies
 # deploy/clickhouse-config/initdb/02-users.sh (no quotes, backslash or
@@ -57,7 +59,7 @@ summary=()
 for key in CMK_REST_SECRET TOPOLOGY_EDITOR_SECRET CH_ADMIN_PASSWORD CH_WRITER_PASSWORD \
     CH_READER_PASSWORD CH_GRAFANA_PASSWORD GRAFANA_ADMIN_PASSWORD MQTT_POLLER_PASSWORD \
     WS_PASSWORD ADMIN_WS_PASSWORD MQTT_ANALYTICS_PASSWORD TRIAGE_WS_PASSWORD \
-    CH_ANALYTICS_PASSWORD; do
+    CH_ANALYTICS_PASSWORD MQTT_BRIDGE_PASSWORD; do
     if [ -n "$(get_val "$key")" ]; then
         summary+=("$key: kept")
     else

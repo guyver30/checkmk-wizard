@@ -10,3 +10,4 @@ design-system/*.tgz
 web_assets/
 # Chrome performance traces
 Trace-*.json.gz
+deploy/certs/*.pem
