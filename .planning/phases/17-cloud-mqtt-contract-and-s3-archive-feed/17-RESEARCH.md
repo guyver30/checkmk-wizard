@@ -302,6 +302,20 @@ def should_publish_status(prev, cur, now, heartbeat_s):
 | A7 | ClickHouse non-replicated insert dedup needs a window setting | Pitfall 3 | Use app-level dedupe only |
 | A8 | Cloud broker is also Mosquitto (or supports `%u` ACLs) | Pattern 6 | ACL syntax differs; the phase's cloud side is not ours to build |
 
+### Live verification (plan 17-01)
+
+Run 2026-10-14 with `uv run scripts/smoke_test_bridge.py --engine docker`: two `eclipse-mosquitto:2` brokers (image digest `eclipse-mosquitto@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408`, mosquitto 2.1.2) joined by an mqttv50 bridge. TLS (`bridge_cafile`) not exercised; plaintext on a throwaway container network.
+
+- A1 PASS: event_id user property set by a paho v5 publisher arrived unchanged at the cloud v5 subscriber.
+- A2 PASS: retain flag is carried across the bridge, and an empty retained payload cleared the cloud retained copy.
+- A3 FAIL (informational, observed): after a local network outage and reconnect, the retained message was re-sent 0 times; the bridge does not re-send retained messages on reconnect (the 4G volume estimate in Pitfall 1 is therefore pessimistic, not optimistic).
+- A4 PASS: bridge fragment loaded from `include_dir /mosquitto/config/conf.d`; A4 (empty directory) PASS: broker started and logged no error with an empty conf.d.
+- A5 PASS: paho-mqtt 2.1 v5 names (`MQTTv5`, `Properties`, `PacketTypes.PUBLISH`, `UserProperty`, `msg.properties`) work as written; proven by the script itself.
+- A6 PASS: 5/5 QoS 1 messages published during a WAN outage were delivered after reconnect (the `max_queued_messages 1000` directive also parses before the listener).
+- A8 PASS: `pattern write app/%u/#` kept login 123 inside `app/123/`, a write to `app/999/` was dropped; the bridge's `read sites/s1/#` grant kept `sites/s2/` traffic off the cloud.
+- Also verified: REMAP PASS (`sites/s1/<suffix>` arrives as `app/123/s1/<suffix>`).
+- A7 (ClickHouse dedup window) is not covered by this test.
+
 ## Open Questions (RESOLVED)
 
 1. **Is status archived or not?**
