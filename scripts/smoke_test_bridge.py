@@ -489,7 +489,10 @@ def main(argv: list[str] | None = None) -> int:
     print("\nVerdicts:")
     for key in (*REQUIRED_CHECKS, "A3"):
         value = results.get(key)
-        label = "n/a" if value is None else ("PASS" if value else "FAIL")
+        if key == "A3":
+            label = "re-sent" if value else "not re-sent"
+        else:
+            label = "n/a" if value is None else ("PASS" if value else "FAIL")
         suffix = " (informational)" if key == "A3" else ""
         print(f"  {key:10s} {label}{suffix}")
     print("TLS (bridge_cafile) not exercised: plaintext on a throwaway network.")
