@@ -6,7 +6,7 @@ import {
   parseRuntimeConfig,
 } from "./runtimeConfig";
 
-const DEFAULTS = { checkmkSite: "dmc", wsUsername: "wsreader", wsPassword: "wsreader" };
+const DEFAULTS = { checkmkSite: "dmc", wsUsername: "wsreader", wsPassword: "wsreader", siteSen: null };
 
 // getRuntimeConfig() is a module-level singleton shared across every test in this file --
 // reset it before each test so an earlier loadRuntimeConfig() call can't leak into the next.
@@ -20,8 +20,20 @@ describe("parseRuntimeConfig", () => {
       checkmkSite: "mysite",
       wsUsername: "u",
       wsPassword: "p",
+      siteSen: null,
     });
   });
+
+  it("accepts a valid siteSen", () => {
+    expect(parseRuntimeConfig({ checkmkSite: "dmc", siteSen: "123" }).siteSen).toBe("123");
+  });
+
+  it.each(["", "0", "007", "-1", "abc", 123, undefined, "1234567890123456789"])(
+    "treats invalid siteSen %j as null",
+    (bad) => {
+      expect(parseRuntimeConfig({ siteSen: bad }).siteSen).toBeNull();
+    },
+  );
 
   it.each([{}, null, "string", [1, 2, 3]])("falls back to defaults for %j", (raw) => {
     expect(parseRuntimeConfig(raw)).toEqual(DEFAULTS);
@@ -32,6 +44,7 @@ describe("parseRuntimeConfig", () => {
       checkmkSite: "mysite",
       wsUsername: "wsreader",
       wsPassword: "wsreader",
+      siteSen: null,
     });
   });
 
@@ -62,8 +75,8 @@ describe("loadRuntimeConfig", () => {
 
     const result = await loadRuntimeConfig(fakeFetch as unknown as typeof fetch);
 
-    expect(result).toEqual({ checkmkSite: "mysite", wsUsername: "u", wsPassword: "p" });
-    expect(getRuntimeConfig()).toEqual({ checkmkSite: "mysite", wsUsername: "u", wsPassword: "p" });
+    expect(result).toEqual({ checkmkSite: "mysite", wsUsername: "u", wsPassword: "p", siteSen: null });
+    expect(getRuntimeConfig()).toEqual({ checkmkSite: "mysite", wsUsername: "u", wsPassword: "p", siteSen: null });
   });
 
   it("resolves to defaults (never rejects) when fetch rejects", async () => {

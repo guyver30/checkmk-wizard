@@ -14,17 +14,23 @@ export interface RuntimeConfig {
   checkmkSite: string;
   wsUsername: string;
   wsPassword: string;
+  siteSen: string | null;
 }
 
 const DEFAULTS: RuntimeConfig = {
   checkmkSite: DEFAULT_CHECKMK_SITE,
   wsUsername: DEFAULT_WS_USERNAME,
   wsPassword: DEFAULT_WS_PASSWORD,
+  siteSen: null,
 };
 
 // wizard.py's site-name rule: starts with a letter, up to 16 letters/digits/underscores --
 // also a subset of the nginx allow-list's [A-Za-z0-9_]+ path segment (T-ixs-02).
 const SITE_ID_RE = /^[A-Za-z][A-Za-z0-9_]{0,15}$/;
+
+// Site equipment number: digits only, no leading zero, at most 18 digits. The same rule is
+// applied by the poller, the bridge renderer and the wizard (Phase 17 D-12).
+const SEN_RE = /^[1-9][0-9]{0,17}$/;
 
 export function parseRuntimeConfig(raw: unknown): RuntimeConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -43,7 +49,9 @@ export function parseRuntimeConfig(raw: unknown): RuntimeConfig {
     typeof obj.wsPassword === "string" && obj.wsPassword !== ""
       ? obj.wsPassword
       : DEFAULTS.wsPassword;
-  return { checkmkSite, wsUsername, wsPassword };
+  const siteSen =
+    typeof obj.siteSen === "string" && SEN_RE.test(obj.siteSen) ? obj.siteSen : null;
+  return { checkmkSite, wsUsername, wsPassword, siteSen };
 }
 
 let current: RuntimeConfig = { ...DEFAULTS };

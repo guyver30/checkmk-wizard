@@ -15,6 +15,12 @@
 // that only proves the column exists -- it does not guarantee every row is non-null, so the
 // timestamp-age fallback below remains a required, exercised code path, not dead code.
 //
+// Phase 17 D-09 (2026-10-14): the poller throttles status, so a quiet host's retained payload
+// is refreshed only every `heartbeat_s` seconds. The poller republishes on any STALE-band
+// crossing of Checkmk's `staleness`, so the preferred branch stays correct with a frozen
+// retained value; the timestamp fallback is widened by `heartbeat_s`; and a dead poller is
+// still caught by isPollerStale on the per-cycle lan/poller/status.
+//
 // No DOM access, no broker connection, no browser storage, no network calls -- pure
 // functions only.
 
@@ -38,7 +44,9 @@ export function isDeviceStale(
     return true; // missing/unparseable timestamp: unknown age is not fresh
   }
   const ageSeconds = (nowMs - parsed) / 1000;
-  return ageSeconds >= STALENESS_FACTOR * POLL_INTERVAL_SECONDS;
+  const hb = devicePayload.heartbeat_s;
+  const heartbeat = typeof hb === "number" && Number.isFinite(hb) && hb > 0 ? hb : 0;
+  return ageSeconds >= STALENESS_FACTOR * Math.max(POLL_INTERVAL_SECONDS, heartbeat);
 }
 
 export function isPollerStale(
