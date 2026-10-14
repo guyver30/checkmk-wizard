@@ -12,6 +12,7 @@ import { connect } from "./store/mqttClient";
 // view now lives in the home view's right-hand pane (?host=<id>, 260928-l4h), reachable from the
 // map/tree/incident cards, not from here.
 function AppNav() {
+  const siteSen = getRuntimeConfig().siteSen;
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -33,6 +34,15 @@ function AppNav() {
           >
             {getRuntimeConfig().checkmkSite}
           </span>
+          {siteSen !== null && (
+            <span
+              className="mr-3 whitespace-nowrap text-sm text-fg-tertiary"
+              data-testid="site-sen"
+              title="Site equipment number"
+            >
+              SEN {siteSen}
+            </span>
+          )}
           <HeaderStats />
         </>
       }

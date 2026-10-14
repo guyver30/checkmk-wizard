@@ -3,10 +3,23 @@ import { Badge } from "kone-design-system";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
 import App, { AppShell } from "./App";
+import { __setRuntimeConfigForTests } from "./lib/runtimeConfig";
 
 describe("App", () => {
   afterEach(() => {
     window.history.pushState({}, "", "/");
+    __setRuntimeConfigForTests();
+  });
+
+  it("shows the SEN next to the site id when siteSen is configured", () => {
+    __setRuntimeConfigForTests({ siteSen: "123" });
+    render(<App />);
+    expect(within(screen.getByRole("banner")).getByTestId("site-sen")).toHaveTextContent("SEN 123");
+  });
+
+  it("renders no SEN element when siteSen is absent", () => {
+    render(<App />);
+    expect(within(screen.getByRole("banner")).queryByTestId("site-sen")).not.toBeInTheDocument();
   });
 
   it("renders the three-pane layout at /", () => {
