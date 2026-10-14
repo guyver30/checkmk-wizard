@@ -70,6 +70,7 @@ Progress: [██████████] 99%
 - Phase 14.2 inserted after Phase 14: Failure prediction (regression, dates with confidence tag) and template/local-model incident narration in a separate analytics container; split out of Phase 14 per 14-CONTEXT.md D-01/D-30..D-32
 - Phase 16 added: Dashboard admin mode (?admin=1) to fake host UP/DOWN for live management demos via an MQTT command topic consumed by the poller (Livestatus commands); includes keeping the inferred unmanaged-switch card with faked-DOWN children. Gate is the query flag only (user choice 2026-10-02: closed demo network).
 - Phase 14.3 inserted after Phase 14: Per-site MQTT namespace (sites/<site_id>/...), runs before 14.2; decided 2026-10-04 (URGENT)
+- Phase 17 added 2026-10-14: Cloud MQTT Contract and S3 Archive Feed — `app/<SEN>/<site_id>/...` remap, MQTT v5 `event_id`, S3 archive feed, per-SEN ACLs (source docs/MQTT_CLIENT_DATA_FLOW.md)
 
 ### Decisions
 

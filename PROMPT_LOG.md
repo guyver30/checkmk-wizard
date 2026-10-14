@@ -727,3 +727,27 @@ yes, fake the Filesystem service in demo mode and set it at current level based 
 ## 2026-10-13 14:25
 
 can I manually force the host to warn status ?
+
+## 2026-10-14 11:06
+
+/bm:resume-work
+
+## 2026-10-14 11:16
+
+SEN stands for site equipment number, it uniquely identifies a site
+
+## 2026-10-14 11:22
+
+not sure if always one or more than one...let's stay flexible
+
+## 2026-10-14 11:24
+
+/bm:discuss-phase (no phase number)
+
+## 2026-10-14 11:38
+
+yes, add it as Phase 17
+
+## 2026-10-14 11:41
+
+/bm:discuss-phase 17

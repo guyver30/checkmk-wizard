@@ -558,3 +558,13 @@ Plans:
 - [x] 16-09-PLAN.md — Poller: Restore returns hosts to the demo baseline (also the switch reverse cascade); 30 s keepalive re-injects faked state so fakes never go STALE (wave 1)
 - [x] 16-10-PLAN.md — Dashboard: plain click selects in admin mode (no host details), Select all, demo-baseline restore copy (wave 1)
 - [x] 16-11-PLAN.md — Docs: runbook, dashboard README, CONTEXT amendments, live re-verify checklist (wave 2)
+
+### Phase 17: Cloud MQTT Contract and S3 Archive Feed
+
+**Goal:** Each site's retained and discrete MQTT messages reach the cloud broker under the archive contract `app/<SEN>/<site_id>/<suffix>` (SEN = site equipment number, uniquely identifies a site; one or many Checkmk sites per SEN stays supported), so the S3 archive service (`docs/MQTT_CLIENT_DATA_FLOW.md`) can land them as JSONL. Adds a required `SITE_SEN` setting, a prefix remap from the local `sites/<site_id>/` namespace (Mosquitto bridge preferred; local contract, ACLs and tests stay untouched), MQTT v5 with a stable `event_id` user property on discrete messages (events, incidents, commands), a decision on whether per-cycle `status` samples are archived or only discrete events, and per-SEN ACLs for a shared cloud broker. Source: `docs/MQTT_CLIENT_DATA_FLOW.md`, `docs/MQTT-CONTRACT-WALKTHROUGH.md`.
+**Requirements**: TBD
+**Depends on:** Phase 14.2, Phase 14.3
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 17 to break down)
