@@ -302,17 +302,23 @@ def should_publish_status(prev, cur, now, heartbeat_s):
 | A7 | ClickHouse non-replicated insert dedup needs a window setting | Pitfall 3 | Use app-level dedupe only |
 | A8 | Cloud broker is also Mosquitto (or supports `%u` ACLs) | Pattern 6 | ACL syntax differs; the phase's cloud side is not ours to build |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Is status archived or not?**
    - Known: D-06 says no stream; D-07 throttles the shared topic; `topic #` forwards it anyway.
    - Unclear: whether throttled status is acceptable in S3, or must be excluded at the bridge.
    - Recommendation: forward it (throttled, QoS 0, small), mention in docs. If excluded, replace `topic #` with explicit lines for services, topology, events, incidents, poller status, history, admin, needs.
+   - RESOLVED: plan 17-02 FA-1 (forward everything with `topic #`, including throttled status and the per-cycle `lan/poller/status`; flagged for user decision, documented in plan 17-08).
 2. **History volume vs D-02 as written.** 15 s full batches are the biggest 4G cost. Recommend a publish-interval knob and chunking; ask whether to add gzip (readability in S3 versus bytes).
+   - RESOLVED: plan 17-03 FA-6 (every cycle, uncompressed, 500-row chunks; reduction flagged for user review).
 3. **`lan/events/recent` over the bridge.** Whole 127 KB array rewritten per change; the walkthrough's per-event topic proposal is out of scope here. D-06 lists "events" as archived, so decide whether this phase also adds a small per-event non-retained message (`lan/events/item`) with `event_id`; recommended, because it is what gives the archiver a true per-event record.
+   - RESOLVED: plan 17-03 FA-8 (array shape unchanged, content-hash event_id; per-event message not added; flagged for user review).
 4. **Multi-site cloud ClickHouse.** History tables lack site/SEN; decide per-site database vs added column (analytics-owned migration).
+   - RESOLVED: plan 17-06 FA-14 (one cloud-ingest instance and database per (SEN, site); no schema change this phase).
 5. **Dashboard staleness fix** (Pattern 4) must be chosen before throttling ships, or all hosts show STALE.
+   - RESOLVED: plans 17-04 (heartbeat_s payload key, republish on staleness band crossing) and 17-05 (fallback widened by heartbeat_s).
 6. **Where bridge secrets live** (cloud password, CA): `deploy/.env` plus a bind-mounted CA file; the wizard should not prompt for these.
+   - RESOLVED: plan 17-02 (deploy/.env via init-env.sh and compose, CA file bind-mounted; the wizard prompts only for SEN, plan 17-07).
 
 ## Environment Availability
 
