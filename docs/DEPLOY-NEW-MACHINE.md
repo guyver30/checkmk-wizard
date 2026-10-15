@@ -431,6 +431,38 @@ The unit also has an `ExecReload`, so `systemctl --user reload checkmk-stack.ser
 before `ExecReload` existed, add the line to your copy and run `daemon-reload`; `reload` fails with
 "Job type reload is not applicable" until you do.
 
+## Backup and restore (move the site and map to another machine)
+
+`deploy/backup.sh` writes one tar bundle containing the Checkmk site, the topology map drawing
+(`map_drawing_data`) and a copy of `deploy/.env` (the site id and the secrets the restored site was
+created with). The bundle holds secrets, so it is written mode 600.
+
+```bash
+cd ~/checkmk-stack/app/checkmk-wizard/deploy
+./backup.sh                  # with history: exports the checkmk_data volume (full down/up, brief downtime)
+./backup.sh --no-history     # config only: omd backup --no-rrds --no-past, no downtime
+./backup.sh --out ~/backups  # where to write the bundle (default: current directory)
+```
+
+On the new machine do steps 1–2 (prerequisites, clone), skip step 3 (the bundle brings `.env`), then:
+
+```bash
+cd ~/checkmk-stack/app/checkmk-wizard/deploy
+podman compose build dashboard
+./restore_backup.sh /path/to/checkmk-backup-dmc-<stamp>-full.tar --public-host <this machine's address>
+```
+
+- `--public-host` rewrites `CMK_PUBLIC_HOST`; agents registered against the old address need
+  re-registering if it changed. `--yes` skips the confirmation. An existing `.env` is kept as
+  `.env.bak-<stamp>`.
+- A `full` bundle replaces the `checkmk_data` volume (history included). A `nohistory` bundle starts a
+  blank site and restores the archive into it with `omd restore --reuse`, then does a full down/up.
+- Do not run the wizard afterwards; the site already has its configuration.
+- The Checkmk image on the new machine must be the same version as at backup time (the bundle's
+  `manifest.txt` records it).
+- ClickHouse and MinIO history (`clickhouse_data`, `minio_data`) is not in the bundle; export those
+  volumes with `podman volume export` if you want it.
+
 ## Updating later
 
 After every `git pull`:
