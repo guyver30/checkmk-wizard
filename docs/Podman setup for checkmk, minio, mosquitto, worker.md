@@ -929,6 +929,8 @@ Environment="DOCKER_HOST=unix:///run/user/%U/podman/podman.sock"
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 ExecStart=/usr/bin/podman compose up -d
 ExecStop=/usr/bin/podman compose down
+# `systemctl --user reload checkmk-stack.service` does a full down/up (same as restart)
+ExecReload=/bin/sh -c '/usr/bin/podman compose down && /usr/bin/podman compose up -d'
 TimeoutStopSec=180
 
 [Install]
@@ -943,7 +945,7 @@ Why it looks like this (corrected 2026-09-30; the earlier version of this unit h
 - **`network-online.target` is gone.** It exists only in the system manager, so a user unit that waits on it waits on nothing.
 - **`Wants=podman.socket` is added.** `After=` alone only orders the unit after the socket; it doesn't start the socket.
 
-`TimeoutStopSec=180` gives `compose down` more than the default 90 seconds at shutdown. No start timeout is needed: systemd disables it for `Type=oneshot` (`man systemd.service`, `TimeoutStartSec=`), so a slow first image pull at boot is not cut off. The unit file was checked with `systemd-analyze --user verify` (systemd 257).
+`ExecReload` makes `systemctl --user reload checkmk-stack.service` a full `compose down && up -d` (equivalent to `restart`; every container is recreated). `TimeoutStopSec=180` gives `compose down` more than the default 90 seconds at shutdown. No start timeout is needed: systemd disables it for `Type=oneshot` (`man systemd.service`, `TimeoutStartSec=`), so a slow first image pull at boot is not cut off. The unit file was checked with `systemd-analyze --user verify` (systemd 257).
 
 ---
 
@@ -956,8 +958,11 @@ cd ~/checkmk-stack/app/checkmk-wizard/deploy
 podman compose down
 
 systemctl --user daemon-reload
-systemctl --user enable --now checkmk-stack.service
+systemctl --user enable checkmk-stack.service
+systemctl --user restart checkmk-stack.service
 ```
+
+Use `restart`, not `enable --now`: the unit is `oneshot` with `RemainAfterExit=yes`, so once it has run it stays `active (exited)` and `--now` does nothing. If the unit was already active, the `podman compose down` above removes the containers and nothing starts them again.
 
 ---
 
