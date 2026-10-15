@@ -61,7 +61,7 @@ directory as `/app`.
 600. It generates every secret below, asks for the site name (default `dmc`), and lists this
 machine's IPv4 addresses so you can pick `CMK_PUBLIC_HOST`, or type an address or DNS name
 yourself. It never overwrites a value that is already set, so it's safe to re-run. It never
-prints the secret values, and it ends with the next steps to run.
+prints the secret values, and it ends with a short note for existing installs. Then run the full `podman compose down && podman compose up -d` (step 5).
 
 | Variable | Value | Why it matters |
 |---|---|---|
@@ -197,7 +197,7 @@ podman compose build dashboard
 podman compose up -d
 ```
 
-The dashboard also owns a `map_drawing_data` volume (the topology map's shared drawing layer, written through nginx's `/map-drawing.json` location). It is created on the first `up`; there is nothing to configure. `deploy/reset-site.sh` keeps it. Back it up with `podman volume export deploy_map_drawing_data -o map-drawing-backup.tar` (the name is prefixed by the compose project; check `podman volume ls`). To clear the drawing, remove that volume while the stack is down.
+The dashboard also owns a `map_drawing_data` volume (the topology map's shared drawing layer, written through nginx's `/map-drawing.json` location). It is created on the first `up`; there is nothing to configure. `deploy/reset-site.sh` deletes it (a reset starts with an empty map). Back it up with `deploy/backup.sh` or `podman volume export deploy_map_drawing_data -o map-drawing-backup.tar` (the name is prefixed by the compose project; check `podman volume ls`). To clear the drawing, remove that volume while the stack is down.
 
 MinIO comes from `cgr.dev/chainguard/minio`, pinned by digest, because `minio/minio` is gone from
 Docker Hub and `quay.io/minio/minio` no longer allows anonymous pulls (§3 "Note on the MinIO
