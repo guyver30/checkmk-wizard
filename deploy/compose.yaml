@@ -304,7 +304,15 @@ services:
   # 4. Automation Worker (Python 3.12 + uv) — runs checkmk-wizard (§8) and
   # any other scripts placed under ./app, e.g. the MQTT publisher.
   worker:
-    image: python:3.12-slim
+    # Built from deploy/worker.Containerfile so uv, its Python 3.11 and the
+    # wizard's dependencies are already in the image: the worker (and
+    # run-wizard.sh's `uv sync`) then need no internet access. Build it while
+    # online: `podman compose build worker` (again after a git pull that
+    # changes pyproject.toml or uv.lock).
+    build:
+      context: ..
+      dockerfile: deploy/worker.Containerfile
+    image: localhost/checkmk-worker:latest
     container_name: automation-worker
     restart: unless-stopped
     working_dir: /app
@@ -366,9 +374,7 @@ services:
       # after Phase 1 (src/checkmk_wizard/wizard.py:_provision_topology_editor),
       # same create-or-rotate pattern as CMK_REST_SECRET above.
       - TOPOLOGY_EDITOR_SECRET=${TOPOLOGY_EDITOR_SECRET:-}
-    command: >
-      bash -c "pip install --no-cache-dir uv &&
-               tail -f /dev/null"
+    command: ["tail", "-f", "/dev/null"]
     networks:
       - cmk_net
 

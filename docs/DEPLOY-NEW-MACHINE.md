@@ -193,9 +193,15 @@ poller falls back to its in-memory ledger for the faked signal and logs that at 
 
 ```bash
 cd ~/checkmk-stack/app/checkmk-wizard/deploy     # always run compose from here
-podman compose build dashboard
+podman compose build dashboard worker
 podman compose up -d
 ```
+
+The `worker` image (`deploy/worker.Containerfile`) bakes in `uv`, Python 3.11 and the wizard's
+dependencies, so the wizard runs on a machine **with no internet**. Build it while the machine is
+online; afterwards nothing needs the network. Rebuild it (online) after a `git pull` that changes
+`pyproject.toml` or `uv.lock`; offline, `uv sync` then stops with an error naming the missing
+package. Other images (`python:3.12-slim`, Checkmk, Mosquitto, ...) must already be present locally.
 
 The dashboard also owns a `map_drawing_data` volume (the topology map's shared drawing layer, written through nginx's `/map-drawing.json` location). It is created on the first `up`; there is nothing to configure. `deploy/reset-site.sh` deletes it (a reset starts with an empty map). Back it up with `deploy/backup.sh` or `podman volume export deploy_map_drawing_data -o map-drawing-backup.tar` (the name is prefixed by the compose project; check `podman volume ls`). To clear the drawing, remove that volume while the stack is down.
 
@@ -474,10 +480,10 @@ After every `git pull`:
 
 ```bash
 cd ~/checkmk-stack/app/checkmk-wizard/deploy
-podman compose build dashboard && podman compose down && podman compose up -d
+podman compose build dashboard worker && podman compose down && podman compose up -d
 podman compose exec worker bash -c "cd /app/checkmk-wizard && uv sync"
 ```
 
-`deploy/redeploy.sh` does the rebuild and restart in one go: it builds `dashboard` (analytics has no build section; the force-recreate picks up its code), runs `podman compose down`, then `up -d --force-recreate poller analytics`, then `up -d` for the rest. Run it after a `git pull` (the `uv sync` line above is still separate).
+`deploy/redeploy.sh` does the rebuild and restart in one go: it builds `dashboard` and `worker` (analytics has no build section; the force-recreate picks up its code), runs `podman compose down`, then `up -d --force-recreate poller analytics`, then `up -d` for the rest. Run it after a `git pull` (the `uv sync` line above is still separate).
 
 The map drawing layer needs the rebuilt dashboard image (new nginx location and volume), so run `podman compose build dashboard` and then a full `podman compose down && podman compose up -d`, not a single-container restart (that has cut Checkmk's egress before).

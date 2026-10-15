@@ -13,9 +13,11 @@ set -euo pipefail
 # compose project (and so the volume names).
 cd "$(dirname "$0")"
 
-# Only the dashboard has a build: section; analytics runs a stock python image with the
-# repo bind-mounted, so the --force-recreate below is what makes it pick up new code.
-podman compose build dashboard
+# The dashboard and worker have build: sections (the worker image bakes in uv and the
+# wizard's dependencies so it runs offline; unchanged layers are cached and need no
+# network). Analytics runs a stock python image with the repo bind-mounted, so the
+# --force-recreate below is what makes it pick up new code.
+podman compose build dashboard worker
 podman compose down
 podman compose up -d --force-recreate poller analytics
 # `up -d` with service names starts only those and their dependencies; this starts
