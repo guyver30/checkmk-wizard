@@ -90,6 +90,12 @@ services:
     # /mosquitto/config/mosquitto.passwd itself, in the container's writable layer,
     # on every start, then execs the image's own ENTRYPOINT + CMD.
     #
+    # The `rm -f` first matters: the writable layer survives a plain container
+    # restart (reboot, restart policy), and `mosquitto_passwd -c` aborts with
+    # "Unable to open file ... File exists", which under `set -eu` put the broker
+    # in a restart loop after a reboot (2026-10-15). Removing the old file first
+    # makes every start idempotent.
+    #
     # Verified against eclipse-mosquitto:2 (github.com/eclipse-mosquitto/mosquitto,
     # branch master, docker/2.0-openssl/Dockerfile, VERSION=2.0.22, alpine:3.23):
     # - The image has no USER directive (starts as root); user/group `mosquitto` is
@@ -127,6 +133,7 @@ services:
       - >-
         set -eu;
         umask 077;
+        rm -f /mosquitto/config/mosquitto.passwd;
         mosquitto_passwd -c -b /mosquitto/config/mosquitto.passwd poller "$$MQTT_POLLER_PASSWORD";
         mosquitto_passwd -b /mosquitto/config/mosquitto.passwd wsreader "$$WS_PASSWORD";
         mosquitto_passwd -b /mosquitto/config/mosquitto.passwd wsadmin "$$ADMIN_WS_PASSWORD";
