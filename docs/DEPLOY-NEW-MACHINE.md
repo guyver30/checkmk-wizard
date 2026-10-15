@@ -414,6 +414,11 @@ If the service fails, read the full error with `journalctl --user -u checkmk-sta
 - **`podman ps` shows no stack containers, but the service is `active (exited)`**: the stack was
   taken down by hand (`podman compose down`) while the unit was already active, so nothing started
   it again. Run `systemctl --user restart checkmk-stack.service`.
+- **After a reboot the dashboard never reconnects; `podman logs mosquitto` repeats `Unable to open file
+  /mosquitto/config/mosquitto.passwd for writing. File exists.`**: an older `compose.yaml` whose
+  mosquitto entrypoint did not remove the previous password file first, so a plain container restart
+  (not a recreate) crash-looped the broker. `git pull` (the entrypoint now runs `rm -f` first), then
+  `podman compose down && podman compose up -d`.
 - **`no configuration file provided`**: `WorkingDirectory` doesn't point at `deploy/`.
 - **`the container name "…" is already in use`**: containers from a different compose project
   (typically an older layout run from another directory) still exist. Remove them with
