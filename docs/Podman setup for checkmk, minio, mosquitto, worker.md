@@ -829,13 +829,13 @@ To run the wizard against a genuinely fresh Checkmk site, remove the Checkmk vol
 
 - `checkmk_data` holds the site itself (hosts, folders, rules, tag groups, users, monitoring history). Removing it makes the container's entrypoint create a brand-new `dmc` site on the next start.
 - `mosquitto_data` holds the broker's **retained** messages, which is all the dashboard reads (`sites/<site_id>/lan/devices/{id}/...`, `sites/<site_id>/lan/devices/topology`). On startup the poller reads every retained `sites/<site_id>/lan/devices/{id}/*` topic and clears the ones whose host is not on the site. This happens on its first cycle that has a confirmed host list: either Livestatus returned hosts, or Livestatus returned none and the REST API confirmed zero configured hosts (which needs `CMK_REST_SECRET`). So old hosts disappear from the dashboard without touching the broker volume. The sweep does not rewrite the global `sites/<site_id>/lan/events/recent` feed, though, and after a poller restart the old hosts' `removed` events carry no previous state (`from`/`to` both empty), so the dashboard's history lists them as "unknown → unknown". Remove `mosquitto_data` together with `checkmk_data` so the old site's event history goes with it.
-- `map_drawing_data` (the dashboard's topology map drawing) is not part of a site reset and is kept.
+- `map_drawing_data` (the dashboard's topology map drawing) is removed by `deploy/reset-site.sh` too, so the reset starts with an empty map. Back it up first (`deploy/backup.sh`) if you want to keep it.
 
 Run from `deploy/` (compose prefixes volume names with its project name — `deploy_` here; confirm with `podman volume ls` and, if unsure, `podman inspect checkmk --format '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{"\n"}}{{end}}'`):
 
 ```bash
 podman compose down
-podman volume rm deploy_checkmk_data deploy_mosquitto_data
+podman volume rm deploy_checkmk_data deploy_mosquitto_data deploy_map_drawing_data
 podman compose up -d
 ```
 

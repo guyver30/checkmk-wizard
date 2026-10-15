@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Start over with a blank Checkmk site in container mode, optionally under a
 # new name: detect the site that really lives in the site volume, confirm it,
-# ask for the new site name, then stop the stack, delete the site volume and
-# the broker's retained-message volume, record the name in deploy/.env and
+# ask for the new site name, then stop the stack, delete the site volume, the
+# broker's retained-message volume and the topology map drawing volume
+# (map_drawing_data), record the name in deploy/.env and
 # start again.
 #
 # The worker has no `omd`, so the wizard itself cannot delete a site; the
@@ -112,8 +113,9 @@ if ! config_err="$(podman compose config --services 2>&1 >/dev/null)"; then
     exit 1
 fi
 
-# map_drawing_data (the topology map drawing) is deliberately not removed by a site reset.
-volumes=("${project}_checkmk_data" "${project}_mosquitto_data")
+# map_drawing_data (the topology map drawing) goes too, so a reset starts with an
+# empty map. Back it up first if you want it (deploy/backup.sh).
+volumes=("${project}_checkmk_data" "${project}_mosquitto_data" "${project}_map_drawing_data")
 if $with_history; then
     volumes+=("${project}_clickhouse_data")
 fi
@@ -162,7 +164,8 @@ fi
 
 echo
 echo "This deletes the Checkmk site '$existing_site' (hosts, folders, rules, users,"
-echo "monitoring history) and the dashboard's retained MQTT data. No undo."
+echo "monitoring history), the dashboard's retained MQTT data and the topology map"
+echo "drawing. No undo."
 echo "Volumes: ${volumes[*]}"
 
 # Nothing has been modified yet, so Ctrl+C here is a clean abort.

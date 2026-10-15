@@ -129,20 +129,6 @@ fi
 echo
 echo "deploy/.env (secret values are not printed):"
 printf '  %s\n' "${summary[@]}"
-cat <<EOF
-
-Next steps:
-  cd deploy && podman compose down && podman compose up -d
-  (a full down/up, never a single-service restart -- see the project memory
-  about single-container restarts breaking Checkmk egress)
-  \`podman compose build dashboard\` is only needed after pulling code changes.
-
-  To rotate a Mosquitto password (MQTT_POLLER_PASSWORD, WS_PASSWORD or ADMIN_WS_PASSWORD),
-  edit it in deploy/.env, then \`podman compose down && podman compose up -d\`
-  -- the mosquitto container rebuilds its password file from .env on every
-  start. Note: an existing .env with WS_PASSWORD=wsreader already uncommented
-  keeps that value (this script never overwrites a set value) -- blank it out
-  and re-run this script to get a generated one instead.
-  Existing installs must re-run this script before `podman compose up`:
-  compose refuses to start mosquitto and dashboard without ADMIN_WS_PASSWORD.
-EOF
+echo
+echo "Existing installs must re-run this script before 'podman compose up':"
+echo "compose refuses to start mosquitto and dashboard without ADMIN_WS_PASSWORD."
