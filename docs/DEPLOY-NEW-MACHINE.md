@@ -211,8 +211,8 @@ image").
 podman compose ps
 ```
 
-Expect `automation-worker`, `checkmk`, `dashboard`, `minio`, `mosquitto` and `mqtt-poller`,
-all `Up`. The PORTS column here shows only the ports each image declares, not the host
+Expect `automation-worker`, `checkmk`, `clickhouse`, `dashboard`, `grafana`, `minio`,
+`mosquitto`, `mqtt-poller` and `analytics`, all `Up` (`minio-init` is a one-shot and exits). The PORTS column here shows only the ports each image declares, not the host
 mappings; that's how `docker-compose` displays Podman containers, so check the mappings with
 the next two commands instead.
 
@@ -369,6 +369,8 @@ Environment="DOCKER_HOST=unix:///run/user/%U/podman/podman.sock"
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 ExecStart=/usr/bin/podman compose up -d
 ExecStop=/usr/bin/podman compose down
+# `systemctl --user reload checkmk-stack.service` does a full down/up (same as restart)
+ExecReload=/bin/sh -c '/usr/bin/podman compose down && /usr/bin/podman compose up -d'
 TimeoutStopSec=180
 
 [Install]
@@ -387,15 +389,21 @@ Take over the running stack and enable the service:
 cd ~/checkmk-stack/app/checkmk-wizard/deploy
 podman compose down                    # the service starts it fresh; volumes are kept
 systemctl --user daemon-reload
-systemctl --user enable --now checkmk-stack.service
+systemctl --user enable checkmk-stack.service
+systemctl --user restart checkmk-stack.service
 ```
+
+Use `restart`, not `enable --now`: the unit is `oneshot` with `RemainAfterExit=yes`, so once it has run
+it stays `active (exited)` and `--now` does nothing. If the unit is already active (a re-run of this
+step, or a stack that came up from the service at boot), the `podman compose down` above removes the
+containers and `enable --now` never starts them again. `restart` always does a full down/up.
 
 Check it:
 
 ```bash
 systemctl --user status checkmk-stack.service   # expect: Active: active (exited)
 loginctl show-user $USER --property=Linger      # expect: Linger=yes
-podman compose ps                               # all six containers Up
+podman compose ps                               # all containers Up (see §6)
 ```
 
 Then reboot once and confirm the stack comes back without logging in, for example by opening
@@ -403,15 +411,25 @@ the dashboard on port 8090 from another machine.
 
 If the service fails, read the full error with `journalctl --user -u checkmk-stack.service -e`:
 
+- **`podman ps` shows no stack containers, but the service is `active (exited)`**: the stack was
+  taken down by hand (`podman compose down`) while the unit was already active, so nothing started
+  it again. Run `systemctl --user restart checkmk-stack.service`.
 - **`no configuration file provided`**: `WorkingDirectory` doesn't point at `deploy/`.
 - **`the container name "…" is already in use`**: containers from a different compose project
   (typically an older layout run from another directory) still exist. Remove them with
   `podman rm -f checkmk mosquitto minio automation-worker mqtt-poller dashboard`, then
   `systemctl --user restart checkmk-stack.service`. Volumes are not removed.
 
-After editing the unit file, run `systemctl --user daemon-reload`. Stopping and starting the
-service (`systemctl --user stop` / `start checkmk-stack.service`) does the same full down/up as
-running compose by hand.
+After editing the unit file, run `systemctl --user daemon-reload`, then `systemctl --user restart
+checkmk-stack.service` so the change takes effect. Stopping and starting the service
+(`systemctl --user stop` / `start checkmk-stack.service`) does the same full down/up as running
+compose by hand.
+
+The unit also has an `ExecReload`, so `systemctl --user reload checkmk-stack.service` does a full
+`podman compose down && up -d` without leaving the unit stopped in between. It is equivalent to
+`restart`. It is not a lightweight reload: every container is recreated. If you added the unit
+before `ExecReload` existed, add the line to your copy and run `daemon-reload`; `reload` fails with
+"Job type reload is not applicable" until you do.
 
 ## Updating later
 
