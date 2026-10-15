@@ -795,3 +795,35 @@ update the data flow docs to say that (that daily availability rollup and the sy
 ## 2026-10-14 16:19
 
 /bm:pause-work
+
+## 2026-10-15 09:15
+
+I followed the instructions in chapter 9 of docs/DEPLOY-NEW-MACHINE.md, is this normal? (pasted podman ps showing only buildx_buildkit_default, and journalctl showing checkmk-stack.service started all containers and finished)
+
+## 2026-10-15 09:17
+
+yes, fix the doc (DEPLOY-NEW-MACHINE.md step 9: restart instead of enable --now; container list)
+
+## 2026-10-15 09:20
+
+ok let's add that ExecReload and document it
+
+## 2026-10-15 09:29
+
+let's create a backup.sh (and related restore_backup.sh): checkmk_data with/without history via arg, backup map, backup env needed for restore
+
+## 2026-10-15 09:46
+
+yes, apply it (rm -f mosquitto.passwd in entrypoint) and commit and push to main and branch
+
+## 2026-10-15 09:49
+
+init-env.sh lines 132-145 are executed even though not supposed to: remove that section. reset-site.sh should also erase existing drawings.
+
+## 2026-10-15 12:59
+
+can we build the worker image on the same machine (connect it to internet) so the wizard runs when internet is off later? (implement)
+
+## 2026-10-15 15:51
+
+I have a strange situation. From checkmk machine I can ping a host, but the wizard not able to find it and also if I add manually in checkmk it's not discovered. nmap -Pn IP finds the host, nmap -sn IP does not. Any clue?

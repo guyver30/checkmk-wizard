@@ -27,6 +27,14 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/checkmk-wizard-venv \
     UV_CACHE_DIR=/opt/uv-cache \
     UV_LINK_MODE=copy
 
+# iputils-ping: the wizard's network scan sends an ICMP echo per host through the
+# system `ping` binary (python:3.12-slim does not ship one), so hosts with none
+# of the scanned TCP ports open are still found. Without it the scan silently
+# falls back to TCP-only.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app/checkmk-wizard

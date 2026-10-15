@@ -201,7 +201,7 @@ The `worker` image (`deploy/worker.Containerfile`) bakes in `uv`, Python 3.11 an
 dependencies, so the wizard runs on a machine **with no internet**. Build it while the machine is
 online; afterwards nothing needs the network. Rebuild it (online) after a `git pull` that changes
 `pyproject.toml` or `uv.lock`; offline, `uv sync` then stops with an error naming the missing
-package. Other images (`python:3.12-slim`, Checkmk, Mosquitto, ...) must already be present locally.
+package. The image also installs `iputils-ping` (via `apt-get`, so the build itself needs internet): the wizard's network scan uses `ping` to find hosts with no open TCP ports, and falls back to TCP-only if it is missing (`podman exec automation-worker which ping` should print a path). Other images (`python:3.12-slim`, Checkmk, Mosquitto, ...) must already be present locally.
 
 The dashboard also owns a `map_drawing_data` volume (the topology map's shared drawing layer, written through nginx's `/map-drawing.json` location). It is created on the first `up`; there is nothing to configure. `deploy/reset-site.sh` deletes it (a reset starts with an empty map). Back it up with `deploy/backup.sh` or `podman volume export deploy_map_drawing_data -o map-drawing-backup.tar` (the name is prefixed by the compose project; check `podman volume ls`). To clear the drawing, remove that volume while the stack is down.
 
