@@ -323,19 +323,69 @@ A From / To filter above the list narrows the rows to an inclusive range:
 
 ## 5b. Device-type icons (drop-in)
 
-Full guide: [`docs/DEVICE-TYPE-ICONS.md`](../docs/DEVICE-TYPE-ICONS.md). Summary:
+The dashboard shows an icon per host, chosen by the host's **device type**. Icons are plain SVG
+files you drop into a folder — there is no code to edit.
 
-Every `dashboard-react/src/assets/icons/device-types/<device_type>.svg` is bundled at build time.
-The file name **is** the device type — the `tag_device_type` value from `device_types.json`
-(case-sensitive): `other`, `E-link`, `ACS`, `Multimedia`, `NetworkDevice`, `GroupController`.
+#### Where things are
 
-- **Change an icon:** overwrite that file, rebuild.
-- **Add an icon for a new type:** add the type to `device_types.json` (repo root; keep `other` first), drop `<Type>.svg` in the
-  folder, rebuild. No code edit. (A type with no file falls back to `other.svg`, so keep that one.)
-- **SVG rules:** square `viewBox` (16×16 like the shipped ones), root `<svg fill="none">`, and
-  glyph paths filled with exactly `fill="#141414"` — the map swaps that colour per host state
-  (see `recoloredDataUri` in `src/lib/mapIcons.ts`). The sidebar tree uses the same file as a CSS
-  mask, so it follows the text colour. Multi-colour/gradient icons will not recolour.
+| What | Path |
+|------|------|
+| List of device types (the Checkmk `device_type` tag choices) | `device_types.json` (repo root) |
+| Icon files, one per device type | `dashboard-react/src/assets/icons/device-types/<device_type>.svg` |
+| Code that loads them (no edit needed) | `dashboard-react/src/lib/mapIcons.ts` |
+
+Current types: `other`, `E-link`, `ACS`, `Multimedia`, `NetworkDevice`, `GroupController`, `DOP`.
+
+#### The rule
+
+**The icon's file name is the device type**, exactly and case-sensitively:
+`E-link` → `E-link.svg`, `NetworkDevice` → `NetworkDevice.svg`.
+
+A device whose type has no matching file shows `other.svg`, so `other.svg` must always exist.
+
+#### Change an icon
+
+1. Overwrite `dashboard-react/src/assets/icons/device-types/<device_type>.svg`.
+2. Rebuild the dashboard (below).
+
+#### Add an icon for a new device type
+
+1. Add the type name to `device_types.json`. Keep `"other"` as the **first** entry — the wizard
+   refuses to run otherwise (Checkmk gives every untagged host the first listed value).
+2. Save the icon as `dashboard-react/src/assets/icons/device-types/<NewType>.svg`.
+3. Rebuild the dashboard (below).
+4. **On a site that already exists**, also add the new choice to the `device_type` tag group in
+   Checkmk (*Setup → Tags → Host tag groups → device_type*, then activate changes). The wizard only
+   creates that tag group once and never updates its choice list, so editing `device_types.json`
+   alone does not change an existing site. A brand-new site picks the list up automatically.
+
+#### SVG requirements
+
+- Square `viewBox`; the shipped icons are 16×16 (`viewBox="0 0 16 16"`).
+- Root element `<svg … fill="none">`, with the glyph shapes filled with **exactly**
+  `fill="#141414"`.
+- Single colour only. The dashboard swaps `#141414` for the host's state colour on the map
+  (green/orange/red/grey) and uses the icon as a mask in the sidebar tree, so gradients,
+  multiple colours, strokes-only glyphs or embedded images will not recolour correctly.
+
+Easiest start: copy an existing file and replace its `<path>` data.
+
+#### Rebuild / preview
+
+Icons are bundled at build time, so a change is visible only after a rebuild.
+
+- Quick look while editing: `cd dashboard-react && npm run dev`.
+- Deployed dashboard: rebuild and redeploy the `dashboard` container as usual (build
+  prerequisites are in §2–3 of this file).
+
+#### Troubleshooting
+
+| Symptom | Cause |
+|---------|-------|
+| New icon not showing | Dashboard not rebuilt, or the file name does not match the type exactly (check case). |
+| Icon shows as the `other` circle | No file named after that type, or the host's type is `unknown` (tag group missing on the site — add `unknown.svg` if you want a distinct icon). |
+| Icon stays black/grey and ignores state colour | Glyph fill is not exactly `fill="#141414"`. |
+| Wizard aborts: "first entry must be 'other'" | `device_types.json` was reordered. |
 
 ## 5c. Incidents
 
@@ -481,8 +531,7 @@ Once a host is selected:
   and the next poll. A host whose current type is not in the file (for example `unknown`) keeps
   that value as an extra option. Checkmk rejects a value that is not a choice of its `device_type`
   tag group; the wizard only creates that group once, so after adding a type to
-  `device_types.json` on an existing site, also add the choice in Checkmk (Setup > Tags, see
-  docs/DEVICE-TYPE-ICONS.md).
+  `device_types.json` on an existing site, also add the choice in Checkmk (Setup > Tags, see §5b).
 - **Host criticality** — a Low/Medium/High/Critical `Select` setting the host's own
   business-criticality tier (the `criticality` label).
 - **Per-service criticality** — one row per service shown on the host's details page. For an
@@ -506,7 +555,7 @@ OK/WARN/CRIT state palette — see §5c for where these badges appear on inciden
 
 Opening the dashboard with `?admin=1` (read once at page load) turns it into a presenter console
 that fakes host UP/DOWN/UNREACHABLE states for live demos. Step-by-step usage is in the runbook,
-`docs/Incident demo with fake check results.md`, section "Admin mode (dashboard, Phase 16)".
+`docs/WIZARD-OPERATION.md`, appendix "Incident demo with fake check results", section "Admin mode (dashboard, Phase 16)".
 
 Modules: `src/lib/adminMode.ts` (detection, login loading, command/ack/faked parsing, folder and
 cascade-preview helpers), `src/store/adminStore.ts` (selection, faked map, pending command, last

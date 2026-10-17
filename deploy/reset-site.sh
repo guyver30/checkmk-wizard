@@ -10,7 +10,7 @@
 # checkmk entrypoint creates a new, empty site on the next start when the
 # `checkmk_data` volume is gone, named after CMK_SITE_ID. `mosquitto_data` goes
 # too, because the poller's startup sweep does not clear the global
-# `sites/<site_id>/lan/events/recent` feed (docs/WIZARD-OPERATION.md, "Starting over with a
+# `sites/<site_id>/lan/events/recent` feed (docs/DEPLOY-NEW-MACHINE.md §11.3, "Starting over with a
 # blank site").
 #
 # Usage: deploy/reset-site.sh [--with-history] [--yes] [--site NAME]
@@ -21,7 +21,7 @@
 # Esc or Ctrl+C at either prompt aborts before anything is changed.
 #
 # Always a full down/up: restarting a single container once cut Checkmk off
-# from the LAN (Podman setup doc §5.1).
+# from the LAN (docs/DEPLOY-NEW-MACHINE.md §12.3).
 
 set -euo pipefail
 

@@ -1,5 +1,5 @@
 """Interactive terminal wizard orchestrating Phases 1-7 of the Checkmk Setup
-Configurator (see docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md).
+Configurator (see docs/archive/CHECKMK_SETUP_CONFIGURATOR_PLAN.md).
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ _DELETE_SITE = object()
 # container (`deploy/compose.yaml`'s `checkmk` service maps `8080:5000`,
 # and the `worker` service's own `CMK_REST_API` already hardcodes
 # `http://checkmk:5000/...`), so a fresh operator following
-# docs/Podman-setup §8.3 can press Enter and get a working connection.
+# docs/DEPLOY-NEW-MACHINE.md §7 can press Enter and get a working connection.
 _CONTAINER_MODE_CHECKMK_HOST = "checkmk:5000"
 
 # OMD site name rules (docs.checkmk.com/latest/en/omd_basics.html,

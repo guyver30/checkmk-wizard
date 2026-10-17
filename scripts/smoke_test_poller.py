@@ -42,7 +42,7 @@ Each check proves one requirement:
 The fifth success criterion (a real Checkmk host deletion) is not
 exercised here — it needs a live Checkmk site to delete a host from, not
 just a running broker — and is documented as a manual step in
-`docs/Podman setup for checkmk, minio, mosquitto, worker.md`.
+`docs/DEPLOY-NEW-MACHINE.md` (section 9, "Manual tombstone test").
 """
 
 from __future__ import annotations
@@ -599,7 +599,7 @@ def main() -> int:
         "--host mosquitto --livestatus-host checkmk --skip-restart-checks "
         "(a sibling container cannot restart the poller service). The real "
         "Checkmk host-deletion tombstone test is a manual step documented in "
-        "docs/Podman setup for checkmk, minio, mosquitto, worker.md.",
+        "docs/DEPLOY-NEW-MACHINE.md (section 9).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", default="localhost")
@@ -685,7 +685,7 @@ def main() -> int:
         "[NOTE] The real-Checkmk host-deletion tombstone test (delete a host in the "
         "Checkmk UI and confirm it disappears from lan/devices/topology) is a manual "
         "step -- see the 'Manual tombstone test' section of "
-        "docs/Podman setup for checkmk, minio, mosquitto, worker.md."
+        "docs/DEPLOY-NEW-MACHINE.md (section 9)."
     )
 
     if all(results):

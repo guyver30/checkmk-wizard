@@ -665,7 +665,7 @@ def test_default_checkmk_host_container_mode():
     # service hostname instead. `:5000` is the REST/GUI port the
     # check-mk-raw image actually serves the site on internally
     # (deploy/compose.yaml maps 8080:5000), so a fresh operator following
-    # docs/Podman-setup §8.3 gets a working connection by pressing Enter.
+    # docs/DEPLOY-NEW-MACHINE.md §7 gets a working connection by pressing Enter.
     assert _default_checkmk_host(container_mode=True) == "checkmk:5000"
 
 

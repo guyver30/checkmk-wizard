@@ -301,7 +301,7 @@ services:
     networks:
       - cmk_net
 
-  # 4. Automation Worker (Python 3.12 + uv) — runs checkmk-wizard (§8) and
+  # 4. Automation Worker (Python 3.12 + uv) — runs checkmk-wizard (docs/DEPLOY-NEW-MACHINE.md §7) and
   # any other scripts placed under ./app, e.g. the MQTT publisher.
   worker:
     # Built from deploy/worker.Containerfile so uv, its Python 3.11 and the
@@ -322,10 +322,10 @@ services:
       # (a sibling of checkmk-stack/app/). The 09-03 poller service's
       # "../scripts" mount required moving compose.yaml to live inside the
       # repo checkout itself (checkmk-stack/app/checkmk-wizard/deploy/, see
-      # docs/Podman setup...md §2), which silently broke this path: "./app"
+      # docs/DEPLOY-NEW-MACHINE.md §2), which silently broke this path: "./app"
       # then resolved to an empty auto-created deploy/app/ instead of the
       # checkmk-stack/app/ directory the repo actually lives in. "../.."
-      # from deploy/ lands on checkmk-stack/app/, matching §8.1's promise
+      # from deploy/ lands on checkmk-stack/app/, matching the promise in docs/DEPLOY-NEW-MACHINE.md §2
       # that the repo lands in the worker container at /app/checkmk-wizard.
       - ../..:/app:z
     environment:
@@ -390,8 +390,7 @@ services:
     volumes:
       # ../scripts resolves relative to this compose file's own directory
       # (deploy/), so `podman compose` must be run from the repo checkout's
-      # deploy/ directory (see docs/Podman setup for checkmk, minio,
-      # mosquitto, worker.md §2/§4). Set POLLER_SCRIPTS_DIR to an absolute
+      # deploy/ directory (see docs/DEPLOY-NEW-MACHINE.md §2/§5). Set POLLER_SCRIPTS_DIR to an absolute
       # path for layouts that differ. Mounted read-only, and mounts the
       # git-tracked scripts/ directory rather than the uncommitted ./app
       # (see the worker service's own volume above) so a fresh checkout
@@ -429,8 +428,7 @@ services:
       # choose it BEFORE the first wizard run — the wizard provisions Checkmk
       # to match; recreate the poller (`podman compose up -d poller`) after
       # changing it — see
-      # "First-time credential setup" in
-      # docs/Podman setup for checkmk, minio, mosquitto, worker.md §3.
+      # "Broker passwords" in docs/DEPLOY-NEW-MACHINE.md §3.5.
       # An unset secret (empty default below) is a silent degradation, not a
       # crash: the poller keeps running and keeps publishing status, but
       # every device's `folder` field comes back empty. It must default to
