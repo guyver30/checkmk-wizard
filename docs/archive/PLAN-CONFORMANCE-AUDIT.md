@@ -6,7 +6,7 @@ phase by phase. Every REST endpoint, CLI command, and behavioral claim made
 in the plan (and in code comments citing "verified via context7") was
 independently re-checked against live Checkmk documentation
 (`docs.checkmk.com`, fetched fresh via context7, not from training data).
-Companion doc: [WIZARD-OPERATION.md](WIZARD-OPERATION.md) for exact
+Companion doc: [WIZARD-OPERATION.md](../WIZARD-OPERATION.md) for exact
 mechanics.
 
 ## Summary

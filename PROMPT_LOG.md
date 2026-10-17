@@ -827,3 +827,37 @@ can we build the worker image on the same machine (connect it to internet) so th
 ## 2026-10-15 15:51
 
 I have a strange situation. From checkmk machine I can ping a host, but the wizard not able to find it and also if I add manually in checkmk it's not discovered. nmap -Pn IP finds the host, nmap -sn IP does not. Any clue?
+
+## 2026-10-17 15:11
+
+/bm:resume-work
+
+## 2026-10-17 15:20
+
+I saw an issue with dashboard. Icons and edge drawn properly, position ok, but no drawing (rectangle, etc.). In dev tools I see this : Failed to load resource the server responded with a status of 404. Then :8090/map-drawing.json
+
+## 2026-10-17 15:40
+
+earlier we discussed about offline install for wizard (automation worker). Is this now properly documented and redeploy script needs to be updated?
+
+## 2026-10-17 16:05
+
+yes fix the stale docs and also reorganize documentation, I think we have too many .md. We should just have
+wizard-operation
+deploy-new-machine
+architecture
+
+so the building steps, scripts role, usage and sequence should be all in deploy-new-machine.
+thoughts?
+
+## 2026-10-17 16:12
+
+and of course readme for high level info and links to separate .md
+
+## 2026-10-17 17:05
+
+I launched redeploy.sh and saw a few exit code 125 and exit code 1 (pasted podman-compose log)
+
+## 2026-10-17 17:15
+
+yes simplify redeploy.sh and commit

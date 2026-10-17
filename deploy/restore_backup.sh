@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Restore a bundle made by deploy/backup.sh onto this machine: put back
 # deploy/.env, the Checkmk site and the topology map drawing, then start the
-# stack. Meant for a fresh checkout (DEPLOY-NEW-MACHINE.md steps 1-2) but also
+# stack. Meant for a fresh checkout (docs/DEPLOY-NEW-MACHINE.md §1-§2) but also
 # works on an existing stack, replacing its site and drawing.
 #
 # Usage: deploy/restore_backup.sh BUNDLE.tar [--public-host HOST] [--yes]
@@ -20,7 +20,7 @@
 # Do not run the wizard afterwards: the site already has its configuration.
 #
 # Always a full down/up: restarting a single container once cut Checkmk off
-# from the LAN (Podman setup doc §5.1).
+# from the LAN (docs/DEPLOY-NEW-MACHINE.md §12.3).
 
 set -euo pipefail
 

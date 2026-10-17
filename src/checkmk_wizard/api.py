@@ -1,7 +1,7 @@
 """Checkmk REST API client.
 
 Endpoints and payloads verified against live Checkmk docs via context7
-(docs.checkmk.com, REST API reference) — see docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md
+(docs.checkmk.com, REST API reference) — see docs/archive/CHECKMK_SETUP_CONFIGURATOR_PLAN.md
 for the source citations.
 """
 
@@ -140,7 +140,7 @@ class CheckmkConnection:
     # separate from `username`/`secret` (used for all REST API calls) so a
     # least-privilege registration-only user can be used when available.
     # Defaults to the REST credential if no dedicated one was found — see
-    # docs/PLAN-CONFORMANCE-AUDIT.md, Phase 5, credential-scope finding.
+    # docs/archive/PLAN-CONFORMANCE-AUDIT.md, Phase 5, credential-scope finding.
     registration_user: str | None = None
     registration_secret: str | None = None
     # The site's HTTP/REST/GUI port only — e.g. 5000 for the
@@ -799,7 +799,7 @@ async def bootstrap_automation_user(
                             "secret": secret,
                             "store_automation_secret": True,
                         },
-                        # Matches CHECKMK_SETUP_CONFIGURATOR_PLAN.md's own stated
+                        # Matches archive/CHECKMK_SETUP_CONFIGURATOR_PLAN.md's own stated
                         # fallback: a scoped custom role is best practice, but
                         # admin is acceptable for a single-operator setup tool —
                         # there's no built-in role with the general folder/host/

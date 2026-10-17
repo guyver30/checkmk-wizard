@@ -1,242 +1,57 @@
 # checkmk-wizard
 
-Interactive terminal wizard that configures a fresh Checkmk Community Edition
-site from scratch — network discovery, host onboarding, agent installation,
-and activation. See [docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md](docs/CHECKMK_SETUP_CONFIGURATOR_PLAN.md)
-for the full design and phase breakdown.
+Takes a bare [Checkmk](https://checkmk.com) Community Edition install all the way to a fully onboarded,
+monitored network, and then shows that network live: an interactive terminal wizard (network discovery, host
+onboarding, agent installation, activation) plus a containerized stack that publishes Checkmk's state over
+MQTT to a React dashboard with a live, editable topology map, history, forecasts and incident narration.
 
-For exactly how the implementation behaves today, see
-[docs/WIZARD-OPERATION.md](docs/WIZARD-OPERATION.md). For how that
-implementation compares to the plan above (verified against live Checkmk
-docs), see [docs/PLAN-CONFORMANCE-AUDIT.md](docs/PLAN-CONFORMANCE-AUDIT.md).
+## Documentation
 
-## Prerequisites
+| Read this | For |
+|---|---|
+| [`docs/DEPLOY-NEW-MACHINE.md`](docs/DEPLOY-NEW-MACHINE.md) | **Deploy and operate the stack**: prerequisites, the order of the steps, what each script in `deploy/` does, settings, offline use, checks, updating, backup and restore, starting over, troubleshooting |
+| [`docs/WIZARD-OPERATION.md`](docs/WIZARD-OPERATION.md) | **The wizard**: requirements, host-native and container mode, every phase, options (`--demo`, `--manage`), and the dashboard demo runbook |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | **How it fits together**: container roles, ports, data flow, the MQTT topic contract and the cloud archive contract |
+| [`dashboard-react/README.md`](dashboard-react/README.md) | The dashboard: building it, runtime config, map editing, device-type icons, incidents, admin mode |
+| [`design-system/USAGE.md`](design-system/USAGE.md) | The `kone-design-system` component library the dashboard is built on |
+| [`docs/archive/`](docs/archive/) | Original design plan, plan-conformance audit and research notes; history, not current behaviour |
 
-### On the machine running this wizard
+## What is in the repository
 
-This wizard supports two modes, auto-detected at startup by whether `omd`
-is on `PATH` — no flag to set:
+- `src/checkmk_wizard/` — the wizard (Python 3.11+, managed with [uv](https://docs.astral.sh/uv/)):
+  `api.py` (Checkmk REST client), `site.py` (OMD site bootstrap), `scanner.py` (TCP and ICMP scan),
+  `remote.py` (SSH firewall and agent install), `livestatus.py` (post-activation host state),
+  `wizard.py` (orchestration of all phases).
+- `deploy/` — `compose.yaml`, image build files and the operator scripts (`init-env.sh`, `run-wizard.sh`,
+  `redeploy.sh`, `backup.sh`, `restore_backup.sh`, `reset-site.sh`).
+- `scripts/` — the Livestatus-to-MQTT poller, smoke tests and diagnostic probes.
+- `analytics/` — needs, forecasts, incident narration and the daily availability rollup.
+- `dashboard-react/`, `design-system/` — the dashboard SPA and its component library.
 
-**Host-native mode** — the wizard runs directly on the Checkmk site's
-host, driving `omd` and reading the site's automation secret off the
-local filesystem. This is the original, fully-featured mode: it can
-create, reuse, or delete OMD sites.
+## Quick start
 
-- **Linux.** Required throughout (`omd`, `/etc/os-release`, etc.) —
-  there's no Windows/macOS support for the host running the wizard.
-- **Checkmk Community Edition already installed on this host**, with
-  `omd` on `PATH`. The wizard does **not** install the Checkmk package
-  itself — it only creates/starts the OMD *site* on top of an existing
-  install; see [Checkmk's install
-  docs](https://docs.checkmk.com/latest/en/install_packages.html) for your
-  distro (Debian, Ubuntu, RHEL/AlmaLinux/Rocky, and SLES are officially
-  supported).
-- **Plain root at the OS level — not `omd su <site>`.** Phase 1 runs
-  `omd create`/`omd start`/`omd config` as root, naming the site
-  explicitly each time (the pattern Checkmk's docs specify for root-level
-  `omd` invocation); site *creation* specifically requires root and can't
-  be done as a site user. Nothing in this codebase drops into a site's own
-  shell/environment — it reads the automation secret via a plain absolute
-  filesystem path, which root can access unconditionally. Run it from a
-  root shell or via `sudo` (see [Run](#run) below) — not via `omd su
-  <site>`.
+**Containerized stack (recommended).** Follow [`docs/DEPLOY-NEW-MACHINE.md`](docs/DEPLOY-NEW-MACHINE.md). In short,
+with rootless Podman installed and the repo cloned into `~/checkmk-stack/app/checkmk-wizard`:
 
-**Container mode** — the wizard runs somewhere `omd` isn't available (e.g.
-a separate "worker" container alongside a containerized Checkmk). Site
-creation/deletion aren't possible from here — the wizard connects to a
-site that already exists instead (e.g. one a Checkmk container's own
-entrypoint auto-created via `CMK_SITE_ID`/`CMK_PASSWORD`). If `omd` simply
-isn't installed anywhere and this isn't actually a container deployment,
-the wizard prints the same install instructions it always has, as a
-fallback hint, since it can't tell the two situations apart on its own.
+```bash
+deploy/init-env.sh                                   # secrets, site name, this machine's address
+cd deploy && podman compose build dashboard worker   # while online; the worker image makes the wizard work offline
+podman compose up -d
+./run-wizard.sh                                      # the wizard, inside the worker container
+podman compose down && podman compose up -d          # once, so the poller sees the new setup
+```
 
-- **`CMK_SITE_ID` set on the wizard's own container too** (matching
-  whatever it's set to on the Checkmk container) — purely a convenience:
-  it pre-fills the site-name prompt so you don't have to retype it, and
-  can still be overridden by typing a different name (which must match an existing site — the wizard can't create or rename one from a worker). The bundled `deploy/compose.yaml` takes the site name from a single `CMK_SITE_ID` variable (default `dmc`, set it in `deploy/.env` before the first `podman compose up`); an existing site can be renamed with `omd mv` inside the checkmk container, or wiped and recreated under a new name with `deploy/reset-site.sh` — see "Choosing the site name" in `docs/Podman setup for checkmk, minio, mosquitto, worker.md`. There's no
-  network-based way for the wizard to discover site names on its own —
-  every Checkmk REST endpoint is scoped under `/<site>/...`, so the name
-  has to be known before anything can be queried.
-- **The `cmkadmin` password** (whatever the Checkmk container's own
-  `CMK_PASSWORD` was set to) — prompted for at startup, never pre-filled;
-  the prompt says that on a freshly created site whose password was never
-  changed it is the compose default `cmkadmin`. It is followed by an offer
-  (default yes) to change it: since that default is well-known, the wizard
-  sets a new one over the REST API (`change_cmkadmin_password()`, same as
-  host-native mode does for its generated password; Checkmk's password
-  policy applies) and uses the new password for everything below.
-  `compose.yaml` keeps `CMK_PASSWORD=cmkadmin` and needs no update (Checkmk
-  only reads it when it first creates the site). The wizard uses it
-  to create the site's `automation` REST user itself over the API (the
-  same `bootstrap_automation_user()` mechanism host-native mode uses right
-  after `omd create`), so there's no local secret file to read. If
-  `CMK_REST_SECRET` is set in the worker env, the user is created — or an
-  existing one updated — with exactly that secret, which is never printed.
-  Leave it
-  blank to skip this and provide an automation secret directly instead
-  (e.g. fetched manually via `podman exec <checkmk-container> cat
-  /omd/sites/<site>/var/check_mk/web/automation/automation.secret`, or one
-  from a dedicated user created via Setup > Users in the web UI) — the
-  wizard also falls back to this automatically if bootstrapping fails
-  (e.g. re-running against a site that already has an `automation` user
-  from a previous run). The same cmkadmin password is also used to reset
-  the secret of Checkmk's built-in `agent_registration` user (the
-  least-privilege account recommended for `cmk-agent-ctl register`) if no
-  local secret is found for it either — falling back to reusing the
-  general `automation` credential for registration if that also fails.
-- **Livestatus-over-TCP enabled and plain text (`LIVESTATUS_TCP_TLS` off)**
-  on the target site — the wizard can't turn this on remotely, and warns at
-  startup if it can't reach it or if port 6557 answers only TLS. A fresh
-  Checkmk 2.4 site defaults to TLS on, which shows up as "Connection reset
-  by peer", the poller's "Malformed columns response", and an empty
-  dashboard. `deploy/compose.yaml` handles both: `CMK_LIVESTATUS_TCP=on`
-  plus the `deploy/checkmk-hooks/pre-start/` entrypoint hook that turns TLS
-  off. Host-native mode turns TCP on and TLS off itself. For any other
-  setup, run `omd stop <site>; omd config <site> set LIVESTATUS_TCP on;
-  omd config <site> set LIVESTATUS_TCP_TLS off; omd start <site>` on the
-  Checkmk host/container.
+Then open the dashboard on port 8090. Update later with `deploy/redeploy.sh`.
 
-**Both modes need:**
-
-- **Python 3.11 or newer** and **[uv](https://docs.astral.sh/uv/)** as the
-  package manager. Install uv if you don't already have it:
-  ```bash
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  ```
-- **Network access** to the Checkmk REST API and to the site's Livestatus
-  TCP port (6557 by default — host-native mode turns this on (plain text) automatically
-  for any site it creates or reuses, for the Phase 7 host-state check),
-  usually `localhost` for both in host-native mode, or the Checkmk
-  container's hostname/IP in container mode, plus outbound access to
-  whatever subnet(s) you intend to scan (Phase 3) and whatever hosts you
-  onboard (Phase 5).
-
-### On target hosts you onboard (Phase 5 — only if you use SSH automation)
-
-Only relevant if you opt into automated SSH firewall/agent-install for
-Linux targets; skipping SSH credentials in Phase 5 falls back to
-copy-paste manual instructions instead, with none of these requirements.
-
-- **SSH reachable** from the Checkmk host, with a valid password or
-  private key for the account you provide.
-- **`sudo` access** for that SSH account — used to modify firewall rules,
-  install the agent package, and run `cmk-agent-ctl register`.
-- **`dpkg` (Debian/Ubuntu-family) or `rpm` (RHEL/SLES/Fedora-family)**,
-  whichever matches the target's distro — detected automatically from
-  `/etc/os-release`.
-- **`sha256sum`** (part of GNU coreutils, present by default on all
-  mainstream distros) — used to verify the uploaded agent package before
-  installing it.
-- **Windows targets** need none of the above: the wizard never
-  automates against Windows, it only generates PowerShell commands for
-  you to run manually.
-- **SNMP-only devices** (switches, routers, etc.) need none of the above
-  either — no SSH, just SNMP read access and a community string, which
-  the wizard prompts for directly.
-
-## Setup
+**Wizard directly on a Checkmk host** (host-native mode, as root):
 
 ```bash
 uv sync
-```
-
-## Run
-
-### Host-native mode (the wizard runs on the Checkmk host itself)
-
-As root (see [Prerequisites](#prerequisites) for why):
-
-```bash
 uv run checkmk-wizard
 ```
 
-If you're using `sudo` instead of a root shell, use `sudo -E` (or an
-explicit `PATH=`) so `sudo` doesn't lose `uv` off your regular user's
-`PATH`:
-
-```bash
-sudo -E uv run checkmk-wizard
-```
-
-### Container mode (the wizard runs in the worker container)
-
-When Checkmk is deployed as a container, the wizard runs from the
-`automation-worker` container alongside it — not on your host shell, which
-has no route to the site. `--interactive --tty` is required: the wizard is
-a `questionary` prompt flow and will not work without a TTY.
-
-```bash
-podman exec --interactive --tty automation-worker \
-  bash -c "cd /app/checkmk-wizard && uv sync && uv run checkmk-wizard"
-```
-
-The `uv sync` is deliberate — the checkout is bind-mounted into the
-container, so a `git pull` on the host changes the code the container runs
-but not its virtualenv.
-
-### Demo mode
-
-`--demo` fills a site with fake hosts so you can demo a populated, all-green
-Checkmk site and dashboard without real devices:
-
-```bash
-uv run checkmk-wizard --demo
-deploy/run-wizard.sh --demo   # container mode; arguments are forwarded
-```
-
-Phase 3 does not scan. For each Phase 2 folder with a subnet it asks how many
-hosts to create and in which subnet (default: the folder's subnet; with no
-folders, the root folder and `198.51.100.0/24`, the non-routable TEST-NET-2
-range) and stages the first N usable addresses not already in Checkmk. Phase 4
-keeps its prompts but the monitoring method defaults to `ping`, and its
-"Promote which hosts?" checkbox starts with every host generated in this run
-checked (deselect to skip; pre-existing pending hosts stay unchecked).
-
-Phase 7 creates a "Host check command: Always assume host to be up" rule
-(`host_check_commands`) for the promoted hosts before activation, so the core
-keeps running a host check that returns UP and the hosts stay UP and fresh
-(not STALE) on the dashboard. After activation each host also gets an UP
-result injected, and its `PING` service has its check disabled with an OK
-result injected. The injected plugin output is check_icmp-style text such as
-`OK - <ip> rta <random>ms lost 0%` (rta random per host, 0.2–3.0 ms). If the rule cannot be created the wizard warns
-and falls back to also disabling the host check (`DISABLE_HOST_CHECK`). To
-undo, delete that rule (Setup > Hosts > Host monitoring rules > Host check
-command) and send `ENABLE_SVC_CHECK;<host>;PING` (plus
-`ENABLE_HOST_CHECK;<host>` if the fallback ran). If Livestatus is unreachable
-the wizard prints the manual `lq` commands instead of failing. The
-post-activation state table shows `PENDING` for hosts the core has never
-checked.
-
-### Main menu and --manage
-
-After Phase 1 the wizard asks "What do you want to do?". "Onboard new hosts"
-(the default; Enter) is the full flow. "Manage existing hosts only" skips
-folders, scan and onboarding and goes to the device type/alias screen, then
-the monitored-services step (both default to Yes here), Phase 6 for changed
-service hosts, and Phase 7. Skip the menu with:
-
-```bash
-uv run checkmk-wizard --manage
-deploy/run-wizard.sh --manage   # container mode
-```
-
-`--manage` cannot be combined with `--demo` (argparse error). The wizard
-cannot change hostname, IP address, folder, monitoring method, SNMP community
-or expected-open ports of an existing host; use the Checkmk GUI (Setup >
-Hosts). Details in
-[docs/WIZARD-OPERATION.md](docs/WIZARD-OPERATION.md#main-menu-after-phase-1-added-2026-10-08).
-
-### Leaving early (Esc)
-
-Press Esc (or Ctrl+C) at the main menu, at any prompt in Phases 1-4 or in the
-manage-only flow (and the optional "Manage
-monitored services on existing hosts" step that follows Phase 4) to abort. The wizard lists the
-site's pending (not yet activated) changes, marks other users' changes, and
-asks whether to apply them, revert them (discards ALL pending changes on the
-site, via the Checkmk GUI's "Revert changes"), or leave them pending. From
-Phase 5 on Esc is disabled because SSH changes to remote hosts cannot be
-reverted; Ctrl+C then exits with status 130. Details in
-[docs/WIZARD-OPERATION.md](docs/WIZARD-OPERATION.md#leaving-the-wizard-early-esc).
+The mode is detected by whether `omd` is on `PATH`. Requirements, both modes and all options are in
+[`docs/WIZARD-OPERATION.md`](docs/WIZARD-OPERATION.md).
 
 ## Test
 
@@ -244,40 +59,6 @@ reverted; Ctrl+C then exits with status 130. Details in
 uv run pytest
 ```
 
-Tests cover the REST API client (mocked via `respx`), the async port
-scanner, and the remote (SSH/firewall/OS-compatibility) helpers in
-isolation. They don't exercise a live Checkmk site, real network targets,
-or actual SSH connections — that requires a real lab environment.
-
-## Live dashboard
-
-A backend-less React + TypeScript web dashboard (`dashboard-react/`) visualizes the resulting
-Checkmk-monitored network topology and device status in real time over MQTT, with a live editable
-topology map, served on port 8090 alongside the rest of the stack. Per-deployment dashboard
-settings come from `deploy/.env` at container start, not from an edited source file. See
-[`dashboard-react/README.md`](dashboard-react/README.md) for building it, and
-[`docs/Podman setup for checkmk, minio, mosquitto, worker.md`](<docs/Podman setup for checkmk, minio, mosquitto, worker.md>)
-for how it fits into the wider deployment. To deploy the whole stack on a new machine, follow the
-checklist in [`docs/DEPLOY-NEW-MACHINE.md`](docs/DEPLOY-NEW-MACHINE.md).
-
-Admin mode (`?admin=1`) lets a presenter fake host UP/DOWN/UNREACHABLE states for live demos;
-see the runbook section in
-[`docs/Incident demo with fake check results.md`](<docs/Incident demo with fake check results.md>)
-and `dashboard-react/README.md` section 5e.
-
-Device-type icons are drop-in SVG files (file name = device type) — see
-[`docs/DEVICE-TYPE-ICONS.md`](docs/DEVICE-TYPE-ICONS.md).
-
-## Project layout
-
-- `src/checkmk_wizard/api.py` — Checkmk REST API client (Phase 1, 2, 5-7)
-- `src/checkmk_wizard/site.py` — OMD site bootstrap and automation credentials (Phase 1)
-- `src/checkmk_wizard/scanner.py` — async TCP port scanner plus ICMP ping probe (Phase 3)
-- `src/checkmk_wizard/remote.py` — SSH firewall check/fix and agent install (Phase 5.1/5.2)
-- `src/checkmk_wizard/livestatus.py` — post-activation host state check (Phase 7)
-- `src/checkmk_wizard/wizard.py` — interactive orchestration of all phases
-  Phase 3 also picks up hosts that are already in Checkmk but never promoted
-  (found by a folder's daily network scan, or left by an earlier run) so
-  Phase 4 can offer them; the scan is mandatory on a new site and defaults
-  to "yes" on an existing site only when you just added a folder with a
-  subnet. Promoted hosts carry the label `cmk_wizard=onboarded`.
+The tests cover the REST client (mocked with `respx`), the scanner and the remote (SSH, firewall,
+OS-compatibility) helpers in isolation; they do not touch a live Checkmk site, real targets or SSH. The
+dashboard has its own suite (`dashboard-react/`, see its README).

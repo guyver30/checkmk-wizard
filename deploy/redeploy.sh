@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Rebuild the dashboard image, then bring the whole stack down and
-# up again with the poller and analytics force-recreated, so a `git pull` is
-# actually picked up (the poller reads scripts/mqtt_poller.py once at start).
+# Rebuild the dashboard and worker images, then bring the whole stack down and up
+# again, so a `git pull` is actually picked up (the poller reads
+# scripts/mqtt_poller.py once at start, and analytics bind-mounts the repo).
 #
 # A full down/up is deliberate, not a single-container restart: that has cut
-# Checkmk's egress before (docs/DEPLOY-NEW-MACHINE.md, "Updating later").
+# Checkmk's egress before (docs/DEPLOY-NEW-MACHINE.md §11.1, "Updating later").
 #
 # Usage: deploy/redeploy.sh
 set -euo pipefail
@@ -15,11 +15,11 @@ cd "$(dirname "$0")"
 
 # The dashboard and worker have build: sections (the worker image bakes in uv and the
 # wizard's dependencies so it runs offline; unchanged layers are cached and need no
-# network). Analytics runs a stock python image with the repo bind-mounted, so the
-# --force-recreate below is what makes it pick up new code.
+# network). Poller and analytics run stock python images with the repo bind-mounted;
+# `down` removes their containers, so the `up -d` below creates them fresh and they
+# pick up new code. (An earlier version also ran `up -d --force-recreate poller
+# analytics` between the two: after `down` there is nothing to recreate, and
+# podman-compose 1.0.6 only printed exit 125/1 "no such container" errors for it.)
 podman compose build dashboard worker
 podman compose down
-podman compose up -d --force-recreate poller analytics
-# `up -d` with service names starts only those and their dependencies; this starts
-# the rest (already-running services are left as they are).
 podman compose up -d

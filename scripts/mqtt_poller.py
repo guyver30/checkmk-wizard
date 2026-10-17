@@ -125,7 +125,7 @@ TOPIC_ADMIN_FAKED = "admin/faked"
 # a trailing newline. The id becomes an MQTT topic level, so `/ + #` and
 # whitespace must never get through.
 _SITE_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,15}")
-# The archive contract (docs/MQTT_CLIENT_DATA_FLOW.md) requires a positive
+# The archive contract (ARCHITECTURE.md, Appendix B) requires a positive
 # decimal SEN without leading zeros and silently drops anything else; same
 # rule as deploy/render-mosquitto-bridge.sh and the wizard's _SEN_RE. Matched
 # with fullmatch because `$` would accept a trailing newline.

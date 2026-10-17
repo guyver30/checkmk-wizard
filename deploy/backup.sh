@@ -21,7 +21,7 @@
 # with deploy/restore_backup.sh.
 #
 # Always a full down/up: restarting a single container once cut Checkmk off
-# from the LAN (Podman setup doc §5.1).
+# from the LAN (docs/DEPLOY-NEW-MACHINE.md §12.3).
 
 set -euo pipefail
 
