@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How the containers talk: MQTT topics, payloads and REST calls</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230d1520'/%3E%3Cpath d='M14 20h14M36 20h14M14 44h14M36 44h14M28 20v24M36 20v24' stroke='%23ffb547' stroke-width='4' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
+<!-- Blueprint register (references/style-guide.md): architecture and data flow. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0d1520; --surface: #132031; --border: #22324a; --border-bright: #596b87;
+    --text: #e3ecf5; --text-dim: #92a6bb; --accent: #ffb547; --accent-dim: rgba(255,181,71,.14);
+    --ok: #6fd3a0; --warn: #e8d36a; --risk: #ff7b6b; --info: #7cc0f0;
+    --node-top: color-mix(in srgb, var(--text) 7%, var(--surface)); --lift: rgb(0 0 0 / .45); --halo: 32%;
+    --font-body: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+    --t-label: .75rem; --t-small: .875rem; --t-body: 1rem; --t-lead: 1.25rem; --t-h2: 1.625rem; --t-h1: clamp(2.25rem, 5.5vw, 4rem);
+    --s-1: .25rem; --s-2: .5rem; --s-3: .75rem; --s-4: 1rem; --s-5: 1.5rem; --s-6: 2rem; --s-7: 3rem; --s-8: 4.5rem;
+    --r-1: 4px; --r-2: 10px;
+    --ease: cubic-bezier(.16,1,.3,1); --fast: 150ms; --med: 300ms; --slow: 500ms;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f2f6fa; --surface: #ffffff; --border: #d6e0ea; --border-bright: #818f9e;
+      --text: #0f1a26; --text-dim: #4d6074; --accent: #a34700; --accent-dim: rgba(163,71,0,.12);
+      --ok: #1c7443; --warn: #776300; --risk: #b0341e; --info: #145f99;
+      --node-top: var(--surface); --lift: rgb(18 22 20 / .12); --halo: 22%;
+    }
+  }
+
+  html { font-size: 17px; scroll-padding-top: 4.5rem; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 400 var(--t-body)/1.6 var(--font-body); text-wrap: pretty; font-kerning: normal; font-synthesis: none; -webkit-font-smoothing: antialiased; }
+  ::selection { background: var(--accent-dim); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  main { max-width: 64rem; margin: 0 auto; padding: var(--s-7) var(--s-5) var(--s-8); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-8); }
+  section, figure, header { min-width: 0; }
+  header { display: grid; gap: var(--s-4); }
+  h1, h2 { text-box: trim-both cap alphabetic; }
+  h1 { font-size: var(--t-h1); line-height: 1.05; font-weight: 600; letter-spacing: -.035em; text-wrap: balance; max-width: 18ch; margin-bottom: var(--s-2); }
+  h2 { font-size: var(--t-h2); line-height: 1.2; font-weight: 600; letter-spacing: -.015em; text-wrap: balance; }
+  h3 { font-size: var(--t-body); line-height: 1.3; font-weight: 600; }
+  .sec-head { display: grid; gap: var(--s-3) var(--s-5); align-items: baseline; border-top: 1px solid var(--border); padding-top: var(--s-5); margin-bottom: var(--s-6); }
+  @media (min-width: 52rem) { .sec-head { grid-template-columns: 3fr 9fr; } }
+  .eyebrow { display: flex; align-items: center; gap: var(--s-2); font: 600 var(--t-label) var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  .eyebrow::before { content: ''; width: 1.25rem; height: 2px; background: currentColor; }
+  .ve-label { font: 500 var(--t-label) var(--font-mono); color: var(--text-dim); }
+  .caps { text-transform: uppercase; letter-spacing: .08em; font-weight: 600; color: var(--text); }
+  .lead { font-size: var(--t-lead); line-height: 1.5; color: var(--text-dim); max-width: 46ch; }
+  .lead b { color: var(--text); font-weight: 600; }
+  .meta { font: 500 var(--t-label) var(--font-mono); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .note { color: var(--text-dim); max-width: 65ch; margin-top: var(--s-3); }
+  code { font: .875em var(--font-mono); font-variant-ligatures: none; overflow-wrap: anywhere; }
+
+  /* top nav (4+ sections) */
+  .toc { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 94%, transparent); border-bottom: 1px solid var(--border); }
+  .toc ul { list-style: none; padding: 0 var(--s-5); margin: 0 auto; max-width: 64rem; display: flex; gap: var(--s-5); overflow-x: auto; scrollbar-width: none; mask-image: linear-gradient(90deg, #000 92%, transparent); }
+  .toc ul::-webkit-scrollbar { display: none; }
+  .toc a { display: block; padding: var(--s-3) 0; font: 500 var(--t-label) var(--font-mono); color: var(--text-dim); text-decoration: none; white-space: nowrap; border-bottom: 2px solid transparent; }
+  .toc a:hover, .toc a.is-here { color: var(--text); border-bottom-color: var(--accent); }
+
+  /* figure: Blueprint stage = 24px line grid at low contrast */
+  .frame { background: linear-gradient(color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px) 0 0 / 24px 24px, var(--bg); border: 1px solid var(--border); border-radius: var(--r-1); padding: var(--s-5); overflow-x: auto; }
+  figcaption { font-size: var(--t-body); color: var(--text-dim); margin-top: var(--s-3); max-width: 65ch; }
+  .fig-n { font: 600 var(--t-label) var(--font-mono); color: var(--text); margin-right: var(--s-2); }
+
+  .ve-svg { width: 100%; min-width: 760px; height: auto; display: block; font: 500 17px var(--font-body); }
+  .ve-n .sh { fill: url(#ve-node); stroke: var(--border-bright); stroke-width: 1.5; filter: drop-shadow(0 6px 14px var(--lift)); transition: stroke var(--fast) var(--ease), opacity var(--med) var(--ease); }
+  .ve-n .lid { fill: var(--node-top); }
+  .ve-n.is-key .sh { fill: color-mix(in srgb, var(--accent) 11%, var(--surface)); stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 16px color-mix(in srgb, var(--accent) var(--halo), transparent)); }
+  .ve-n text { fill: var(--text); text-anchor: middle; dominant-baseline: central; font-weight: 600; }
+  .ve-n .sub { fill: var(--text-dim); font: 500 14px var(--font-mono); }
+  .ve-n.is-bad .sh { stroke: var(--risk); stroke-dasharray: 6 5; }
+  .ve-e { fill: none; stroke: var(--text-dim); stroke-width: 1.75; marker-end: url(#ve-ah); transition: stroke var(--fast) var(--ease), opacity var(--med) var(--ease); }
+  .ve-e.is-hot { stroke: var(--accent); stroke-width: 2.75; filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 55%, transparent)); }
+  .ve-e.is-async { stroke-dasharray: 6 5; }
+  .ve-e.is-bad { stroke: var(--risk); }
+  .ve-el { fill: var(--text-dim); font: 500 14px var(--font-mono); text-anchor: middle; paint-order: stroke; stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; }
+  .ve-el.l { text-anchor: end; } .ve-el.r { text-anchor: start; }
+  .ve-el b { fill: var(--accent); font-weight: 600; }
+  .ve-zone { fill: none; stroke: var(--border-bright); stroke-width: 1.5; stroke-dasharray: 8 6; }
+  .ve-tag { fill: var(--text-dim); font: 600 13px var(--font-mono); letter-spacing: .06em; }
+  .ve-dim path { fill: none; stroke-width: 1; } .ve-dim .ext { stroke: var(--border-bright); } .ve-dim .ln { stroke: var(--text-dim); }
+  .ve-dim text { fill: var(--text); font: 500 14px var(--font-mono); text-anchor: middle; }
+  .tick { stroke: var(--accent); stroke-width: 2.5; } .tick.q { stroke: var(--text-dim); stroke-width: 1.75; }
+  .axis { stroke: var(--border-bright); stroke-width: 1.5; fill: none; }
+  .lane-t { fill: var(--text); font: 600 15px var(--font-body); }
+  .lane-s { fill: var(--text-dim); font: 500 13px var(--font-mono); }
+
+  /* linked highlighting */
+  .ve-ref { text-decoration: underline dotted var(--text-dim) 1px; text-underline-offset: .22em; border-radius: var(--r-1); transition: background var(--fast) var(--ease); }
+  .ve-ref.is-lit { background: var(--accent-dim); text-decoration-color: var(--accent); }
+  svg [data-ref] { transition: opacity var(--med) var(--ease); }
+  svg.has-lit path[data-ref]:not(.is-lit), svg.has-lit g[data-ref]:not(.is-lit) .sh { opacity: .25; }
+  svg.has-lit g[data-ref]:not(.is-lit) text, svg.has-lit text[data-ref]:not(.is-lit) { fill: var(--text-dim); }
+  .ve-n.is-lit .sh { stroke: var(--accent); }
+  .ve-e.is-lit { stroke: var(--accent); }
+  .ve-el.is-lit { fill: var(--text); }
+  tr[data-ref].is-lit td { background: var(--accent-dim); }
+
+  /* tables */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-1); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: var(--t-small); min-width: 44rem; }
+  th { text-align: left; font: 600 var(--t-label) var(--font-mono); color: var(--text-dim); letter-spacing: .04em; padding: var(--s-3) var(--s-4); background: var(--surface); border-bottom: 1px solid var(--border-bright); white-space: nowrap; }
+  td { padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+  td.n { font: 600 var(--t-small) var(--font-mono); color: var(--accent); white-space: nowrap; }
+  td code, th code { white-space: nowrap; }
+  td .wrap { white-space: normal; }
+  .mk { display: inline-flex; align-items: center; gap: 6px; font: 600 var(--t-label) var(--font-mono); white-space: nowrap; }
+  .mk.w { color: var(--accent); } .mk.w::before { content: ''; width: .55rem; height: .55rem; background: currentColor; }
+  .mk.r { color: var(--info); } .mk.r::before { content: ''; width: .55rem; height: .55rem; border: 1.5px solid currentColor; border-radius: 50%; }
+  .mk.n0 { color: var(--text-dim); } .mk.n0::before { content: '–'; }
+  .chip { display: inline-flex; align-items: center; gap: var(--s-2); font: 600 var(--t-label) var(--font-mono); padding: 2px var(--s-2); border: 1px solid currentColor; border-radius: var(--r-1); white-space: nowrap; }
+  .chip::before { content: ''; width: .5rem; height: .5rem; background: currentColor; }
+  .chip.ok { color: var(--ok); } .chip.ok::before { border-radius: 50%; }
+  .chip.warn { color: var(--warn); } .chip.warn::before { clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+  .chip.risk { color: var(--risk); }
+  .chip.info { color: var(--info); } .chip.info::before { transform: rotate(45deg); }
+
+  /* payload explorer */
+  .tabs { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-3); }
+  button { font: 500 var(--t-small) var(--font-mono); color: var(--text); background: var(--surface); border: 1px solid var(--border-bright); border-radius: var(--r-1); padding: var(--s-2) var(--s-3); cursor: pointer; transition: border-color var(--fast) var(--ease); }
+  button:hover, button:focus-visible { border-color: var(--accent); }
+  button[aria-selected=true] { border-color: var(--accent); background: var(--accent-dim); }
+  .pane { display: grid; gap: var(--s-3); }
+  .pane[hidden] { display: none; }
+  .pane .hdr { display: grid; gap: var(--s-2); }
+  .pane .topic { font: 600 var(--t-small) var(--font-mono); overflow-wrap: anywhere; }
+  .badges { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+  pre { font: var(--t-small)/1.55 var(--font-mono); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-2); padding: var(--s-4); overflow-x: auto; margin: 0; font-variant-ligatures: none; }
+  pre .k { color: var(--info); } pre .s { color: var(--ok); } pre .c { color: var(--text-dim); }
+  .cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(14.5rem, 1fr)); gap: var(--s-4); }
+  .case { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-2); padding: var(--s-4); display: grid; gap: var(--s-3); align-content: start; }
+  .case code { white-space: normal; }
+  details { border-top: 1px solid var(--border); padding-top: var(--s-4); color: var(--text-dim); }
+  summary { cursor: pointer; font: 500 var(--t-label) var(--font-mono); margin-bottom: var(--s-2); }
+  .sources { border-top: 1px solid var(--border); padding-top: var(--s-4); display: grid; gap: var(--s-2); color: var(--text-dim); }
+
+  .js-motion main > * { transition: opacity var(--slow) var(--ease), transform var(--slow) var(--ease); }
+  .js-motion main > :not(.in) { opacity: 0; transform: translateY(1rem); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media print {
+    :root { --bg: #fff; --surface: #fff; --border: #d6e0ea; --border-bright: #818f9e; --text: #0f1a26; --text-dim: #4d6074; --accent: #a34700; --ok: #1c7443; --warn: #776300; --risk: #b0341e; --info: #145f99; --node-top: #fff; }
+    .toc, .tabs { display: none; }
+    .pane[hidden] { display: grid; }
+    .frame { overflow: visible; background: #fff; } .ve-svg { min-width: 0; }
+    .frame, .case, tr { break-inside: avoid; } h2 { break-after: avoid; }
+    svg * { filter: none !important; }
+    .js-motion main > * { opacity: 1 !important; transform: none !important; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="ve-ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker>
+    <linearGradient id="ve-node" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--node-top)"/><stop offset="1" style="stop-color:var(--surface)"/></linearGradient>
+  </defs>
+</svg>
+
+<nav class="toc" aria-label="Sections"><ul>
+  <li><a href="#overview">Overview</a></li>
+  <li><a href="#index">Conversations</a></li>
+  <li><a href="#mqtt">MQTT topics</a></li>
+  <li><a href="#payloads">Payloads</a></li>
+  <li><a href="#rest">REST calls</a></li>
+  <li><a href="#history">History path</a></li>
+  <li><a href="#acl">Broker access</a></li>
+  <li><a href="#sources">Sources</a></li>
+</ul></nav>
+
+<main>
+
+  <header id="overview">
+    <p class="eyebrow">Container communication</p>
+    <h1>One poller turns Checkmk into MQTT. Everything else listens.</h1>
+    <p class="lead">The <span class="ve-ref" data-ref="poller" tabindex="0">poller</span> reads Checkmk over Livestatus and publishes <b class="ve-ref" data-ref="mosq" tabindex="0">retained MQTT topics</b>. The <span class="ve-ref" data-ref="dash" tabindex="0">dashboard</span> and <span class="ve-ref" data-ref="analytics" tabindex="0">analytics</span> read them. REST goes the other way only for setup and edits.</p>
+    <p class="meta">9 containers on one Podman network · read from compose.yaml, nginx config and code · 17 Oct 2026</p>
+  </header>
+
+  <figure>
+    <div class="frame">
+      <svg class="ve-svg" viewBox="0 24 940 490" role="img" aria-label="Overview of the containers. Hosts talk to Checkmk. The poller reads Checkmk over Livestatus and REST and publishes to Mosquitto. The browser reads Mosquitto over WebSocket and loads the dashboard, which proxies REST to Checkmk. Analytics subscribes and publishes on Mosquitto. The poller and analytics write to the history store. The wizard in the worker calls Checkmk over REST and the hosts over SSH.">
+        <!-- zone: everything inside the Podman network -->
+        <path class="ve-zone" d="M255 50H690V500H10V220H255Z"/>
+        <text class="ve-tag" x="265" y="42">cmk_net · Podman bridge</text>
+
+        <!-- edges first, nodes after -->
+        <path class="ve-e" data-ref="e1" d="M160 110H270"/>
+        <text class="ve-el" data-ref="e1" x="215" y="96"><b>1</b> agent/SNMP</text>
+
+        <path class="ve-e" data-ref="e2" d="M70 240V150"/>
+        <text class="ve-el r" data-ref="e2" x="80" y="200"><b>2</b> SSH :22</text>
+
+        <path class="ve-e" data-ref="e3" d="M160 280H215V130H270"/>
+        <text class="ve-el r" data-ref="e3" x="223" y="226"><b>3</b> REST :5000</text>
+
+        <path class="ve-e" data-ref="e4" d="M320 150V240"/>
+        <text class="ve-el l" data-ref="e4" x="312" y="200"><b>4</b> LQL</text>
+        <path class="ve-e" data-ref="e5" d="M360 240V150"/>
+        <text class="ve-el r" data-ref="e5" x="368" y="200"><b>5</b> REST GET</text>
+
+        <path class="ve-e is-hot" data-ref="e6" d="M410 265H520"/>
+        <text class="ve-el" data-ref="e6" x="465" y="252"><b>6</b> publish</text>
+        <path class="ve-e" data-ref="e7" d="M520 295H410"/>
+        <text class="ve-el" data-ref="e7" x="465" y="316"><b>7</b> admin/cmd</text>
+
+        <path class="ve-e is-hot" data-ref="e8" d="M660 265H800V150"/>
+        <text class="ve-el" data-ref="e8" x="728" y="252"><b>8</b> WS :9002</text>
+        <path class="ve-e" data-ref="e9" d="M880 150V295H660"/>
+        <text class="ve-el" data-ref="e9" x="770" y="316"><b>9</b> commands</text>
+
+        <path class="ve-e" data-ref="e10" d="M770 110H660"/>
+        <text class="ve-el" data-ref="e10" x="715" y="96"><b>10</b> SPA :8090</text>
+        <path class="ve-e" data-ref="e11" d="M520 110H410"/>
+        <text class="ve-el" data-ref="e11" x="465" y="96"><b>11</b> REST</text>
+
+        <path class="ve-e" data-ref="e12" d="M565 320V410"/>
+        <text class="ve-el l" data-ref="e12" x="557" y="366"><b>12</b> subscribe</text>
+        <path class="ve-e" data-ref="e13" d="M615 410V320"/>
+        <text class="ve-el r" data-ref="e13" x="623" y="366"><b>13</b> publish</text>
+
+        <path class="ve-e" data-ref="e14" d="M340 320V410"/>
+        <text class="ve-el r" data-ref="e14" x="348" y="366"><b>14</b> INSERT</text>
+        <path class="ve-e" data-ref="e15" d="M520 450H410"/>
+        <text class="ve-el" data-ref="e15" x="465" y="437"><b>15</b> SQL</text>
+
+        <g class="ve-n" data-ref="hosts" transform="translate(20 70)"><rect class="sh" width="140" height="80" rx="6"/><text x="70" y="34">Hosts</text><text class="sub" x="70" y="58">LAN devices</text></g>
+        <g class="ve-n" data-ref="checkmk" transform="translate(270 70)"><rect class="sh" width="140" height="80" rx="6"/><text x="70" y="34">Checkmk</text><text class="sub" x="70" y="58">:5000 :6557</text></g>
+        <g class="ve-n" data-ref="dash" transform="translate(520 70)"><rect class="sh" width="140" height="80" rx="6"/><text x="70" y="34">Dashboard</text><text class="sub" x="70" y="58">nginx</text></g>
+        <g class="ve-n" data-ref="browser" transform="translate(770 70)"><rect class="sh" width="140" height="80" rx="6"/><text x="70" y="34">Browser</text><text class="sub" x="70" y="58">operator</text></g>
+        <g class="ve-n" data-ref="worker" transform="translate(20 240)"><rect class="sh" width="140" height="80" rx="6"/><text x="70" y="34">Worker</text><text class="sub" x="70" y="58">wizard</text></g>
+        <g class="ve-n" data-ref="poller" transform="translate(270 240)"><rect class="sh" width="140" height="80" rx="6"/><text x="70" y="34">Poller</text><text class="sub" x="70" y="58">mqtt-poller</text></g>
+        <g class="ve-n is-key" data-ref="mosq" transform="translate(520 240)"><rect class="sh" width="140" height="80" rx="6"/><text x="70" y="34">Mosquitto</text><text class="sub" x="70" y="58">:1883 :9002</text></g>
+        <g class="ve-n" data-ref="store" transform="translate(270 410)"><path class="sh" d="M0 10V70A70 10 0 0 0 140 70V10"/><ellipse class="sh lid" cx="70" cy="10" rx="70" ry="10"/><text x="70" y="42">ClickHouse</text><text class="sub" x="70" y="62">+ MinIO</text></g>
+        <g class="ve-n" data-ref="analytics" transform="translate(520 410)"><rect class="sh" width="140" height="80" rx="6"/><text x="70" y="34">Analytics</text><text class="sub" x="70" y="58">forecasts</text></g>
+      </svg>
+    </div>
+    <figcaption><span class="fig-n">Fig. 1</span>Live state flows from the poller through Mosquitto to the browser (amber). Numbers match the conversation index below. Grafana and the MinIO details are in Fig. 5.</figcaption>
+  </figure>
+
+  <section id="index">
+    <div class="sec-head"><p class="ve-label caps">Conversation index</p><h2>Fifteen conversations, five protocols</h2></div>
+    <figure>
+      <div class="table-scroll"><table>
+        <thead><tr><th class="num">#</th><th>From → to</th><th>Protocol · port</th><th>What moves</th><th>Credential</th></tr></thead>
+        <tbody>
+          <tr data-ref="e1"><td class="n">1</td><td>Checkmk ↔ hosts</td><td><code>:6556</code> agent pull, <code>:8000</code> TLS registration, SNMP, ICMP</td><td class="wrap">Check results. Checkmk starts the pull, SNMP and ping.</td><td class="wrap">Agent TLS cert, SNMP community</td></tr>
+          <tr data-ref="e2"><td class="n">2</td><td>Worker → hosts</td><td>SSH <code>:22</code></td><td class="wrap">Firewall fix, agent install, smartmontools</td><td class="wrap">SSH login typed in the wizard, not stored</td></tr>
+          <tr data-ref="e3"><td class="n">3</td><td>Worker → Checkmk</td><td>HTTP REST <code>checkmk:5000</code></td><td class="wrap">Folders, hosts, rules, discovery, activation, users</td><td class="wrap"><code>automation</code> Bearer; <code>cmkadmin</code> once to bootstrap</td></tr>
+          <tr data-ref="e4"><td class="n">4</td><td>Poller → Checkmk</td><td>Livestatus <code>:6557</code>, plain TCP</td><td class="wrap"><code>GET hosts</code>, <code>GET services</code> each cycle</td><td class="wrap">None. The network is the boundary.</td></tr>
+          <tr data-ref="e5"><td class="n">5</td><td>Poller → Checkmk</td><td>HTTP REST <code>:5000</code></td><td class="wrap"><code>GET host_config</code>: folder, parents, labels</td><td class="wrap"><code>automation</code> Bearer</td></tr>
+          <tr data-ref="e6"><td class="n">6</td><td>Poller → Mosquitto</td><td>MQTT <code>:1883</code></td><td class="wrap">Retained <code>lan/…</code> topics</td><td class="wrap">User <code>poller</code></td></tr>
+          <tr data-ref="e7"><td class="n">7</td><td>Mosquitto → poller</td><td>MQTT</td><td class="wrap"><code>admin/cmd</code> becomes a Livestatus <code>COMMAND</code></td><td class="wrap">User <code>poller</code></td></tr>
+          <tr data-ref="e8"><td class="n">8</td><td>Mosquitto → browser</td><td>MQTT over WebSocket <code>:9002</code></td><td class="wrap">All <code>lan/#</code> state</td><td class="wrap"><code>wsreader</code>; <code>wsadmin</code> with <code>?admin=1</code></td></tr>
+          <tr data-ref="e9"><td class="n">9</td><td>Browser → Mosquitto</td><td>MQTT over WebSocket</td><td class="wrap"><code>admin/cmd</code>, <code>needs/triage/cmd</code></td><td class="wrap"><code>wsadmin</code>, <code>wstriage</code> (write-only)</td></tr>
+          <tr data-ref="e10"><td class="n">10</td><td>Browser → dashboard</td><td>HTTP <code>:8090</code></td><td class="wrap">SPA, <code>/config.json</code>, <code>/map-drawing.json</code></td><td class="wrap">None (closed network)</td></tr>
+          <tr data-ref="e11"><td class="n">11</td><td>Dashboard → Checkmk</td><td>HTTP via nginx <code>/checkmk-api/</code></td><td class="wrap">Topology edits, discovered-host activation</td><td class="wrap"><code>topology_editor</code>, added by nginx</td></tr>
+          <tr data-ref="e12"><td class="n">12</td><td>Mosquitto → analytics</td><td>MQTT QoS 1</td><td class="wrap">Device, event and incident topics, triage commands</td><td class="wrap">User <code>analytics</code></td></tr>
+          <tr data-ref="e13"><td class="n">13</td><td>Analytics → Mosquitto</td><td>MQTT QoS 1</td><td class="wrap">Needs, forecasts, narration</td><td class="wrap">User <code>analytics</code></td></tr>
+          <tr data-ref="e14"><td class="n">14</td><td>Poller → ClickHouse</td><td>HTTP <code>:8123</code></td><td class="wrap"><code>INSERT … FORMAT JSONEachRow</code></td><td class="wrap"><code>poller_writer</code></td></tr>
+          <tr data-ref="e15"><td class="n">15</td><td>Analytics ↔ ClickHouse</td><td>HTTP <code>:8123</code></td><td class="wrap">INSERT events, incidents, triage; SELECT hourly metrics</td><td class="wrap"><code>analytics_writer</code></td></tr>
+        </tbody>
+      </table></div>
+      <figcaption><span class="fig-n">Table 1</span>Hover a row to light its edge in Fig. 1. The cloud bridge in the phase-17 branch is not drawn.</figcaption>
+    </figure>
+  </section>
+
+  <section id="mqtt">
+    <div class="sec-head"><p class="ve-label caps">MQTT topics</p><h2>The poller writes six topics, analytics writes three</h2></div>
+    <figure>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Topic <span style="font-weight:400">(under <code>sites/&lt;site_id&gt;/</code>)</span></th><th class="num">QoS</th><th>Retained</th><th>Poller</th><th>Analytics</th><th>Dashboard</th><th>Published when</th></tr></thead>
+        <tbody>
+          <tr><td><code>lan/devices/{id}/status</code></td><td class="num">0</td><td><span class="chip ok">yes</span></td><td><span class="mk w">write</span></td><td><span class="mk r">read</span></td><td><span class="mk r">read</span></td><td class="wrap">Every 15 s poll cycle, one per host</td></tr>
+          <tr><td><code>lan/devices/{id}/services</code></td><td class="num">1</td><td><span class="chip ok">yes</span></td><td><span class="mk w">write</span></td><td><span class="mk r">read</span></td><td><span class="mk r">read</span></td><td class="wrap">A service state or the service set changes</td></tr>
+          <tr><td><code>lan/devices/topology</code></td><td class="num">1</td><td><span class="chip ok">yes</span></td><td><span class="mk w">write</span></td><td><span class="mk r">read</span></td><td><span class="mk r">read</span></td><td class="wrap">Parents, type, folder or a label changes</td></tr>
+          <tr><td><code>lan/events/recent</code></td><td class="num">1</td><td><span class="chip ok">yes</span></td><td><span class="mk w">write</span></td><td><span class="mk r">read</span></td><td><span class="mk r">read</span></td><td class="wrap">Any state transition; keeps the last 1000</td></tr>
+          <tr><td><code>lan/incidents/{id}/status</code></td><td class="num">1</td><td><span class="chip ok">yes</span></td><td><span class="mk w">write</span></td><td><span class="mk r">read</span></td><td><span class="mk r">read</span></td><td class="wrap">An incident opens, changes or closes</td></tr>
+          <tr><td><code>lan/poller/status</code></td><td class="num">1</td><td><span class="chip ok">yes</span></td><td><span class="mk w">write</span></td><td><span class="mk n0"></span></td><td><span class="mk r">read</span></td><td class="wrap">Every cycle; the last-will message says <code>offline</code></td></tr>
+          <tr><td><code>lan/needs/{need_id}/status</code></td><td class="num">1</td><td><span class="chip ok">yes</span></td><td><span class="mk n0"></span></td><td><span class="mk w">write</span></td><td><span class="mk r">read</span></td><td class="wrap">Failure needs every 15 s, trend needs every 900 s</td></tr>
+          <tr><td><code>lan/forecasts/{host}</code></td><td class="num">1</td><td><span class="chip ok">yes</span></td><td><span class="mk n0"></span></td><td><span class="mk w">write</span></td><td><span class="mk r">read</span></td><td class="wrap">Every 900 s evaluation</td></tr>
+          <tr><td><code>lan/incidents/{id}/narration</code></td><td class="num">1</td><td><span class="chip ok">yes</span></td><td><span class="mk n0"></span></td><td><span class="mk w">write</span></td><td><span class="mk r">read</span></td><td class="wrap">An incident opens or changes</td></tr>
+          <tr><td><code>admin/cmd</code></td><td class="num">1</td><td><span class="chip warn">no</span></td><td><span class="mk r">read</span></td><td><span class="mk n0"></span></td><td><span class="mk w">write</span></td><td class="wrap">Operator fakes a host state (<code>?admin=1</code>)</td></tr>
+          <tr><td><code>admin/ack</code></td><td class="num">1</td><td><span class="chip warn">no</span></td><td><span class="mk w">write</span></td><td><span class="mk n0"></span></td><td><span class="mk r">read</span></td><td class="wrap">The poller answers a command</td></tr>
+          <tr><td><code>admin/faked</code></td><td class="num">1</td><td><span class="chip ok">yes</span></td><td><span class="mk w">write</span></td><td><span class="mk n0"></span></td><td><span class="mk r">read</span></td><td class="wrap">The set of faked hosts changes</td></tr>
+          <tr><td><code>needs/triage/cmd</code></td><td class="num">1</td><td><span class="chip warn">no</span></td><td><span class="mk n0"></span></td><td><span class="mk r">read</span></td><td><span class="mk w">write</span></td><td class="wrap">Operator changes a need's tier</td></tr>
+        </tbody>
+      </table></div>
+      <figcaption><span class="fig-n">Table 2</span>Every topic has exactly one writer. A removed host is cleared by publishing an empty retained payload (a tombstone).</figcaption>
+    </figure>
+
+    <figure style="margin-top: var(--s-7)">
+      <div class="frame">
+        <svg class="ve-svg" viewBox="0 0 940 150" role="img" aria-label="A 60 second timeline. The poll cycle and the analytics failure tick fire every 15 seconds. The availability scheduler ticks every 30 seconds. Trend needs and forecasts run every 900 seconds, which is off this scale.">
+          <path class="axis" d="M200 120H920"/>
+          <g class="ve-dim"><path class="ext" d="M200 112V128M440 112V128"/><path class="ln" d="M200 124H440M196 128l8-8M436 128l8-8"/><text x="320" y="144">15 s</text></g>
+          <text class="lane-t" x="0" y="26">Poll cycle</text><text class="lane-s" x="0" y="44">poller, status per host</text>
+          <text class="lane-t" x="0" y="66">Failure needs</text><text class="lane-s" x="0" y="84">analytics, host DOWN</text>
+          <text class="lane-t" x="0" y="106">Rollup tick</text>
+          <path class="tick" d="M200 12V50M440 12V50M680 12V50M920 12V50"/>
+          <path class="tick" d="M200 54V92M440 54V92M680 54V92M920 54V92"/>
+          <path class="tick q" d="M200 96V114M680 96V114"/>
+          <text class="lane-s" x="720" y="108">every 30 s, a day rolls up once it has ended</text>
+          <text class="lane-s" x="0" y="144">0 s</text><text class="lane-s" x="890" y="144">60 s</text>
+        </svg>
+      </div>
+      <figcaption><span class="fig-n">Fig. 2</span>In one minute the broker sees four status batches from the poller. Trend needs and forecasts are re-evaluated every 900 s, 60 times slower, so they stay off this scale.</figcaption>
+    </figure>
+  </section>
+
+  <section id="payloads">
+    <div class="sec-head"><p class="ve-label caps">Payloads</p><h2>What each message looks like</h2></div>
+    <p class="note" style="margin-top:0;margin-bottom:var(--s-4)">Field names come from the code and the contract. Values are illustrative.</p>
+    <div class="tabs" role="tablist" aria-label="Payload examples"></div>
+    <div id="panes"></div>
+  </section>
+
+  <section id="rest">
+    <div class="sec-head"><p class="ve-label caps">REST calls</p><h2>Three callers reach Checkmk, each with its own login</h2></div>
+    <figure>
+      <div class="frame">
+        <svg class="ve-svg" viewBox="0 0 940 400" role="img" aria-label="The wizard in the worker calls the Checkmk REST API with the automation user. The poller calls it with the same user but only reads host_config. The browser goes through the nginx gate, which allows three request groups, adds the topology_editor credential, and answers 403 to everything else.">
+          <path class="ve-zone" d="M10 20H920V380H10Z"/>
+          <text class="ve-tag" x="20" y="14">cmk_net · Podman bridge</text>
+          <path class="ve-e" data-ref="r1" d="M180 70H720"/>
+          <text class="ve-el" data-ref="r1" x="450" y="56">wizard · full CRUD · automation Bearer</text>
+          <path class="ve-e" data-ref="r2" d="M180 170H720"/>
+          <text class="ve-el" data-ref="r2" x="450" y="156">GET host_config each cycle · automation Bearer</text>
+          <path class="ve-e" data-ref="r3" d="M180 295H330"/>
+          <text class="ve-el" data-ref="r3" x="255" y="281">/checkmk-api/</text>
+          <path class="ve-e is-hot" data-ref="r4" d="M520 270H720"/>
+          <text class="ve-el" data-ref="r4" x="620" y="256">allowed + topology_editor</text>
+          <path class="ve-e is-bad" data-ref="r5" d="M425 335V372"/>
+          <text class="ve-el l" data-ref="r5" x="415" y="358" style="fill:var(--risk)">✕ everything else: 403</text>
+
+          <g class="ve-n" data-ref="r1" transform="translate(20 30)"><rect class="sh" width="160" height="80" rx="6"/><text x="80" y="34">Worker</text><text class="sub" x="80" y="58">wizard</text></g>
+          <g class="ve-n" data-ref="r2" transform="translate(20 130)"><rect class="sh" width="160" height="80" rx="6"/><text x="80" y="34">Poller</text><text class="sub" x="80" y="58">mqtt-poller</text></g>
+          <g class="ve-n" data-ref="r3" transform="translate(20 255)"><rect class="sh" width="160" height="80" rx="6"/><text x="80" y="34">Browser</text><text class="sub" x="80" y="58">edit mode</text></g>
+          <g class="ve-n" data-ref="r4 r5" transform="translate(330 255)"><rect class="sh" width="190" height="80" rx="6"/><text x="95" y="34">nginx gate</text><text class="sub" x="95" y="58">allow-list</text></g>
+          <g class="ve-n is-key" data-ref="r1 r2 r4" transform="translate(720 30)"><rect class="sh" width="190" height="300" rx="6"/><text x="95" y="130">Checkmk</text><text class="sub" x="95" y="156">REST API</text><text class="sub" x="95" y="180">/&lt;site&gt;/check_mk/api/1.0</text><text class="sub" x="95" y="204">:5000</text></g>
+        </svg>
+      </div>
+      <figcaption><span class="fig-n">Fig. 3</span>The browser never holds a Checkmk secret. nginx adds the narrow <code>topology_editor</code> login only to the calls on its allow-list.</figcaption>
+    </figure>
+
+    <figure style="margin-top: var(--s-7)">
+      <div class="table-scroll"><table>
+        <thead><tr><th>Caller</th><th>Method</th><th>Path under <code>/&lt;site&gt;/check_mk/api/1.0</code></th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="9" class="wrap"><b>Wizard</b><br><span class="ve-label">automation Bearer</span></td><td><code>GET</code></td><td><code>/version</code></td><td class="wrap">Reachability and login check</td></tr>
+          <tr><td><code>GET POST</code></td><td><code>/domain-types/folder_config/collections/all</code></td><td class="wrap">List and create folders</td></tr>
+          <tr><td><code>GET PUT DELETE</code></td><td><code>/objects/folder_config/~{name}</code></td><td class="wrap">Read, update, remove a folder</td></tr>
+          <tr><td><code>GET POST</code></td><td><code>/domain-types/host_config/collections/all</code></td><td class="wrap">List and create hosts</td></tr>
+          <tr><td><code>GET PUT DELETE</code></td><td><code>/objects/host_config/{host}</code></td><td class="wrap">Read-merge-write attributes (tags, parents, labels)</td></tr>
+          <tr><td><code>POST</code></td><td><code>/domain-types/service_discovery_run/actions/start/invoke</code></td><td class="wrap">Discover services on a host</td></tr>
+          <tr><td><code>GET POST DELETE</code></td><td><code>/domain-types/rule/collections/all</code>, <code>/objects/rule/{id}</code></td><td class="wrap">Expected-open ports, PING, systemd, thresholds</td></tr>
+          <tr><td><code>GET POST</code></td><td><code>/domain-types/activation_run/…</code>, <code>/objects/activation_run/{id}</code></td><td class="wrap">Pending changes, activate, poll the run</td></tr>
+          <tr><td><code>GET POST PUT</code></td><td><code>/domain-types/user_config/…</code>, <code>/objects/user_role/…</code></td><td class="wrap">Create the automation, registration and <code>topology_editor</code> users</td></tr>
+          <tr><td class="wrap"><b>Poller</b><br><span class="ve-label">automation Bearer</span></td><td><code>GET</code></td><td><code>/domain-types/host_config/collections/all</code></td><td class="wrap">Folder, parents, map position, criticality labels</td></tr>
+          <tr><td rowspan="3" class="wrap"><b>Dashboard</b><br><span class="ve-label">via nginx, topology_editor</span></td><td><code>GET</code></td><td><code>/version</code>, <code>/domain-types/activation_run/collections/pending_changes</code>, <code>/objects/activation_run/{id}</code></td><td class="wrap">Is editing available, pending count, activation progress</td></tr>
+          <tr><td><code>GET PUT</code></td><td><code>/objects/host_config/{host}</code></td><td class="wrap">Parents, map position, <b>device type</b>, criticality, dependencies</td></tr>
+          <tr><td><code>POST</code></td><td><code>/domain-types/host_config/collections/all</code>, <code>/domain-types/activation_run/actions/activate-changes/invoke</code></td><td class="wrap">Add an unmanaged switch, activate changes</td></tr>
+        </tbody>
+      </table></div>
+      <figcaption><span class="fig-n">Table 3</span>The wizard also logs in to the Checkmk GUI once (cookie and CSRF) as <code>cmkadmin</code> to create its first users and to revert changes. Any other path through <code>/checkmk-api/</code> returns 403.</figcaption>
+    </figure>
+
+    <figure style="margin-top: var(--s-7)">
+      <div class="cases">
+        <div class="case"><span class="chip info">Livestatus</span><h3>Read, every 15 s</h3><p><code>GET hosts</code> with columns <code>name state parents tags alias staleness …</code> and <code>GET services</code>, both <code>OutputFormat: json</code> over plain TCP <code>:6557</code>.</p></div>
+        <div class="case"><span class="chip info">Livestatus</span><h3>Write, on <code>admin/cmd</code></h3><p>One line per command: <code>COMMAND [ts] PROCESS_HOST_CHECK_RESULT …</code>, with <code>DISABLE_HOST_CHECK</code> and <code>DISABLE_SVC_CHECK</code> first so the fake is not overwritten.</p></div>
+        <div class="case"><span class="chip warn">Why plain TCP</span><h3>No TLS on 6557</h3><p>The poller and wizard speak plain LQL. A fresh site defaults to TLS, so a compose hook turns <code>LIVESTATUS_TCP_TLS</code> off. The port is never published to the host.</p></div>
+      </div>
+      <figcaption><span class="fig-n">Fig. 4</span>Livestatus is the only path that reads state. REST reads configuration.</figcaption>
+    </figure>
+  </section>
+
+  <section id="history">
+    <div class="sec-head"><p class="ve-label caps">History path</p><h2>Only the poller writes history; five readers use it</h2></div>
+    <figure>
+      <div class="frame">
+        <svg class="ve-svg" viewBox="0 0 940 410" role="img" aria-label="The poller inserts rows into ClickHouse. Analytics inserts and selects, and writes daily availability rollups to MinIO. ClickHouse moves parts older than 31 days to MinIO. Grafana and the dashboard read ClickHouse. The dashboard also reads rollups from MinIO.">
+          <path class="ve-zone" d="M10 20H920V395H10Z"/>
+          <text class="ve-tag" x="20" y="14">cmk_net · Podman bridge</text>
+          <path class="ve-e is-hot" data-ref="h1" d="M190 80H350"/>
+          <text class="ve-el" data-ref="h1" x="270" y="66">INSERT JSONEachRow</text>
+          <path class="ve-e" data-ref="h2" d="M190 170H350"/>
+          <text class="ve-el" data-ref="h2" x="270" y="156">INSERT · SELECT</text>
+          <path class="ve-e" data-ref="h3" d="M105 210V335H350"/>
+          <text class="ve-el" data-ref="h3" x="228" y="321">PUT rollup · S3 :9000</text>
+          <path class="ve-e is-async" data-ref="h4" d="M450 200V285"/>
+          <text class="ve-el r" data-ref="h4" x="460" y="248">tier &gt; 31 days</text>
+          <path class="ve-e" data-ref="h5" d="M730 80H550"/>
+          <text class="ve-el" data-ref="h5" x="640" y="66">SELECT</text>
+          <path class="ve-e" data-ref="h6" d="M730 170H550"/>
+          <text class="ve-el" data-ref="h6" x="640" y="156">GET /ch-api/</text>
+          <path class="ve-e" data-ref="h7" d="M830 210V335H550"/>
+          <text class="ve-el" data-ref="h7" x="690" y="321">GET /availability/</text>
+
+          <g class="ve-n" data-ref="h1" transform="translate(30 40)"><rect class="sh" width="160" height="80" rx="6"/><text x="80" y="34">Poller</text><text class="sub" x="80" y="58">poller_writer</text></g>
+          <g class="ve-n" data-ref="h2 h3" transform="translate(30 130)"><rect class="sh" width="160" height="80" rx="6"/><text x="80" y="34">Analytics</text><text class="sub" x="80" y="58">analytics_writer</text></g>
+          <g class="ve-n is-key" data-ref="h1 h2 h4 h5 h6" transform="translate(350 40)"><path class="sh" d="M0 10V150A100 10 0 0 0 200 150V10"/><ellipse class="sh lid" cx="100" cy="10" rx="100" ry="10"/><text x="100" y="62">ClickHouse</text><text class="sub" x="100" y="88">history.metrics</text><text class="sub" x="100" y="108">host_state · service_state</text><text class="sub" x="100" y="128">events · incidents · need_triage</text></g>
+          <g class="ve-n" data-ref="h3 h4 h7" transform="translate(350 285)"><path class="sh" d="M0 10V70A100 10 0 0 0 200 70V10"/><ellipse class="sh lid" cx="100" cy="10" rx="100" ry="10"/><text x="100" y="42">MinIO</text><text class="sub" x="100" y="62">fleet-availability</text></g>
+          <g class="ve-n" data-ref="h5" transform="translate(730 40)"><rect class="sh" width="180" height="80" rx="6"/><text x="90" y="34">Grafana</text><text class="sub" x="90" y="58">grafana_reader</text></g>
+          <g class="ve-n" data-ref="h6 h7" transform="translate(730 130)"><rect class="sh" width="180" height="80" rx="6"/><text x="90" y="34">Dashboard</text><text class="sub" x="90" y="58">dashboard_reader</text></g>
+        </svg>
+      </div>
+      <figcaption><span class="fig-n">Fig. 5</span>Writers use separate ClickHouse logins from readers. The dashboard login is read-only and sees only the <code>history</code> database.</figcaption>
+    </figure>
+    <div class="cases" style="margin-top: var(--s-6)">
+      <div class="case"><span class="chip ok">Write</span><h3>Poller, each cycle</h3><p><code>POST :8123/?query=INSERT INTO history.metrics FORMAT JSONEachRow</code>. A failed insert is dropped, never retried, so a gap reads as "no data".</p></div>
+      <div class="case"><span class="chip ok">Write</span><h3>Analytics, daily</h3><p>Computes yesterday's availability in ClickHouse and writes <code>availability/YYYY/MM/YYYY-MM-DD.json</code> and a Parquet copy to the <code>fleet-availability</code> bucket.</p></div>
+      <div class="case"><span class="chip info">Read</span><h3>Dashboard, by nginx</h3><p><code>GET /ch-api/</code> adds <code>readonly = 1</code> and <code>dashboard_reader</code>; <code>GET /availability/…</code> accepts only the two rollup file names. No other path passes.</p></div>
+    </div>
+  </section>
+
+  <section id="acl">
+    <div class="sec-head"><p class="ve-label caps">Broker access</p><h2>Each login can do one narrow thing</h2></div>
+    <figure>
+      <div class="table-scroll"><table>
+        <thead><tr><th>MQTT user</th><th>Used by</th><th>Reads</th><th>Writes</th></tr></thead>
+        <tbody>
+          <tr><td><code>poller</code></td><td class="wrap">mqtt-poller</td><td class="wrap"><code>sites/&lt;id&gt;/#</code></td><td class="wrap"><code>sites/&lt;id&gt;/#</code></td></tr>
+          <tr><td><code>wsreader</code></td><td class="wrap">Dashboard, always</td><td class="wrap"><code>lan/#</code></td><td class="wrap"><span class="mk n0">none</span></td></tr>
+          <tr><td><code>wsadmin</code></td><td class="wrap">Dashboard with <code>?admin=1</code></td><td class="wrap"><code>lan/#</code>, <code>admin/ack</code>, <code>admin/faked</code></td><td class="wrap"><code>admin/cmd</code></td></tr>
+          <tr><td><code>analytics</code></td><td class="wrap">analytics</td><td class="wrap"><code>lan/#</code>, <code>needs/triage/cmd</code></td><td class="wrap"><code>lan/needs/#</code>, <code>lan/forecasts/#</code>, <code>lan/incidents/+/narration</code></td></tr>
+          <tr><td><code>wstriage</code></td><td class="wrap">Dashboard needs pane</td><td class="wrap"><span class="mk n0">none</span></td><td class="wrap"><code>needs/triage/cmd</code></td></tr>
+        </tbody>
+      </table></div>
+      <figcaption><span class="fig-n">Table 4</span>Paths are under <code>sites/&lt;site_id&gt;/</code>. The broker renders this ACL at every start from <code>deploy/mosquitto.acl.template</code>. <code>wsadmin</code> and <code>wstriage</code> are served openly by nginx, so use them on a closed network only.</figcaption>
+    </figure>
+  </section>
+
+  <section id="sources" class="sources" aria-label="Sources">
+    <p class="ve-label caps">Sources</p>
+    <p><code>deploy/compose.yaml</code> · <code>deploy/dashboard-nginx.conf</code> · <code>deploy/mosquitto.acl.template</code> · <code>scripts/mqtt_poller.py</code> · <code>analytics/</code> · <code>src/checkmk_wizard/api.py</code> · <code>dashboard-react/src/lib/checkmkWrite.ts</code> · <code>ARCHITECTURE.md</code> (topic contract, appendix A).</p>
+  </section>
+
+</main>
+<script>
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Payload explorer: one tab per topic. Field names come from the code; values are illustrative.
+  const P = [
+    { id: 'status', tab: 'device status', topic: 'lan/devices/{id}/status', qos: '0', ret: true, by: 'poller', note: 'Gauge keys are null when the host has no backing service (a ping-only host has no CPU service).',
+      body: `{"id":"linux1","state":"OK","in_downtime":false,"acknowledged":false,
+ "device_type":"server","folder":"/vlan100","alias":"","address":"192.168.100.20",
+ "staleness":0.4,"host_state_raw":"UP","timestamp":"2026-10-03T04:00:00+00:00",
+ "cpu_percent":12.3,"cpu_warn":80,"cpu_crit":90,
+ "ram_percent":41.0,"ram_warn":80,"ram_crit":90,
+ "disk_percent":55.2,"disk_warn":80,"disk_crit":90,
+ "smart_total":1,"smart_failing":0}` },
+    { id: 'topology', tab: 'topology', topic: 'lan/devices/topology', qos: '1', ret: true, by: 'poller', note: 'One message for the whole graph. Sent only when structure or a label changes.',
+      body: `{"devices":[
+  {"id":"sw1","parents":[],"device_type":"NetworkDevice","folder":"/vlan100",
+   "alias":"core switch","map_position":"120,80","unmanaged":false,
+   "criticality":"high","service_criticality":{},"depends_on":[]},
+  {"id":"linux1","parents":["sw1"],"device_type":"other","folder":"/vlan100",
+   "alias":"","map_position":null,"unmanaged":false,
+   "criticality":"low","service_criticality":{"Systemd Service cron":"high"},"depends_on":["sw1"]}
+ ],"timestamp":"2026-10-03T04:00:00+00:00"}` },
+    { id: 'services', tab: 'services', topic: 'lan/devices/{id}/services', qos: '1', ret: true, by: 'poller', note: 'A JSON array. CPU, RAM, filesystem and SMART services are left out because the gauges carry them.',
+      body: `[{"description":"Check_MK","state":"OK","plugin_output":"Success, execution time 0.4 sec"},
+ {"description":"Systemd Service cron","state":"CRIT","plugin_output":"Status: inactive"}]` },
+    { id: 'events', tab: 'events', topic: 'lan/events/recent', qos: '1', ret: true, by: 'poller', note: 'A bounded array of the last 1000 transitions. A removed host adds an entry with "event":"removed".',
+      body: `[{"timestamp":"2026-10-03T04:00:30+00:00","device_id":"linux1","event":"state_change","from":"OK","to":"CRIT"}]` },
+    { id: 'poller', tab: 'poller status', topic: 'lan/poller/status', qos: '1', ret: true, by: 'poller', note: 'The broker publishes the offline form itself, as the poller\'s last-will, when the connection drops.',
+      body: `{"status":"online","since":"2026-10-03T03:00:00+00:00","last_poll":"2026-10-03T04:00:00+00:00","device_count":3}
+
+// last will:
+{"status":"offline"}` },
+    { id: 'incident', tab: 'incident', topic: 'lan/incidents/{incident_id}/status', qos: '1', ret: true, by: 'poller', note: 'The id is incident-{root host}. A closed incident is cleared with an empty retained payload.',
+      body: `{"id":"incident-sw1","root":"sw1","root_state":"DOWN","inferred":false,
+ "confirmed_down":[],"not_observable":["cam1","linux1"],"dependents":[],
+ "worst_criticality":"low","since":"2026-10-03T04:05:00+00:00",
+ "timestamp":"2026-10-03T04:05:00+00:00"}` },
+    { id: 'need', tab: 'need', topic: 'lan/needs/{need_id}/status', qos: '1', ret: true, by: 'analytics', note: 'Tier is immediate, urgent or standard. A trend need predicts the date a metric reaches warn and crit.',
+      body: `{"id":"t-3fa91c07be21","source":"trend","host":"linux1","service":"Filesystem /",
+ "metric":"fs_used_percent","unit":"%","tier":"urgent","computed_tier":"urgent",
+ "days_to_warn":4.2,"days_to_crit":11.8,"warn_date":"2026-10-08","crit_date":"2026-10-16",
+ "confidence":"medium","history_days":31.5,"value":88.4,"warn":80.0,"crit":90.0,
+ "triage":null,"generated_at":"2026-10-04T08:15:00Z"}` },
+    { id: 'forecast', tab: 'forecast', topic: 'lan/forecasts/{host}', qos: '1', ret: true, by: 'analytics', note: 'One topic per host, with every fitted series for that host.',
+      body: `{"host":"linux1","generated_at":"2026-10-04T08:15:00Z","fits":[
+  {"status":"trending","history_days":31.5,"slope_per_day":0.42,"r2":0.93,
+   "confidence":"medium","last_value":88.5,"warn":80.0,"crit":90.0,
+   "crit_date":"2026-10-16","days_to_crit":11.8,
+   "service":"Filesystem /","metric":"fs_used_percent","unit":"%"}]}` },
+    { id: 'narration', tab: 'narration', topic: 'lan/incidents/{incident_id}/narration', qos: '1', ret: true, by: 'analytics', note: 'Template text, not a language model. It names the common cause and its dependents.',
+      body: `{"id":"incident-sw1",
+ "headline":"sw1 (critical criticality) is the inferred common cause since 12:05.",
+ "sentences":["…"],"tier":"immediate","generated_at":"2026-10-04T12:05:30Z"}` },
+    { id: 'cmd', tab: 'admin command', topic: 'admin/cmd', qos: '1', ret: false, by: 'dashboard (wsadmin)', note: 'Action is up, down, unreach, restore or restore_all. The poller validates the id, the action and every host name.',
+      body: `{"id":"cmd-1759563000-a1","action":"down","hosts":["sw1"]}` },
+    { id: 'ack', tab: 'admin ack', topic: 'admin/ack', qos: '1', ret: false, by: 'poller', note: 'The answer to one command. cascaded marks hosts that turned UNREACH because their parent went DOWN.',
+      body: `{"id":"cmd-1759563000-a1","ok":true,"action":"down","detail":"…",
+ "applied":[{"host":"sw1","state":"DOWN","cascaded":false},
+            {"host":"linux1","state":"UNREACH","cascaded":true}],
+ "skipped":[]}` },
+    { id: 'faked', tab: 'admin faked', topic: 'admin/faked', qos: '1', ret: true, by: 'poller', note: 'The current set of faked hosts, so a reloaded page still shows them.',
+      body: `{"hosts":{"sw1":"DOWN","linux1":"UNREACH"},"source":"…","timestamp":"2026-10-03T04:05:00+00:00"}` },
+    { id: 'triage', tab: 'triage command', topic: 'needs/triage/cmd', qos: '1', ret: false, by: 'dashboard (wstriage)', note: 'Analytics validates it, can only change the tier, and records an audit row in ClickHouse.',
+      body: `{"id":"cmd-1759563000-a1","need_id":"t-3fa91c07be21","action":"downgrade","note":"planned","by":"jo"}` },
+  ];
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const tint = (s) => esc(s)
+    .replace(/(\/\/ [^\n]*)/g, '<span class="c">$1</span>')
+    .replace(/(&quot;|")([A-Za-z_0-9 ]+)(&quot;|")(?=:)/g, '<span class="k">"$2"</span>');
+  const tabs = document.querySelector('.tabs'), panes = document.getElementById('panes');
+  P.forEach((p, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.role = 'tab'; b.id = 'tab-' + p.id; b.textContent = p.tab;
+    b.setAttribute('aria-controls', 'pane-' + p.id); b.setAttribute('aria-selected', i === 0);
+    tabs.append(b);
+    const d = document.createElement('div');
+    d.className = 'pane'; d.id = 'pane-' + p.id; d.setAttribute('role', 'tabpanel'); d.setAttribute('aria-labelledby', b.id); d.hidden = i !== 0;
+    d.innerHTML = `<div class="hdr"><p class="topic">${p.topic.startsWith('lan/') || p.topic.startsWith('admin/') || p.topic.startsWith('needs/') ? 'sites/&lt;site_id&gt;/' : ''}${esc(p.topic)}</p>
+      <div class="badges"><span class="chip info">QoS ${p.qos}</span><span class="chip ${p.ret ? 'ok' : 'warn'}">${p.ret ? 'retained' : 'not retained'}</span><span class="chip info">written by ${esc(p.by)}</span></div>
+      <p class="note" style="margin:0">${p.note}</p></div><pre><code>${tint(p.body)}</code></pre>`;
+    panes.append(d);
+    b.addEventListener('click', () => {
+      for (const t of tabs.children) t.setAttribute('aria-selected', t === b);
+      for (const x of panes.children) x.hidden = x !== d;
+    });
+  });
+
+  // Linked highlighting
+  const linked = [...document.querySelectorAll('[data-ref]')], refs = (el) => el.dataset.ref.split(' ');
+  let hovered = null, focused = null;
+  const paint = () => {
+    const keys = (hovered || focused)?.dataset.ref.split(' ') ?? [];
+    for (const t of linked) t.classList.toggle('is-lit', refs(t).some((k) => keys.includes(k)));
+    for (const svg of document.querySelectorAll('svg')) svg.classList.toggle('has-lit', !!svg.querySelector('.is-lit'));
+  };
+  for (const el of linked) {
+    el.addEventListener('pointerenter', () => { hovered = el; paint(); });
+    el.addEventListener('pointerleave', () => { hovered = null; paint(); });
+    el.addEventListener('focus', () => { focused = el; paint(); });
+    el.addEventListener('blur', () => { focused = null; paint(); });
+  }
+
+  // Scroll-spy for the top nav
+  const links = [...document.querySelectorAll('.toc a')];
+  const spy = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) for (const a of links) a.classList.toggle('is-here', a.getAttribute('href') === '#' + e.target.id);
+  }, { rootMargin: '-10% 0px -80% 0px' });
+  for (const a of links) { const t = document.querySelector(a.getAttribute('href')); if (t) spy.observe(t); }
+
+  if (!still) {
+    document.documentElement.classList.add('js-motion');
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting) { io.unobserve(e.target); e.target.classList.add('in'); }
+    }, { rootMargin: '0px 0px -10% 0px' });
+    for (const el of document.querySelectorAll('main > *')) io.observe(el);
+  }
+</script>
+</body>
+</html>
