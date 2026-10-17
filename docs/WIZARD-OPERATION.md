@@ -161,8 +161,7 @@ described under "Prerequisites the wizard assumes are already true" and in the p
 ## Entry point and control flow
 
 `checkmk-wizard --demo` (added 2026-10-01) runs demo mode: Phase 3 generates
-host IPs instead of scanning, Phase 4 defaults the monitoring method to
-`ping` and pre-checks the generated hosts, and Phase 7 creates an always-up
+host IPs instead of scanning, Phase 4 pre-checks the generated hosts, and Phase 7 creates an always-up
 host check rule and fakes the hosts UP after activation (see those sections).
 Since 2026-10-12 a demo host may also be created as a Linux agent host: the
 `linux` method then sets the agent tags only and skips every SSH, agent,
@@ -1120,7 +1119,9 @@ retag flow and then reports there is nothing to promote.
 
 ## Phase 4 — Host Classification (`wizard.py:564-651`)
 
-In demo mode (`--demo`) the "Monitoring method" select defaults to `ping`; all
+The "Monitoring method" select (linux / windows / snmp / simple ping) defaults to
+`ping` in every mode, so pressing Enter never starts an SSH/agent install (changed
+2026-10-17; before that only `--demo` defaulted to it). In demo mode all
 prompts stay. (Changed 2026-10-02: the "Promote which hosts?" checkbox starts
 with every `demo_generated` host checked, so the user deselects rather than
 selects; non-demo runs start with nothing checked.) Changed 2026-10-12: the
@@ -2921,7 +2922,7 @@ show the faked value until Checkmk's next real check runs.
 Confirm no incidents remain open:
 
 ```bash
-mosquitto_sub -u wsreader -P wsreader -t 'sites/<site_id>/lan/incidents/#' -v -C 1 -W 5
+podman exec mosquitto sh -c 'mosquitto_sub -h localhost -u wsreader -P "$WS_PASSWORD" -t "sites/<site_id>/lan/incidents/#" -v -C 1 -W 5'
 ```
 
 Expect a timeout ("Timed out", RC 27) with no message received — the same clear-vs-empty

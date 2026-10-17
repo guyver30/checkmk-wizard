@@ -861,3 +861,17 @@ I launched redeploy.sh and saw a few exit code 125 and exit code 1 (pasted podma
 ## 2026-10-17 17:15
 
 yes simplify redeploy.sh and commit
+
+## 2026-10-17 17:40
+
+pleas ensure that the various commands listed in the documentation (like launching the wizard) can be properly run in podman setup...This is the basic setup we have, so where you mention "uv run ..." or how to check logs, it has always to be considered as in podman environment
+
+## 2026-10-17 18:20
+
+a couple of things:
+in the wizard, when asking if a host is linux, windows, snmp, ping, use "ping" as default
+in the dashboard, in edit mode, I want to be able to modify the device type (useful if new devices are auto discovered, so I don't need to re-run the wizard)
+
+## 2026-10-17 19:05
+
+commit it and push to both main and branch

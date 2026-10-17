@@ -2218,10 +2218,11 @@ async def phase4_classification(
                 )
             else:
                 hostname = raw_hostname
-        # Demo hosts do not exist, so default to ping: no SSH/agent waits.
-        # Linux is still offered in demo mode as a no-install agent host
+        # Default to ping (changed 2026-10-17, operator request): the safe
+        # reachability-only choice, so Enter never starts an SSH/agent install.
+        # In demo mode the hosts do not exist, so ping also avoids SSH/agent
+        # waits; linux is still offered there as a no-install agent host
         # (agent tags only, nothing contacted, faked UP in Phase 7).
-        method_default: dict[str, str] = {"default": "ping"} if demo else {}
         linux_title = (
             "linux (Checkmk agent) - demo: agent host, nothing installed, faked UP"
             if demo
@@ -2229,7 +2230,7 @@ async def phase4_classification(
         )
         os_family = await questionary.select(
             f"Monitoring method for {hostname}:",
-            **method_default,
+            default="ping",
             choices=[
                 questionary.Choice(linux_title, value="linux"),
                 questionary.Choice("windows (Checkmk agent)", value="windows"),

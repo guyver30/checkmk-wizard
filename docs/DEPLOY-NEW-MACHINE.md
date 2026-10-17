@@ -59,6 +59,24 @@ yourself from `deploy/`.
 
 Day two: update with `deploy/redeploy.sh` (§11.1), back up with `deploy/backup.sh` (§11.2).
 
+### Where commands run
+
+The host needs only `podman`, `podman compose` and the `deploy/*.sh` scripts (plus plain `curl`, `ss` and
+`systemctl`). Everything else runs **inside a container**, so every `uv`, `python` or MQTT command in this guide is
+given as a `podman exec` / `podman compose exec` line. Run `podman compose ...` from `deploy/`.
+
+| To do this | Run |
+|---|---|
+| The wizard, `uv`, `python`, `pytest`, the smoke scripts | `podman exec automation-worker bash -c "cd /app/checkmk-wizard && <command>"` (add `-it` when it prompts). The checkout is bind-mounted at `/app/checkmk-wizard`, so `deploy/.env` is readable there: start a command with `set -a && . deploy/.env && set +a &&` to load the secrets. |
+| Read logs | `podman logs --tail 50 <container>` (add `-f` to follow), or `podman compose logs -f <service>`. Containers: `checkmk`, `mosquitto`, `mqtt-poller`, `analytics`, `clickhouse`, `minio`, `grafana`, `dashboard`, `automation-worker`. |
+| MQTT (`mosquitto_sub`, `mosquitto_pub`) | `podman exec mosquitto sh -c 'mosquitto_sub -h localhost -u poller -P "$MQTT_POLLER_PASSWORD" -t "<topic>" -C 1 -W 5'`. The broker container already holds the passwords (`MQTT_POLLER_PASSWORD`, `WS_PASSWORD`, ...) in its environment; keep the single quotes so they expand inside the container. |
+| Checkmk (`omd`, `lq`) | `podman compose exec checkmk omd <command> <site>` |
+| ClickHouse | `podman exec clickhouse clickhouse-client --user ch_admin --password "$CH_ADMIN_PASSWORD" -q "<sql>"` after `set -a; . ./.env; set +a` in `deploy/` |
+| The poller's own tools | `podman exec mqtt-poller python -u /scripts/mqtt_poller.py --check-columns` |
+
+The wizard's `uv sync` and `uv run` work offline because the worker image carries the dependencies (§5). Nothing
+needs `uv` or Python installed on the host.
+
 Never restart a single container on its own (`podman compose restart <service>`, `podman restart ...`): on
 rootless Podman it has cut Checkmk off from the LAN and turned every host DOWN (§12.3). Always use a full
 `podman compose down && podman compose up -d`; volumes are kept.
@@ -560,11 +578,11 @@ podman exec -it automation-worker bash -c "cd /app/checkmk-wizard && uv run chec
 ```
 
 The worker keeps its virtualenv in the container (`UV_PROJECT_ENVIRONMENT=/opt/checkmk-wizard-venv`),
-not in the checkout, so `uv run` on the host and in the worker never share a `.venv`. If a host
-`uv run` fails with `failed to canonicalize path .../.venv/bin/python3: Permission denied`, the
-`.venv` was created by an older worker (its Python symlink points into the container). Delete it
-(`rm -rf ~/checkmk-stack/app/checkmk-wizard/.venv`) and let the host's next `uv sync` rebuild it,
-then do a full `podman compose down && podman compose up -d` so the worker picks up the variable.
+not in the checkout, and nothing in this guide runs `uv` on the host. If an old `.venv` from an earlier worker
+or a host `uv` run sits in the checkout and `uv` fails with
+`failed to canonicalize path .../.venv/bin/python3: Permission denied`, delete it
+(`rm -rf ~/checkmk-stack/app/checkmk-wizard/.venv`), then do a full `podman compose down && podman compose up -d`
+so the worker picks up the variable.
 
 To start over later with a blank site, run `deploy/reset-site.sh`; it also lets
 you pick a new site name, and wipes the existing site
@@ -613,41 +631,29 @@ See [`WIZARD-OPERATION.md`](WIZARD-OPERATION.md) for the full phase-by-phase wal
 Verify end-to-end communication across the bridge network from inside the worker container. A 401 here is expected and counts as a pass at this point in the guide -- the automation REST user (and its secret, the only credential Checkmk's Bearer auth accepts) is not bootstrapped until the wizard has run (§7), so a 401 or a 200 both prove the worker reached Checkmk's REST API, as opposed to a connection error, timeout, or proxy-level 404, which would indicate a genuine reachability problem:
 
 ```bash
-podman compose exec worker bash -c "
-  uv run --with paho-mqtt,minio,requests python3 -c '
-import requests, os
-from minio import Minio
+# Checkmk REST API: prints 200 or 401 when reachable
+podman exec automation-worker python3 -c 'import os, urllib.request, urllib.error
+try:
+    print("Checkmk API:", urllib.request.urlopen(os.environ["CMK_REST_API"] + "/version", timeout=5).status)
+except urllib.error.HTTPError as e:
+    print("Checkmk API:", e.code)'
 
-# Checkmk API check
-cmk = requests.get(os.environ[\"CMK_REST_API\"] + \"/version\")
-print(f\"Checkmk API: {cmk.status_code}\" + (\" (reachable)\" if cmk.status_code in (200, 401) else \" (UNEXPECTED - check network/site status)\"))
-
-# MinIO check
-s3 = Minio(\"minio:9000\", access_key=\"minioadmin\", secret_key=\"minioadmin\", secure=False)
-print(f\"MinIO Buckets: {s3.list_buckets()}\")
-'
-"
-
+# MinIO: lists the buckets (boto3 is part of the worker's baked-in environment)
+podman exec automation-worker bash -c 'cd /app/checkmk-wizard && uv run python -c "
+import boto3
+s3 = boto3.client(\"s3\", endpoint_url=\"http://minio:9000\", aws_access_key_id=\"minioadmin\", aws_secret_access_key=\"minioadmin\", region_name=\"us-east-1\")
+print([b[\"Name\"] for b in s3.list_buckets()[\"Buckets\"]])"'
 ```
 
 ### Broker smoke test
 
-[`scripts/smoke_test_broker.py`](../scripts/smoke_test_broker.py) proves the Mosquitto hardening actually holds against a live broker — configuration alone doesn't demonstrate it. Its `--poller-password`/`--ws-password` default from the `MQTT_POLLER_PASSWORD`/`WS_PASSWORD` environment variables, and `--site-id` defaults to `CMK_SITE_ID`, so source `deploy/.env` first. From the repo checkout on the deployment host:
+[`scripts/smoke_test_broker.py`](../scripts/smoke_test_broker.py) proves the Mosquitto hardening actually holds against a live broker — configuration alone doesn't demonstrate it. Its `--poller-password`/`--ws-password` default from the `MQTT_POLLER_PASSWORD`/`WS_PASSWORD` environment variables, and `--site-id` defaults to `CMK_SITE_ID`, so the command loads `deploy/.env` first. It runs in the worker, which reaches the broker by its service name (`mosquitto`, WebSockets on container port 9001):
 
 ```bash
-set -a; . deploy/.env; set +a
-uv run python scripts/smoke_test_broker.py
+podman exec automation-worker bash -c 'cd /app/checkmk-wizard && set -a && . deploy/.env && set +a && uv run python scripts/smoke_test_broker.py --host mosquitto --ws-port 9001'
 ```
 
-From inside the `worker` container (the script never restarts the broker unless `--with-restart` is passed): the worker container does not carry `MQTT_POLLER_PASSWORD`/`WS_PASSWORD` in its own environment, so pass them explicitly:
-
-```bash
-uv run python scripts/smoke_test_broker.py --host mosquitto --ws-port 9001 \
-  --poller-password "$MQTT_POLLER_PASSWORD" --ws-password "$WS_PASSWORD" \
-  --site-id "$CMK_SITE_ID"
-```
-
-What each check proves (the analytics and triage checks take `--analytics-password` / `--triage-ws-password`, which default from `MQTT_ANALYTICS_PASSWORD` / `TRIAGE_WS_PASSWORD`; the broker restart check is off by default and opt-in via `--with-restart`, because restarting a single container breaks Checkmk egress on the deploy host, so never pass it there; `--skip-restart` is still accepted as a no-op; the last line reports `N checks passed, M skipped`, so groups skipped for lack of a password are visible):
+The script never restarts the broker unless `--with-restart` is passed. What each check proves (the analytics and triage checks take `--analytics-password` / `--triage-ws-password`, which default from `MQTT_ANALYTICS_PASSWORD` / `TRIAGE_WS_PASSWORD`; the broker restart check is off by default and opt-in via `--with-restart`, because restarting a single container breaks Checkmk egress on the deploy host, so never pass it there; `--skip-restart` is still accepted as a no-op; the last line reports `N checks passed, M skipped`, so groups skipped for lack of a password are visible):
 
 - `analytics_writes_allowed` / `analytics_incident_status_denied` — the `analytics` login may publish under `lan/needs/` and `lan/incidents/<id>/narration` but not on `lan/incidents/<id>/status`
 - `wstriage_publish_cmd` / `wstriage_publish_lan_denied` — the `wstriage` login can publish `needs/triage/cmd` (analytics receives it) and nothing under `lan/`
@@ -659,16 +665,10 @@ The broker config caps every publish at 2 MB (`message_size_limit 2097152` in `d
 
 ### Poller smoke test
 
-[`scripts/smoke_test_poller.py`](../scripts/smoke_test_poller.py) proves the live Livestatus column set and four of the five Phase 9 success criteria against a running stack — configuration alone doesn't demonstrate any of this. From the repo checkout on the deployment host:
+[`scripts/smoke_test_poller.py`](../scripts/smoke_test_poller.py) proves the live Livestatus column set and four of the five Phase 9 success criteria against a running stack — configuration alone doesn't demonstrate any of this. It runs in the worker, which cannot restart or kill its sibling `poller` container, hence `--skip-restart-checks`:
 
 ```bash
-uv run python scripts/smoke_test_poller.py   # --site-id defaults to CMK_SITE_ID
-```
-
-From inside the `worker` container (which cannot restart or kill its sibling `poller` service, hence `--skip-restart-checks`):
-
-```bash
-uv run python scripts/smoke_test_poller.py --host mosquitto --livestatus-host checkmk --skip-restart-checks --site-id "$CMK_SITE_ID"
+podman exec automation-worker bash -c 'cd /app/checkmk-wizard && set -a && . deploy/.env && set +a && uv run python scripts/smoke_test_poller.py --host mosquitto --livestatus-host checkmk --skip-restart-checks'
 ```
 
 What each check proves:
@@ -695,29 +695,23 @@ TCP (6557) is deliberately never published to the host — the `checkmk` service
 `LIVESTATUS_HOST=checkmk` in its `environment:`, already has `paho-mqtt` installed, and already
 mounts the script at `/scripts/mqtt_poller.py`, so the command needs no further setup.
 
-Corrected 2026-09-16: this line previously read `uv run python scripts/mqtt_poller.py
---check-columns`, which is an `automation-worker` command (that container installs `uv`; the
-poller container does not) written as if it were a host command. Run from a host shell it fails
-on DNS or connect, which reads like a site problem rather than a wrong-command problem. Every
-bare `uv run` elsewhere in this section is likewise a command for inside `automation-worker` at
-`/app/checkmk-wizard`, never for the deployment host itself.
-
 **Manual tombstone test:** the fifth Phase 9 success criterion (a real Checkmk host deletion) needs a live Checkmk site to delete a host from, so it isn't automated. Delete a host in the Checkmk UI, activate changes, wait one poll interval, then confirm with:
 
 ```bash
-set -a; . deploy/.env; set +a
-mosquitto_sub -h <host> -p 1883 -u poller -P "$MQTT_POLLER_PASSWORD" -t 'sites/<site_id>/lan/devices/<host>/status' -v -C 1 -W 5
+podman exec mosquitto sh -c 'mosquitto_sub -h localhost -u poller -P "$MQTT_POLLER_PASSWORD" -t "sites/<site_id>/lan/devices/<host>/status" -v -C 1 -W 5'
 ```
 
 Live-verified 2026-09-08 (deleting `192.168.0.215`): a zero-length retained publish is a *clear*, not a delivered empty message, so `mosquitto_sub` without `-C`/`-W` would simply hang with no output. `-C 1 -W 5` makes that observable: the subscribe times out ("Timed out", RC 27) with no message received, which is what confirms the retained status was cleared. Also confirm the host is gone from `sites/<site_id>/lan/devices/topology` and that a `removed` event appears in `sites/<site_id>/lan/events/recent`.
 
 ### History read-path smoke test (Phase 14.1)
 
-[`scripts/smoke_test_history_proxy.py`](../scripts/smoke_test_history_proxy.py) proves the read-only ClickHouse/rollup HTTP path (HIST-08/HIST-09/HIST-10): that `/ch-api/` and `/availability/` answer GET reads as the read-only `dashboard_reader` identity, that every write/admin/system-table/credential-override path through them is refused, and that Grafana requires login. From the repo checkout on the deployment host:
+[`scripts/smoke_test_history_proxy.py`](../scripts/smoke_test_history_proxy.py) proves the read-only ClickHouse/rollup HTTP path (HIST-08/HIST-09/HIST-10): that `/ch-api/` and `/availability/` answer GET reads as the read-only `dashboard_reader` identity, that every write/admin/system-table/credential-override path through them is refused, and that Grafana requires login. It uses only the standard library and talks to the published ports (dashboard 8090, Grafana 3000, MinIO 9000), so it needs this machine's LAN address, which the worker already has as `CMK_PUBLIC_HOST`:
 
 ```bash
-uv run python scripts/smoke_test_history_proxy.py --host <podman-host> --grafana-password "$GRAFANA_ADMIN_PASSWORD"
+podman exec automation-worker bash -c 'cd /app/checkmk-wizard && set -a && . deploy/.env && set +a && uv run python scripts/smoke_test_history_proxy.py --host "$CMK_PUBLIC_HOST" --grafana-password "$GRAFANA_ADMIN_PASSWORD"'
 ```
+
+If the connection from inside the container to the host's own LAN address is refused (some rootless network setups do not route it), run the same script from any other machine with Python 3.9+ and `--host <this machine's address>`.
 
 The rollup-object checks need at least one day's availability rollup to already exist in `fleet-availability` — the analytics service (formerly the poller) backfills on startup once it has a previous local day's data in ClickHouse, so run this after the stack has been up across at least one local midnight (Asia/Singapore), or after confirming a rollup object exists by hand (`mc ls local/fleet-availability/availability/` from inside a MinIO client, or an `/availability/...` GET once you know a date). As with the broker and poller smoke tests, if you change poller code or need to re-apply a compose change, restart the whole stack (`podman compose down && podman compose up -d`) rather than a single service — see §12.3.
 
@@ -745,7 +739,7 @@ With `TOPOLOGY_EDITOR_SECRET` provisioned (§3.1) and the stack up, condensed fr
 UAT checklist:
 
 1. Confirm the poller's `sites/<site_id>/lan/devices/topology` payload carries `map_position`/`unmanaged` keys
-   on each device node (`mosquitto_sub -u wsreader -P wsreader -t sites/<site_id>/lan/devices/topology -C 1 -W 5`).
+   on each device node (`podman exec mosquitto sh -c 'mosquitto_sub -h localhost -u wsreader -P "$WS_PASSWORD" -t "sites/<site_id>/lan/devices/topology" -C 1 -W 5'`).
 2. Open the dashboard — the topology map (vis-network) replaces the old placeholder, coloured by
    live state, with parent→child arrows and click-to-detail navigation.
 3. Turn on "Edit topology", draw an edge, drag a node, and press "Apply changes" — confirm it
@@ -766,7 +760,7 @@ With the stack up, verify the root-cause incident engine end to end:
    `present: last_state_change (optional)`. If it instead reports `missing`, every incident's
    `since` will be `null` and the dashboard's duration string will read "duration unknown" —
    not a bug, a documented degradation (see the incident topic paragraph in [`ARCHITECTURE.md`](../ARCHITECTURE.md)).
-2. `mosquitto_sub -u wsreader -P wsreader -t 'sites/<site_id>/lan/incidents/#' -v -C 1 -W 5` shows any currently
+2. `podman exec mosquitto sh -c 'mosquitto_sub -h localhost -u wsreader -P "$WS_PASSWORD" -t "sites/<site_id>/lan/incidents/#" -v -C 1 -W 5'` shows any currently
    open incidents (one retained message per open incident); with none open it times out
    ("Timed out", RC 27) with no message received, the same clear-vs-empty distinction as the
    manual tombstone test above.
@@ -1013,7 +1007,7 @@ Never restart a single service: a lone container restart breaks Checkmk's egress
 DOWN. Then check against the live stack:
 
 ```bash
-set -a; . deploy/.env; set +a; uv run python scripts/smoke_test_broker.py   # --site-id comes from CMK_SITE_ID
+podman exec automation-worker bash -c 'cd /app/checkmk-wizard && set -a && . deploy/.env && set +a && uv run python scripts/smoke_test_broker.py --host mosquitto --ws-port 9001'
 podman exec mqtt-poller python /scripts/mqtt_poller.py --check-columns
 ```
 
@@ -1074,11 +1068,10 @@ podman logs analytics 2>&1 | tail -30
 Expect in the analytics log: `Analytics service running (...)` (with passwords shown as `***`), one `Chart metric <name> matched <N> series` line per charted metric (a `matched 0 series` warning means the metric name is wrong), `Restored <N> need(s) from retained topics`, and a startup warning that no SMART/NVMe wear metric is configured (expected today). Failure needs under `lan/needs/#` appear within about 15 s (`POLL_INTERVAL_SECONDS`); retained `sites/<site_id>/lan/forecasts/#` and trend needs appear within the first slow evaluation cycle (up to `EVAL_INTERVAL_SECONDS`, 15 minutes by default):
 
 ```bash
-set -a; . ./.env; set +a
-mosquitto_sub -h <host> -p 1883 -u poller -P "$MQTT_POLLER_PASSWORD" -t 'sites/<site_id>/lan/needs/#' -t 'sites/<site_id>/lan/forecasts/#' -v -W 5
+podman exec mosquitto sh -c 'mosquitto_sub -h localhost -u poller -P "$MQTT_POLLER_PASSWORD" -t "sites/<site_id>/lan/needs/#" -t "sites/<site_id>/lan/forecasts/#" -v -W 5'
 ```
 
-Then run the broker smoke test from the repo checkout, which now also checks the `analytics` and `wstriage` grants (§9), and confirm a rollup object appears in the `fleet-availability` bucket after the next local midnight (the analytics service now owns it).
+Then run the broker smoke test (§9), which now also checks the `analytics` and `wstriage` grants, and confirm a rollup object appears in the `fleet-availability` bucket after the next local midnight (the analytics service now owns it).
 
 A rollback is the same full down/up on the previous commit; the new ClickHouse tables are left in place and are ignored by older code.
 
@@ -1124,11 +1117,10 @@ The manual steps below are only for a site that was created without that variabl
 podman compose exec checkmk omd stop dmc
 podman compose exec checkmk omd config dmc set LIVESTATUS_TCP on
 podman compose exec checkmk omd config dmc set LIVESTATUS_TCP_TLS off
-podman compose exec checkmk omd start dmc
-podman restart mqtt-poller
+podman compose down && podman compose up -d    # full down/up: starts the site and reconnects the poller
 ```
 
-`omd config ... set` refuses to change config variables while the site is running — it errors with `Cannot change config variables while site is running.` — which is why the site is stopped first and then *started* rather than left running and restarted afterward. A site freshly brought up by `podman compose up -d` (§5) is already running when you reach this step, so the stop is always needed, not situational. Stopping the site for this loses nothing: flipping `LIVESTATUS_TCP` is a config change, not a code change or a data wipe, so the site's monitoring data, hosts, and history all live in the `checkmk_data` volume and survive the stop/start untouched.
+`omd config ... set` refuses to change config variables while the site is running — it errors with `Cannot change config variables while site is running.` — which is why the site is stopped first; the full down/up at the end then starts it again (the `checkmk` entrypoint runs `omd start`) and makes the poller reconnect, without a single-container restart. A site freshly brought up by `podman compose up -d` (§5) is already running when you reach this step, so the stop is always needed, not situational. Stopping the site for this loses nothing: flipping `LIVESTATUS_TCP` is a config change, not a code change or a data wipe, so the site's monitoring data, hosts, and history all live in the `checkmk_data` volume and survive the stop and the down/up untouched.
 
 This binds Livestatus on port **6557** by default (Checkmk's own default `LIVESTATUS_TCP_PORT`) — matching what checkmk-wizard already expects, so nothing else needs configuring. No `ports:` entry is needed in `compose.yaml` for this: containers on the same `cmk_net` bridge can already reach `checkmk:6557` directly by service name, without publishing the port to the host/LAN — and it should stay that way, since Livestatus's wire protocol has no authentication of its own and relies entirely on network-level isolation.
 

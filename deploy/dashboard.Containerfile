@@ -22,6 +22,9 @@ COPY design-system/ design-system/
 # `npm pack` ignores --prefix and always packs the current directory, hence the cd.
 RUN cd design-system && npm ci && npm run build && npm pack
 
+# The device types the edit-mode "Device type" select offers (src/lib/deviceTypes.ts imports
+# ../../../device_types.json, which is /src/device_types.json in this stage).
+COPY device_types.json device_types.json
 COPY dashboard-react/ dashboard-react/
 RUN npm --prefix dashboard-react ci \
  && npm --prefix dashboard-react run build

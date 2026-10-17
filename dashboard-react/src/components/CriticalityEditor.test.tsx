@@ -6,6 +6,7 @@ import type { TopologyNode } from "../lib/types";
 
 vi.mock("../lib/checkmkWrite", () => ({
   setCriticality: vi.fn(),
+  setDeviceType: vi.fn(),
   setServiceCriticality: vi.fn(),
   updateDependsOn: vi.fn(),
 }));
@@ -32,6 +33,7 @@ function renderEditor(overrides: Partial<React.ComponentProps<typeof Criticality
 
 beforeEach(() => {
   vi.mocked(checkmkWrite.setCriticality).mockReset();
+  vi.mocked(checkmkWrite.setDeviceType).mockReset();
   vi.mocked(checkmkWrite.setServiceCriticality).mockReset();
   vi.mocked(checkmkWrite.updateDependsOn).mockReset();
 });
@@ -41,7 +43,7 @@ describe("CriticalityEditor", () => {
     renderEditor();
     expect(screen.getByLabelText(/^Device/)).toBeInTheDocument();
     expect(
-      screen.getByText("Select a device on the map or from the list to edit its criticality."),
+      screen.getByText("Select a device on the map or from the list to edit its device type, criticality and dependencies."),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText(/^Host criticality/)).not.toBeInTheDocument();
   });
@@ -56,6 +58,48 @@ describe("CriticalityEditor", () => {
     renderEditor({ selectedHost: "h1", node: { id: "h1", criticality: "high" } as TopologyNode });
     const select = screen.getByLabelText(/^Host criticality/) as HTMLSelectElement;
     expect(select.value).toBe("high");
+  });
+
+  it("prefills Device type from node.device_type, falling back to other", () => {
+    const { unmount } = renderEditor({ selectedHost: "h1", node: { id: "h1", device_type: "ACS" } as TopologyNode });
+    expect((screen.getByLabelText(/^Device type/) as HTMLSelectElement).value).toBe("ACS");
+    unmount();
+    renderEditor({ selectedHost: "h1", node: { id: "h1" } as TopologyNode });
+    expect((screen.getByLabelText(/^Device type/) as HTMLSelectElement).value).toBe("other");
+  });
+
+  it("offers a host's unlisted current device type so the Select never shows a blank", () => {
+    renderEditor({ selectedHost: "h1", node: { id: "h1", device_type: "unknown" } as TopologyNode });
+    const select = screen.getByLabelText(/^Device type/) as HTMLSelectElement;
+    expect(select.value).toBe("unknown");
+    expect(Array.from(select.options).map((o) => o.value)).toContain("NetworkDevice");
+  });
+
+  it("changing Device type calls setDeviceType and, on success, calls onSaved once", async () => {
+    vi.mocked(checkmkWrite.setDeviceType).mockResolvedValueOnce(undefined);
+    const { onSaved } = renderEditor({ selectedHost: "h1", node: { id: "h1" } as TopologyNode });
+    const select = screen.getByLabelText(/^Device type/) as HTMLSelectElement;
+
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "NetworkDevice" } });
+    });
+
+    expect(checkmkWrite.setDeviceType).toHaveBeenCalledWith("h1", "NetworkDevice");
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(select.value).toBe("NetworkDevice");
+  });
+
+  it("a failed Device type write calls onFailed and reverts the optimistic value", async () => {
+    vi.mocked(checkmkWrite.setDeviceType).mockRejectedValueOnce(new Error("rejected"));
+    const { onFailed } = renderEditor({ selectedHost: "h1", node: { id: "h1", device_type: "ACS" } as TopologyNode });
+    const select = screen.getByLabelText(/^Device type/) as HTMLSelectElement;
+
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "other" } });
+    });
+
+    await waitFor(() => expect(onFailed).toHaveBeenCalledTimes(1));
+    expect(select.value).toBe("ACS");
   });
 
   it("changing Host criticality calls setCriticality and, on success, calls onSaved once", async () => {

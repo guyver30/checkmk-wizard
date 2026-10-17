@@ -43,7 +43,7 @@ podman compose down && podman compose up -d          # once, so the poller sees 
 
 Then open the dashboard on port 8090. Update later with `deploy/redeploy.sh`.
 
-**Wizard directly on a Checkmk host** (host-native mode, as root):
+**Wizard directly on a Checkmk host** (host-native mode, as root; this is the only case that runs `uv` on the host):
 
 ```bash
 uv sync
@@ -56,8 +56,10 @@ The mode is detected by whether `omd` is on `PATH`. Requirements, both modes and
 ## Test
 
 ```bash
-uv run pytest
+podman exec automation-worker bash -c "cd /app/checkmk-wizard && uv run pytest"
 ```
+
+(On a development machine with `uv` installed, plain `uv run pytest` from the checkout does the same.)
 
 The tests cover the REST client (mocked with `respx`), the scanner and the remote (SSH, firewall,
 OS-compatibility) helpers in isolation; they do not touch a live Checkmk site, real targets or SSH. The
