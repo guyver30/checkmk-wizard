@@ -907,3 +907,7 @@ commit and push to both main and branch
 ## 2026-10-17 22:30
 
 copy it into docs and commit then push
+
+## 2026-10-17 22:40
+
+push it to main too...later on we will have a specific one for the branch
