@@ -2035,7 +2035,7 @@ async def phase3_discovery(
     table.add_column("Folder")
     table.add_column("Open ports")
     for sh in all_results:
-        table.add_row(sh.ip, sh.folder, ", ".join(map(str, sh.open_ports)))
+        table.add_row(sh.ip, sh.folder, ", ".join(map(str, sh.open_ports)) or "(ping only)")
     console.print(table)
 
     return all_results

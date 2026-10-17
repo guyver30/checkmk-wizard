@@ -1081,8 +1081,11 @@ retag flow and then reports there is nothing to promote.
    `scanner.py:17`), shared across every folder's scan — validated,
    re-prompted on a parse failure, same as before.
 4. For each `(folder, cidr)` pair, runs `scan_network()` (`scanner.py:63-85`
-   — CIDR chunked into `/24`s, bounded-concurrency TCP-connect sweep, a
-   host counts as "alive" if any checked port responds) and **stages every
+   — CIDR chunked into `/24`s, bounded-concurrency TCP-connect sweep plus
+   one ICMP echo per host via the system `ping` binary; a host counts as
+   "alive" if any checked port responds **or** it answers ping, so hosts
+   with no open ports are listed as "(ping only)". If `ping` is not
+   installed the scan silently falls back to TCP-only) and **stages every
    alive IP directly into that folder**: `POST
    /domain-types/host_config/collections/all` with `{host_name: ip,
    folder: folder, attributes: {ipaddress: ip, tag_agent: "no-agent",

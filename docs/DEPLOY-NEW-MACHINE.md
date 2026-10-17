@@ -391,7 +391,7 @@ The `worker` image (`deploy/worker.Containerfile`) bakes in `uv`, Python 3.11 an
 dependencies, so the wizard runs on a machine **with no internet**. Build it while the machine is
 online; afterwards nothing needs the network. Rebuild it (online) after a `git pull` that changes
 `pyproject.toml` or `uv.lock`; offline, `uv sync` then stops with an error naming the missing
-package. Other images (`python:3.12-slim`, Checkmk, Mosquitto, ...) must already be present locally.
+package. The image also installs `iputils-ping` (via `apt-get`, so the build itself needs internet): the wizard's network scan uses `ping` to find hosts with no open TCP ports, and falls back to TCP-only if it is missing (`podman exec automation-worker which ping` should print a path). Other images (`python:3.12-slim`, Checkmk, Mosquitto, ...) must already be present locally.
 
 **Offline use, checklist.** Everything the wizard needs at run time is in the worker image, so the machine may be
 disconnected once these hold (check while still online):
@@ -400,7 +400,8 @@ disconnected once these hold (check while still online):
 2. The other images are already pulled (`podman images`): Checkmk, Mosquitto, ClickHouse, Grafana, MinIO, the
    MinIO client and `python:3.12-slim` (used by `poller` and `analytics`). A `podman compose up -d` offline
    will not fetch a missing one.
-3. `deploy/run-wizard.sh` gets as far as the Checkmk login prompt. Its `uv sync` runs against the baked-in
+3. `podman exec automation-worker which ping` prints a path (the network scan's ICMP probe).
+4. `deploy/run-wizard.sh` gets as far as the Checkmk login prompt. Its `uv sync` runs against the baked-in
    cache (`UV_OFFLINE=1`) and fails fast, naming the package, if `uv.lock` changed since the image was built.
 
 The wizard's SSH, REST and scan traffic stays on your LAN, so it needs no internet. The agent package is pushed to target hosts over SFTP, and the smartmontools `.deb` files ship in
