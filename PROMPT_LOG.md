@@ -899,3 +899,11 @@ yes add the note to the deploy doc. but which one is recommended to use?
 ## 2026-10-17 21:25
 
 commit and push to both main and branch
+
+## 2026-10-17 21:45
+
+/visual-explainer:visual-explainer I want to see how the different containers talk to each other and what are the topics/payloads and REST calls used
+
+## 2026-10-17 22:30
+
+copy it into docs and commit then push
