@@ -875,3 +875,19 @@ in the dashboard, in edit mode, I want to be able to modify the device type (use
 ## 2026-10-17 19:05
 
 commit it and push to both main and branch
+
+## 2026-10-17 19:30
+
+phase 17 work must stay in phase-17-cloud-mqtt branch only
+
+## 2026-10-17 20:00
+
+consolidated docs, simplified redeploy.sh need to be in the main also
+
+## 2026-10-17 20:40
+
+we need the icmp ping probe in the wizard network scan, for both main and branch.
+
+## 2026-10-17 20:55
+
+push
