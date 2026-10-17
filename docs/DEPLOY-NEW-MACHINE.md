@@ -126,6 +126,19 @@ Notes on these steps:
   the failed services never created a container, so existing volumes and the network are reused.
 - **`DOCKER_HOST`** points the compose provider at the rootless Podman socket. The `1000` in some older
   examples is your UID; the commands above use `$(id -u)`.
+- **Which compose provider you have.** `podman compose` only forwards to an external tool, and the output
+  depends on which one: with `docker-compose` you see tidy `Container x Started` lines; with `podman-compose`
+  you see every raw `podman run ...` command, `exit code:` lines and a `>>>> Executing external compose
+  provider ...` header. If both are installed, Podman 4.9 prefers `docker-compose`. Check with
+  `podman compose version` and `which docker-compose podman-compose`; force one by setting
+  `PODMAN_COMPOSE_PROVIDER=/usr/bin/podman-compose` (or `docker-compose`) in the shell, or `compose_providers`
+  in `~/.config/containers/containers.conf`. **Recommended: `podman-compose` 1.0.6**, the package from step 1.
+  This stack was developed and checked against it, and `deploy/compose.yaml` carries workarounds for its
+  behaviour (for example no `depends_on` on `minio-init`). `docker-compose` should also work through the
+  Podman socket but has not been tested here. Expected `podman-compose` noise, not errors: `exit code: 125` /
+  `1` with "no such container" or "name already in use" followed by a successful `podman start`, and its
+  output prints each container's environment, secrets included, so do not paste that log anywhere shared.
+  Use the same provider on every machine so the behaviour described in this guide matches.
 
 ## 2. Clone into the expected layout
 

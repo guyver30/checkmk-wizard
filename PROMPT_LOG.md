@@ -891,3 +891,11 @@ we need the icmp ping probe in the wizard network scan, for both main and branch
 ## 2026-10-17 20:55
 
 push
+
+## 2026-10-17 21:10
+
+yes add the note to the deploy doc. but which one is recommended to use?
+
+## 2026-10-17 21:25
+
+commit and push to both main and branch
