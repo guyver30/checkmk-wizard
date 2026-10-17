@@ -4858,7 +4858,7 @@ async def test_phase3_demo_without_folders_uses_root_and_test_net_default(monkey
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("demo", [True, False])
-async def test_phase4_monitoring_method_defaults_to_ping_only_in_demo(monkeypatch, demo):
+async def test_phase4_monitoring_method_defaults_to_ping(monkeypatch, demo):
     from checkmk_wizard import wizard as wiz
 
     scanned = ScannedHost(ip="10.0.0.5", open_ports=[], folder="/")
@@ -4875,9 +4875,8 @@ async def test_phase4_monitoring_method_defaults_to_ping_only_in_demo(monkeypatc
     await phase4_classification([scanned], demo=demo)
 
     method_kwargs = select_kwargs[0]
-    assert ("default" in method_kwargs) is demo
-    if demo:
-        assert method_kwargs["default"] == "ping"
+    # Changed 2026-10-17: ping is the default in every mode, not only demo.
+    assert method_kwargs["default"] == "ping"
     titles = {c.value: c.title for c in method_kwargs["choices"]}
     if demo:
         assert "demo" in titles["linux"] and "nothing installed" in titles["linux"]

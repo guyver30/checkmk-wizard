@@ -21,6 +21,7 @@ import {
   pendingChangeKey,
   probeEditingAvailable,
   setCriticality,
+  setDeviceType,
   setMapPosition,
   setServiceCriticality,
   updateDependsOn,
@@ -321,6 +322,54 @@ describe("setCriticality", () => {
   it("rejects an invalid host name before any fetch", async () => {
     await expect(setCriticality("bad host", "high")).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("setDeviceType", () => {
+  it("PUTs tag_device_type, preserving every other attribute and label", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(
+        200,
+        {
+          extensions: {
+            attributes: {
+              ipaddress: "10.0.0.5",
+              parents: ["sw1"],
+              tag_device_type: "other",
+              labels: { map_position: "1,2" },
+              meta_data: { created_at: "x" },
+            },
+          },
+        },
+        { ETag: "e" },
+      ),
+    );
+    fetchMock.mockResolvedValueOnce(mockResponse(200, {}));
+
+    await setDeviceType("h1", "ACS");
+
+    expect(fetchMock.mock.calls[1][0]).toContain("/objects/host_config/h1");
+    expect(fetchMock.mock.calls[1][1].method).toBe("PUT");
+    expect(fetchMock.mock.calls[1][1].headers["If-Match"]).toBe("e");
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(body.attributes).toEqual({
+      ipaddress: "10.0.0.5",
+      parents: ["sw1"],
+      tag_device_type: "ACS",
+      labels: { map_position: "1,2" },
+    });
+  });
+
+  it("rejects an invalid host name or an empty type before any fetch", async () => {
+    await expect(setDeviceType("bad host", "ACS")).rejects.toThrow();
+    await expect(setDeviceType("h1", "")).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces Checkmk's rejection of an unknown tag value", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(200, { extensions: { attributes: {} } }, { ETag: "e" }));
+    fetchMock.mockResolvedValueOnce(mockResponse(400, { title: "Bad Request" }));
+    await expect(setDeviceType("h1", "Nope")).rejects.toThrow();
   });
 });
 

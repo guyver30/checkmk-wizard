@@ -466,13 +466,23 @@ device tree instead shows the IP as a hover tooltip on the host name, leaving th
 unchanged. Nothing is appended when the name already equals the IP, or when the poller has no
 address for that host (e.g. an unmanaged switch, or a payload from an older poller).
 
-## 5d. Criticality & dependencies
+## 5d. Device type, criticality & dependencies
 
 While "Edit topology" is on, a collapsible "Criticality & dependencies" panel (`CriticalityEditor`,
 DASH-16) sits below the toolbar. Pick a device from its own `Device` selector, or click a node on
 the map — a node click while editing routes to this panel's selection instead of the detail page.
 Once a host is selected:
 
+- **Device type** — a `Select` of the types in `device_types.json` (the `device_type` host tag,
+  REST attribute `tag_device_type`), so a newly discovered host can be classified here without
+  re-running the wizard. It uses the same read-merge `PUT` as parents (`setDeviceType` in
+  `src/lib/checkmkWrite.ts`) and the same nginx allow-list entry, so every other attribute and
+  label is preserved. The dashboard shows the new type (icon, grouping) after **Apply changes**
+  and the next poll. A host whose current type is not in the file (for example `unknown`) keeps
+  that value as an extra option. Checkmk rejects a value that is not a choice of its `device_type`
+  tag group; the wizard only creates that group once, so after adding a type to
+  `device_types.json` on an existing site, also add the choice in Checkmk (Setup > Tags, see
+  docs/DEVICE-TYPE-ICONS.md).
 - **Host criticality** — a Low/Medium/High/Critical `Select` setting the host's own
   business-criticality tier (the `criticality` label).
 - **Per-service criticality** — one row per service shown on the host's details page. For an

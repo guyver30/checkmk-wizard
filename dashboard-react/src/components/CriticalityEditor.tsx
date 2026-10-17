@@ -1,5 +1,6 @@
-// DASH-16 edit-mode panel: an operator sets a selected host's business criticality tier,
-// per-service criticality, and depends-on links. Every field write is optimistic (this
+// DASH-16 edit-mode panel: an operator sets a selected host's device type (added 2026-10-17, so
+// a newly discovered host can be classified without re-running the wizard), business criticality
+// tier, per-service criticality, and depends-on links. Every field write is optimistic (this
 // component's own local state updates immediately) and goes straight to Checkmk through
 // lib/checkmkWrite.ts's label writers -- there is no per-field Set/Save button and no second
 // pending-count/Apply flow (D-06/D-07): a successful write calls the same onSaved the map's
@@ -12,7 +13,8 @@ import { useState, type ChangeEvent } from "react";
 import { MultiSelect, Select } from "kone-design-system";
 import type { MultiSelectOption, SelectOption } from "kone-design-system";
 import { CRITICALITY_TIERS, isCriticalityTier, type CriticalityTier } from "../lib/incidents";
-import { setCriticality, setServiceCriticality, updateDependsOn } from "../lib/checkmkWrite";
+import { setCriticality, setDeviceType, setServiceCriticality, updateDependsOn } from "../lib/checkmkWrite";
+import { deviceTypeOptions } from "../lib/deviceTypes";
 import type { TopologyNode } from "../lib/types";
 
 const CRITICALITY_LABELS: Record<CriticalityTier, string> = {
@@ -85,10 +87,13 @@ export function CriticalityEditor({
 }: CriticalityEditorProps) {
   const [collapsed, setCollapsed] = useState(false);
 
+  // A host with no device_type in the topology payload carries Checkmk's implicit first choice.
+  const nodeDeviceType = node?.device_type || "other";
   const nodeCriticality = isCriticalityTier(node?.criticality) ? node.criticality : "low";
   const nodeServiceCriticalityKey = JSON.stringify(serviceCriticalityFromNode(node?.service_criticality));
   const nodeDependsOnKey = JSON.stringify(dependsOnFromNode(node?.depends_on));
 
+  const [deviceType, setDeviceTypeState] = useState<string>(nodeDeviceType);
   const [criticality, setCriticalityState] = useState<CriticalityTier>(nodeCriticality);
   const [serviceCriticality, setServiceCriticalityState] = useState<Record<string, CriticalityTier>>(() =>
     JSON.parse(nodeServiceCriticalityKey),
@@ -105,13 +110,29 @@ export function CriticalityEditor({
   // -- this reset is a direct response to a prop change, not a synchronization with an external
   // system, so it belongs in the render itself. The initial useState calls above seed the very
   // first render's values; this comparison only ever fires on a later prop change.
-  const resetKey = `${selectedHost ?? ""}|${nodeCriticality}|${nodeServiceCriticalityKey}|${nodeDependsOnKey}`;
+  const resetKey = `${selectedHost ?? ""}|${nodeDeviceType}|${nodeCriticality}|${nodeServiceCriticalityKey}|${nodeDependsOnKey}`;
   const [lastResetKey, setLastResetKey] = useState(resetKey);
   if (resetKey !== lastResetKey) {
     setLastResetKey(resetKey);
+    setDeviceTypeState(nodeDeviceType);
     setCriticalityState(nodeCriticality);
     setServiceCriticalityState(JSON.parse(nodeServiceCriticalityKey));
     setDependsOnState(JSON.parse(nodeDependsOnKey));
+  }
+
+  function handleDeviceTypeChange(event: ChangeEvent<HTMLSelectElement>) {
+    const next = event.target.value;
+    if (!selectedHost || !next || next === deviceType) {
+      return;
+    }
+    const previous = deviceType;
+    setDeviceTypeState(next);
+    setDeviceType(selectedHost, next)
+      .then(onSaved)
+      .catch(() => {
+        setDeviceTypeState(previous);
+        onFailed(COULD_NOT_SAVE);
+      });
   }
 
   function handleHostCriticalityChange(event: ChangeEvent<HTMLSelectElement>) {
@@ -178,6 +199,10 @@ export function CriticalityEditor({
       });
   }
 
+  const deviceTypeSelectOptions: SelectOption[] = deviceTypeOptions(deviceType).map((type) => ({
+    value: type,
+    label: type,
+  }));
   const deviceOptions: SelectOption[] = hostIds.map((id) => ({ value: id, label: nameFor(id) }));
   const serviceRows = Array.from(new Set([...serviceNames, ...Object.keys(serviceCriticality)])).sort();
   const dependsOnOptions: MultiSelectOption[] = hostIds
@@ -209,11 +234,18 @@ export function CriticalityEditor({
           />
           {!selectedHost && (
             <p className="text-xs text-fg-tertiary">
-              Select a device on the map or from the list to edit its criticality.
+              Select a device on the map or from the list to edit its device type, criticality and dependencies.
             </p>
           )}
           {selectedHost && (
             <>
+              <Select
+                id="criticality-editor-device-type"
+                label="Device type"
+                options={deviceTypeSelectOptions}
+                value={deviceType}
+                onChange={handleDeviceTypeChange}
+              />
               <Select
                 id="criticality-editor-host-tier"
                 label="Host criticality"

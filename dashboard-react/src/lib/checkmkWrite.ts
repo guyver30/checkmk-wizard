@@ -272,6 +272,25 @@ export function setCriticality(host: string, tier: CriticalityTier): Promise<voi
   );
 }
 
+// Changes a host's device type (the `device_type` host tag group, REST attribute
+// `tag_device_type`), so a newly discovered host can be classified from the dashboard without
+// re-running the wizard. A tag is a plain host attribute, so it rides the same GET -> merge ->
+// full PUT as parents: every other attribute, label and tag is preserved. Checkmk rejects a
+// value that is not a choice of the tag group (HTTP 400, surfaced to the caller as
+// CheckmkWriteError); the caller offers only the choices from device_types.json. Goes live
+// with the next "Apply changes", like every other edit-mode write.
+export function setDeviceType(host: string, deviceType: string): Promise<void> {
+  if (!isValidHostName(host)) {
+    return Promise.reject(new Error(`invalid host name: ${host}`));
+  }
+  if (!deviceType || deviceType.trim() !== deviceType) {
+    return Promise.reject(new Error(`invalid device type: ${deviceType}`));
+  }
+  return serialize(() =>
+    updateHostAttributes(host, (attributes) => ({ ...attributes, tag_device_type: deviceType })),
+  );
+}
+
 export function setServiceCriticality(
   host: string,
   serviceName: string,
