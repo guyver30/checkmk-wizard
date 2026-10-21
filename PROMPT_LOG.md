@@ -987,3 +987,31 @@ ok
 ## 2026-10-21 13:30
 
 before you asked me about [merge options]. I choose option 2. And also commit the changes of backup restore script and push to both main and branch
+
+## 2026-10-21 13:50
+
+(pasted: git pull on the VM aborted: local changes to deploy/compose.yaml would be overwritten by merge, 82a728a..8f619af main)
+
+## 2026-10-21 14:05
+
+Error: no pod with name or ID pod_deploy found: no such pod
+
+## 2026-10-21 14:20
+
+(pasted: pod_deploy Degraded, 8 containers; clickhouse Exited (132) again, dashboard Exited (1); grafana and mqtt-poller absent; volumes deploy_* exist)
+
+## 2026-10-21 14:35
+
+restore backup gave me that pod_deploy error
+
+## 2026-10-21 14:45
+
+(pasted: omd sites shows dmc_test 2.4.0p37.cre default; /omd/sites/dmc_test/version -> ../../versions/2.4.0p37.cre owned by dmc_test; etc has apache, auth.secret, auth.serials)
+
+## 2026-10-21 15:00
+
+I'm lost...and the restore backup is hanging after dashboard (last line: a container id 4f98b8ca...)
+
+## 2026-10-21 15:20
+
+the dashboard is up adn backup restored with drawing. So which commits you have to do to fix the restore issue?

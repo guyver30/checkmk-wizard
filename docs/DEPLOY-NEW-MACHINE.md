@@ -949,7 +949,9 @@ podman compose build dashboard
 
 - `--public-host` rewrites `CMK_PUBLIC_HOST`; agents registered against the old address need
   re-registering if it changed. `--yes` skips the confirmation. An existing `.env` is kept as
-  `.env.bak-<stamp>`.
+  `.env.bak-<stamp>`. The bundle's `.env` replaces it, except that this machine's own `CLICKHOUSE_TAG` and
+  `CH_*` passwords are kept (ClickHouse's users live in this machine's volume, and the bundle's machine may
+  have a newer CPU; §12.5), and `init-env.sh` then fills in any setting the bundle's `.env` lacks.
 - A `full` bundle replaces the `checkmk_data` volume (history included). The script extracts it with `tar` inside the Checkmk image, not `podman volume import`: the import fails with `Error: invalid symlink .../<site>/version -> ../../versions/<ver>.cre` because the site's own symlink points outside the volume (fixed 2026-10-21). If you hit that error on an older checkout, `git pull` and run the script again; it recreates the half-filled volume. A `nohistory` bundle starts a
   blank site and restores the archive into it with `omd restore --reuse`, then does a full down/up.
 - Do not run the wizard afterwards; the site already has its configuration.

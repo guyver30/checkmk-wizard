@@ -72,11 +72,37 @@ if ! $assume_yes; then
 fi
 
 # .env: keep the current one as a dated copy, then install the backed-up one.
+prev_env=""
 if [ -f .env ]; then
-    cp -p .env ".env.bak-$(date +%Y%m%d-%H%M%S)"
+    prev_env=".env.bak-$(date +%Y%m%d-%H%M%S)"
+    cp -p .env "$prev_env"
 fi
 cp "$work/env" .env
 chmod 600 .env
+
+# Keep this machine's own values for settings that belong to the machine, not
+# the site (2026-10-21): CLICKHOUSE_TAG (the bundle's machine may have a newer
+# CPU; on a Celeron N5105 26.9.4.3 dies with SIGILL, exit 132) and the CH_*
+# passwords (ClickHouse created its users from them in the clickhouse_data
+# volume, which the bundle does not contain, so new ones lock every client
+# out). Without this the restore silently reverted both and the stack came up
+# broken. On a fresh machine there is no previous .env and the bundle's values
+# are used.
+if [ -n "$prev_env" ]; then
+    for key in CLICKHOUSE_TAG CH_ADMIN_PASSWORD CH_WRITER_PASSWORD CH_READER_PASSWORD \
+        CH_GRAFANA_PASSWORD CH_ANALYTICS_PASSWORD; do
+        value="$(sed -n "s/^$key=//p" "$prev_env" | tail -1)"
+        [ -n "$value" ] || continue
+        if grep -q "^$key=" .env; then
+            sed -i "s|^$key=.*|$key=$value|" .env
+        else
+            echo "$key=$value" >> .env
+        fi
+        echo "Kept $key from the previous .env."
+    done
+fi
+# Fill in anything the bundle's .env lacks (e.g. settings added after it was made).
+./init-env.sh >/dev/null
 if [ -n "$public_host" ]; then
     if grep -q '^CMK_PUBLIC_HOST=' .env; then
         sed -i "s|^CMK_PUBLIC_HOST=.*|CMK_PUBLIC_HOST=$public_host|" .env
