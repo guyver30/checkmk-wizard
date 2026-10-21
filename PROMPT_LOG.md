@@ -979,3 +979,7 @@ I'm lost...and the restore backup is hanging after dashboard (last line: a conta
 ## 2026-10-21 15:20
 
 the dashboard is up adn backup restored with drawing. So which commits you have to do to fix the restore issue?
+
+## 2026-10-21 15:35
+
+push to main and branch
