@@ -983,3 +983,19 @@ the dashboard is up adn backup restored with drawing. So which commits you have 
 ## 2026-10-21 15:35
 
 push to main and branch
+
+## 2026-10-21 15:50
+
+if I restore a backup on a machine with same IP address and same checkmk site id, and I have a linux agent previously registered to old machine, does it register automatically to new machine? or do I need to do something else
+
+## 2026-10-21 16:00
+
+(pasted: cmk-agent-ctl status 2.4.0p34 on E-LINK_WKS2: connection 192.168.10.30/dmc_test, pull-agent, issuer Site dmc_test agent signing CA, validity 13 Oct 2026 - 2031, Remote hostname E-LINK_WKS2, IP allowlist any)
+
+## 2026-10-21 16:10
+
+check_mk and checkmk_agent are ok in the gui
+
+## 2026-10-21 16:20
+
+yes update the doc and push to both main and branch

@@ -888,6 +888,14 @@ podman compose build dashboard
   `.env.bak-<stamp>`. The bundle's `.env` replaces it, except that this machine's own `CLICKHOUSE_TAG` and
   `CH_*` passwords are kept (ClickHouse's users live in this machine's volume, and the bundle's machine may
   have a newer CPU; §12.5), and `init-env.sh` then fills in any setting the bundle's `.env` lacks.
+- **Agents keep working if the address and site ID are unchanged.** The site's agent CA and the registered host
+  UUIDs are in the restored volume, so a Linux agent registered to the old machine needs no re-registration
+  (tested 2026-10-21: agent 2.4.0p34, pull mode, same IP and site ID; its `Check_MK` and `Check_MK Agent` services
+  were OK after the restore). Check one agent with `sudo cmk-agent-ctl status`: it should list the connection
+  `<address>/<site>` with the issuer "Site '<site>' agent signing CA". If the address changed, or an agent
+  stays in timeout (ports 8000 and 6556 must be published), re-register it with
+  `sudo cmk-agent-ctl delete-all --enable-insecure-connections` and then
+  `sudo cmk-agent-ctl register --hostname <host> --server <address>:8000 --site <site> --user automation --trust-cert`.
 - A `full` bundle replaces the `checkmk_data` volume (history included). The script extracts it with `tar` inside the Checkmk image, not `podman volume import`: the import fails with `Error: invalid symlink .../<site>/version -> ../../versions/<ver>.cre` because the site's own symlink points outside the volume (fixed 2026-10-21). If you hit that error on an older checkout, `git pull` and run the script again; it recreates the half-filled volume. A `nohistory` bundle starts a
   blank site and restores the archive into it with `omd restore --reuse`, then does a full down/up.
 - Do not run the wizard afterwards; the site already has its configuration.
