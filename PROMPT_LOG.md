@@ -751,3 +751,203 @@ make another drawing (different name) with high level dataflow
 ## 2026-10-14 14:26
 
 update the data flow docs to say that (that daily availability rollup and the sync between clickhouse and minio)
+
+## 2026-10-14 15:28
+
+/bm:execute-phase 17
+
+## 2026-10-14 16:19
+
+/bm:pause-work
+
+## 2026-10-15 09:15
+
+I followed the instructions in chapter 9 of docs/DEPLOY-NEW-MACHINE.md, is this normal? (pasted podman ps showing only buildx_buildkit_default, and journalctl showing checkmk-stack.service started all containers and finished)
+
+## 2026-10-15 09:17
+
+yes, fix the doc (DEPLOY-NEW-MACHINE.md step 9: restart instead of enable --now; container list)
+
+## 2026-10-15 09:20
+
+ok let's add that ExecReload and document it
+
+## 2026-10-15 09:29
+
+let's create a backup.sh (and related restore_backup.sh): checkmk_data with/without history via arg, backup map, backup env needed for restore
+
+## 2026-10-15 09:46
+
+yes, apply it (rm -f mosquitto.passwd in entrypoint) and commit and push to main and branch
+
+## 2026-10-15 09:49
+
+init-env.sh lines 132-145 are executed even though not supposed to: remove that section. reset-site.sh should also erase existing drawings.
+
+## 2026-10-15 12:59
+
+can we build the worker image on the same machine (connect it to internet) so the wizard runs when internet is off later? (implement)
+
+## 2026-10-15 15:51
+
+I have a strange situation. From checkmk machine I can ping a host, but the wizard not able to find it and also if I add manually in checkmk it's not discovered. nmap -Pn IP finds the host, nmap -sn IP does not. Any clue?
+
+## 2026-10-17 15:11
+
+/bm:resume-work
+
+## 2026-10-17 15:20
+
+I saw an issue with dashboard. Icons and edge drawn properly, position ok, but no drawing (rectangle, etc.). In dev tools I see this : Failed to load resource the server responded with a status of 404. Then :8090/map-drawing.json
+
+## 2026-10-17 15:40
+
+earlier we discussed about offline install for wizard (automation worker). Is this now properly documented and redeploy script needs to be updated?
+
+## 2026-10-17 16:05
+
+yes fix the stale docs and also reorganize documentation, I think we have too many .md. We should just have
+wizard-operation
+deploy-new-machine
+architecture
+
+so the building steps, scripts role, usage and sequence should be all in deploy-new-machine.
+thoughts?
+
+## 2026-10-17 16:12
+
+and of course readme for high level info and links to separate .md
+
+## 2026-10-17 17:05
+
+I launched redeploy.sh and saw a few exit code 125 and exit code 1 (pasted podman-compose log)
+
+## 2026-10-17 17:15
+
+yes simplify redeploy.sh and commit
+
+## 2026-10-17 17:40
+
+pleas ensure that the various commands listed in the documentation (like launching the wizard) can be properly run in podman setup...This is the basic setup we have, so where you mention "uv run ..." or how to check logs, it has always to be considered as in podman environment
+
+## 2026-10-17 18:20
+
+a couple of things:
+in the wizard, when asking if a host is linux, windows, snmp, ping, use "ping" as default
+in the dashboard, in edit mode, I want to be able to modify the device type (useful if new devices are auto discovered, so I don't need to re-run the wizard)
+
+## 2026-10-17 19:05
+
+commit it and push to both main and branch
+
+## 2026-10-17 19:30
+
+phase 17 work must stay in phase-17-cloud-mqtt branch only
+
+## 2026-10-17 20:00
+
+consolidated docs, simplified redeploy.sh need to be in the main also
+
+## 2026-10-17 20:40
+
+we need the icmp ping probe in the wizard network scan, for both main and branch.
+
+## 2026-10-17 20:55
+
+push
+
+## 2026-10-17 21:10
+
+yes add the note to the deploy doc. but which one is recommended to use?
+
+## 2026-10-17 21:25
+
+commit and push to both main and branch
+
+## 2026-10-17 21:45
+
+/visual-explainer:visual-explainer I want to see how the different containers talk to each other and what are the topics/payloads and REST calls used
+
+## 2026-10-17 22:30
+
+copy it into docs and commit then push
+
+## 2026-10-17 22:40
+
+push it to main too...later on we will have a specific one for the branch
+
+## 2026-10-21 10:11
+
+I am doing step 1 in @docs/DEPLOY-NEW-MACHINE.md and got this error: `loginctl enable-linger $USER` -> "Failed to execute /usr/bin/pkttyagent: No such file or directory / Could not enable linger: Access denied"
+
+## 2026-10-21 10:15
+
+yes update the doc to use sudo
+
+## 2026-10-21 10:20
+
+add instructions to install git in the prereq
+
+## 2026-10-21 10:25
+
+during build I got this: podman pulling grafana 13.2.2 then "Error: generating dependency graph for container 5ad584a9...: container f0641ec7... depends on container ab2b90db... not found in input list: no such container"
+
+## 2026-10-21 10:35
+
+(pasted podman ps -a output: clickhouse Exited (132), dashboard Exited (1), grafana Created, checkmk unhealthy after 20s; host is checkmk-PVE; the podman inspect command errored with "no names or ids specified")
+
+## 2026-10-21 10:45
+
+(pasted: cpuinfo shows only sse4_2 x2, no avx/avx2; clickhouse entrypoint "Illegal instruction" on clickhouse extract-from-config)
+
+## 2026-10-21 10:55
+
+model name      : Intel(R) Celeron(R) N5105 @ 2.00GHz
+
+## 2026-10-21 11:05
+
+(pasted: clickhouse-server 26.9.4.3 -> Illegal instruction; 25.8 -> 25.8.33.6 OK; 24.8 -> 24.8.14.39 OK)
+
+## 2026-10-21 11:15
+
+we have set host as cpu in proxmox vm
+
+## 2026-10-21 11:25
+
+go with option 1, the CLICKHOUSE_TAG override
+
+## 2026-10-21 11:40
+
+it built. how to check if running properly? but I cannot see the dashboard
+
+## 2026-10-21 11:50
+
+(pasted: all containers Up except dashboard Exited(1); dashboard log: nginx [emerg] the closing bracket in "WS_USERNAME" variable is missing in /etc/nginx/conf.d/default.conf:82; clickhouse initdb ran and created users OK)
+
+## 2026-10-21 12:05
+
+(pasted: rendered /config.json line shows "wsUsername":"${WS_USERNAME:-wsreader}" literal and no siteSen; container env WS_USERNAME=${WS_USERNAME:-wsreader}; CMK_SITE_ID=g28)
+
+## 2026-10-21 12:20
+
+yes make the init-env.sh fix permanent, because now dashboard is online
+
+## 2026-10-21 12:40
+
+add curl as prereq in the deploy documentation, update all the related documentation with these findings, commit and push
+
+## 2026-10-21 12:50
+
+did you push also to main or only branch?
+
+## 2026-10-21 12:55
+
+ok
+
+## 2026-10-21 13:10
+
+(pasted: deploy/restore_backup.sh backup/checkmk-backup-dmc_test-20261015-013233-full.tar --public-host 192.168.10.30 -> after full down, "Error: invalid symlink .../volumes/deploy_checkmk_data/_data/dmc_test/version -> ../../versions/2.4.0p37.cre")
+
+## 2026-10-21 13:30
+
+before you asked me about [merge options]. I choose option 2. And also commit the changes of backup restore script and push to both main and branch
