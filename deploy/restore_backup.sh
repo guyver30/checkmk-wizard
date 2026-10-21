@@ -104,7 +104,16 @@ podman volume import "${project}_map_drawing_data" "$work/map_drawing_data.tar"
 
 fresh_volume checkmk_data
 if [ "$mode" = full ]; then
-    podman volume import "${project}_checkmk_data" "$work/checkmk_data.tar"
+    # 2026-10-21: not `podman volume import`. It rejects the site's own
+    # symlink (<site>/version -> ../../versions/<ver>.cre, which points
+    # outside the volume) with 'Error: invalid symlink', leaving a half-filled
+    # volume. Extracting with tar inside the checkmk image keeps the symlinks,
+    # owners and modes as exported (by root, so the numeric ids are restored).
+    cmk_image="$(sed -n 's|^ *image: *\(checkmk/[^ ]*\).*|\1|p' compose.yaml | head -1)"
+    podman run --rm --user root --entrypoint tar \
+        -v "${project}_checkmk_data:/data" \
+        -v "$work/checkmk_data.tar:/in/checkmk_data.tar:ro,z" \
+        "$cmk_image" -xpf /in/checkmk_data.tar -C /data --numeric-owner
     echo "Starting the stack..."
     podman compose up -d
 else

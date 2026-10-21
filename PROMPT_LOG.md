@@ -971,3 +971,19 @@ yes make the init-env.sh fix permanent, because now dashboard is online
 ## 2026-10-21 12:40
 
 add curl as prereq in the deploy documentation, update all the related documentation with these findings, commit and push
+
+## 2026-10-21 12:50
+
+did you push also to main or only branch?
+
+## 2026-10-21 12:55
+
+ok
+
+## 2026-10-21 13:10
+
+(pasted: deploy/restore_backup.sh backup/checkmk-backup-dmc_test-20261015-013233-full.tar --public-host 192.168.10.30 -> after full down, "Error: invalid symlink .../volumes/deploy_checkmk_data/_data/dmc_test/version -> ../../versions/2.4.0p37.cre")
+
+## 2026-10-21 13:30
+
+before you asked me about [merge options]. I choose option 2. And also commit the changes of backup restore script and push to both main and branch
