@@ -9,6 +9,8 @@
 #            GRAFANA_ADMIN_PASSWORD, MQTT_POLLER_PASSWORD, WS_PASSWORD,
 #            ADMIN_WS_PASSWORD, MQTT_ANALYTICS_PASSWORD, TRIAGE_WS_PASSWORD,
 #            CH_ANALYTICS_PASSWORD
+# Defaults written explicitly: WS_USERNAME=wsreader, ADMIN_WS_USERNAME=wsadmin,
+#            TRIAGE_WS_USERNAME=wstriage, CLICKHOUSE_TAG=26.9.4.3 (see below)
 # Asked:     CMK_SITE_ID (default dmc), CMK_PUBLIC_HOST
 #
 # Secrets are 32 URL-safe characters ([A-Za-z0-9_-]), which also satisfies
@@ -63,6 +65,25 @@ for key in CMK_REST_SECRET TOPOLOGY_EDITOR_SECRET CH_ADMIN_PASSWORD CH_WRITER_PA
     else
         set_val "$key" "$(gen_secret)"
         summary+=("$key: generated")
+    fi
+done
+
+# Compose defaults that must be real values in .env. 2026-10-21: with the
+# podman-compose a fresh machine had, `- WS_USERNAME=${WS_USERNAME:-wsreader}`
+# in the dashboard's `environment:` reached the container as the literal text
+# `${WS_USERNAME:-wsreader}` when WS_USERNAME was not in .env, and nginx
+# refused to start ("the closing bracket in "WS_USERNAME" variable is
+# missing") when envsubst pasted it into /config.json. Writing the values the
+# defaults stand for sidesteps default expansion entirely. Existing values
+# (including a CLICKHOUSE_TAG override) are kept.
+for pair in WS_USERNAME=wsreader ADMIN_WS_USERNAME=wsadmin \
+    TRIAGE_WS_USERNAME=wstriage CLICKHOUSE_TAG=26.9.4.3; do
+    key="${pair%%=*}"
+    if [ -n "$(get_val "$key")" ]; then
+        summary+=("$key: kept ($(get_val "$key"))")
+    else
+        set_val "$key" "${pair#*=}"
+        summary+=("$key: set (${pair#*=})")
     fi
 done
 
