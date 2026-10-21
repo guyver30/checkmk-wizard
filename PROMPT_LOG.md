@@ -911,3 +911,63 @@ copy it into docs and commit then push
 ## 2026-10-17 22:40
 
 push it to main too...later on we will have a specific one for the branch
+
+## 2026-10-21 10:11
+
+I am doing step 1 in @docs/DEPLOY-NEW-MACHINE.md and got this error: `loginctl enable-linger $USER` -> "Failed to execute /usr/bin/pkttyagent: No such file or directory / Could not enable linger: Access denied"
+
+## 2026-10-21 10:15
+
+yes update the doc to use sudo
+
+## 2026-10-21 10:20
+
+add instructions to install git in the prereq
+
+## 2026-10-21 10:25
+
+during build I got this: podman pulling grafana 13.2.2 then "Error: generating dependency graph for container 5ad584a9...: container f0641ec7... depends on container ab2b90db... not found in input list: no such container"
+
+## 2026-10-21 10:35
+
+(pasted podman ps -a output: clickhouse Exited (132), dashboard Exited (1), grafana Created, checkmk unhealthy after 20s; host is checkmk-PVE; the podman inspect command errored with "no names or ids specified")
+
+## 2026-10-21 10:45
+
+(pasted: cpuinfo shows only sse4_2 x2, no avx/avx2; clickhouse entrypoint "Illegal instruction" on clickhouse extract-from-config)
+
+## 2026-10-21 10:55
+
+model name      : Intel(R) Celeron(R) N5105 @ 2.00GHz
+
+## 2026-10-21 11:05
+
+(pasted: clickhouse-server 26.9.4.3 -> Illegal instruction; 25.8 -> 25.8.33.6 OK; 24.8 -> 24.8.14.39 OK)
+
+## 2026-10-21 11:15
+
+we have set host as cpu in proxmox vm
+
+## 2026-10-21 11:25
+
+go with option 1, the CLICKHOUSE_TAG override
+
+## 2026-10-21 11:40
+
+it built. how to check if running properly? but I cannot see the dashboard
+
+## 2026-10-21 11:50
+
+(pasted: all containers Up except dashboard Exited(1); dashboard log: nginx [emerg] the closing bracket in "WS_USERNAME" variable is missing in /etc/nginx/conf.d/default.conf:82; clickhouse initdb ran and created users OK)
+
+## 2026-10-21 12:05
+
+(pasted: rendered /config.json line shows "wsUsername":"${WS_USERNAME:-wsreader}" literal and no siteSen; container env WS_USERNAME=${WS_USERNAME:-wsreader}; CMK_SITE_ID=g28)
+
+## 2026-10-21 12:20
+
+yes make the init-env.sh fix permanent, because now dashboard is online
+
+## 2026-10-21 12:40
+
+add curl as prereq in the deploy documentation, update all the related documentation with these findings, commit and push

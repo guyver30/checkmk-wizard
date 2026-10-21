@@ -245,7 +245,14 @@ services:
   # of an empty clickhouse_data volume, so every CH_* secret below must be set
   # in deploy/.env BEFORE that first start (see deploy/.env.example).
   clickhouse:
-    image: clickhouse/clickhouse-server:26.9.4.3
+    # 2026-10-21: the tag is overridable via CLICKHOUSE_TAG in deploy/.env.
+    # 26.9.4.3 dies with SIGILL (exit 132, "Illegal instruction" from the
+    # entrypoint's `clickhouse extract-from-config`) on CPUs without AVX, e.g.
+    # the Intel Celeron N5105; 25.8.33.6 and 24.8.14.39 run there. Verified
+    # live with `podman run --rm clickhouse/clickhouse-server:<tag>
+    # clickhouse --version`. The default stays 26.9.4.3, the version the
+    # schema and storage config were written against.
+    image: clickhouse/clickhouse-server:${CLICKHOUSE_TAG:-26.9.4.3}
     container_name: clickhouse
     restart: unless-stopped
     depends_on:

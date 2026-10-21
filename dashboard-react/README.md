@@ -75,7 +75,10 @@ Then open `http://<HOST_IP>:5173/` from a LAN browser.
 
 Per-deployment values (`checkmkSite`, `wsUsername`, `wsPassword`) are loaded at startup from
 `/config.json` (`src/lib/runtimeConfig.ts`), which the production nginx renders from
-`deploy/.env` (`CMK_SITE_ID`, `WS_USERNAME`, `WS_PASSWORD` — see `deploy/dashboard-nginx.conf`).
+`deploy/.env` (`CMK_SITE_ID`, `WS_USERNAME`, `WS_PASSWORD` — see `deploy/dashboard-nginx.conf`;
+`deploy/init-env.sh` writes the default `WS_USERNAME`, `ADMIN_WS_USERNAME` and `TRIAGE_WS_USERNAME`
+explicitly, because some `podman-compose` versions pass an unset `${WS_USERNAME:-wsreader}` default
+through as literal text and nginx then refuses to start).
 Under `vite dev`/`vite preview` there is no `/config.json`, so the defaults `dmc`/`wsreader`/
 `wsreader` apply. `src/lib/config.ts` holds only constants and those defaults, and is never
 edited per deployment (amended 2026-09-30, quick 260930-ixs).
